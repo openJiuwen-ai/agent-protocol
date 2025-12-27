@@ -1,0 +1,6 @@
+build/
+log.txt
+Makefile.win
+API.md
+docs/streamable_response_mode.md
+tests/test_streaming_auth_interceptor.cpp

@@ -1,0 +1,29 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 120
+AlignTrailingComments: false
+ReflowComments: false
+BinPackArguments: true
+BinPackParameters: true
+AllowAllParametersOfDeclarationOnNextLine: true
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterNamespace: false
+  AfterControlStatement: Never
+  BeforeElse: false
+  BeforeWhile: false
+  BeforeCatch: false
+AllowShortFunctionsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+IndentWidth: 4
+UseTab: Never
+PointerAlignment: Left
+Standard: Cpp11
+SpacesBeforeTrailingComments: 1
+AccessModifierOffset: -4

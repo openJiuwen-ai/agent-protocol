@@ -1,0 +1,58 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Build directories
+build/
+output/
+
+# Third party dependencies (managed by CMake FetchContent)
+third_party/googletest-*/
+third_party/libevent-*/
+third_party/nlohmann_json-*/
+third_party/http_parser-*/
+
+# Temporary files
+*.txt
+*.log
+!CMakeLists.txt
+
+# IDE files
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
