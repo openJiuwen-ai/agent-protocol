@@ -34,17 +34,19 @@ function clear_example_process()
 
 function run_helloworld_example()
 {
-    $BIN_PATH/helloworld_server &
-    $BIN_PATH/helloworld_client 127.0.0.1 8080
+    $BIN_PATH/helloworld_server -i 127.0.0.1 -p 8888 &
+    $BIN_PATH/helloworld_client -i 127.0.0.1 -p 8888
 
     check_example_process "helloworld_server"
+    sleep 1
     clear_example_process "helloworld_server"
 }
 
 function run_streaming_example()
 {
-    $BIN_PATH/streaming_server &
-    $BIN_PATH/streaming_client
+    $BIN_PATH/streaming_server -i 127.0.0.1 -p 8888 &
+    sleep 1
+    $BIN_PATH/streaming_client -i 127.0.0.1 -p 8888
 
     check_example_process "streaming_server"
     clear_example_process "streaming_server"

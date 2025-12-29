@@ -25,8 +25,9 @@ add_subdirectory(server)
 add_subdirectory(transport)
 add_subdirectory(utils)
 
-target_link_libraries(a2a_cpp PUBLIC nlohmann_json::nlohmann_json dl pthread)
+target_link_libraries(a2a_cpp PRIVATE third_party_headers dl pthread)
+target_link_libraries(a2a_cpp PUBLIC nlohmann_json::nlohmann_json)
 
 if (A2A_HTTP AND CURL_FOUND)
-    target_link_libraries(a2a_cpp PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(a2a_cpp PRIVATE CURL::libcurl)
 endif()

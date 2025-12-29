@@ -55,27 +55,8 @@ brew install libcurl-devel
 ```
 其他平台请安装等价包
 
-##### cpp-httplib
-源码安装
-1. 下载源代码，并解压
-2. 进入到源代码目录，执行以下命令
-```bash
-mkdir build && cd build
-cmake ..
-make -j $(nproc)
-make install
-```
-
-##### nlohmann_json
-源码安装
-1. 下载源代码，并解压
-2. 进入到源代码目录，执行以下命令
-```bash
-mkdir build && cd build
-cmake ..
-make -j $(nproc)
-make install
-```
+##### cpp-httplib 和 nlohmann_json
+在third_party/third_party.cmake中会尝试先在本地系统查找，查找失败则会尝试从github拉取源代码
 
 #### 编译a2a cpp
 
@@ -88,10 +69,10 @@ make -j $(nproc)
 编译成功后，会在与code同级目录下生成output目录，包含lib和bin，其中lib为动态库，bin为示例二进制
 使用时，讲lib下的动态库放入/usr/lib64下，然后可以执行bin下的二进制
 服务端启动后会监听本机的8080端口，启动命令为：
-./helloworld_server
+./helloworld_server -i 127.0.0.1 -p 8080
 
 客户端可以连接制定IP和端口的服务端，启动命令为：
-./helloworld_client 127.0.0.1 8080
+./helloworld_client -i 127.0.0.1 -p 8080
 
 成功运行会在客户端控制台输出服务端返回的数据
 

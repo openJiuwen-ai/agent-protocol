@@ -121,19 +121,19 @@ int HttpServerTransport::Start(const std::string& ipAddr, uint16_t port)
 
         // 使用 set_chunked_content_provider
         res.set_chunked_content_provider("text/event-stream",
-                                         [this, body = req.body](size_t, httplib::DataSink& sink) -> bool {
-                                             HttplibEmitter emitter(&sink);
-                                             try {
-                                                if (streamHandler_) {
-                                                    streamHandler_(body, emitter);
-                                                }
-                                                sink.done(); // 显式标记完成
-                                             } catch (const std::exception& e) {
-                                                std::cout << e.what();
-                                                sink.done();
-                                             }
-                                             return true; // 返回 true 表示完成
-                                         });
+            [this, body = req.body](size_t, httplib::DataSink& sink) -> bool {
+                HttplibEmitter emitter(&sink);
+                try {
+                    if (streamHandler_) {
+                        streamHandler_(body, emitter);
+                    }
+                    sink.done(); // 显式标记完成
+                } catch (const std::exception& e) {
+                    std::cout << e.what();
+                    sink.done();
+                }
+                return true; // 返回 true 表示完成
+            });
     });
 
     server_.Get("/.well-known/agent-card.json", [this](const httplib::Request& req, httplib::Response& res) {

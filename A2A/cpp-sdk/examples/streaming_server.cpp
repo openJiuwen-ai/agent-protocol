@@ -4,8 +4,9 @@
 
 #include <cstdlib>
 #include <getopt.h>
-#include <httplib.h>
 #include <iostream>
+#include <atomic>
+#include <csignal>
 #include <nlohmann/json.hpp>
 
 #include "server/request_handler.h"
@@ -50,40 +51,40 @@ public:
         }
 
         // 2. 生成任务 ID（用你平台的 UUID，或 fallback）
-        std::string task_id = "task-1";
-        std::string ctx_id = a2a::generateUuid();
+        std::string taskId = req->taskId.value_or(a2a::generateUuid());
+        std::string ctxId = req->contextId.value_or(a2a::generateUuid());
 
         // 3. 创建任务
         a2a::Task task;
-        task.id = task_id;
-        task.contextId = ctx_id;
+        task.id = taskId;
+        task.contextId = ctxId;
         task.kind = "task";
         task.status.state = a2a::TaskState::WORKING;
         eventQueue.Enqueue(task);
 
         // 4. 创建flight info
         a2a::TaskStatusUpdateEvent flight_status;
-        flight_status.contextId = ctx_id;
+        flight_status.contextId = ctxId;
         flight_status.final = false;
         flight_status.status.state = a2a::TaskState::WORKING;
         flight_status.status.message = makeCombinedPart("flight-progress", {{"stage", "calling-flight"}});
-        flight_status.taskId = task_id;
+        flight_status.taskId = taskId;
         eventQueue.Enqueue(flight_status);
 
         // 5. 模拟FlightAgent的回复
         json flight_data{
             {"action", "flights/info"}, {"airline", "Air France"}, {"destination", destination}, {"price", "750 USD"}};
         a2a::TaskArtifactUpdateEvent flight_artifact;
-        flight_artifact.contextId = ctx_id;
-        flight_artifact.taskId = task_id;
+        flight_artifact.contextId = ctxId;
+        flight_artifact.taskId = taskId;
         flight_artifact.artifact.artifactId = a2a::generateUuid();
         flight_artifact.artifact.parts.push_back(a2a::TextPart{"text", std::nullopt, flight_data.dump()});
         eventQueue.Enqueue(flight_artifact);
 
         // 6. 创建weather info
         a2a::TaskStatusUpdateEvent weather_status;
-        weather_status.contextId = ctx_id;
-        weather_status.taskId = task_id;
+        weather_status.contextId = ctxId;
+        weather_status.taskId = taskId;
         weather_status.final = false;
         weather_status.status.state = a2a::TaskState::WORKING;
         weather_status.status.message = makeCombinedPart("weather-progress", {{"stage", "calling-weather"}});
@@ -93,16 +94,16 @@ public:
         json weather_data{
             {"action", "weather/forecast"}, {"city", destination}, {"temperature", "-2°C"}, {"conditions", "Snowy"}};
         a2a::TaskArtifactUpdateEvent weather_artifact;
-        weather_artifact.contextId = ctx_id;
-        weather_artifact.taskId = task_id;
+        weather_artifact.contextId = ctxId;
+        weather_artifact.taskId = taskId;
         weather_artifact.artifact.artifactId = a2a::generateUuid();
         weather_artifact.artifact.parts.push_back(a2a::TextPart{"text", std::nullopt, weather_data.dump()});
         eventQueue.Enqueue(weather_artifact);
 
         // 8. 最终状态更新
         a2a::TaskStatusUpdateEvent final_status;
-        final_status.contextId = ctx_id;
-        final_status.taskId = task_id;
+        final_status.contextId = ctxId;
+        final_status.taskId = taskId;
         final_status.final = true;
         final_status.status.state = a2a::TaskState::COMPLETED;
         final_status.status.message = makeCombinedPart("done", {{"stage", "aggregate"}});
@@ -163,12 +164,12 @@ private:
 };
 
 // 全局退出标志
-static std::atomic<bool> running{true};
+static std::atomic<bool> g_running{true};
 
 void signal_handler(int sig)
 {
     std::cout << "\nReceived signal " << sig << ". Shutting down...\n";
-    running = false;
+    g_running = false;
 }
 
 void printUsage(const char* program_name)

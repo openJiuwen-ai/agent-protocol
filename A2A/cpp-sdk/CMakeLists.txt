@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(third_party/third_party.cmake)
+
 # 构建类型设置
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -42,12 +44,6 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/output/lib)
 
 # 指定curl的库路径
 find_package(CURL REQUIRED)
-
-# 指定curl的库路径
-find_package(OpenSSL REQUIRED)
-
-set(nlohmann_json_DIR "${LIB_PATH}/share/cmake/nlohmann_json")
-find_package(nlohmann_json REQUIRED NO_DEFAULT_PATH)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 add_subdirectory(src)

@@ -58,13 +58,14 @@ public:
 
         // 发送处理结果
         a2a::Message response_msg;
-        response_msg.messageId = "msg-123";
         response_msg.role = a2a::Role::AGENT;
 
         // 从请求中提取用户输入
         std::string user_input = "Hello World!";
         if (context.Message()) {
             const auto& msg = context.Message();
+            response_msg.messageId = msg->messageId;
+            response_msg.contextId = msg->contextId.value_or("");
             for (const auto& part : msg->parts) {
                 if (auto* text_part = std::get_if<a2a::TextPart>(&part)) {
                     user_input = text_part->text;
