@@ -6,6 +6,7 @@
 #define MCP_HTTP_COMMON_INCLUDE_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>

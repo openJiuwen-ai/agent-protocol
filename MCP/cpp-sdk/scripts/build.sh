@@ -8,10 +8,10 @@
 #   - Reserved switches for examples and unit tests
 #
 # Usage examples:
-#   ./build.sh                    # Release build, core lib only
-#   ./build.sh -t Debug           # Debug build
-#   ./build.sh --with-tests       # build unit tests if CMakeLists adds them
-#   ./build.sh --coverage         # build with code coverage (requires tests)
+#   ./script/build.sh                    # Release build, core lib only
+#   ./script/build.sh -t Debug           # Debug build
+#   ./script/build.sh --with-tests       # build unit tests if CMakeLists adds them
+#   ./script/build.sh --coverage         # build with code coverage (requires tests)
 #
 
 set -euo pipefail
@@ -104,7 +104,7 @@ if [[ ${OPTIMAL_JOBS} -gt 8 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="${SCRIPT_DIR}"
+SOURCE_DIR="${SCRIPT_DIR}/.."
 BUILD_DIR_ABS="${SOURCE_DIR}/${BUILD_DIR}"
 
 mkdir -p "${BUILD_DIR_ABS}"

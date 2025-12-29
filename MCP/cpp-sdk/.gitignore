@@ -35,6 +35,9 @@
 build/
 output/
 
+# Test directories
+test_output/
+
 # Third party dependencies (managed by CMake FetchContent)
 third_party/googletest-*/
 third_party/libevent-*/
