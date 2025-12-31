@@ -103,18 +103,7 @@ int main()
         MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP server instance created successfully");
 
         // add tool
-        Mcp::ToolInfo echoTool;
-        echoTool.name = ECHO_TOOL_NAME;
-        echoTool.title = ECHO_TOOL_TITLE;
-        echoTool.description = ECHO_TOOL_DESCRIPTION;
-        echoTool.inputSchema = {
-            {"type", "object"},
-            {"properties", {{"user_query", {{"type", "string"}, {"description", "The user query."}}}}},
-            {"required", {"user_query"}}};
-        echoTool.outputSchema = {
-            {"type", "object"},
-            {"properties", {{"result", {{"type", "string"}, {"description", "The echoed message"}}}}}};
-        echoTool.func = [](const std::string &name, const Mcp::JsonValue &arguments,
+        auto echoFunc = [](const std::string &name, const Mcp::JsonValue &arguments,
                            const std::optional<Mcp::JsonValue> &ctx) -> Mcp::CallToolResult {
             Mcp::CallToolResult result;
             result.isError = false;
@@ -134,9 +123,16 @@ int main()
             }
             return result;
         };
+        std::string echoInputSchema = R"({"type": "object", "properties": {"user_query": {"type": "string",
+            "description": "The user query."}}, "required": ["user_query"]})";
+        std::string echoOutputSchema = R"({"type": "object", "properties": {"result": {"type": "string", "description":
+            "The echoed message"}}})";
+        std::string echoTitle = ECHO_TOOL_TITLE;
+        std::string echoDescription = ECHO_TOOL_DESCRIPTION;
         try {
-            server->AddTool(echoTool);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", echoTool.name.c_str());
+            server->AddTool(ECHO_TOOL_NAME, echoFunc, std::cref(echoTitle), std::cref(echoDescription),
+                std::cref(echoInputSchema), std::cref(echoOutputSchema));
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", ECHO_TOOL_NAME);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add tool failed: %s", e.what());
         } catch (...) {
@@ -278,6 +274,7 @@ int main()
     MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP Server test completed");
     if (g_logFile) {
         fclose(g_logFile);
+        g_logFile = nullptr;
     }
 
     std::cout << "=== Test completed successfully ===" << std::endl;
