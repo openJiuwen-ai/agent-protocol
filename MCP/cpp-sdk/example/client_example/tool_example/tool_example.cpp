@@ -59,7 +59,8 @@ int main()
         auto listResult = listFuture.get();
         MCP_LOG(MCP_LOG_LEVEL_INFO, "ListTools success, tool count: %zu", listResult->tools.size());
         for (const auto &tool : listResult->tools) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Tool: %s - %s", tool.name.c_str(), tool.description.c_str());
+            const char* desc = tool.description.has_value() ? tool.description->c_str() : "";
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Tool: %s - %s", tool.name.c_str(), desc);
         }
     } catch (const std::exception &e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListTools failed: %s", e.what());

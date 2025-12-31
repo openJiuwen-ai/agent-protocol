@@ -6,6 +6,7 @@
 #define MCP_TYPE_INCLUDE_H_
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -162,6 +163,14 @@ struct ResourceLink {
     std::optional<Annotations> annotations;
 };
 
+struct ToolAnnotations {
+    std::optional<std::string> title;
+    std::optional<bool> readOnlyHint = std::nullopt;
+    std::optional<bool> destructiveHint = std::nullopt;
+    std::optional<bool> idempotentHint = std::nullopt;
+    std::optional<bool> openWorldHint = std::nullopt;
+};
+
 // A type that can hold any of the content types
 using ContentType = std::variant<TextContent, ImageContent, AudioContent, ResourceLink, EmbeddedResource>;
 
@@ -173,20 +182,14 @@ struct CallToolResult : public Result {
 using ToolFunc = std::function<CallToolResult(const std::string& name, const JsonValue& arguments,
                                               const std::optional<JsonValue>& ctx)>;
 
-struct ToolInfo {
-    std::string name;
-    std::string title;
-    std::string description;
-    JsonValue inputSchema;
-    JsonValue outputSchema;
-    ToolFunc func;
-};
-
 //Struct for list_tool result
 struct Tool {
     std::string name;
-    std::string description;
-    JsonValue inputSchema;
+    std::optional<std::string> description;
+    std::optional<std::string> inputSchema;
+    std::optional<std::string> outputSchema;
+    std::optional<ToolAnnotations> annotations;
+    std::optional<std::vector<Icon>> icons;
 };
 
 struct ListToolsResult : public Result {

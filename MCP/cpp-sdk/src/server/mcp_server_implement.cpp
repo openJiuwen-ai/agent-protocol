@@ -21,6 +21,7 @@
 #include "mcp_log.h"
 #include "mcp_type.h"
 #include "server/server_session.h"
+#include "server/tool_manager.h"
 #include "shared/common_type.h"
 #include "shared/jsonrpc.h"
 
@@ -357,8 +358,22 @@ void McpServerImplement::Stop()
     MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP Server stopped");
 }
 
-void McpServerImplement::AddTool(const ToolInfo& tool)
+void McpServerImplement::AddTool(const std::string& name, ToolFunc fn,
+                                 std::optional<std::reference_wrapper<const std::string>> title,
+                                 std::optional<std::reference_wrapper<const std::string>> description,
+                                 std::optional<std::reference_wrapper<const std::string>> inputSchema,
+                                 std::optional<std::reference_wrapper<const std::string>> outputSchema,
+                                 const bool structuredOutput,
+                                 std::optional<std::reference_wrapper<const ToolAnnotations>> annotations,
+                                 std::optional<std::reference_wrapper<const std::vector<Icon>>> icons)
 {
+    if (fn == nullptr) {
+        throw std::invalid_argument("Tool function implementation cannot be null");
+    }
+    if (name.empty()) {
+        throw std::invalid_argument("Tool name cannot be empty");
+    }
+    ServerTool tool(name, fn, title, description, inputSchema, outputSchema, structuredOutput, annotations, icons);
     toolManager_.AddTool(tool);
 }
 

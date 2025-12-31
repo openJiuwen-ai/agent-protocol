@@ -72,7 +72,6 @@ sudo yum install libcurl-devel
 
 ### 运行 MCP Client
 
-```
 具体可以参考 Client 示例目录，直接执行：
 
 ```bash

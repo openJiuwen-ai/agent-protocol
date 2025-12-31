@@ -638,24 +638,88 @@ struct adl_serializer<Mcp::CallToolResult> {
     }
 };
 
+// ToolAnnotations
+template <>
+struct adl_serializer<Mcp::ToolAnnotations> {
+    static void to_json(json& j, const Mcp::ToolAnnotations& ta)
+    {
+        if (ta.title.has_value()) {
+            j["title"] = ta.title.value();
+        }
+        if (ta.readOnlyHint.has_value()) {
+            j["readOnlyHint"] = ta.readOnlyHint.value();
+        }
+        if (ta.destructiveHint.has_value()) {
+            j["destructiveHint"] = ta.destructiveHint.value();
+        }
+        if (ta.idempotentHint.has_value()) {
+            j["idempotentHint"] = ta.idempotentHint.value();
+        }
+        if (ta.openWorldHint.has_value()) {
+            j["openWorldHint"] = ta.openWorldHint.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ToolAnnotations& ta)
+    {
+        if (j.contains("title")) {
+            ta.title = j.at("title").get<std::string>();
+        }
+        if (j.contains("readOnlyHint")) {
+            ta.readOnlyHint = j.at("readOnlyHint").get<bool>();
+        }
+        if (j.contains("destructiveHint")) {
+            ta.destructiveHint = j.at("destructiveHint").get<bool>();
+        }
+        if (j.contains("idempotentHint")) {
+            ta.idempotentHint = j.at("idempotentHint").get<bool>();
+        }
+        if (j.contains("openWorldHint")) {
+            ta.openWorldHint = j.at("openWorldHint").get<bool>();
+        }
+    }
+};
+
 // Tool
 template <>
 struct adl_serializer<Mcp::Tool> {
     static void to_json(json& j, const Mcp::Tool& t)
     {
         j["name"] = t.name;
-        j["description"] = t.description;
-        j["inputSchema"] = t.inputSchema;
+        if (t.description.has_value()) {
+            j["description"] = t.description.value();
+        }
+        if (t.inputSchema.has_value()) {
+            j["inputSchema"] = nlohmann::json::parse(t.inputSchema.value());
+        }
+        if (t.outputSchema.has_value()) {
+            j["outputSchema"] = nlohmann::json::parse(t.outputSchema.value());
+        }
+        if (t.annotations.has_value()) {
+            j["annotations"] = t.annotations.value();
+        }
+        if (t.icons.has_value()) {
+            j["icons"] = t.icons.value();
+        }
     }
 
     static void from_json(const json& j, Mcp::Tool& t)
     {
         j.at("name").get_to(t.name);
-        t.description = j.value("description", std::string());
+        if (j.contains("description")) {
+            t.description = j.at("description").get<std::string>();
+        }
         if (j.contains("inputSchema")) {
-            t.inputSchema = j.at("inputSchema");
-        } else {
-            t.inputSchema = json::object();
+            t.inputSchema = j.at("inputSchema").dump();
+        }
+        if (j.contains("outputSchema")) {
+            t.outputSchema = j.at("outputSchema").dump();
+        }
+        if (j.contains("annotations")) {
+            t.annotations = j.at("annotations").get<Mcp::ToolAnnotations>();
+        }
+        if (j.contains("icons")) {
+            t.icons = j.at("icons").get<std::vector<Mcp::Icon>>();
         }
     }
 };

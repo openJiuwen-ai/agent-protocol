@@ -8,19 +8,8 @@
 
 namespace Mcp {
 
-void ToolManager::AddTool(const ToolInfo& tool)
+void ToolManager::AddTool(const ServerTool& tool)
 {
-    // Validate required fields
-    if (tool.name.empty()) {
-        throw std::invalid_argument("Tool name cannot be empty");
-    }
-    if (tool.description.empty()) {
-        throw std::invalid_argument("Tool description cannot be empty");
-    }
-    if (!tool.func) {
-        throw std::invalid_argument("Tool function implementation cannot be null");
-    }
-
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tools_.find(tool.name);
     if (it != tools_.end() && !overwrite_) {
@@ -51,12 +40,14 @@ ListToolsResult ToolManager::ListTools() const
     ListToolsResult result;
     result.tools.reserve(tools_.size());
 
-    for (const auto& [_, toolInfo] : tools_) {
+    for (const auto& [_, item] : tools_) {
         Tool tool;
-        tool.name = toolInfo.name;
-        tool.description = toolInfo.description;
-        tool.inputSchema = toolInfo.inputSchema;
-
+        tool.name = item.name;
+        tool.description = item.description;
+        tool.inputSchema = item.inputSchema;
+        tool.outputSchema = item.outputSchema;
+        tool.annotations = item.annotations;
+        tool.icons = item.icons;
         result.tools.push_back(std::move(tool));
     }
 

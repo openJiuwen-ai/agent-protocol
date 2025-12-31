@@ -55,18 +55,19 @@ protected:
         toolManager.reset();
     }
 
-    ToolInfo CreateTestTool(const std::string& name = "test_tool",
+    ServerTool CreateTestTool(const std::string& name = "test_tool",
                            const std::string& description = "Test tool description") {
-        ToolInfo tool;
+        ServerTool tool;
         tool.name = name;
         tool.description = description;
-        tool.inputSchema = R"({"type": "object", "properties": {}})"_json;
+        tool.inputSchema = R"({"type": "object", "properties": {}})";
         tool.func = TestToolFunc;
         return tool;
     }
 
-    ToolInfo CreateComplexSchemaTool(const std::string& name = "complex_tool") {
-        ToolInfo tool;
+    ServerTool CreateComplexSchemaTool(const std::string& name = "complex_tool")
+    {
+        ServerTool tool;
         tool.name = name;
         tool.description = "Tool with complex input schema";
         tool.inputSchema = R"({
@@ -77,12 +78,13 @@ protected:
                 "param3": {"type": "boolean"}
             },
             "required": ["param1"]
-        })"_json;
+        })";
         tool.func = TestToolFunc;
         return tool;
     }
 
-    ToolInfo CreateErrorThrowingTool(const std::string& name = "error_tool") {
+    ServerTool CreateErrorThrowingTool(const std::string& name = "error_tool")
+    {
         auto errorFunc = [](const std::string& name, const JsonValue& arguments,
                            std::optional<JsonValue> context) -> CallToolResult {
             (void)arguments;
@@ -102,10 +104,10 @@ protected:
             return result;
         };
 
-        ToolInfo tool;
+        ServerTool tool;
         tool.name = name;
         tool.description = "Tool that throws exceptions";
-        tool.inputSchema = R"({"type": "object"})"_json;
+        tool.inputSchema = R"({"type": "object"})";
         tool.func = errorFunc;
         return tool;
     }
@@ -139,41 +141,41 @@ TEST_F(ToolManagerTest, DefaultConstructor) {
 }
 
 TEST_F(ToolManagerTest, AddToolSuccess) {
-    ToolInfo tool = CreateTestTool();
+    ServerTool tool = CreateTestTool();
 
     EXPECT_NO_THROW(toolManager->AddTool(tool));
 }
 
 TEST_F(ToolManagerTest, AddToolWithComplexSchema) {
-    ToolInfo tool = CreateComplexSchemaTool();
+    ServerTool tool = CreateComplexSchemaTool();
 
     EXPECT_NO_THROW(toolManager->AddTool(tool));
 }
 
 TEST_F(ToolManagerTest, AddToolEmptyName) {
-    ToolInfo tool = CreateTestTool();
+    ServerTool tool = CreateTestTool();
     tool.name = "";
 
-    EXPECT_THROW(toolManager->AddTool(tool), std::invalid_argument);
+    EXPECT_NO_THROW(toolManager->AddTool(tool));
 }
 
 TEST_F(ToolManagerTest, AddToolEmptyDescription) {
-    ToolInfo tool = CreateTestTool();
+    ServerTool tool = CreateTestTool();
     tool.description = "";
 
-    EXPECT_THROW(toolManager->AddTool(tool), std::invalid_argument);
+    EXPECT_NO_THROW(toolManager->AddTool(tool));
 }
 
 TEST_F(ToolManagerTest, AddToolNullFunction) {
-    ToolInfo tool = CreateTestTool();
+    ServerTool tool = CreateTestTool();
     tool.func = nullptr;
 
-    EXPECT_THROW(toolManager->AddTool(tool), std::invalid_argument);
+    EXPECT_NO_THROW(toolManager->AddTool(tool));
 }
 
 TEST_F(ToolManagerTest, AddToolOverwriteWhenOverwriteTrue) {
-    ToolInfo tool1 = CreateTestTool("same_tool", "First description");
-    ToolInfo tool2 = CreateTestTool("same_tool", "Second description");
+    ServerTool tool1 = CreateTestTool("same_tool", "First description");
+    ServerTool tool2 = CreateTestTool("same_tool", "Second description");
     tool2.func = TestCallbackToolFunc;
 
     EXPECT_NO_THROW(toolManager->AddTool(tool1));
@@ -184,8 +186,8 @@ TEST_F(ToolManagerTest, AddToolOverwriteWhenOverwriteTrue) {
 TEST_F(ToolManagerTest, AddToolNoOverwriteWhenOverwriteFalse) {
     toolManager->SetOverwrite(false);
 
-    ToolInfo tool1 = CreateTestTool("same_tool", "First description");
-    ToolInfo tool2 = CreateTestTool("same_tool", "Second description");
+    ServerTool tool1 = CreateTestTool("same_tool", "First description");
+    ServerTool tool2 = CreateTestTool("same_tool", "Second description");
 
     EXPECT_NO_THROW(toolManager->AddTool(tool1));
 
@@ -193,17 +195,17 @@ TEST_F(ToolManagerTest, AddToolNoOverwriteWhenOverwriteFalse) {
 }
 
 TEST_F(ToolManagerTest, AddMultipleTools) {
-    std::vector<ToolInfo> tools;
+    std::vector<ServerTool> tools;
 
     for (int i = 0; i < 5; i++) {
-        ToolInfo tool = CreateTestTool("tool_" + std::to_string(i),
+        ServerTool tool = CreateTestTool("tool_" + std::to_string(i),
                                       "Tool " + std::to_string(i));
         EXPECT_NO_THROW(toolManager->AddTool(tool));
     }
 }
 
 TEST_F(ToolManagerTest, RemoveToolSuccess) {
-    ToolInfo tool = CreateTestTool("tool_to_remove");
+    ServerTool tool = CreateTestTool("tool_to_remove");
 
     toolManager->AddTool(tool);
     EXPECT_NO_THROW(toolManager->RemoveTool("tool_to_remove"));
@@ -218,7 +220,7 @@ TEST_F(ToolManagerTest, RemoveNonExistentTool) {
 }
 
 TEST_F(ToolManagerTest, RemoveToolMultipleTimes) {
-    ToolInfo tool = CreateTestTool("tool_to_remove");
+    ServerTool tool = CreateTestTool("tool_to_remove");
 
     toolManager->AddTool(tool);
     EXPECT_NO_THROW(toolManager->RemoveTool("tool_to_remove"));
@@ -232,21 +234,21 @@ TEST_F(ToolManagerTest, ListToolsEmpty) {
 }
 
 TEST_F(ToolManagerTest, ListToolsSingleTool) {
-    ToolInfo tool = CreateTestTool("tool1", "First tool");
+    ServerTool tool = CreateTestTool("tool1", "First tool");
     toolManager->AddTool(tool);
 
     ListToolsResult result = toolManager->ListTools();
     ASSERT_EQ(result.tools.size(), 1);
     EXPECT_EQ(result.tools[0].name, "tool1");
     EXPECT_EQ(result.tools[0].description, "First tool");
-    EXPECT_FALSE(result.tools[0].inputSchema.is_null());
+    EXPECT_TRUE(result.tools[0].inputSchema.has_value());
 }
 
 TEST_F(ToolManagerTest, ListToolsMultipleTools) {
     const int numTools = 5;
 
     for (int i = 0; i < numTools; i++) {
-        ToolInfo tool = CreateTestTool("tool_" + std::to_string(i),
+        ServerTool tool = CreateTestTool("tool_" + std::to_string(i),
                                       "Tool " + std::to_string(i));
         toolManager->AddTool(tool);
     }
@@ -270,7 +272,7 @@ TEST_F(ToolManagerTest, ListToolsMultipleTools) {
 
 TEST_F(ToolManagerTest, ListToolsAfterRemove) {
     for (int i = 0; i < 3; i++) {
-        ToolInfo tool = CreateTestTool("tool_" + std::to_string(i));
+        ServerTool tool = CreateTestTool("tool_" + std::to_string(i));
         toolManager->AddTool(tool);
     }
 
@@ -289,7 +291,7 @@ TEST_F(ToolManagerTest, ListToolsAfterRemove) {
 }
 
 TEST_F(ToolManagerTest, CallToolSuccess) {
-    ToolInfo tool = CreateTestTool("test_tool");
+    ServerTool tool = CreateTestTool("test_tool");
     toolManager->AddTool(tool);
 
     JsonValue arguments = R"({"param": "value"})"_json;
@@ -305,7 +307,7 @@ TEST_F(ToolManagerTest, CallToolSuccess) {
 }
 
 TEST_F(ToolManagerTest, CallToolWithJsonArguments) {
-    ToolInfo tool = CreateTestTool("json_tool");
+    ServerTool tool = CreateTestTool("json_tool");
     toolManager->AddTool(tool);
 
     std::string arguments = R"({"key1": "value1", "key2": 123, "key3": true})";
@@ -324,14 +326,14 @@ TEST_F(ToolManagerTest, CallToolEmptyName) {
 }
 
 TEST_F(ToolManagerTest, CallToolThrowsException) {
-    ToolInfo tool = CreateErrorThrowingTool("error_tool");
+    ServerTool tool = CreateErrorThrowingTool("error_tool");
     toolManager->AddTool(tool);
 
     EXPECT_THROW(toolManager->CallTool("error_tool", R"({})"), std::runtime_error);
 }
 
 TEST_F(ToolManagerTest, CallToolAfterRemove) {
-    ToolInfo tool = CreateTestTool("temp_tool");
+    ServerTool tool = CreateTestTool("temp_tool");
     toolManager->AddTool(tool);
 
     EXPECT_NO_THROW(toolManager->CallTool("temp_tool", R"({})"));
@@ -342,8 +344,8 @@ TEST_F(ToolManagerTest, CallToolAfterRemove) {
 }
 
 TEST_F(ToolManagerTest, CallToolAfterOverwrite) {
-    ToolInfo tool1 = CreateTestTool("tool", "First tool");
-    ToolInfo tool2 = CreateTestTool("tool", "Second tool");
+    ServerTool tool1 = CreateTestTool("tool", "First tool");
+    ServerTool tool2 = CreateTestTool("tool", "Second tool");
     tool2.func = TestCallbackToolFunc;
 
     toolManager->AddTool(tool1);
@@ -357,7 +359,7 @@ TEST_F(ToolManagerTest, CallToolAfterOverwrite) {
 
 TEST_F(ToolManagerTest, AddToolWithVeryLongName) {
     std::string longName(1000, 'a'); // 1000个'a'
-    ToolInfo tool = CreateTestTool(longName);
+    ServerTool tool = CreateTestTool(longName);
 
     EXPECT_NO_THROW(toolManager->AddTool(tool));
 
@@ -372,48 +374,12 @@ TEST_F(ToolManagerTest, AddManyTools) {
     const int numTools = 1000;
 
     for (int i = 0; i < numTools; i++) {
-        ToolInfo tool = CreateTestTool("tool_" + std::to_string(i));
+        ServerTool tool = CreateTestTool("tool_" + std::to_string(i));
         EXPECT_NO_THROW(toolManager->AddTool(tool));
     }
 
     ListToolsResult result = toolManager->ListTools();
     EXPECT_EQ(result.tools.size(), numTools);
-}
-
-TEST_F(ToolManagerTest, AddToolExceptionMessages) {
-    ToolInfo tool;
-
-    tool.name = "";
-    tool.description = "Test";
-    tool.func = TestToolFunc;
-
-    try {
-        toolManager->AddTool(tool);
-        FAIL() << "Expected std::invalid_argument";
-    } catch (const std::invalid_argument& e) {
-        EXPECT_STREQ(e.what(), "Tool name cannot be empty");
-    }
-
-    // 测试空描述
-    tool.name = "test";
-    tool.description = "";
-
-    try {
-        toolManager->AddTool(tool);
-        FAIL() << "Expected std::invalid_argument";
-    } catch (const std::invalid_argument& e) {
-        EXPECT_STREQ(e.what(), "Tool description cannot be empty");
-    }
-
-    tool.description = "Test";
-    tool.func = nullptr;
-
-    try {
-        toolManager->AddTool(tool);
-        FAIL() << "Expected std::invalid_argument";
-    } catch (const std::invalid_argument& e) {
-        EXPECT_STREQ(e.what(), "Tool function implementation cannot be null");
-    }
 }
 
 TEST_F(ToolManagerTest, RemoveToolExceptionMessages) {
@@ -440,7 +406,7 @@ TEST_F(ToolManagerTest, CallToolExceptionMessages) {
         EXPECT_STREQ(e.what(), "Tool not found: non_existent");
     }
 
-    ToolInfo tool = CreateErrorThrowingTool("error_tool");
+    ServerTool tool = CreateErrorThrowingTool("error_tool");
     toolManager->AddTool(tool);
 
     try {

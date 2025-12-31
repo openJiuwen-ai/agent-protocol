@@ -39,7 +39,14 @@ public:
         return running_;
     }
 
-    void AddTool(const ToolInfo& tool) override;
+    void AddTool(const std::string& name, ToolFunc fn,
+                 std::optional<std::reference_wrapper<const std::string>> title = std::nullopt,
+                 std::optional<std::reference_wrapper<const std::string>> description = std::nullopt,
+                 std::optional<std::reference_wrapper<const std::string>> inputSchema = std::nullopt,
+                 std::optional<std::reference_wrapper<const std::string>> outputSchema = std::nullopt,
+                 const bool structuredOutput = false,
+                 std::optional<std::reference_wrapper<const ToolAnnotations>> annotations = std::nullopt,
+                 std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt) override;
     void RemoveTool(const std::string& name) override;
 
     void AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler) override;

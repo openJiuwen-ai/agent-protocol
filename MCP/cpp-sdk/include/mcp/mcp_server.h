@@ -55,9 +55,24 @@ public:
     /**
      * Add a tool to the server.
      *
-     * @param tool Tool information including name, description, and implementation
+     * @param name Tool name, must be unique (required).
+     * @param fn Tool function object (required).
+     * @param title Tool title (optional).
+     * @param description Tool description (optional).
+     * @param inputSchema String for input parameters (optional).
+     * @param outputSchema String for output parameters (optional).
+     * @param structuredOutput Whether the tool supports structured output (default: false).
+     * @param annotations Tool annotations (optional).
+     * @param icons Tool icons (optional).
      */
-    virtual void AddTool(const ToolInfo& tool) = 0;
+    virtual void AddTool(const std::string& name, ToolFunc fn,
+                         std::optional<std::reference_wrapper<const std::string>> title = std::nullopt,
+                         std::optional<std::reference_wrapper<const std::string>> description = std::nullopt,
+                         std::optional<std::reference_wrapper<const std::string>> inputSchema = std::nullopt,
+                         std::optional<std::reference_wrapper<const std::string>> outputSchema = std::nullopt,
+                         const bool structuredOutput = false,
+                         std::optional<std::reference_wrapper<const ToolAnnotations>> annotations = std::nullopt,
+                         std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt) = 0;
 
     /**
      * Remove a tool from the server.
