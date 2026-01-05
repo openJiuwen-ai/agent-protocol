@@ -39,6 +39,7 @@ function run_helloworld_example()
     $BIN_PATH/helloworld_client -i 127.0.0.1 -p 8888
 
     check_example_process "helloworld_server"
+    sleep 1
     clear_example_process "helloworld_server"
 }
 
