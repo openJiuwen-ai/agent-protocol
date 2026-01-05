@@ -68,14 +68,6 @@ install_dependencies() {
                 need_curl=1
             fi
 
-            # Check openssl-lib (runtime library)
-            if check_deb_package openssl-libs; then
-                echo "  - openssl-lib: OK"
-            else
-                echo "  - openssl-lib: NOT FOUND"
-                need_openssl=1
-            fi
-
             # Check openssl-devel (development package)
             if check_deb_package libssl-dev; then
                 echo "  - openssl-devel: OK"

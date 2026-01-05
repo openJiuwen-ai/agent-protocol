@@ -239,19 +239,6 @@ fi
 cd "${SOURCE_DIR}"
 echo ""
 
-# Step 4: Generate coverage report
-echo "[Step 4/4] Generating HTML coverage report..."
-echo "  Output directory: ${OUTPUT_DIR_ABS}/coverage"
-
-cd "${BUILD_DIR_ABS}"
-python3 -m gcovr -r ../ \
-    --exclude-dir=".*test.*" \
-    --exclude-dir=".*third_party.*" \
-    --exclude=".*third_party.*\.hpp" \
-    --html --html-details \
-    -o "${OUTPUT_DIR_ABS}/coverage/coverage.html"
-cd "${SOURCE_DIR}"
-
 echo ""
 echo "========================================"
 echo "  Reports Generated!"
@@ -259,7 +246,4 @@ echo "========================================"
 echo ""
 echo "Test Results Report:"
 echo "  file://${OUTPUT_DIR_ABS}/ut/ut_result.html"
-echo ""
-echo "Coverage Report:"
-echo "  file://${OUTPUT_DIR_ABS}/coverage/coverage.html"
 echo ""

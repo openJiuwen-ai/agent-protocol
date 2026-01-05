@@ -87,7 +87,12 @@ elseif(TARGET libevent_pthreads)
 elseif(TARGET "libevent::pthread")
 	target_link_libraries(mcp PUBLIC libevent::pthread)
 else()
-	message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
+	find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
+	if(_mcp_event_pthreads_lib)
+		target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_lib})
+	else()
+		message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
+	endif()
 endif()
 
 set_target_properties(mcp PROPERTIES

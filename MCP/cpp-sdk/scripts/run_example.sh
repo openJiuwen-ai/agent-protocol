@@ -20,6 +20,8 @@ EXAMPLE_TYPE="all"
 BUILD_ONLY=false
 RUN_ONLY=false
 SERVER_PID=""
+SERVER_PORT="${SERVER_PORT:-8000}"
+FORCE_KILL_PORT=false
 
 # Cleanup function to kill background server
 cleanup() {
@@ -29,6 +31,65 @@ cleanup() {
         kill ${SERVER_PID}
         wait ${SERVER_PID} 2>/dev/null
         echo "  ✓ Server stopped"
+    fi
+}
+
+get_listening_pids_by_port() {
+    local port="$1"
+
+    if command -v lsof > /dev/null 2>&1; then
+        lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u
+        return 0
+    fi
+
+    if command -v ss > /dev/null 2>&1; then
+        ss -ltnp "sport = :${port}" 2>/dev/null \
+            | sed -n 's/.*pid=\([0-9][0-9]*\),.*/\1/p' \
+            | sort -u
+        return 0
+    fi
+
+    return 1
+}
+
+free_port_if_occupied() {
+    local port="$1"
+    local pids
+
+    pids="$(get_listening_pids_by_port "${port}" || true)"
+    if [ -z "${pids}" ]; then
+        return 0
+    fi
+
+    if [ "${FORCE_KILL_PORT}" != true ]; then
+        echo ""
+        echo "Error: Port ${port} is already in use. Listener PID(s):"
+        echo "${pids}" | sed 's/^/  - PID: /'
+        echo ""
+        echo "Use '--force-kill-port' to terminate them automatically, or choose another port with '--port <PORT>' (or env SERVER_PORT)."
+        exit 1
+    fi
+
+    echo ""
+    echo "Port ${port} is already in use. Stopping listener process(es):"
+    echo "${pids}" | sed 's/^/  - PID: /'
+
+    echo "${pids}" | xargs -r kill 2>/dev/null || true
+    sleep 2
+
+    pids="$(get_listening_pids_by_port "${port}" || true)"
+    if [ -n "${pids}" ]; then
+        echo "Port ${port} is still in use after SIGTERM. Forcing kill (SIGKILL):"
+        echo "${pids}" | sed 's/^/  - PID: /'
+        echo "${pids}" | xargs -r kill -9 2>/dev/null || true
+        sleep 1
+    fi
+
+    pids="$(get_listening_pids_by_port "${port}" || true)"
+    if [ -n "${pids}" ]; then
+        echo "Error: Failed to free port ${port}. Remaining PID(s):"
+        echo "${pids}" | sed 's/^/  - PID: /'
+        exit 1
     fi
 }
 
@@ -48,6 +109,8 @@ Options:
                           tool    - Run tool client example
                           prompt  - Run prompt client example
                           resource - Run resource client example
+  -p, --port <PORT>     Server listen port (default: 8000, or env SERVER_PORT)
+  -f, --force-kill-port If the server port is in use, kill the process(es) occupying it
   -b, --build-only      Only build examples, do not run
   -r, --run-only        Only run examples (skip build)
   -h, --help            Show this help message
@@ -68,6 +131,14 @@ while [[ $# -gt 0 ]]; do
         -t|--type)
             EXAMPLE_TYPE="$2"
             shift 2
+            ;;
+        -p|--port)
+            SERVER_PORT="$2"
+            shift 2
+            ;;
+        -f|--force-kill-port)
+            FORCE_KILL_PORT=true
+            shift
             ;;
         -b|--build-only)
             BUILD_ONLY=true
@@ -199,6 +270,8 @@ run_server_example() {
         echo "Error: Executable 'ServerExample' not found"
         exit 1
     fi
+
+    free_port_if_occupied "${SERVER_PORT}"
 
     # Run server in background
     ./ServerExample > server_example.log 2>&1 &

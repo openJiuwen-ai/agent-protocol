@@ -49,6 +49,13 @@ function(fetch_or_find_package)
   # Try to find system package first
   set(PACKAGE_FOUND FALSE)
   if(${OPTION_VAR})
+    if (${ARG_NAME} STREQUAL "cpp-httplib")
+      find_path(${ARG_NAME}_INCLUDE_DIR "httplib.h")
+      target_include_directories(third_party_headers INTERFACE
+        ${ARG_NAME}_INCLUDE_DIR)
+      message(STATUS "[${ARG_NAME}] header found in ${ARG_NAME}_INCLUDE_DIR")
+      return()
+    endif()
     find_package(${ARG_SYSTEM_PACKAGE_NAME} QUIET)
     if (${ARG_SYSTEM_PACKAGE_NAME}_FOUND)
       message(STATUS "${ARG_SYSTEM_PACKAGE_NAME} found")
