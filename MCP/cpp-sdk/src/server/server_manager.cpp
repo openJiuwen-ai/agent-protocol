@@ -43,7 +43,6 @@ void ServerManager::ThreadMain(int id)
 
 ServerManager::~ServerManager()
 {
-    Stop();
 }
 
 void ServerManager::HttpServerManagerStart()

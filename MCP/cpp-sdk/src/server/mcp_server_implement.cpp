@@ -289,10 +289,6 @@ McpServerImplement::McpServerImplement(const ServerConfig& config)
     }
 
     config_ = config;
-    // 2. Initialize server manager
-    if (!InitializeServerManager()) {
-        throw std::runtime_error("Failed to initialize ServerManager");
-    }
 }
 
 McpServerImplement::McpServerImplement(const ServerConfig& config, const StreamableHttpServerConfig& transportConfig)
@@ -308,20 +304,12 @@ McpServerImplement::McpServerImplement(const ServerConfig& config, const Streama
 
     config_ = config;
     streamableConfig_ = transportConfig;
-    // 2. Initialize server manager
-    if (!InitializeServerManager()) {
-        throw std::runtime_error("Failed to initialize ServerManager");
-    }
 }
 
 McpServerImplement::~McpServerImplement()
 {
     if (running_) {
         Stop();
-    }
-
-    if (serverManager_) {
-        serverManager_.reset();
     }
 }
 
@@ -332,11 +320,7 @@ bool McpServerImplement::Run()
         return false;
     }
 
-    try {
-        serverManager_->Start();
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager start successfully");
-    } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Exception while starting ServerManager: %s", e.what());
+    if (!InitializeServerManager()) {
         return false;
     }
 
@@ -469,6 +453,8 @@ bool McpServerImplement::InitializeServerManager()
             this->ReceiveIncomingMessages(requestId, request, ctx);
             });
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager initialized successfully");
+        serverManager_->Start();
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager start successfully");
         return true;
     } catch (const std::exception& e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Exception while creating ServerManager: %s", e.what());
