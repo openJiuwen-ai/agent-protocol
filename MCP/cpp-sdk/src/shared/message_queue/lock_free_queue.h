@@ -18,12 +18,15 @@
 #include <cstddef>
 #include <thread>
 
+#include "shared/common_type.h"
+#include "mcp_log.h"
+
 namespace Mcp {
 
-#define MCP_LFQ_MIN_CAPACITY        2U
-#define MCP_LFQ_CACHELINE_SIZE      64U
-#define MCP_LFQ_ALIGN_MASK          (MCP_LFQ_CACHELINE_SIZE - 1U)
-#define MCP_LFQ_ALIGN_PADDING       MCP_LFQ_ALIGN_MASK
+constexpr unsigned int MCP_LFQ_MIN_CAPACITY = (MAX_THREAD_NUM * 2);
+constexpr unsigned int MCP_LFQ_CACHELINE_SIZE = 64U;
+constexpr unsigned int MCP_LFQ_ALIGN_MASK = (MCP_LFQ_CACHELINE_SIZE - 1U);
+constexpr unsigned int MCP_LFQ_ALIGN_PADDING = MCP_LFQ_ALIGN_MASK;
 
 /**
  * @brief Lock-free single producer single consumer queue
@@ -205,9 +208,14 @@ public:
     {
         // Clean up remaining items
         T* item;
-        while ((item = buffer_[tail_].data.load(std::memory_order_acquire)) != nullptr) {
-            delete item;
-            tail_ = (tail_ + 1) & mask_;
+        while (!Empty()) {
+            size_t tail = tail_.fetch_add(1);
+            Node& node = buffer_[tail & mask_];
+            item = node.data.exchange(nullptr, std::memory_order_acq_rel);
+            if (item != nullptr) {
+                delete item;
+            }
+            size_.fetch_sub(1);
         }
     }
 
@@ -224,6 +232,11 @@ public:
      */
     bool Push(const T& item)
     {
+        if (Size() >= capacity_) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "MPSCQueue overflow detected, capacity=%zu", capacity_);
+            return false;
+        }
+    
         size_t pos = head_.fetch_add(1, std::memory_order_acq_rel);
         size_t index = pos & mask_;
 
@@ -231,21 +244,13 @@ public:
 
         // Wait if this slot is still being consumed
         while (node.ready.load(std::memory_order_acquire)) {
-            // In production, might want to yield or timeout
             std::this_thread::yield();
-        }
-
-        // Check if we've lapped the consumer
-        size_t tailPos = tail_.load(std::memory_order_acquire);
-        if ((pos - tailPos) >= capacity_) {
-            // Roll back and report full
-            head_.store(pos, std::memory_order_release);
-            return false;
         }
 
         // Store the data
         node.data.store(new T(item), std::memory_order_release);
         node.ready.store(true, std::memory_order_release);
+        size_.fetch_add(1);
 
         return true;
     }
@@ -257,7 +262,9 @@ public:
      */
     bool TryPop(T& result)
     {
-        Node& node = buffer_[tail_];
+        size_t tail = tail_.load(std::memory_order_relaxed);
+        size_t index = tail & mask_;
+        Node& node = buffer_[index];
 
         if (!node.ready.load(std::memory_order_acquire)) {
             return false;
@@ -272,7 +279,8 @@ public:
             delete data;
 
             // Move to next position
-            tail_ = (tail_ + 1) & mask_;
+            tail_.fetch_add(1);
+            size_.fetch_sub(1);
             return true;
         }
 
@@ -285,8 +293,7 @@ public:
      */
     size_t Size() const
     {
-        size_t headPos = head_.load(std::memory_order_acquire);
-        return (headPos - tail_) & mask_;
+        return size_.load(std::memory_order_acquire);
     }
 
     /**
@@ -295,8 +302,7 @@ public:
      */
     bool Empty() const
     {
-        Node& node = buffer_[tail_];
-        return !node.ready.load(std::memory_order_acquire);
+        return size_.load(std::memory_order_acquire) == 0;
     }
 
     /**
@@ -324,6 +330,8 @@ private:
 
     // Consumer position (only modified by consumer)
     alignas(MCP_LFQ_CACHELINE_SIZE) std::atomic<size_t> tail_{0};
+
+    alignas(MCP_LFQ_CACHELINE_SIZE) std::atomic<size_t> size_{0};
 };
 
 } // namespace Mcp

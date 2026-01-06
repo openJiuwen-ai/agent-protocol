@@ -33,6 +33,8 @@ const char* const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 static const std::vector<std::string> SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"};
 static const std::string SUPPORTED_PROTOCOL_VERSIONS_STRING = "2024-11-05, 2025-03-26, 2025-06-18";
 
+constexpr unsigned int MAX_THREAD_NUM = 64;
+
 // JSON-RPC 2.0 error codes
 enum class JsonRpcErrorCode : int {
     PARSE_ERROR = -32700,

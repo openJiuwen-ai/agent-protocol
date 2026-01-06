@@ -27,13 +27,7 @@
 
 namespace Mcp {
 
-const uint32_t g_MaxThreads = 64;
-const uint16_t g_DefaultHttpPort = 80;
-const uint16_t g_DefaultHttpsPort = 443;
-const uint16_t g_MaxPort = 65535;
-const uint16_t g_InvalidPort = 0; // Represents invalid or unspecified port
-const size_t g_MaxHostnameLength = 253;
-const size_t g_UrlProtocolOffset = 3; // Length of "://"
+constexpr size_t MAX_HOSTNAME_LENGTH = 253;
 
 void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx)
 {
@@ -403,9 +397,8 @@ bool McpServerImplement::ValidateStreamableHttpConfig(const StreamableHttpServer
         return false;
     }
 
-    if (config.ioThreads == 0 || config.ioThreads > g_MaxThreads) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "IO threads count (%u) should be in (0, %u)", config.ioThreads,
-                g_MaxThreads);
+    if (config.ioThreads == 0 || config.ioThreads > MAX_THREAD_NUM) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "IO threads count (%u) should be in (0, %u)", config.ioThreads, MAX_THREAD_NUM);
         return false;
     }
 
@@ -427,9 +420,9 @@ bool McpServerImplement::ValidateConfig(const ServerConfig& config)
         return true;
     }
 
-    if (config_.workerThreads == 0 || config_.workerThreads > g_MaxThreads) {
+    if (config_.workerThreads == 0 || config_.workerThreads > MAX_THREAD_NUM) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Worker threads count (%u) should be in (0, %u)",
-            config.workerThreads, g_MaxThreads);
+            config.workerThreads, MAX_THREAD_NUM);
         return false;
     }
 
@@ -488,7 +481,7 @@ bool McpServerImplement::ValidateTlsConfig(const TlsConfig& config)
     }
 
     if (!config.serverName.empty()) {
-        if (config.serverName.length() > g_MaxHostnameLength) {
+        if (config.serverName.length() > MAX_HOSTNAME_LENGTH) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "TLS server name too long: %zu characters", config.serverName.length());
             return false;
         }
