@@ -9,10 +9,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -20,9 +18,17 @@
 
 #include "event/event_system.h"
 #include "shared/http_common.h"
+#include "shared/message_queue/mpsc_notify_queue.h"
 
 namespace Mcp {
 namespace Http {
+
+// Service state enumeration
+enum class ServiceState {
+    RUNNING,  // Service is running and accepting requests
+    STOPPING, // Service is stopping (no new requests, but finishing active ones)
+    STOPPED   // Service has stopped completely
+};
 
 // HTTP Client constants (same as original)
 constexpr int DEFAULT_CONNECTION_TIMEOUT_MS = 30000; // 30 seconds
@@ -50,15 +56,6 @@ struct HttpClientServiceConfig {
     std::string tlsClientCertFile;
     std::string tlsClientKeyFile;
     std::string tlsClientKeyPassword;
-};
-
-/**
- * @brief Result of sending request to queue
- */
-struct SendResult {
-    bool success = false; // Whether successfully added to queue
-    uint64_t requestId = 0; // Request ID
-    std::string errorMessage; // Reason for failure (e.g., queue full)
 };
 
 /**
@@ -145,7 +142,7 @@ public:
      */
     bool IsRunning() const
     {
-        return running_;
+        return state_.load(std::memory_order_acquire) == ServiceState::RUNNING;
     }
 
     /**
@@ -154,27 +151,26 @@ public:
      * @param userData User data pointer
      * @param timeoutMs Request timeout in milliseconds
      * @param callback Response callback function called on completion
-     * @return SendResult containing success status, requestId, and error message if applicable
      */
-    SendResult Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback);
+    void Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback);
 
 private:
     // Core components
     HttpClientServiceConfig config_; // Service configuration parameters
-    CURLM* multiHandle_; // libcurl multi handle for concurrent transfers
-    std::atomic<bool> running_; // Service running state flag
+    CURLM* multiHandle_{nullptr}; // libcurl multi handle for concurrent transfers
+    std::atomic<ServiceState> state_{ServiceState::STOPPED}; // Service state
     std::unique_ptr<EventSystem> eventSystem_; // Event system for async I/O
-    std::unordered_map<uint64_t, std::shared_ptr<RequestContext>> activeRequests_; // Active requests tracking
-    std::unordered_map<curl_socket_t, std::shared_ptr<CurlSocketContext>> socketContexts_; // Socket contexts
+
+    // Request queue for async submission from user threads to I/O thread
+    MPSCNotifyQueue<std::shared_ptr<RequestContext>> requestQueue_;
+
+    // activeRequests_ is only accessed in I/O thread, no lock needed
+    std::unordered_map<uint64_t, std::shared_ptr<RequestContext>> activeRequests_;
+    std::unordered_map<curl_socket_t, std::shared_ptr<CurlSocketContext>> socketContexts_;
 
     int timerEventId_{-1}; // Timer event ID
-    int stopEventId_{-1}; // Event ID for stopping the event loop
+    int stopNotifyEventId_{-1}; // Event ID for stopping the service
     std::thread ioThread_; // I/O thread for event processing
-
-    // Graceful shutdown support
-    static constexpr int GRACEFUL_STOP_TIMEOUT_MS = 3000; // 3 seconds timeout for graceful shutdown
-    std::condition_variable stopCondition_; // Condition variable for graceful shutdown
-    std::mutex stopMutex_; // Mutex for condition variable
 
     /**
      * @brief Main I/O thread function for event-driven HTTP processing
@@ -198,11 +194,16 @@ private:
                                const std::unordered_map<std::string, std::string>& headers = {});
 
     /**
-     * @brief Process single HTTP request
-     * Creates CURL handle, configures with request data, and adds to multi interface
+     * @brief Handle request in I/O thread (called from queue callback)
      * @param request Shared pointer to request context containing all request information
      */
-    void HandleRequest(const std::shared_ptr<RequestContext>& request);
+    void HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request);
+
+    /**
+     * @brief Handle stop request in I/O thread
+     * Processes remaining queue items and cancels active requests before stopping
+     */
+    void HandleStopRequestInIOThread();
 
     /**
      * @brief Check for completed HTTP requests and process results
@@ -219,17 +220,6 @@ private:
      * @brief Cancel all active requests during shutdown
      */
     void CancelAllActiveRequests();
-
-    /**
-     * @brief Process pending events to allow requests to complete
-     */
-    void ProcessPendingEvents();
-
-    /**
-     * @brief Notify when a request is completed (for graceful shutdown)
-     * @param requestId ID of the completed request
-     */
-    void NotifyRequestCompleted(uint64_t requestId);
 
     /**
      * @brief libcurl socket callback

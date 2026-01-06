@@ -58,9 +58,9 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
             if (!initPtr) {
                 throw std::runtime_error("Result type mismatch: cannot cast to InitializeResult");
             }
+            SendInitializedNotification();
             initialized_ = true;
             promise->set_value(initPtr);
-            SendInitializedNotification();
         } catch (...) {
             promise->set_exception(std::current_exception());
         }

@@ -82,6 +82,7 @@ void ServerSession::SendInitializeResponse(int64_t requestId, const ServerCapabi
     serverInfo.version = serverConfig_.version;
     auto initResult = std::make_unique<InitializeResult>(DEFAULT_PROTOCOL_VERSION, capabilities, serverInfo);
     SendResponse(requestId, std::move(initResult), ctx);
+    isInitialized_ = true;
 }
 
 void ServerSession::HandleInitializeNotification(const Notification& notification)

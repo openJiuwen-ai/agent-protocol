@@ -17,12 +17,15 @@
 namespace Mcp {
 namespace Http {
 
-constexpr int WAIT_CONDITION_TIMEOUT_MS = 10;
+constexpr int MAX_PROCESSED_REQUEST_WHEN_STOP = 1000;
+constexpr int GRACEFUL_STOP_TIMEOUT = 3000;
+constexpr int GRACEFUL_STOP_SLEEP_TIME = 10;
+constexpr int DEFAULT_QUEUE_CAPACITY = 1024;
+constexpr int DEFAULT_QUEUE_MAX_BATCH_SIZE = 16;
+
 // Constructor and destructor
 HttpClientService::HttpClientService(const HttpClientServiceConfig& config)
-    : config_(config), multiHandle_(nullptr), running_(false)
-{
-}
+    : config_(config), requestQueue_(DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_MAX_BATCH_SIZE) {}
 
 HttpClientService::~HttpClientService()
 {
@@ -36,7 +39,7 @@ HttpClientService::~HttpClientService()
 // Lifecycle management
 bool HttpClientService::Start()
 {
-    if (running_) {
+    if (state_.load(std::memory_order_acquire) != ServiceState::STOPPED) {
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Service already running");
         return true;
     }
@@ -82,18 +85,18 @@ bool HttpClientService::Start()
     curl_multi_setopt(multiHandle_, CURLMOPT_TIMERFUNCTION, TimerCallback);
     curl_multi_setopt(multiHandle_, CURLMOPT_TIMERDATA, this);
 
-    // Create stop event for graceful shutdown
-    stopEventId_ = eventSystem_->CreateNotifyEventId(
-        [this](int fd, short events, void* arg) {
-            (void)events;
-            (void)arg;
-            // Clear the eventfd and stop the event loop
-            uint64_t value;
-            eventSystem_->ReadEventFd(fd, value);
-            eventSystem_->Stop();
-        }, nullptr, true);
-    if (stopEventId_ == -1) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create stop event");
+    // Initialize request queue
+    if (!requestQueue_.Initialize(eventSystem_.get(),
+        [this](const std::shared_ptr<RequestContext>& req) {
+            // Check if service is stopping
+            auto currentState = state_.load(std::memory_order_acquire);
+            if (currentState != ServiceState::RUNNING) {
+                HandleErrorResponse(req, "Service is stopping");
+                return;
+            }
+            HandleRequestInIOThread(req);
+        })) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to initialize request queue");
         eventSystem_.reset();
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
@@ -101,7 +104,28 @@ bool HttpClientService::Start()
         return false;
     }
 
-    running_ = true;
+    // Create stop notify event
+    stopNotifyEventId_ = eventSystem_->CreateNotifyEventId(
+        [this](int fd, short events, void* arg) {
+            (void)events;
+            (void)arg;
+            // Clear the eventfd
+            uint64_t value;
+            while (eventSystem_->ReadEventFd(fd, value)) {
+            }
+            HandleStopRequestInIOThread();
+        }, nullptr, true);
+    if (stopNotifyEventId_ == -1) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create stop notify event");
+        requestQueue_.Cleanup();
+        eventSystem_.reset();
+        curl_multi_cleanup(multiHandle_);
+        multiHandle_ = nullptr;
+        curl_global_cleanup();
+        return false;
+    }
+
+    state_.store(ServiceState::RUNNING, std::memory_order_release);
 
     ioThread_ = std::thread(&HttpClientService::IoThreadMain, this);
     MCP_LOG(MCP_LOG_LEVEL_INFO, "HTTP client service started successfully");
@@ -110,50 +134,22 @@ bool HttpClientService::Start()
 
 void HttpClientService::Stop()
 {
-    if (!running_) {
+    auto currentState = state_.load(std::memory_order_acquire);
+    if (currentState != ServiceState::RUNNING) {
         return;
     }
 
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Stopping HTTP client service with %zu active requests", activeRequests_.size());
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Stopping HTTP client service");
 
-    // 1. Stop accepting new requests
-    running_ = false;
+    // Transition to stopping state
+    state_.store(ServiceState::STOPPING, std::memory_order_release);
 
-    // 2. Set graceful stop timeout
-    const auto timeout = std::chrono::milliseconds(GRACEFUL_STOP_TIMEOUT_MS);
-    const auto start = std::chrono::steady_clock::now();
-
-    // 3. Wait for requests to complete gracefully
-    while (!activeRequests_.empty()) {
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        if (elapsed > timeout) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "Timeout waiting for %zu requests, cancelling", activeRequests_.size());
-            break;
-        }
-
-        // Process events to allow requests to complete
-        ProcessPendingEvents();
-
-        // Check if all requests completed via condition variable
-        {
-            std::unique_lock<std::mutex> lock(stopMutex_);
-            if (stopCondition_.wait_for(lock, std::chrono::milliseconds(WAIT_CONDITION_TIMEOUT_MS),
-                                        [this] { return activeRequests_.empty(); })) {
-                break; // All requests completed
-            }
-        }
+    // Notify I/O thread to handle stop
+    if (eventSystem_ != nullptr && stopNotifyEventId_ != -1) {
+        eventSystem_->NotifyEventId(stopNotifyEventId_);
     }
 
-    // 4. Force cancel remaining requests
-    if (!activeRequests_.empty()) {
-        CancelAllActiveRequests();
-    }
-
-    // 5. Wake up the event loop to allow I/O thread to exit
-    if (eventSystem_ != nullptr && stopEventId_ != -1 && ioThread_.joinable()) {
-        eventSystem_->NotifyEventId(stopEventId_);
-    }
-
+    // Wait for I/O thread to finish
     if (ioThread_.joinable()) {
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Waiting for I/O thread to finish...");
         ioThread_.join();
@@ -165,50 +161,49 @@ void HttpClientService::Stop()
         timerEventId_ = -1;
     }
 
-    // Cleanup all socket contexts
-    for (auto& [sockfd, context] : socketContexts_) {
-        DestroySocketContext(context);
-    }
-    socketContexts_.clear();
-
-    // Cleanup EventSystem
-    if (eventSystem_ != nullptr) {
-        if (stopEventId_ != -1) {
-            eventSystem_->CloseNotifyEventId(stopEventId_);
-            stopEventId_ = -1;
-        }
-        eventSystem_.reset();
+    // Cleanup stop notify event
+    if (stopNotifyEventId_ != -1 && eventSystem_ != nullptr) {
+        eventSystem_->CloseNotifyEventId(stopNotifyEventId_);
+        stopNotifyEventId_ = -1;
     }
 
-    // Cleanup libcurl
+    // Cleanup request queue
+    requestQueue_.Cleanup();
+
     if (multiHandle_ != nullptr) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Cleaning up libcurl multi handle");
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
     }
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Cleaning up libcurl global resources");
     curl_global_cleanup();
+
+    if (eventSystem_ != nullptr) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Cleaning up EventSystem");
+        eventSystem_.reset();
+    }
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "HTTP client service stopped");
 }
 
 // Core sending interface
-SendResult HttpClientService::Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback)
+void HttpClientService::Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback)
 {
-    if (!running_) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Send failed: HTTP client service is not running");
-        return SendResult{false, 0, "Service is not running"};
+    if (state_.load(std::memory_order_acquire) != ServiceState::RUNNING) {
+        throw std::runtime_error("Failed to send HTTP request: Service is not running");
     }
 
     uint64_t requestId = ((UserData*)userData)->requestId;
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request %llu: %s %s", requestId, request.method.c_str(), request.url.c_str());
 
-    // Create request context and track it
     auto requestContext = std::make_shared<RequestContext>(request, callback, timeoutMs, userData);
-    activeRequests_[requestId] = requestContext;
 
-    // Process request immediately
-    HandleRequest(requestContext);
+    // Submit to queue and return immediately
+    if (!requestQueue_.Send(requestContext)) {
+        throw std::runtime_error("Request queue is full");
+    }
 
-    return SendResult{true, requestId, "Send successfully"};
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Send request into queue successfully");
 }
 
 void HttpClientService::IoThreadMain()
@@ -245,15 +240,15 @@ void HttpClientService::HandleSuccessResponse(const std::shared_ptr<RequestConte
     ExecuteCallback(request, response);
 }
 
-void HttpClientService::HandleRequest(const std::shared_ptr<RequestContext>& request)
+void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request)
 {
     if (request == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HandleRequest failed: received null request");
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "failed: received null request");
         return;
     }
 
     uint64_t requestId = request->userData.requestId;
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Processing request %llu: %s %s (timeout=%dms)", requestId,
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Processing request %llu in I/O thread: %s %s (timeout=%dms)", requestId,
             request->request.method.c_str(), request->request.url.c_str(), request->timeoutMs);
 
     // Create CURL handle
@@ -281,7 +276,83 @@ void HttpClientService::HandleRequest(const std::shared_ptr<RequestContext>& req
         return;
     }
 
+    activeRequests_[requestId] = request;
+
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request %llu added to libcurl multi handle", requestId);
+}
+
+void HttpClientService::HandleStopRequestInIOThread()
+{
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Processing stop request in I/O thread");
+
+    // 1. Process remaining requests in queue
+    size_t remaining = requestQueue_.GetQueueSize();
+    if (remaining > 0) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Processing %zu remaining requests in queue before stop", remaining);
+
+        std::shared_ptr<RequestContext> request;
+        int processed = 0;
+        // Process up to 1000 requests to prevent infinite loop
+        while (processed < MAX_PROCESSED_REQUEST_WHEN_STOP) {
+            if (!requestQueue_.TryPop(request)) {
+                break; // Queue is empty
+            }
+            // Reject the request
+            HandleErrorResponse(request, "Service is stopping");
+            processed++;
+        }
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Processed %d requests from queue during stop", processed);
+    }
+
+    // 3. Wait for active requests to complete (max 3 seconds)
+    if (!activeRequests_.empty()) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Waiting for %zu active requests to complete", activeRequests_.size());
+
+        auto start = std::chrono::steady_clock::now();
+        while (!activeRequests_.empty()) {
+            // Trigger socket action to allow requests to complete
+            int running = 0;
+            curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &running);
+            CheckMultiInfo();
+
+            // Check timeout
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            if (elapsed > GRACEFUL_STOP_TIMEOUT) {
+                MCP_LOG(MCP_LOG_LEVEL_WARN, "Timeout waiting for active requests");
+                break;
+            }
+
+            // Short sleep to avoid busy waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(GRACEFUL_STOP_SLEEP_TIME));
+        }
+    }
+
+    // 4. Force cancel remaining active requests
+    if (!activeRequests_.empty()) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Cancelling %zu remaining active requests", activeRequests_.size());
+        CancelAllActiveRequests();
+    }
+
+    // 5. Cleanup socket contexts before stopping event loop
+    for (auto& [sockfd, context] : socketContexts_) {
+        if (context != nullptr) {
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Cleaning up socket context: sockfd=%d", sockfd);
+            // Remove event if still active
+            if (context->eventId != -1 && eventSystem_ != nullptr) {
+                eventSystem_->RemoveEvent(context->eventId);
+                context->eventId = -1;
+            }
+        }
+    }
+    socketContexts_.clear();
+
+    // 6. Set state to stopped before stopping event loop
+    state_.store(ServiceState::STOPPED, std::memory_order_release);
+
+    // 7. Stop event loop
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Stopping event loop");
+    eventSystem_->Stop();
 }
 
 void HttpClientService::CheckMultiInfo()
@@ -304,7 +375,6 @@ void HttpClientService::CheckMultiInfo()
                 if (it != activeRequests_.end()) {
                     request = it->second;
                     activeRequests_.erase(it);
-                    NotifyRequestCompleted(request->userData.requestId);
                 }
             }
 
@@ -336,7 +406,10 @@ int HttpClientService::SocketCallback(CURL* easy, curl_socket_t sockfd, int acti
 {
     (void)easy;
     auto* service = static_cast<HttpClientService*>(userp);
-    if (service == nullptr || !service->running_) {
+    // Allow socket operations in RUNNING and STOPPING states
+    // (STOPPING allows active requests to finish)
+    auto currentState = service->state_.load(std::memory_order_acquire);
+    if (currentState == ServiceState::STOPPED) {
         return -1;
     }
 
@@ -363,18 +436,20 @@ int HttpClientService::SocketCallback(CURL* easy, curl_socket_t sockfd, int acti
             events |= EV_PERSIST;
 
             // Update event
-            if (context->eventId != -1) {
-                service->eventSystem_->RemoveEvent(context->eventId);
+            if (service->eventSystem_ != nullptr && context->isValid()) {
+                if (context->eventId != -1) {
+                    service->eventSystem_->RemoveEvent(context->eventId);
+                }
+                context->eventId = service->eventSystem_->AddEvent(
+                    sockfd, static_cast<EventType>(events),
+                    [service](int fd, short eventFlags, void* arg) { service->OnSocketEvent(fd, eventFlags, arg); },
+                    context);
             }
-            context->eventId = service->eventSystem_->AddEvent(
-                sockfd, static_cast<EventType>(events),
-                [service](int fd, short eventFlags, void* arg) { service->OnSocketEvent(fd, eventFlags, arg); },
-                context);
 
             break;
 
         case CURL_POLL_REMOVE:
-            if (context != nullptr) {
+            if (context != nullptr && context->isValid()) {
                 // Find the shared_ptr from the socketContexts_ map
                 auto it = service->socketContexts_.find(sockfd);
                 if (it != service->socketContexts_.end()) {
@@ -395,14 +470,18 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
 {
     (void)multi;
     auto* service = static_cast<HttpClientService*>(userp);
-    if (service == nullptr || !service->running_) {
+    // Allow timer operations in RUNNING and STOPPING states
+    auto currentState = service->state_.load(std::memory_order_acquire);
+    if (currentState == ServiceState::STOPPED) {
         return 0;
     }
 
     // Remove existing timer
     if (service->timerEventId_ != -1) {
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "remove event id: %d", service->timerEventId_);
-        service->eventSystem_->RemoveEvent(service->timerEventId_);
+        if (service->eventSystem_ != nullptr) {
+            service->eventSystem_->RemoveEvent(service->timerEventId_);
+        }
         service->timerEventId_ = -1;
     }
 
@@ -416,12 +495,14 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
         timeoutMs = 1; // 0 means call socket_action asap
     }
 
-    // Set new timer
-    service->timerEventId_ = service->eventSystem_->AddTimer(
-        timeoutMs, [service](int fd, short events, void* arg) { service->OnTimeout(fd, events, arg); }, nullptr,
-        false);
+    // Set new timer (with safety check)
+    if (service->eventSystem_ != nullptr) {
+        service->timerEventId_ = service->eventSystem_->AddTimer(
+            timeoutMs, [service](int fd, short events, void* arg) { service->OnTimeout(fd, events, arg); }, nullptr,
+            false);
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "add Timer id: %d, timeout: %llu ms", service->timerEventId_, timeoutMs);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "add Timer id: %d, timeout: %llu ms", service->timerEventId_, timeoutMs);
+    }
 
     return 0;
 }
@@ -431,7 +512,8 @@ void HttpClientService::OnTimeout(int fd, short events, void* arg)
     (void)fd;
     (void)events;
     (void)arg;
-    if (!running_) {
+    auto currentState = state_.load(std::memory_order_acquire);
+    if (currentState == ServiceState::STOPPED) {
         return;
     }
 
@@ -450,13 +532,14 @@ void HttpClientService::OnTimeout(int fd, short events, void* arg)
 
 void HttpClientService::OnSocketEvent(int fd, short events, void* arg)
 {
-    if (!running_) {
+    auto currentState = state_.load(std::memory_order_acquire);
+    if (currentState == ServiceState::STOPPED) {
         return;
     }
 
     CurlSocketContext* context = static_cast<CurlSocketContext*>(arg);
-    if (context == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Socket context is null for fd=%d", fd);
+    if (context == nullptr || !context->isValid()) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket context is null or invalid for fd=%d", fd);
         return;
     }
 
@@ -492,13 +575,17 @@ std::shared_ptr<CurlSocketContext> HttpClientService::CreateSocketContext(curl_s
 
 void HttpClientService::DestroySocketContext(const std::shared_ptr<CurlSocketContext>& context)
 {
-    if (context == nullptr) {
+    if (context == nullptr || !context->isValid()) {
         return;
     }
 
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket destroy: fd=%d, sockfd=%d", context->eventId, context->sockfd);
+
+    // Mark as invalid first to prevent concurrent access
+    context->invalidate();
+
     // Remove event
-    if (context->eventId != -1) {
+    if (context->eventId != -1 && eventSystem_ != nullptr) {
         eventSystem_->RemoveEvent(context->eventId);
         context->eventId = -1; // Clear to prevent double removal
     }
@@ -689,34 +776,6 @@ void HttpClientService::CancelAllActiveRequests()
     activeRequests_.clear();
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "All active requests cancelled");
-}
-
-void HttpClientService::ProcessPendingEvents()
-{
-    if (multiHandle_ == nullptr || !running_) {
-        return;
-    }
-
-    // Perform a non-blocking socket action to process any pending events
-    int running_handles = 0;
-    CURLMcode code = curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
-    if (code != CURLM_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "curl_multi_socket_action failed: %s", curl_multi_strerror(code));
-    }
-
-    // Check for completed requests
-    CheckMultiInfo();
-}
-
-void HttpClientService::NotifyRequestCompleted(uint64_t requestId)
-{
-    // Notify any waiting threads that a request has completed
-    (void)requestId;
-    {
-        std::lock_guard<std::mutex> lock(stopMutex_);
-        // No need to do anything specific here, the condition variable will be notified below
-    }
-    stopCondition_.notify_all();
 }
 
 // Factory method implementation
