@@ -40,20 +40,17 @@ public:
     }
 
     void AddTool(const std::string& name, ToolFunc fn,
-                 std::optional<std::reference_wrapper<const std::string>> title = std::nullopt,
-                 std::optional<std::reference_wrapper<const std::string>> description = std::nullopt,
-                 std::optional<std::reference_wrapper<const std::string>> inputSchema = std::nullopt,
-                 std::optional<std::reference_wrapper<const std::string>> outputSchema = std::nullopt,
-                 const bool structuredOutput = false,
-                 std::optional<std::reference_wrapper<const ToolAnnotations>> annotations = std::nullopt,
-                 std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt) override;
+        AddToolOptionalParams params = {}) override;
     void RemoveTool(const std::string& name) override;
 
-    void AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler) override;
+    void AddPrompt(const std::string& name, RenderPromptFunc handler,
+        AddPromptOptionalParams params = {}) override;
     void RemovePrompt(const std::string& name) override;
-    void AddResource(const ResourceInfo& resource, ReadResourceFunc readFunc) override;
+    void AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
+        AddResourceOptionalParams params = {}) override;
     void RemoveResource(const std::string& uri) override;
-    void AddResourceTemplate(const ResourceTemplate& resourceTemplate) override;
+    void AddResourceTemplate(const std::string& uriTemplate, const std::string& name,
+        AddResourceTemplateOptionalParams params = {}) override;
     void RemoveResourceTemplate(const std::string& uriTemplate) override;
 
 private:

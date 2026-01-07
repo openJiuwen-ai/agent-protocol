@@ -185,6 +185,7 @@ using ToolFunc = std::function<CallToolResult(const std::string& name, const Jso
 //Struct for list_tool result
 struct Tool {
     std::string name;
+    std::optional<std::string> title;
     std::optional<std::string> description;
     std::optional<std::string> inputSchema;
     std::optional<std::string> outputSchema;

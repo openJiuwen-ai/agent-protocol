@@ -336,14 +336,7 @@ void McpServerImplement::Stop()
     MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP Server stopped");
 }
 
-void McpServerImplement::AddTool(const std::string& name, ToolFunc fn,
-                                 std::optional<std::reference_wrapper<const std::string>> title,
-                                 std::optional<std::reference_wrapper<const std::string>> description,
-                                 std::optional<std::reference_wrapper<const std::string>> inputSchema,
-                                 std::optional<std::reference_wrapper<const std::string>> outputSchema,
-                                 const bool structuredOutput,
-                                 std::optional<std::reference_wrapper<const ToolAnnotations>> annotations,
-                                 std::optional<std::reference_wrapper<const std::vector<Icon>>> icons)
+void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOptionalParams params)
 {
     if (fn == nullptr) {
         throw std::invalid_argument("Tool function implementation cannot be null");
@@ -351,7 +344,8 @@ void McpServerImplement::AddTool(const std::string& name, ToolFunc fn,
     if (name.empty()) {
         throw std::invalid_argument("Tool name cannot be empty");
     }
-    ServerTool tool(name, fn, title, description, inputSchema, outputSchema, structuredOutput, annotations, icons);
+    ServerTool tool(name, fn, params.title, params.description, params.inputSchema, params.outputSchema,
+                    params.structuredOutput, params.annotations, params.icons);
     toolManager_.AddTool(tool);
 }
 
@@ -360,8 +354,23 @@ void McpServerImplement::RemoveTool(const std::string& name)
     toolManager_.RemoveTool(name);
 }
 
-void McpServerImplement::AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler)
+void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc handler, AddPromptOptionalParams params)
 {
+    PromptInfo prompt;
+    prompt.name = name;
+    if (params.description.has_value()) {
+        prompt.description = params.description->get();
+    }
+    if (params.title.has_value()) {
+        prompt.title = params.title->get();
+    }
+    if (params.icons.has_value()) {
+        prompt.icons = params.icons->get();
+    }
+    if (params.arguments.has_value()) {
+        prompt.arguments = params.arguments->get();
+    }
+
     promptManager_.AddPrompt(prompt, handler);
 }
 
@@ -370,8 +379,31 @@ void McpServerImplement::RemovePrompt(const std::string& name)
     promptManager_.RemovePrompt(name);
 }
 
-void McpServerImplement::AddResource(const ResourceInfo& resource, ReadResourceFunc readFunc)
+void McpServerImplement::AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
+    AddResourceOptionalParams params)
 {
+    ResourceInfo resource;
+    resource.uri = uri;
+    resource.name = name;
+    if (params.title.has_value()) {
+        resource.title = params.title->get();
+    }
+    if (params.description.has_value()) {
+        resource.description = params.description->get();
+    }
+    if (params.mimeType.has_value()) {
+        resource.mimeType = params.mimeType->get();
+    }
+    if (params.size.has_value()) {
+        resource.size = params.size.value();
+    }
+    if (params.icons.has_value()) {
+        resource.icons = params.icons->get();
+    }
+    if (params.annotations.has_value()) {
+        resource.annotations = params.annotations->get();
+    }
+
     resourceManager_.AddResource(resource, readFunc);
 }
 
@@ -380,8 +412,28 @@ void McpServerImplement::RemoveResource(const std::string& uri)
     resourceManager_.RemoveResource(uri);
 }
 
-void McpServerImplement::AddResourceTemplate(const ResourceTemplate& resourceTemplate)
+void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, const std::string& name,
+    AddResourceTemplateOptionalParams params)
 {
+    ResourceTemplate resourceTemplate;
+    resourceTemplate.uriTemplate = uriTemplate;
+    resourceTemplate.name = name;
+    if (params.title.has_value()) {
+        resourceTemplate.title = params.title->get();
+    }
+    if (params.description.has_value()) {
+        resourceTemplate.description = params.description->get();
+    }
+    if (params.mimeType.has_value()) {
+        resourceTemplate.mimeType = params.mimeType->get();
+    }
+    if (params.icons.has_value()) {
+        resourceTemplate.icons = params.icons->get();
+    }
+    if (params.annotations.has_value()) {
+        resourceTemplate.annotations = params.annotations->get();
+    }
+
     resourceManager_.AddResourceTemplate(resourceTemplate);
 }
 

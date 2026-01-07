@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdarg>
+#include <functional>
 #include <iostream>
 #include <thread>
 
@@ -130,8 +131,12 @@ int main()
         std::string echoTitle = ECHO_TOOL_TITLE;
         std::string echoDescription = ECHO_TOOL_DESCRIPTION;
         try {
-            server->AddTool(ECHO_TOOL_NAME, echoFunc, std::cref(echoTitle), std::cref(echoDescription),
-                std::cref(echoInputSchema), std::cref(echoOutputSchema));
+            Mcp::AddToolOptionalParams toolParams;
+            toolParams.title = std::cref(echoTitle);
+            toolParams.description = std::cref(echoDescription);
+            toolParams.inputSchema = std::cref(echoInputSchema);
+            toolParams.outputSchema = std::cref(echoOutputSchema);
+            server->AddTool(ECHO_TOOL_NAME, echoFunc, toolParams);
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", ECHO_TOOL_NAME);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add tool failed: %s", e.what());
@@ -140,19 +145,21 @@ int main()
         }
 
         // add Prompt
-        Mcp::PromptInfo greetingPrompt;
-        greetingPrompt.name = PROMPT_NAME;
-        greetingPrompt.description = PROMPT_DESCRIPTION;
-        greetingPrompt.arguments = {
-            Mcp::PromptArgument{"name", "The name of the person to greet", true},
-            Mcp::PromptArgument{"language", "Language for the greeting (default: English)", false}};
-
         try {
-            server->AddPrompt(greetingPrompt,
+            std::string promptDescription = PROMPT_DESCRIPTION;
+            Mcp::AddPromptOptionalParams promptParams;
+            promptParams.description = std::cref(promptDescription);
+            const std::vector<Mcp::PromptArgument> promptArgs = {
+                Mcp::PromptArgument{"name", "The name of the person to greet", true},
+                Mcp::PromptArgument{"language", "Language for the greeting (default: English)", false}};
+            promptParams.arguments = std::cref(promptArgs);
+
+            server->AddPrompt(PROMPT_NAME,
                               [](const std::string &promptName,
                                  const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
                                   Mcp::GetPromptResult result;
-                                  result.description = PROMPT_NAME;
+
+                                             (void)promptName;
 
                                   std::string who = "friend";
                                   std::string lang = "English";
@@ -174,8 +181,8 @@ int main()
                                   msg.content = tc;
                                   result.messages.push_back(msg);
                                   return result;
-                              });
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt success: %s", greetingPrompt.name.c_str());
+                              }, promptParams);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt success: %s", PROMPT_NAME);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add prompt failed: %s", e.what());
         } catch (...) {
@@ -183,12 +190,6 @@ int main()
         }
 
         // add resources
-        Mcp::ResourceInfo resource;
-        resource.uri = RESOURCE_URI;
-        resource.name = RESOURCE_NAME;
-        resource.description = RESOURCE_DESCRIPTION;
-        resource.mimeType = RESOURCE_MIME_TYPE;
-
         Mcp::ReadResourceFunc readResourceFunc = [](const std::string &uri) -> Mcp::ReadResourceResult {
             Mcp::ReadResourceResult result;
             Mcp::TextResourceContents textContents;
@@ -199,8 +200,17 @@ int main()
             return result;
         };
         try {
-            server->AddResource(resource, readResourceFunc);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource success: %s", resource.uri.c_str());
+            std::string resourceDescription = RESOURCE_DESCRIPTION;
+            std::string resourceMimeType = RESOURCE_MIME_TYPE;
+            Mcp::AddResourceOptionalParams resourceParams;
+            resourceParams.description = std::cref(resourceDescription);
+            resourceParams.mimeType = std::cref(resourceMimeType);
+            const std::vector<Mcp::Icon> resourceIcons{Mcp::Icon{.src = "http://example.com/icon.png",
+                .mimeType = "image/png", .sizes = std::vector<std::string>{"32x32", "64x64"}, .theme = "light"}};
+            resourceParams.icons = std::cref(resourceIcons);
+
+            server->AddResource(RESOURCE_URI, RESOURCE_NAME, readResourceFunc, resourceParams);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource success: %s", RESOURCE_URI);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add resource failed: %s", e.what());
         } catch (...) {
@@ -208,14 +218,14 @@ int main()
         }
 
         // add ResourceTemplate
-        Mcp::ResourceTemplate resourceTemplate;
-        resourceTemplate.uriTemplate = RESOURCE_TEMPLATE_URI;
-        resourceTemplate.name = RESOURCE_TEMPLATE_NAME;
-        resourceTemplate.description = RESOURCE_TEMPLATE_DESCRIPTION;
-        resourceTemplate.mimeType = RESOURCE_TEMPLATE_MIME_TYPE;
         try {
-            server->AddResourceTemplate(resourceTemplate);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource template success: %s", resourceTemplate.uriTemplate.c_str());
+            std::string resourceTemplateDescription = RESOURCE_TEMPLATE_DESCRIPTION;
+            std::string resourceTemplateMimeType = RESOURCE_TEMPLATE_MIME_TYPE;
+            Mcp::AddResourceTemplateOptionalParams resourceTemplateParams;
+            resourceTemplateParams.description = std::cref(resourceTemplateDescription);
+            resourceTemplateParams.mimeType = std::cref(resourceTemplateMimeType);
+            server->AddResourceTemplate(RESOURCE_TEMPLATE_URI, RESOURCE_TEMPLATE_NAME, resourceTemplateParams);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource template success: %s", RESOURCE_TEMPLATE_URI);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add resource template failed: %s", e.what());
         } catch (...) {

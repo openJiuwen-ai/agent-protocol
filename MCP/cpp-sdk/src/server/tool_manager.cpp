@@ -43,6 +43,7 @@ ListToolsResult ToolManager::ListTools() const
     for (const auto& [_, item] : tools_) {
         Tool tool;
         tool.name = item.name;
+        tool.title = item.title;
         tool.description = item.description;
         tool.inputSchema = item.inputSchema;
         tool.outputSchema = item.outputSchema;

@@ -5,12 +5,59 @@
 #ifndef MCP_SERVER_INCLUDE_H_
 #define MCP_SERVER_INCLUDE_H_
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
 #include "mcp_type.h"
 
 namespace Mcp {
+
+/**
+ * Optional parameters for AddTool method.
+ */
+struct AddToolOptionalParams {
+    std::optional<std::reference_wrapper<const std::string>> title = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> description = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> inputSchema = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> outputSchema = std::nullopt;
+    bool structuredOutput = false;
+    std::optional<std::reference_wrapper<const ToolAnnotations>> annotations = std::nullopt;
+    std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt;
+};
+
+/**
+ * Optional parameters for AddPrompt method.
+ */
+struct AddPromptOptionalParams {
+    std::optional<std::reference_wrapper<const std::string>> description = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> title = std::nullopt;
+    std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt;
+    std::optional<std::reference_wrapper<const std::vector<PromptArgument>>> arguments = std::nullopt;
+};
+
+/**
+ * Optional parameters for AddResource method.
+ */
+struct AddResourceOptionalParams {
+    std::optional<std::reference_wrapper<const std::string>> title = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> description = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> mimeType = std::nullopt;
+    std::optional<std::int64_t> size = std::nullopt;
+    std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt;
+    std::optional<std::reference_wrapper<const Annotations>> annotations = std::nullopt;
+};
+
+/**
+ * Optional parameters for AddResourceTemplate method.
+ */
+struct AddResourceTemplateOptionalParams {
+    std::optional<std::reference_wrapper<const std::string>> title = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> description = std::nullopt;
+    std::optional<std::reference_wrapper<const std::string>> mimeType = std::nullopt;
+    std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt;
+    std::optional<std::reference_wrapper<const Annotations>> annotations = std::nullopt;
+};
 
 /**
  * Abstract base class for MCP server implementations.
@@ -57,22 +104,10 @@ public:
      *
      * @param name Tool name, must be unique (required).
      * @param fn Tool function object (required).
-     * @param title Tool title (optional).
-     * @param description Tool description (optional).
-     * @param inputSchema String for input parameters (optional).
-     * @param outputSchema String for output parameters (optional).
-     * @param structuredOutput Whether the tool supports structured output (default: false).
-     * @param annotations Tool annotations (optional).
-     * @param icons Tool icons (optional).
+     * @param params Optional parameters for the tool.
      */
     virtual void AddTool(const std::string& name, ToolFunc fn,
-                         std::optional<std::reference_wrapper<const std::string>> title = std::nullopt,
-                         std::optional<std::reference_wrapper<const std::string>> description = std::nullopt,
-                         std::optional<std::reference_wrapper<const std::string>> inputSchema = std::nullopt,
-                         std::optional<std::reference_wrapper<const std::string>> outputSchema = std::nullopt,
-                         const bool structuredOutput = false,
-                         std::optional<std::reference_wrapper<const ToolAnnotations>> annotations = std::nullopt,
-                         std::optional<std::reference_wrapper<const std::vector<Icon>>> icons = std::nullopt) = 0;
+        AddToolOptionalParams params = {}) = 0;
 
     /**
      * Remove a tool from the server.
@@ -86,7 +121,8 @@ public:
      *
      * The server will expose it via MCP methods: `prompts/list` and `prompts/get`.
      */
-    virtual void AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler) = 0;
+    virtual void AddPrompt(const std::string& name, RenderPromptFunc handler,
+        AddPromptOptionalParams params = {}) = 0;
 
     /**
      * Remove a prompt by name.
@@ -99,7 +135,8 @@ public:
      * @param resource Resource infomation including URI, name, and read function
      * @param readFunc Function to read the resource content
      */
-    virtual void AddResource(const ResourceInfo& resource, ReadResourceFunc readFunc) = 0;
+    virtual void AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
+        AddResourceOptionalParams params = {}) = 0;
 
     /**
      * Remove a resource by name.
@@ -113,7 +150,8 @@ public:
      * 
      * @param resourceTemplate Resource template information
      */
-    virtual void AddResourceTemplate(const ResourceTemplate& resourceTemplate) = 0;
+    virtual void AddResourceTemplate(const std::string& uriTemplate, const std::string& name,
+        AddResourceTemplateOptionalParams params = {}) = 0;
 
     /**
      * Remove a resource template by URI template.

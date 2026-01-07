@@ -5,6 +5,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -302,8 +303,12 @@ protected:
         std::string echoDescription = ECHO_TOOL_DESCRIPTION;
 
         try {
-            server->AddTool(ECHO_TOOL_NAME, echoFunc, std::cref(echoTitle), std::cref(echoDescription),
-                std::cref(echoInputSchema), std::cref(echoOutputSchema));
+            Mcp::AddToolOptionalParams toolParams;
+            toolParams.title = std::cref(echoTitle);
+            toolParams.description = std::cref(echoDescription);
+            toolParams.inputSchema = std::cref(echoInputSchema);
+            toolParams.outputSchema = std::cref(echoOutputSchema);
+            server->AddTool(ECHO_TOOL_NAME, echoFunc, toolParams);
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", ECHO_TOOL_NAME);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add tool failed: %s", e.what());

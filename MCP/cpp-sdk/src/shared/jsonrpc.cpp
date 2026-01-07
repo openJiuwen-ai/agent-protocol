@@ -686,6 +686,9 @@ struct adl_serializer<Mcp::Tool> {
     static void to_json(json& j, const Mcp::Tool& t)
     {
         j["name"] = t.name;
+        if (t.title.has_value()) {
+            j["title"] = t.title.value();
+        }
         if (t.description.has_value()) {
             j["description"] = t.description.value();
         }
@@ -706,6 +709,9 @@ struct adl_serializer<Mcp::Tool> {
     static void from_json(const json& j, Mcp::Tool& t)
     {
         j.at("name").get_to(t.name);
+        if (j.contains("title")) {
+            t.title = j.at("title").get<std::string>();
+        }
         if (j.contains("description")) {
             t.description = j.at("description").get<std::string>();
         }

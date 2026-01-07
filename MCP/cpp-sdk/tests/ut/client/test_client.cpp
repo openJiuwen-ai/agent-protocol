@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <future>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -121,8 +122,12 @@ private:
         std::string echoDescription = ECHO_TOOL_DESCRIPTION;
 
         try {
-            server_->AddTool(ECHO_TOOL_NAME, echoFunc, std::cref(echoTitle), std::cref(echoDescription),
-                std::cref(echoInputSchema), std::cref(echoOutputSchema));
+            Mcp::AddToolOptionalParams toolParams;
+            toolParams.title = std::cref(echoTitle);
+            toolParams.description = std::cref(echoDescription);
+            toolParams.inputSchema = std::cref(echoInputSchema);
+            toolParams.outputSchema = std::cref(echoOutputSchema);
+            server_->AddTool(ECHO_TOOL_NAME, echoFunc, toolParams);
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", ECHO_TOOL_NAME);
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add tool failed: %s", e.what());
@@ -164,7 +169,26 @@ private:
     void AddTestResource() {
         Mcp::ResourceInfo resource = CreateTestResourceInfo();
         Mcp::ReadResourceFunc readResourceFunc = CreateReadResourceFunction();
-        server_->AddResource(resource, readResourceFunc);
+        Mcp::AddResourceOptionalParams resourceParams;
+        if (resource.title.has_value()) {
+            resourceParams.title = std::cref(resource.title.value());
+        }
+        if (resource.description.has_value()) {
+            resourceParams.description = std::cref(resource.description.value());
+        }
+        if (resource.mimeType.has_value()) {
+            resourceParams.mimeType = std::cref(resource.mimeType.value());
+        }
+        if (resource.size.has_value()) {
+            resourceParams.size = resource.size.value();
+        }
+        if (resource.icons.has_value()) {
+            resourceParams.icons = std::cref(resource.icons.value());
+        }
+        if (resource.annotations.has_value()) {
+            resourceParams.annotations = std::cref(resource.annotations.value());
+        }
+        server_->AddResource(resource.uri, resource.name, readResourceFunc, resourceParams);
     }
 
     static Mcp::ResourceInfo CreateTestResourceInfo() {
@@ -207,7 +231,14 @@ private:
 
     void AddGreetingPrompt() {
         Mcp::PromptInfo greetingPrompt = CreateGreetingPromptInfo();
-        server_->AddPrompt(greetingPrompt, CreatePromptFunction());
+        Mcp::AddPromptOptionalParams promptParams;
+        if (greetingPrompt.description.has_value()) {
+            promptParams.description = std::cref(greetingPrompt.description.value());
+        }
+        if (greetingPrompt.arguments.has_value()) {
+            promptParams.arguments = std::cref(greetingPrompt.arguments.value());
+        }
+        server_->AddPrompt(greetingPrompt.name, CreatePromptFunction(), promptParams);
     }
 
     static Mcp::PromptInfo CreateGreetingPromptInfo() {
@@ -253,7 +284,14 @@ private:
 
     void AddResourceTemplate() {
         Mcp::ResourceTemplate resourceTemplate = CreateResourceTemplate();
-        server_->AddResourceTemplate(resourceTemplate);
+        Mcp::AddResourceTemplateOptionalParams templateParams;
+        if (resourceTemplate.description.has_value()) {
+            templateParams.description = std::cref(resourceTemplate.description.value());
+        }
+        if (resourceTemplate.mimeType.has_value()) {
+            templateParams.mimeType = std::cref(resourceTemplate.mimeType.value());
+        }
+        server_->AddResourceTemplate(resourceTemplate.uriTemplate, resourceTemplate.name, templateParams);
     }
 
     static Mcp::ResourceTemplate CreateResourceTemplate() {
