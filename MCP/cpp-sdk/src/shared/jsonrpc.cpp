@@ -1253,7 +1253,7 @@ ListResourceTemplatesRequest::ListResourceTemplatesRequest()
     method_ = "resources/templates/list";
 }
 
-std::string JSONRPCRequest::Serialize(const std::string& method) const
+std::string JSONRPCRequest::Serialize() const
 {
     json j;
     j["jsonrpc"] = jsonrpc_;
@@ -1314,14 +1314,14 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
     return j.dump();
 }
 
-int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& method)
+int JSONRPCRequest::Deserialize(const std::string& jsonStr)
 {
     auto j = json::parse(jsonStr);
     jsonrpc_ = j.value("jsonrpc", "");
     if (j.contains("id")) {
         id_ = j.at("id").get<int64_t>();
     }
-    method_ = method;
+    method_ = j.value("method", "");
     request_.reset();
 
     if (method_ == "initialize") {
@@ -1507,7 +1507,7 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
     return 0;
 }
 
-std::string JSONRPCNotification::Serialize(const std::string& method) const
+std::string JSONRPCNotification::Serialize() const
 {
     json j;
     j["jsonrpc"] = jsonrpc_;
@@ -1519,11 +1519,11 @@ std::string JSONRPCNotification::Serialize(const std::string& method) const
     return j.dump();
 }
 
-int JSONRPCNotification::Deserialize(const std::string& jsonStr, const std::string& method)
+int JSONRPCNotification::Deserialize(const std::string& jsonStr)
 {
     auto j = json::parse(jsonStr);
     jsonrpc_ = j.value("jsonrpc", "");
-    method_ = method;
+    method_ = j.value("method", "");
     notification_.reset();
 
     if (method_ == "notifications/initialized") {
@@ -1575,8 +1575,7 @@ JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::
 
     if (hasId && hasMethod) {
         JSONRPCRequest request;
-        std::string reqMethod = j.at("method").get<std::string>();
-        request.Deserialize(jsonStr, reqMethod);
+        request.Deserialize(jsonStr);
         return std::move(request);
     }
 
@@ -1588,8 +1587,7 @@ JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::
 
     if (!hasId && hasMethod) {
         JSONRPCNotification notification;
-        std::string notificationMethod = j.at("method").get<std::string>();
-        notification.Deserialize(jsonStr, notificationMethod);
+        notification.Deserialize(jsonStr);
         return std::move(notification);
     }
 
@@ -1605,7 +1603,7 @@ JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::
 std::string SerializeJSONRPCMessage(const JSONRPCMessage& message, std::optional<std::string> method)
 {
     if (auto* request = std::get_if<JSONRPCRequest>(&message)) {
-        return request->Serialize(request->method_);
+        return request->Serialize();
     }
 
     if (auto* response = std::get_if<JSONRPCResponse>(&message)) {
@@ -1616,7 +1614,7 @@ std::string SerializeJSONRPCMessage(const JSONRPCMessage& message, std::optional
     }
 
     if (auto* notification = std::get_if<JSONRPCNotification>(&message)) {
-        return notification->Serialize(notification->method_);
+        return notification->Serialize();
     }
 
     if (auto* error = std::get_if<JSONRPCError>(&message)) {

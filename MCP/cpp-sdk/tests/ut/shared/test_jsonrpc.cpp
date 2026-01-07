@@ -102,10 +102,10 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationSuccess) {
     ASSERT_NE(nullptr, params);
     params->protocolVersion_ = PROTOCOL_VERSION;
 
-    std::string serialized = req.Serialize(req.method_);
+    std::string serialized = req.Serialize();
 
     JSONRPCRequest req2;
-    int result = req2.Deserialize(serialized, METHOD_NAME);
+    int result = req2.Deserialize(serialized);
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, req2.jsonrpc_);
@@ -129,10 +129,10 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestWithStringIdSuccess) {
     req.method_ = METHOD_NAME;
     req.request_ = std::make_unique<InitializeRequest>();
 
-    std::string serialized = req.Serialize(req.method_);
+    std::string serialized = req.Serialize();
 
     JSONRPCRequest req2;
-    int result = req2.Deserialize(serialized, METHOD_NAME);
+    int result = req2.Deserialize(serialized);
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(REQUEST_ID, req2.id_);
@@ -157,10 +157,10 @@ TEST_F(JSONRPCSerializationTest, JSONRPCNotificationSerializationSuccess) {
     JSONRPCNotification notif;
     notif.method_ = TEST_METHOD;
 
-    std::string serialized = notif.Serialize(notif.method_);
+    std::string serialized = notif.Serialize();
 
     JSONRPCNotification notif2;
-    int result = notif2.Deserialize(serialized, TEST_METHOD);
+    int result = notif2.Deserialize(serialized);
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, notif2.jsonrpc_);
@@ -197,7 +197,7 @@ TEST_F(JSONRPCSerializationTest, ListPromptsRequestSerialization) {
     rpcReq.method_ = "prompts/list";
     rpcReq.request_ = std::move(listReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
@@ -221,7 +221,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptRequestSerialization) {
     rpcReq.method_ = "prompts/get";
     rpcReq.request_ = std::move(getReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
@@ -457,7 +457,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptRequestDeserializationComplexArguments
 
     // Deserialize the JSON string
     JSONRPCRequest rpcReq;
-    int result = rpcReq.Deserialize(jsonStr, "prompts/get");
+    int result = rpcReq.Deserialize(jsonStr);
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, rpcReq.jsonrpc_);
@@ -498,7 +498,7 @@ TEST_F(JSONRPCSerializationTest, ReadResourceRequestSerializationIncludesUri)
     rpcReq.method_ = "resources/read";
     rpcReq.request_ = std::move(readReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
@@ -518,7 +518,7 @@ TEST_F(JSONRPCSerializationTest, SubscribeRequestSerializationIncludesUri)
     rpcReq.method_ = "resources/subscribe";
     rpcReq.request_ = std::move(subReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(std::string{"resources/subscribe"}, j.at("method").get<std::string>());
@@ -536,7 +536,7 @@ TEST_F(JSONRPCSerializationTest, UnsubscribeRequestSerializationIncludesUri)
     rpcReq.method_ = "resources/unsubscribe";
     rpcReq.request_ = std::move(unsubReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(std::string{"resources/unsubscribe"}, j.at("method").get<std::string>());
@@ -553,7 +553,7 @@ TEST_F(JSONRPCSerializationTest, ListResourcesRequestSerializationHasParamsKey)
     rpcReq.method_ = "resources/list";
     rpcReq.request_ = std::move(listReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(std::string{"resources/list"}, j.at("method").get<std::string>());
@@ -703,7 +703,7 @@ TEST_F(JSONRPCSerializationTest, ListResourceTemplatesRequestSerializationHasPar
     rpcReq.method_ = "resources/templates/list";
     rpcReq.request_ = std::move(listReq);
 
-    std::string serialized = rpcReq.Serialize(rpcReq.method_);
+    std::string serialized = rpcReq.Serialize();
     auto j = json::parse(serialized);
 
     EXPECT_EQ(std::string{"resources/templates/list"}, j.at("method").get<std::string>());
@@ -874,7 +874,7 @@ TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesRequest) {
     req.id_ = REQUEST_ID;
     req.method_ = METHOD_NAME;
 
-    std::string serialized = req.Serialize(req.method_);
+    std::string serialized = req.Serialize();
 
     JSONRPCMessage message = DeserializeJSONRPCMessage(serialized, METHOD_NAME);
     ASSERT_TRUE(std::holds_alternative<JSONRPCRequest>(message));
@@ -903,7 +903,7 @@ TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesNotification) {
     JSONRPCNotification notif;
     notif.method_ = TEST_METHOD;
 
-    std::string serialized = notif.Serialize(TEST_METHOD);
+    std::string serialized = notif.Serialize();
 
     JSONRPCMessage message = DeserializeJSONRPCMessage(serialized, TEST_METHOD);
     ASSERT_TRUE(std::holds_alternative<JSONRPCNotification>(message));

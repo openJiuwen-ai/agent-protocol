@@ -23,14 +23,6 @@ struct RequestParams {
     virtual ~RequestParams() = default;
 };
 
-// Base for JSON-RPC envelopes
-struct JSONRPC {
-    virtual ~JSONRPC() = default;
-
-    virtual std::string Serialize(const std::string& method) const = 0;
-    virtual int Deserialize(const std::string& jsonStr, const std::string& method) = 0;
-};
-
 struct Request : public MCPBaseType {
     std::string method_;
     std::unique_ptr<RequestParams> params_;
@@ -45,7 +37,7 @@ struct Request : public MCPBaseType {
     Request& operator=(Request&&) noexcept = default;
 };
 
-class JSONRPCRequest : public JSONRPC {
+class JSONRPCRequest {
 public:
     std::string jsonrpc_;
     int64_t id_;
@@ -54,11 +46,11 @@ public:
 
     JSONRPCRequest();
 
-    std::string Serialize(const std::string& method) const override;
-    int Deserialize(const std::string& jsonStr, const std::string& method) override;
+    std::string Serialize() const;
+    int Deserialize(const std::string& jsonStr);
 };
 
-class JSONRPCResponse : public JSONRPC {
+class JSONRPCResponse {
 public:
     std::string jsonrpc_;
     int64_t id_;
@@ -66,8 +58,8 @@ public:
 
     JSONRPCResponse();
 
-    std::string Serialize(const std::string& method) const override;
-    int Deserialize(const std::string& jsonStr, const std::string& method) override;
+    std::string Serialize(const std::string& method) const;
+    int Deserialize(const std::string& jsonStr, const std::string& method);
 };
 
 // Base class for notification parameter data
@@ -89,7 +81,7 @@ struct Notification : public MCPBaseType {
     Notification& operator=(Notification&&) noexcept = default;
 };
 
-class JSONRPCNotification : public JSONRPC {
+class JSONRPCNotification {
 public:
     std::string jsonrpc_;
     std::string method_;
@@ -97,8 +89,8 @@ public:
 
     JSONRPCNotification();
 
-    std::string Serialize(const std::string& method) const override;
-    int Deserialize(const std::string& jsonStr, const std::string& method) override;
+    std::string Serialize() const;
+    int Deserialize(const std::string& jsonStr);
 };
 
 // JSON-RPC error response structure
