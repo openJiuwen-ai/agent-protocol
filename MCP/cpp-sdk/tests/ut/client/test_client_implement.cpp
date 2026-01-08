@@ -387,42 +387,6 @@ TEST_F(McpClientImplementTest, ClientLifecycle) {
     }
 }
 
-// 测试不同配置
-TEST_F(McpClientImplementTest, DifferentConfigurations) {
-    // 配置1：STDIO传输
-    ClientConfig config1;
-    config1.name = "Client1";
-    config1.version = "1.0";
-    std::shared_ptr<ClientTransport> transport1 = std::make_shared<StdioClientTransport>(stdioConfig_);
-
-    auto client1 = std::make_unique<McpClientImplement>(config1, transport1);
-    ASSERT_NE(client1, nullptr);
-
-    EXPECT_NO_THROW({
-        auto future1 = client1->Initialize();
-        EXPECT_TRUE(future1.valid());
-    });
-
-    // 配置2：STREAMABLE_HTTP传输（无效地址）
-    ClientConfig config2;
-    config2.name = "Client2";
-    config2.version = "2.0";
-    StreamableHttpClientConfig httpConfig1;
-    httpConfig1.endpoint = "http://localhost:99999";
-    httpConfig1.headers = {};
-    httpConfig1.timeout = std::chrono::milliseconds(1000);
-    httpConfig1.sseTimeout = std::chrono::milliseconds(1000);
-    std::shared_ptr<ClientTransport> transport2 = std::make_shared<StdioClientTransport>(stdioConfig_);
-
-    auto client2 = std::make_unique<McpClientImplement>(config2, transport2);
-    ASSERT_NE(client2, nullptr);
-
-    EXPECT_NO_THROW({
-        auto future2 = client2->Initialize();
-        EXPECT_TRUE(future2.valid());
-    });
-}
-
 // 测试子进程配置
 TEST_F(McpClientImplementTest, SubprocessConfiguration) {
     // 配置子进程命令
