@@ -49,10 +49,17 @@ function(fetch_or_find_package)
   # Try to find system package first
   set(PACKAGE_FOUND FALSE)
   if(${OPTION_VAR})
-    find_package(${ARG_SYSTEM_PACKAGE_NAME} CONFIG QUIET)
+    message(STATUS "try to find system ${ARG_SYSTEM_PACKAGE_NAME}")
+    # 1 Try find _package first
+    find_package(${ARG_SYSTEM_PACKAGE_NAME} QUIET)
     if (${ARG_SYSTEM_PACKAGE_NAME}_FOUND)
       set(PACKAGE_FOUND TRUE)
-    else()
+      message(STATUS "find package success")
+    endif()
+
+    # 2 Try pkgconfig to find
+    if (NOT PACKAGE_FOUND)
+      message(STATUS "find package failed")
       find_package(PkgConfig QUIET)
       if(PKG_CONFIG_FOUND)
         set(_mcp_pkg_names "${ARG_SYSTEM_PACKAGE_NAME}")
@@ -62,37 +69,103 @@ function(fetch_or_find_package)
 
         foreach(_mcp_pkg_name IN LISTS _mcp_pkg_names)
           pkg_check_modules(_mcp_pkg QUIET IMPORTED_TARGET "${_mcp_pkg_name}")
-          if(_mcp_pkg_FOUND)
-            set(PACKAGE_FOUND TRUE)
+          if(_mcp_pkg_FOUND AND _mcp_pkg_INCLUDE_DIRS AND _mcp_pkg_LIBRARIES)
+            if (NOT "${_mcp_pkg_INCLUDE_DIRS}" STREQUAL "NOTFOUND" AND NOT "${_mcp_pkg_LIBRARIES}" STREQUAL "NOTFOUND")
+              set(PACKAGE_FOUND TRUE)
+              message(STATUS "pkgconfig success")
 
-            if(NOT TARGET "${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}")
-              add_library("${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}" INTERFACE IMPORTED)
-              set_target_properties("${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}" PROPERTIES
-                INTERFACE_LINK_LIBRARIES "PkgConfig::_mcp_pkg"
-              )
-            endif()
+              message(STATUS "_mcp_pkg_INCLUDE_DIRS": ${_mcp_pkg_INCLUDE_DIRS})
+              message(STATUS "_mcp_pkg_LIBRARIES": ${_mcp_pkg_LIBRARIES})
 
-            if ("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "Libevent")
-              if(NOT TARGET event)
-                add_library(event INTERFACE IMPORTED)
-                set_target_properties(event PROPERTIES
+              if(NOT TARGET "${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}")
+                add_library("${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}" INTERFACE IMPORTED)
+                set_target_properties("${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}" PROPERTIES
                   INTERFACE_LINK_LIBRARIES "PkgConfig::_mcp_pkg"
                 )
               endif()
-            elseif("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "nlohmann_json")
-              if(NOT TARGET nlohmann_json::nlohmann_json)
-                add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
-                set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
-                  INTERFACE_LINK_LIBRARIES "PkgConfig::_mcp_pkg"
-                )
+
+              if ("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "libevent")
+                if(NOT TARGET event)
+                  add_library(event INTERFACE IMPORTED)
+                  set_target_properties(event PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "PkgConfig::_mcp_pkg"
+                  )
+                endif()
+              elseif("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "nlohmann_json")
+                if(NOT TARGET nlohmann_json::nlohmann_json)
+                  add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
+                  set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "PkgConfig::_mcp_pkg"
+                  )
+                endif()
               endif()
             endif()
-
-            break()
           endif()
+
         endforeach()
       endif()
     endif()
+
+    # 3 find_path and find_library finally
+    if (NOT PACKAGE_FOUND)
+      message(STATUS "pkgconfig fail")
+
+      if ("${ARG_NAME}" STREQUAL "libevent")
+        message(STATUS "try find_path and find_library")
+
+        find_path(_mcp_libevent_include_dir
+          NAMES event.h
+          PATHS /usr/include /usr/local/include
+        )
+        find_library(_mcp_libevent_lib
+          NAMES event
+          PATHS /usr/lib /usr/lib64
+        )
+        find_library(_mcp_libevent_pthreads_lib
+          NAMES event_pthreads
+          PATHS /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64
+        )
+
+        if(_mcp_libevent_include_dir AND _mcp_libevent_lib AND _mcp_libevent_pthreads_lib)
+          set(PACKAGE_FOUND TRUE)
+          message(STATUS "Using system libevent: include=${_mcp_libevent_include_dir}, lib=${_mcp_libevent_lib}, pthread_lib=${_mcp_libevent_pthreads_lib}")
+
+          if(NOT TARGET libevent)
+              add_library(libevent SHARED IMPORTED)
+              set_target_properties(libevent PROPERTIES
+              IMPORTED_LOCATION "${_mcp_libevent_lib}"
+              INTERFACE_INCLUDE_DIRECTORIES "${_mcp_libevent_include_dir}"
+          )
+          endif()
+
+          if(NOT TARGET libevent_headers)
+            add_library(libevent_headers INTERFACE)
+            target_include_directories(libevent_headers
+                INTERFACE
+                    "${_mcp_libevent_include_dir}"
+            )
+          endif()
+
+          if(NOT TARGET libevent_pthreads)
+            add_library(libevent_pthreads SHARED IMPORTED)
+            set_target_properties(libevent_pthreads PROPERTIES
+              IMPORTED_LOCATION "${_mcp_libevent_pthreads_lib}"
+              INTERFACE_INCLUDE_DIRECTORIES "${_mcp_libevent_include_dir}"
+            )
+          endif()
+
+        else()
+          message(STATUS "fail to using system libevent: include=${_mcp_libevent_include_dir}, lib=${_mcp_libevent_lib}, pthread_lib=${_mcp_libevent_pthrad_lib}")
+        endif()
+
+        if (NOT PACKAGE_FOUND)
+          message(STATUS "find_path and find_library fail")
+        endif()
+
+      endif()
+
+    endif()
+
   endif()
 
   set(${PACKAGE_UPPER}_SRC_DIR "${CMAKE_SOURCE_DIR}/third_party/${ARG_SYSTEM_PACKAGE_NAME}-src")
@@ -155,9 +228,10 @@ endfunction()
 
 # Fetch libevent
 fetch_or_find_package(
-  NAME Libevent
+  NAME libevent
   GIT_REPO https://github.com/libevent/libevent.git
   GIT_TAG release-2.1.12-stable
+  SYSTEM_PACKAGE_NAME Libevent
   OPTIONS
     EVENT__LIBRARY_TYPE SHARED
     EVENT__DISABLE_OPENSSL ON

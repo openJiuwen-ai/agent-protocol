@@ -18,7 +18,6 @@ set -euo pipefail
 
 # Default options
 BUILD_TYPE="Release"
-WITH_EXAMPLES=0
 WITH_TESTS=0
 WITH_COVERAGE=0
 BUILD_DIR="build"
@@ -39,7 +38,7 @@ Options:
 Examples:
   $0
   $0 -t Debug
-  $0 --type Release --with-examples --with-tests
+  $0 --type Release --with-tests
   $0 --coverage                # Build tests with coverage
 EOF
 }
@@ -105,12 +104,16 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="${SCRIPT_DIR}/.."
-BUILD_DIR_ABS="${SOURCE_DIR}/${BUILD_DIR}"
+
+if [[ "${BUILD_DIR}" = /* ]]; then
+  BUILD_DIR_ABS="${BUILD_DIR}"
+else
+  BUILD_DIR_ABS="${SOURCE_DIR}/${BUILD_DIR}"
+fi
 
 mkdir -p "${BUILD_DIR_ABS}"
-cd "${BUILD_DIR_ABS}"
 
-CMAKE_ARGS=("${SOURCE_DIR}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+CMAKE_ARGS=("-S" "${SOURCE_DIR}" "-B" "${BUILD_DIR_ABS}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
 
 if [[ ${WITH_TESTS} -eq 1 ]]; then
   CMAKE_ARGS+=("-DMCP_ENABLE_TESTS=ON")
@@ -131,7 +134,7 @@ else
 fi
 
 echo "[INFO] Building with ${OPTIMAL_JOBS} parallel jobs (detected ${CPU_CORES} CPU cores)"
-cmake --build . -j${OPTIMAL_JOBS}
+cmake --build "${BUILD_DIR_ABS}" -j${OPTIMAL_JOBS}
 
 if [[ ${WITH_COVERAGE} -eq 1 ]]; then
   echo "[INFO] Coverage build finished."

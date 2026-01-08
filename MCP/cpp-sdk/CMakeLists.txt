@@ -41,13 +41,15 @@ add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal -Wtra
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic -pie")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic")
 
-if( CMAKE_BUILD_TYPE STREQUAL "Release")
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
 endif()
 
 # Skip RPATH to avoid hardcoded paths in binaries
-set(CMAKE_SKIP_RPATH TRUE)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+	set(CMAKE_SKIP_RPATH TRUE)
+endif()
 
 # Ensure debug symbols are included
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
