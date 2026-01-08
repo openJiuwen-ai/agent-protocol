@@ -78,24 +78,25 @@ else()
 	set(_mcp_libevent_target event)
 endif()
 
-target_link_libraries(mcp PUBLIC ${_mcp_libevent_target} nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
-target_link_libraries(mcp PRIVATE http_parser)
-
 # Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
+set(_mcp_event_pthreads_target "")
 if(TARGET event_pthreads)
-	target_link_libraries(mcp PUBLIC event_pthreads)
+    set(_mcp_event_pthreads_target event_pthreads)
 elseif(TARGET libevent_pthreads)
-	target_link_libraries(mcp PUBLIC libevent_pthreads)
+    set(_mcp_event_pthreads_target libevent_pthreads)
 elseif(TARGET "libevent::pthread")
-	target_link_libraries(mcp PUBLIC libevent::pthread)
+    set(_mcp_event_pthreads_target libevent::pthread)
 else()
 	find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
 	if(_mcp_event_pthreads_lib)
-		target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_lib})
+	    set(_mcp_event_pthreads_target ${_mcp_event_pthreads_lib})
 	else()
 		message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
 	endif()
 endif()
+
+target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_target} ${_mcp_libevent_target} nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(mcp PRIVATE http_parser)
 
 set_target_properties(mcp PROPERTIES
 	OUTPUT_NAME "mcp"

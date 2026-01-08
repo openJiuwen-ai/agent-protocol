@@ -9,10 +9,10 @@ target_include_directories(mcp_shared_tests PRIVATE
 )
 
 target_link_libraries(mcp_shared_tests
-    mcp_shared 
-    mcp_log 
-    third_party_headers 
-    gtest 
+    mcp_shared
+    mcp_log
+    third_party_headers
+    gtest
     gtest_main
 )
 

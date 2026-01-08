@@ -1,0 +1,38 @@
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} MCP_transport_TEST_SOURCES)
+
+add_executable(mcp_transport_tests
+    ${MCP_transport_TEST_SOURCES}
+)
+
+target_include_directories(mcp_transport_tests
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/include/mcp
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+target_sources(mcp_transport_tests PRIVATE $<TARGET_OBJECTS:mcp_transport>)
+target_sources(mcp_transport_tests PRIVATE $<TARGET_OBJECTS:mcp_server>)
+
+target_link_libraries(mcp_transport_tests
+    PRIVATE
+        mcp_shared
+        mcp_log
+        mcp_event
+        mcp_net
+        mcp_transport
+        mcp_auth
+        third_party_headers
+        http_parser
+        nlohmann_json::nlohmann_json
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        event
+        pthread
+        GTest::gtest_main
+        ${_mcp_event_pthreads_target}
+)
+
+target_compile_features(mcp_transport_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(mcp_transport_tests)
