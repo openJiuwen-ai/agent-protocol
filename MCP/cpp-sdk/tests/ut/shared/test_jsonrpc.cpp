@@ -935,4 +935,116 @@ TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageInvalidJsonThrows) {
     EXPECT_THROW(DeserializeJSONRPCMessage(invalidJson, METHOD_NAME), nlohmann::json::parse_error);
 }
 
+TEST_F(JSONRPCSerializationTest, ResourceUpdatedNotificationSerializeIncludesUriParam)
+{
+    JSONRPCNotification notif;
+    notif.method_ = "notifications/resources/updated";
+
+    auto payload = std::make_unique<Mcp::ResourceUpdatedNotification>();
+    payload->method_ = notif.method_;
+    payload->params_ = std::make_unique<Mcp::ResourceUpdatedNotificationParams>(RESOURCE_URI);
+    notif.notification_ = std::move(payload);
+
+    std::string serialized = notif.Serialize(notif.method_);
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(std::string{"notifications/resources/updated"}, j.at("method").get<std::string>());
+    ASSERT_TRUE(j.contains("params"));
+    ASSERT_TRUE(j.at("params").is_object());
+    EXPECT_EQ(std::string{RESOURCE_URI}, j.at("params").at("uri").get<std::string>());
+}
+
+TEST_F(JSONRPCSerializationTest, ResourceUpdatedNotificationDeserializeParsesUriParam)
+{
+    json j;
+    j["jsonrpc"] = JSONRPC_VERSION;
+    j["method"] = "notifications/resources/updated";
+    j["params"] = {{"uri", RESOURCE_URI}};
+
+    JSONRPCNotification notif;
+    int result = notif.Deserialize(j.dump(), "notifications/resources/updated");
+    EXPECT_EQ(0, result);
+    EXPECT_EQ(JSONRPC_VERSION, notif.jsonrpc_);
+    EXPECT_EQ(std::string{"notifications/resources/updated"}, notif.method_);
+    ASSERT_NE(nullptr, notif.notification_);
+
+    const auto *typed = dynamic_cast<const Mcp::ResourceUpdatedNotification *>(notif.notification_.get());
+    ASSERT_NE(nullptr, typed);
+    ASSERT_NE(nullptr, typed->params_);
+    const auto *params = dynamic_cast<const Mcp::ResourceUpdatedNotificationParams *>(typed->params_.get());
+    ASSERT_NE(nullptr, params);
+    EXPECT_EQ(std::string{RESOURCE_URI}, params->uri);
+}
+
+TEST_F(JSONRPCSerializationTest, ToolListChangedNotificationRoundTripDeserializeTyped)
+{
+    json j;
+    j["jsonrpc"] = JSONRPC_VERSION;
+    j["method"] = "notifications/tools/list_changed";
+    j["params"] = json::object();
+
+    JSONRPCNotification notif;
+    int result = notif.Deserialize(j.dump(), "notifications/tools/list_changed");
+    EXPECT_EQ(0, result);
+    ASSERT_NE(nullptr, notif.notification_);
+    EXPECT_NE(nullptr, dynamic_cast<const Mcp::ToolListChangedNotification *>(notif.notification_.get()));
+}
+
+TEST_F(JSONRPCSerializationTest, PromptListChangedNotificationSerializeIncludesParams)
+{
+    JSONRPCNotification notif;
+    notif.method_ = "notifications/prompts/list_changed";
+
+    std::string serialized = notif.Serialize(notif.method_);
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(std::string{"notifications/prompts/list_changed"}, j.at("method").get<std::string>());
+    ASSERT_TRUE(j.contains("params"));
+    EXPECT_TRUE(j.at("params").is_object());
+}
+
+TEST_F(JSONRPCSerializationTest, PromptListChangedNotificationDeserializeCreatesTypedNotification)
+{
+    json j;
+    j["jsonrpc"] = JSONRPC_VERSION;
+    j["method"] = "notifications/prompts/list_changed";
+    j["params"] = json::object();
+
+    JSONRPCNotification notif;
+    int result = notif.Deserialize(j.dump(), "notifications/prompts/list_changed");
+    EXPECT_EQ(0, result);
+    ASSERT_NE(nullptr, notif.notification_);
+    EXPECT_NE(nullptr, dynamic_cast<const Mcp::PromptListChangedNotification *>(notif.notification_.get()));
+}
+
+TEST_F(JSONRPCSerializationTest, ResourceListChangedNotificationSerializeIncludesParams)
+{
+    JSONRPCNotification notif;
+    notif.method_ = "notifications/resources/list_changed";
+
+    std::string serialized = notif.Serialize(notif.method_);
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(std::string{"notifications/resources/list_changed"}, j.at("method").get<std::string>());
+    ASSERT_TRUE(j.contains("params"));
+    EXPECT_TRUE(j.at("params").is_object());
+}
+
+TEST_F(JSONRPCSerializationTest, ResourceListChangedNotificationDeserializeCreatesTypedNotification)
+{
+    json j;
+    j["jsonrpc"] = JSONRPC_VERSION;
+    j["method"] = "notifications/resources/list_changed";
+    j["params"] = json::object();
+
+    JSONRPCNotification notif;
+    int result = notif.Deserialize(j.dump(), "notifications/resources/list_changed");
+    EXPECT_EQ(0, result);
+    ASSERT_NE(nullptr, notif.notification_);
+    EXPECT_NE(nullptr, dynamic_cast<const Mcp::ResourceListChangedNotification *>(notif.notification_.get()));
+}
+
 } // namespace

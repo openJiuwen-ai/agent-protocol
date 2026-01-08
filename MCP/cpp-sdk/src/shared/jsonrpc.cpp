@@ -1069,6 +1069,75 @@ struct adl_serializer<Mcp::ListResourceTemplatesResult> {
     }
 };
 
+// Notification-related serializers
+template <>
+struct adl_serializer<Mcp::ResourceUpdatedNotificationParams> {
+    static void to_json(json &j, const Mcp::ResourceUpdatedNotificationParams &p)
+    {
+        j["uri"] = p.uri;
+    }
+
+    static void from_json(const json &j, Mcp::ResourceUpdatedNotificationParams &p)
+    {
+        p.uri = j.value("uri", std::string{});
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ResourceUpdatedNotification> {
+    static void to_json(json &j, const Mcp::ResourceUpdatedNotification &notif)
+    {
+        j = json::object();
+        if (notif.params_) {
+            auto p = static_cast<const Mcp::ResourceUpdatedNotificationParams *>(notif.params_.get());
+            if (p != nullptr) {
+                j = *p;
+            }
+        }
+    }
+
+    static void from_json(const json &j, Mcp::ResourceUpdatedNotification &notif)
+    {
+        if (j.contains("uri")) {
+            Mcp::ResourceUpdatedNotificationParams p(std::string{});
+            j.get_to(p);
+            notif.params_ = std::make_unique<Mcp::ResourceUpdatedNotificationParams>(std::move(p));
+        } else {
+            notif.params_.reset();
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ToolListChangedNotification> {
+    static void to_json(json &j, const Mcp::ToolListChangedNotification &)
+    {
+        j = json::object();
+    }
+
+    static void from_json(const json &, Mcp::ToolListChangedNotification &) {}
+};
+
+template <>
+struct adl_serializer<Mcp::PromptListChangedNotification> {
+    static void to_json(json &j, const Mcp::PromptListChangedNotification &)
+    {
+        j = json::object();
+    }
+
+    static void from_json(const json &, Mcp::PromptListChangedNotification &) {}
+};
+
+template <>
+struct adl_serializer<Mcp::ResourceListChangedNotification> {
+    static void to_json(json &j, const Mcp::ResourceListChangedNotification &)
+    {
+        j = json::object();
+    }
+
+    static void from_json(const json &, Mcp::ResourceListChangedNotification &) {}
+};
+
 } // namespace nlohmann
 
 namespace Mcp {
@@ -1130,6 +1199,26 @@ InitializedNotification::InitializedNotification()
 {
     method_ = "notifications/initialized";
     params_ = nullptr;
+}
+
+ResourceUpdatedNotification::ResourceUpdatedNotification()
+{
+    method_ = "notifications/resources/updated";
+}
+
+ToolListChangedNotification::ToolListChangedNotification()
+{
+    method_ = "notifications/tools/list_changed";
+}
+
+PromptListChangedNotification::PromptListChangedNotification()
+{
+    method_ = "notifications/prompts/list_changed";
+}
+
+ResourceListChangedNotification::ResourceListChangedNotification()
+{
+    method_ = "notifications/resources/list_changed";
 }
 
 CallToolParams::CallToolParams(const std::string& tool_name, std::optional<JsonValue> args)
@@ -1450,6 +1539,17 @@ std::string JSONRPCNotification::Serialize(const std::string& method) const
     j["method"] = method_;
     if (method_ == "notifications/initialized") {
         j["params"] = json::object();
+    } else if (notification_ != nullptr && method_ == "notifications/resources/updated") {
+        const auto* notif = dynamic_cast<const ResourceUpdatedNotification*>(notification_.get());
+        if (notif != nullptr) {
+            j["params"] = *notif;
+        }
+    } else if (method_ == "notifications/tools/list_changed") {
+        j["params"] = json::object();
+    } else if (method_ == "notifications/prompts/list_changed") {
+        j["params"] = json::object();
+    } else if (method_ == "notifications/resources/list_changed") {
+        j["params"] = json::object();
     }
 
     return j.dump();
@@ -1464,6 +1564,25 @@ int JSONRPCNotification::Deserialize(const std::string& jsonStr, const std::stri
 
     if (method_ == "notifications/initialized") {
         auto notif = std::make_unique<InitializedNotification>();
+        notif->method_ = method_;
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/resources/updated") {
+        auto notif = std::make_unique<ResourceUpdatedNotification>();
+        notif->method_ = method_;
+        if (j.contains("params")) {
+            j.at("params").get_to(*notif);
+        }
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/tools/list_changed") {
+        auto notif = std::make_unique<ToolListChangedNotification>();
+        notif->method_ = method_;
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/prompts/list_changed") {
+        auto notif = std::make_unique<PromptListChangedNotification>();
+        notif->method_ = method_;
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/resources/list_changed") {
+        auto notif = std::make_unique<ResourceListChangedNotification>();
         notif->method_ = method_;
         notification_ = std::move(notif);
     }

@@ -224,6 +224,28 @@ struct ListResourceTemplatesRequest : public Request {
     ListResourceTemplatesRequest();
 };
 
+struct ResourceUpdatedNotificationParams : public NotificationParams {
+    std::string uri;
+
+    explicit ResourceUpdatedNotificationParams(const std::string &resourceUri) : uri(resourceUri) {}
+};
+
+struct ResourceUpdatedNotification : public Notification {
+    ResourceUpdatedNotification();
+};
+
+struct ToolListChangedNotification : public Notification {
+    ToolListChangedNotification();
+};
+
+struct PromptListChangedNotification : public Notification {
+    PromptListChangedNotification();
+};
+
+struct ResourceListChangedNotification : public Notification {
+    ResourceListChangedNotification();
+};
+
 } // namespace Mcp
 
 #endif // MCP_JSONRPC_INCLUDE_H_
