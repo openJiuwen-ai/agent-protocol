@@ -11,6 +11,7 @@ target_include_directories(mcp_client_tests
 )
 
 target_sources(mcp_client_tests PRIVATE $<TARGET_OBJECTS:mcp_client>)
+target_sources(mcp_client_tests PRIVATE $<TARGET_OBJECTS:mcp_server>)
 
 target_link_libraries(mcp_client_tests
     PRIVATE

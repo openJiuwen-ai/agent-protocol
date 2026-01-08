@@ -79,7 +79,6 @@ constexpr const char* RESOURCE_NAME = "example";
 constexpr const char* RESOURCE_TITLE = "Example Title";
 
 static constexpr int DEFAULT_ID = 123;
-static constexpr int TEN = 10;
 static constexpr int ARGS_NUM = 2;
 static constexpr int ERR_CODE = -32700;
 

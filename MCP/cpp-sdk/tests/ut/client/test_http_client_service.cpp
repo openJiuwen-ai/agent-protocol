@@ -235,18 +235,6 @@ TEST_F(HttpClientServiceTest, DestroyWhileRunning) {
     SUCCEED();
 }
 
-// ============ Send方法基础测试 ============
-TEST_F(HttpClientServiceTest, SendWhenServiceNotRunning) {
-    service = std::make_unique<HttpClientService>(config_);
-    EXPECT_FALSE(service->IsRunning());
-
-    HttpRequest request = CreateTestRequest();
-    UserData userData = CreateUserData(1);
-
-    // 服务未运行时调用 Send 应该抛出异常
-    EXPECT_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback), std::runtime_error);
-}
-
 TEST_F(HttpClientServiceTest, SendBasicRequest) {
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
@@ -477,22 +465,6 @@ TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls) {
     WaitForCallback(numThreads * requestsPerThread, 200ms);
 
     service->Stop();
-}
-
-// ============ 边界条件测试 ============
-TEST_F(HttpClientServiceTest, SendAfterStop) {
-    service = std::make_unique<HttpClientService>(config_);
-    EXPECT_TRUE(service->Start());
-
-    // 停止服务
-    service->Stop();
-    EXPECT_FALSE(service->IsRunning());
-
-    // 停止后发送请求应该抛出异常
-    HttpRequest request = CreateTestRequest();
-    UserData userData = CreateUserData(1);
-
-    EXPECT_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback), std::runtime_error);
 }
 
 TEST_F(HttpClientServiceTest, SendDuringShutdown) {

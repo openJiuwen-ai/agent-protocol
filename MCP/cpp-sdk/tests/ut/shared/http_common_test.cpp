@@ -8,8 +8,8 @@
 #include <string>
 #include <unordered_map>
 
-static constexpr int SIZE_TWO = 2;
-static constexpr int SIZE_FOUR = 4;
+static constexpr int HEADER_SIZE = 2;
+static constexpr int ARGS_NUM = 4;
 static constexpr int REQ_ID = 12345;
 
 namespace Mcp::Http {
@@ -77,7 +77,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_CompleteMessageWithContentLength)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
 
-    EXPECT_EQ(headers.size(), SIZE_TWO);
+    EXPECT_EQ(headers.size(), HEADER_SIZE);
     EXPECT_EQ(headers["Content-Length"], "11");
     EXPECT_EQ(headers["Content-Type"], "text/plain");
     EXPECT_EQ(body, "Hello World");
@@ -186,7 +186,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_MultipleHeaders)
     std::size_t consumedBytes = 0;
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
-    EXPECT_EQ(headers.size(), SIZE_FOUR);
+    EXPECT_EQ(headers.size(), ARGS_NUM);
     EXPECT_EQ(headers["Host"], "localhost:8080");
     EXPECT_EQ(headers["User-Agent"], "TestClient");
     EXPECT_EQ(headers["Accept"], "*/*");
@@ -241,7 +241,7 @@ TEST(HttpCommonTest, HttpResponse_DefaultConstructor)
     EXPECT_EQ(response.statusText, "OK");
     EXPECT_TRUE(response.errorMessage.empty());
     EXPECT_TRUE(response.body.empty());
-    EXPECT_EQ(response.headers.size(), SIZE_TWO);
+    EXPECT_EQ(response.headers.size(), HEADER_SIZE);
     EXPECT_EQ(response.headers[CONTENT_TYPE_HEADER], "text/plain");
     EXPECT_EQ(response.headers["Connection"], "keep-alive");
     EXPECT_EQ(response.userData.requestId, 0);
