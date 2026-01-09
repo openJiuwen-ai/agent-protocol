@@ -19,9 +19,24 @@ constexpr const char* MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version";
 constexpr const char* CONTENT_TYPE_HEADER = "content-type";
 constexpr const char* ACCEPT_HEADER = "accept";
 
+// Common HTTP Header names (wire-level; preserve conventional casing)
+constexpr const char* CACHE_CONTROL_HEADER = "Cache-Control";
+constexpr const char* CONNECTION_HEADER = "Connection";
+constexpr const char* HOST_HEADER = "Host";
+constexpr const char* CONTENT_LENGTH_HEADER = "Content-Length";
+constexpr const char* TRANSFER_ENCODING_HEADER = "Transfer-Encoding";
+constexpr const char* X_ACCEL_BUFFERING_HEADER = "X-Accel-Buffering";
+
 // Content-Type constants
 constexpr const char* CONTENT_TYPE_JSON = "application/json";
 constexpr const char* CONTENT_TYPE_SSE = "text/event-stream";
+constexpr const char* CONTENT_TYPE_TEXT_PLAIN = "text/plain";
+
+// Common header values
+constexpr const char* CACHE_CONTROL_NO_CACHE_NO_TRANSFORM = "no-cache, no-transform";
+constexpr const char* CONNECTION_KEEP_ALIVE = "keep-alive";
+constexpr const char* CONNECTION_CLOSE = "close";
+constexpr const char* TRANSFER_ENCODING_CHUNKED = "chunked";
 
 // HTTP Status Code constants
 constexpr int HTTP_STATUS_OK = 200;
@@ -52,6 +67,12 @@ struct UserData {
     std::string method;
 };
 
+enum class HttpSendType {
+    HTTPRESPONSE = 0, // send total response
+    HTTPRESPONSESTART, // send response start(header only)
+    HTTPRESPONSEBODY, // send response body
+};
+
 // HTTP message types used by HttpServer/HttpClient
 
 struct HttpRequest {
@@ -70,13 +91,14 @@ struct HttpResponse {
     int statusCode = 0;
     std::string errorMessage; // Error message (when success is false)
     std::string statusText;
+    HttpSendType type = HttpSendType::HTTPRESPONSE;
     std::unordered_map<std::string, std::string> headers;
     std::string body;
 
     HttpResponse() : statusCode(HTTP_STATUS_OK), statusText("OK")
     {
-        headers[CONTENT_TYPE_HEADER] = "text/plain";
-        headers["Connection"] = "keep-alive";
+        headers[CONTENT_TYPE_HEADER] = CONTENT_TYPE_TEXT_PLAIN;
+        headers[CONNECTION_HEADER] = CONNECTION_KEEP_ALIVE;
     }
 };
 

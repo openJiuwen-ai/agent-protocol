@@ -143,6 +143,8 @@ struct RequestContext {
     std::string sessionId;
     std::string method;
 
+    bool isGetStream = false;
+
     HttpSendFunc httpSendFunc;
 };
 

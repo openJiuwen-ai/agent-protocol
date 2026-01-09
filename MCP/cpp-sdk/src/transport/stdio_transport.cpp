@@ -725,7 +725,7 @@ void StdioServerTransport::CleanupConnection()
     }
 }
 
-void StdioServerTransport::SendMessage(const JSONRPCMessage& message, const RequestContext& ctx)
+void StdioServerTransport::SendMessage(const JSONRPCMessage& message, RequestContext& ctx)
 {
     if (connection_) {
         GetMessageMethod(message);

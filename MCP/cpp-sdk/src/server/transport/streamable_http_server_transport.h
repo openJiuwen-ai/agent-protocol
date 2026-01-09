@@ -21,6 +21,7 @@
 namespace Mcp {
 
 using Http::HttpResponse;
+using Http::HttpSendType;
 
 // Event message structure containing serialized JSON-RPC message and event ID
 struct EventMessage {
@@ -42,7 +43,7 @@ public:
 
     void HandleRequest(const HttpRequest& request, RequestContext& ctx) override;
 
-    void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) override;
+    void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override;
 
     void Listen() override;
 

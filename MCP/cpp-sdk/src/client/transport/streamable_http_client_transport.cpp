@@ -59,7 +59,7 @@ StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
     httpClientService_ = Http::HttpClientServiceFactory::Create(config);
     // Initialize request headers with Accept and Content-Type, then merge user headers
     requestHeaders_[Http::ACCEPT_HEADER] = std::string(Http::CONTENT_TYPE_JSON) + ", " + Http::CONTENT_TYPE_SSE;
-    requestHeaders_[CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+    requestHeaders_[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
     for (const auto& [key, value] : headers) {
         requestHeaders_[key] = value;
     }
@@ -196,7 +196,7 @@ void StreamableHttpClientTransport::HandleResponse(const HttpResponse& response)
     }
 
     // Determine content type
-    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    auto contentTypeIter = response.headers.find(Http::CONTENT_TYPE_HEADER);
     if (contentTypeIter == response.headers.end()) {
         HandleUnexpectedContentType(response);
         return;
@@ -374,7 +374,7 @@ void StreamableHttpClientTransport::HandleSseEvent(const EventData& eventData, b
 
 void StreamableHttpClientTransport::HandleUnexpectedContentType(const HttpResponse& response)
 {
-    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    auto contentTypeIter = response.headers.find(Http::CONTENT_TYPE_HEADER);
     std::string contentType = contentTypeIter != response.headers.end() ? contentTypeIter->second : "<missing>";
     MCP_LOG(MCP_LOG_LEVEL_ERROR, "Unexpected content type: " + contentType);
 }
