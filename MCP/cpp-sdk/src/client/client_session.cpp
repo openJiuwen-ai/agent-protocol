@@ -98,27 +98,27 @@ std::future<std::shared_ptr<ListToolsResult>> ClientSession::ListTools()
 // Send notifications/initialized implementation
 void ClientSession::SendInitializedNotification()
 {
-    InitializedNotification notification;
-    notification.method_ = "notifications/initialized";
+    auto notification = std::make_unique<InitializedNotification>();
+    notification->method_ = "notifications/initialized";
 
     // Delegate to BaseSession notification sending. Related request id is
     // not associated for this simple notification.
-    SendNotification(notification, std::nullopt);
+    SendNotification(std::move(notification), std::nullopt);
 }
 
 // send_notification implementation
-void ClientSession::SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId)
+void ClientSession::SendNotification(std::unique_ptr<Notification> notification,
+                                     std::optional<int64_t> relatedRequestId [[maybe_unused]])
 {
     // Build a JSONRPCMessage variant holding a JSONRPCNotification instance
-    // and populate only lightweight fields (strings). Do not copy any
-    // underlying unique_ptr members from the input notification.
+    // and move the Notification instance so params_ can be serialized.
     JSONRPCMessage message{std::in_place_type<JSONRPCNotification>};
     auto& notif = std::get<JSONRPCNotification>(message);
     notif.jsonrpc_ = JSONRPC_VERSION;
-    notif.method_ = notification.method_;
+    notif.method_ = notification->method_;
+    notif.notification_ = std::move(notification);
 
     // relatedRequestId is currently unused in wire format; kept for API parity
-    (void)relatedRequestId;
 
     if (clientTransport_ != nullptr) {
         clientTransport_->SendMessage(message);

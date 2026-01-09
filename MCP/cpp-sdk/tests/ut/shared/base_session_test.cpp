@@ -89,7 +89,11 @@ public:
         : BaseSession(std::move(t), std::nullopt, "ut")
     {}
 
-    void SendNotification(const Notification&, std::optional<int64_t>) override {}
+    void SendNotification(std::unique_ptr<Notification> notification, std::optional<int64_t> relatedRequestId) override
+    {
+        (void)notification;
+        (void)relatedRequestId;
+    }
 
     int reqCount{0};
     int notifCount{0};
@@ -105,7 +109,11 @@ public:
         : BaseSession(std::move(t), "ut")
     {}
 
-    void SendNotification(const Notification&, std::optional<int64_t>) override {}
+    void SendNotification(std::unique_ptr<Notification> notification, std::optional<int64_t> relatedRequestId) override
+    {
+        (void)notification;
+        (void)relatedRequestId;
+    }
 };
 
 class DefaultHookSession : public BaseSession {
@@ -116,7 +124,11 @@ public:
     explicit DefaultHookSession(std::shared_ptr<ServerTransport> t)
         : BaseSession(std::move(t), "hdr_ut_server") {}
 
-    void SendNotification(const Notification&, std::optional<int64_t>) override {}
+    void SendNotification(std::unique_ptr<Notification> notification, std::optional<int64_t> relatedRequestId) override
+    {
+        (void)notification;
+        (void)relatedRequestId;
+    }
 };
 
 static JSONRPCMessage MakeRequestMsg(int64_t id, const std::string& method)

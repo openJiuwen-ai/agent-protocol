@@ -91,13 +91,58 @@ void ServerSession::HandleInitializeNotification(const Notification& notificatio
     isInitialized_ = true;
 }
 
-void ServerSession::SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId)
+void ServerSession::SendNotification(std::unique_ptr<Notification> notification,
+                                     std::optional<int64_t> relatedRequestId [[maybe_unused]])
 {
+    // Build a JSONRPCMessage variant holding a JSONRPCNotification instance
+    // and populate only lightweight fields (strings). Do not copy any
+    // underlying unique_ptr members from the input notification.
+    JSONRPCMessage message{std::in_place_type<JSONRPCNotification>};
+    auto& rpcNotif = std::get<JSONRPCNotification>(message);
+    rpcNotif.jsonrpc_ = JSONRPC_VERSION;
+    rpcNotif.method_ = notification->method_;
+    rpcNotif.notification_ = std::move(notification);
+
+    RequestContext dummy{};
+    dummy.sessionId = GetSessionId();
+    dummy.method = rpcNotif.method_;
+    dummy.connectionId = 0;
+    serverTransport_->SendMessage(message, dummy);
 }
 
 void ServerSession::SendProgressNotification(int64_t progressToken, double progress, std::optional<double> total,
                                              const std::optional<std::string>& message)
 {
+}
+
+void ServerSession::SendToolListChangedNotification()
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<ToolListChangedNotification>();
+    SendNotification(std::move(notif), std::nullopt);
+}
+
+void ServerSession::SendPromptListChangedNotification()
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<PromptListChangedNotification>();
+    SendNotification(std::move(notif), std::nullopt);
+}
+
+void ServerSession::SendResourceListChangedNotification()
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<ResourceListChangedNotification>();
+    SendNotification(std::move(notif), std::nullopt);
 }
 
 } // namespace Mcp

@@ -107,7 +107,7 @@ public:
      * @param notification The notification to send
      * @param relatedRequestId Optional ID of the request this notification relates to
      */
-    virtual void SendNotification(const Notification& notification,
+    virtual void SendNotification(std::unique_ptr<Notification> notification,
                                   std::optional<int64_t> relatedRequestId = std::nullopt) = 0;
 
     /**

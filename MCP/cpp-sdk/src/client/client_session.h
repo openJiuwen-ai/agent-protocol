@@ -65,8 +65,8 @@ public:
                                                             const std::optional<JsonValue>& arguments = std::nullopt);
 
     // Override BaseSession notification sending
-    void SendNotification(const Notification& notification,
-                          std::optional<int64_t> relatedRequestId = std::nullopt) override;
+    void SendNotification(std::unique_ptr<Notification> notification,
+                          std::optional<int64_t> relatedRequestId [[maybe_unused]] = std::nullopt) override;
 
     // Check if initialize has completed successfully
     bool IsInitialized() const

@@ -56,6 +56,32 @@ public:
      */
     void HandleRequest(const HttpRequest& request, RequestContext& context);
 
+    /**
+     * @brief Notify the client that the server's tool list has changed.
+     *
+     * Sends an MCP JSON-RPC notification indicating the set of available tools
+     * has been updated (added/removed). Clients can react by re-fetching
+     * the tool list.
+     */
+    void SendToolListChangedNotification();
+
+    /**
+     * @brief Notify the client that the server's prompt list has changed.
+     *
+     * Sends an MCP JSON-RPC notification indicating the set of available prompts
+     * has been updated (added/removed). Clients can react by re-fetching
+     * the prompt list.
+     */
+    void SendPromptListChangedNotification();
+
+    /**
+     * @brief Notify the client that the server's resource list has changed.
+     *
+     * Sends an MCP JSON-RPC notification indicating the set of available resources
+     * has been updated (added/removed). Clients can react by re-fetching
+     * the resource list.
+     */
+    void SendResourceListChangedNotification();
 protected:
     /**
     * @brief Handle an incoming JSON-RPC request from the client.
@@ -74,7 +100,8 @@ protected:
     /**
      * @brief Send a notification to the client.
      */
-    void SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId) override;
+    void SendNotification(std::unique_ptr<Notification> notification,
+                          std::optional<int64_t> relatedRequestId [[maybe_unused]] = std::nullopt) override;
 
     /**
      * @brief Send a progress notification to the client.
