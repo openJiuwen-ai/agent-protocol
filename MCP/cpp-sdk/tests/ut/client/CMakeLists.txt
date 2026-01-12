@@ -24,7 +24,6 @@ target_link_libraries(mcp_client_tests
         third_party_headers
         http_parser
         nlohmann_json::nlohmann_json
-        CURL::libcurl
         OpenSSL::SSL
         OpenSSL::Crypto
         event
@@ -33,6 +32,9 @@ target_link_libraries(mcp_client_tests
         ${_mcp_event_pthreads_target}
 )
 
-target_compile_features(mcp_client_tests PRIVATE cxx_std_17)
+if(MCP_WITH_HTTP)
+    target_link_libraries(mcp_client_tests PRIVATE CURL::libcurl)
+endif()
 
+target_compile_features(mcp_client_tests PRIVATE cxx_std_17)
 gtest_discover_tests(mcp_client_tests)

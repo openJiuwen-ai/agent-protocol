@@ -23,6 +23,10 @@ WITH_COVERAGE=0
 BUILD_DIR="build"
 GENERATOR=""
 
+MCP_BUILD_CLIENT=1
+MCP_BUILD_SERVER=1
+MCP_WITH_HTTP=1
+
 print_help() {
   cat <<EOF
 Usage: $0 [options]
@@ -33,6 +37,9 @@ Options:
   -c, --coverage               Enable code coverage (implies --with-tests)
   -b, --build-dir <dir>        Build directory (default: build)
   -g, --generator <name>       CMake generator (e.g. "Ninja", "NMake Makefiles")
+  --no-client                  Do not build client components
+  --no-server                  Do not build server components
+  --no-http                    Do not build HTTP client transport components
   -h, --help                   Show this help message
 
 Examples:
@@ -40,6 +47,11 @@ Examples:
   $0 -t Debug
   $0 --type Release --with-tests
   $0 --coverage                # Build tests with coverage
+  $0 --no-http --no-client     # No-HTTP Server
+  $0 --no-http --no-server     # No-HTTP Client
+  $0 --no-client               # HTTP Server
+  $0 --no-server               # HTTP Client
+  $0 --no-http                 # No-HTTP Server and Client
 EOF
 }
 
@@ -66,6 +78,18 @@ while [[ $# -gt 0 ]]; do
     -g|--generator)
       GENERATOR="$2";
       shift 2;
+      ;;
+    --no-client)
+      MCP_BUILD_CLIENT=0;
+      shift;
+      ;;
+    --no-server)
+      MCP_BUILD_SERVER=0;
+      shift;
+      ;;
+    --no-http)
+      MCP_WITH_HTTP=0;
+      shift;
       ;;
     -h|--help)
       print_help;
@@ -114,6 +138,10 @@ fi
 mkdir -p "${BUILD_DIR_ABS}"
 
 CMAKE_ARGS=("-S" "${SOURCE_DIR}" "-B" "${BUILD_DIR_ABS}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+
+CMAKE_ARGS+=("-DMCP_BUILD_CLIENT=$([[ ${MCP_BUILD_CLIENT} -eq 1 ]] && echo ON || echo OFF)")
+CMAKE_ARGS+=("-DMCP_BUILD_SERVER=$([[ ${MCP_BUILD_SERVER} -eq 1 ]] && echo ON || echo OFF)")
+CMAKE_ARGS+=("-DMCP_WITH_HTTP=$([[ ${MCP_WITH_HTTP} -eq 1 ]] && echo ON || echo OFF)")
 
 if [[ ${WITH_TESTS} -eq 1 ]]; then
   CMAKE_ARGS+=("-DMCP_ENABLE_TESTS=ON")

@@ -4,8 +4,15 @@ add_subdirectory(auth)
 add_subdirectory(log)
 add_subdirectory(event)
 add_subdirectory(net)
-add_subdirectory(server)
-add_subdirectory(client)
+
+if(MCP_BUILD_SERVER)
+    add_subdirectory(server)
+endif()
+
+if(MCP_BUILD_CLIENT)
+    add_subdirectory(client)
+endif()
+
 add_subdirectory(shared)
 add_subdirectory(transport)
 
@@ -17,11 +24,17 @@ target_sources(mcp
         $<TARGET_OBJECTS:mcp_log>
         $<TARGET_OBJECTS:mcp_event>
         $<TARGET_OBJECTS:mcp_net>
-        $<TARGET_OBJECTS:mcp_server>
-        $<TARGET_OBJECTS:mcp_client>
         $<TARGET_OBJECTS:mcp_shared>
         $<TARGET_OBJECTS:mcp_transport>
 )
+
+if(MCP_BUILD_SERVER)
+    target_sources(mcp PRIVATE $<TARGET_OBJECTS:mcp_server>)
+endif()
+
+if(MCP_BUILD_CLIENT)
+    target_sources(mcp PRIVATE $<TARGET_OBJECTS:mcp_client>)
+endif()
 
 # Public include paths: src/ (for internal headers) and top-level include/
 # so that consumers can do #include "mcp_log.h" etc.

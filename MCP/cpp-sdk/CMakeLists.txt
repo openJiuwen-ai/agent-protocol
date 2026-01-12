@@ -9,10 +9,19 @@ option(MCP_ENABLE_TESTS "Build unit tests" OFF)
 option(MCP_ENABLE_EXAMPLES "Build examples" OFF)
 option(MCP_ENABLE_COVERAGE "Enable code coverage" OFF)
 
+option(MCP_BUILD_CLIENT "Build MCP client components" ON)
+option(MCP_BUILD_SERVER "Build MCP server components" ON)
+option(MCP_WITH_HTTP "Build HTTP client transport components" ON)
+
+add_compile_definitions(MCP_WITH_HTTP=$<BOOL:${MCP_WITH_HTTP}>)
+
 include(third_party/third_party.cmake)
 
 find_package(OpenSSL REQUIRED)
-find_package(CURL REQUIRED)
+
+if(MCP_BUILD_CLIENT AND MCP_WITH_HTTP)
+    find_package(CURL REQUIRED)
+endif()
 
 add_compile_options(-fPIC)
 add_compile_options(-ftrapv)
@@ -58,6 +67,23 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     message(STATUS "Building in Release with Debug Info mode")
 endif()
 
+# Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
+set(_mcp_event_pthreads_target "")
+if(TARGET event_pthreads)
+    set(_mcp_event_pthreads_target event_pthreads)
+elseif(TARGET libevent_pthreads)
+    set(_mcp_event_pthreads_target libevent_pthreads)
+elseif(TARGET "libevent::pthread")
+    set(_mcp_event_pthreads_target libevent::pthread)
+else()
+    find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
+    if(_mcp_event_pthreads_lib)
+        set(_mcp_event_pthreads_target ${_mcp_event_pthreads_lib})
+    else()
+        message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
+    endif()
+endif()
+
 # Add all sources and target definition for mcp from src/
 add_subdirectory(src)
 
@@ -78,25 +104,15 @@ else()
 	set(_mcp_libevent_target event)
 endif()
 
-# Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
-set(_mcp_event_pthreads_target "")
-if(TARGET event_pthreads)
-    set(_mcp_event_pthreads_target event_pthreads)
-elseif(TARGET libevent_pthreads)
-    set(_mcp_event_pthreads_target libevent_pthreads)
-elseif(TARGET "libevent::pthread")
-    set(_mcp_event_pthreads_target libevent::pthread)
-else()
-	find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
-	if(_mcp_event_pthreads_lib)
-	    set(_mcp_event_pthreads_target ${_mcp_event_pthreads_lib})
-	else()
-		message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
-	endif()
+target_link_libraries(mcp PUBLIC ${_mcp_libevent_target} nlohmann_json::nlohmann_json)
+target_link_libraries(mcp PRIVATE http_parser)
+
+if(MCP_BUILD_CLIENT AND MCP_WITH_HTTP)
+	target_link_libraries(mcp PUBLIC CURL::libcurl)
 endif()
 
-target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_target} ${_mcp_libevent_target} nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
-target_link_libraries(mcp PRIVATE http_parser)
+target_link_libraries(mcp PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_target})
 
 set_target_properties(mcp PROPERTIES
 	OUTPUT_NAME "mcp"
