@@ -498,6 +498,29 @@ TEST_F(McpIntegrationTest, CallToolWithInvalidArguments)
         FAIL() << "CallTool failed with exception: " << e.what();
     }
 }
+
+TEST_F(McpIntegrationTest, CallToolWithNullArguments)
+{
+    auto client = CreateTestClient();
+    ASSERT_NE(client, nullptr);
+    // 初始化
+    auto initFuture = client->Initialize();
+    initFuture.wait();
+    // 测试调用工具（缺少必需参数）
+    nlohmann::json arguments;
+
+    auto callFuture = client->CallTool("echo", nullptr, TEST_TIMEOUT_MS);
+    auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
+    ASSERT_EQ(status, std::future_status::ready);
+
+    try {
+        auto callResult = callFuture.get();
+        ASSERT_NE(callResult, nullptr);
+    } catch (const std::exception& e) {
+        FAIL() << "CallTool failed with exception: " << e.what();
+    }
+}
+
 // 测试读取资源
 TEST_F(McpIntegrationTest, ReadResource)
 {
