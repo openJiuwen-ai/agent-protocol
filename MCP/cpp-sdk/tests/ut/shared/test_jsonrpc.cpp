@@ -60,6 +60,8 @@ using Mcp::CallToolRequest;
 using Mcp::CallToolResult;
 using Mcp::CallToolParams;
 using Mcp::Tool;
+using Mcp::Root;
+using Mcp::ListRootsResult;
 using nlohmann::json;
 
 constexpr const char* PROTOCOL_VERSION = "2025-03-26";
@@ -76,6 +78,7 @@ constexpr const char* RESOURCE_URI_2 = "file:///tmp/example.bin";
 constexpr const char* RESOURCE_MIME = "text/plain";
 constexpr const char* RESOURCE_NAME = "example";
 constexpr const char* RESOURCE_TITLE = "Example Title";
+constexpr std::size_t EXPECTED_ROOTS_COUNT = 2;
 
 class JSONRPCSerializationTest : public ::testing::Test {
 protected:
@@ -620,6 +623,82 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationListResources)
     ASSERT_TRUE(j.at("result").contains("resources"));
     ASSERT_TRUE(j.at("result").at("resources").is_array());
     EXPECT_EQ(2, j.at("result").at("resources").size());
+}
+
+// ---------------------------------------------------------------------
+// JSONRPCResponse: roots/list serialization & deserialization tests
+// ---------------------------------------------------------------------
+
+TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationListRoots)
+{
+    JSONRPCResponse resp;
+    resp.id_ = REQUEST_ID;
+
+    ListRootsResult result;
+    Root r1;
+    r1.uri = "file:///tmp";
+    r1.name = std::string{"tmp"};
+    result.roots.push_back(r1);
+
+    Root r2;
+    r2.uri = "file:///home";
+    result.roots.push_back(r2);
+
+    result.meta = std::unordered_map<std::string, Mcp::JsonValue>{{"traceId", "abc"}};
+
+    resp.result_ = std::make_shared<ListRootsResult>(std::move(result));
+
+    std::string serialized = resp.Serialize("roots/list");
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(REQUEST_ID, j.at("id").get<int>());
+    ASSERT_TRUE(j.contains("result"));
+    ASSERT_TRUE(j.at("result").contains("roots"));
+    ASSERT_TRUE(j.at("result").at("roots").is_array());
+    EXPECT_EQ(EXPECTED_ROOTS_COUNT, j.at("result").at("roots").size());
+
+    const auto& roots = j.at("result").at("roots");
+    EXPECT_EQ(std::string{"file:///tmp"}, roots.at(0).at("uri").get<std::string>());
+    EXPECT_EQ(std::string{"tmp"}, roots.at(0).at("name").get<std::string>());
+    EXPECT_EQ(std::string{"file:///home"}, roots.at(1).at("uri").get<std::string>());
+    EXPECT_FALSE(roots.at(1).contains("name"));
+
+    ASSERT_TRUE(j.at("result").contains("_meta"));
+    EXPECT_EQ(std::string{"abc"}, j.at("result").at("_meta").at("traceId").get<std::string>());
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCResponseDeserializationListRoots)
+{
+    std::string jsonStr = R"({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "roots": [
+                {"uri": "file:///tmp", "name": "tmp"},
+                {"uri": "file:///home"}
+            ],
+            "_meta": {"traceId": "abc"}
+        }
+    })";
+
+    JSONRPCResponse resp;
+    int rc = resp.Deserialize(jsonStr, "roots/list");
+    EXPECT_EQ(0, rc);
+    EXPECT_EQ(JSONRPC_VERSION, resp.jsonrpc_);
+    EXPECT_EQ(REQUEST_ID, resp.id_);
+    ASSERT_NE(nullptr, resp.result_);
+
+    auto* rootsResult = dynamic_cast<ListRootsResult*>(resp.result_.get());
+    ASSERT_NE(nullptr, rootsResult);
+    ASSERT_EQ(EXPECTED_ROOTS_COUNT, rootsResult->roots.size());
+    EXPECT_EQ(std::string{"file:///tmp"}, rootsResult->roots[0].uri);
+    ASSERT_TRUE(rootsResult->roots[0].name.has_value());
+    EXPECT_EQ(std::string{"tmp"}, rootsResult->roots[0].name.value());
+    EXPECT_EQ(std::string{"file:///home"}, rootsResult->roots[1].uri);
+    EXPECT_FALSE(rootsResult->roots[1].name.has_value());
+    ASSERT_TRUE(rootsResult->meta.has_value());
+    EXPECT_EQ(std::string{"abc"}, rootsResult->meta->at("traceId").get<std::string>());
 }
 
 TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeResourceTemplatesList)

@@ -141,15 +141,6 @@ public:
     virtual std::future<EmptyResult> SendPing() = 0;
 
     /**
-     * @brief Set the capabilities supported by the client.
-     *
-     * Informs the server of the features and capabilities supported by this client instance.
-     *
-     * @param caps The capabilities supported by the client.
-     * @throw std::runtime_error If the client is not initialized.
-     */
-    virtual void SetClientCapabilities(const McpClientCapabilities& caps) = 0;
-    /**
      * @brief Get the capabilities supported by the server.
      *
      * Retrieves the set of features and capabilities supported by the connected server.

@@ -104,11 +104,6 @@ std::future<EmptyResult> McpClientImplement::SendPing()
     return session_->SendPing();
 }
 
-void McpClientImplement::SetClientCapabilities(const McpClientCapabilities& caps)
-{
-    CheckInitialized();
-}
-
 ServerCapabilities McpClientImplement::GetServerCapabilities()
 {
     CheckInitialized();

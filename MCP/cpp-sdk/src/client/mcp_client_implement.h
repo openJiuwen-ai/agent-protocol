@@ -42,8 +42,6 @@ public:
 
     void SendRootsListChanged() override;
     std::future<EmptyResult> SendPing() override;
-
-    void SetClientCapabilities(const McpClientCapabilities& caps) override;
     ServerCapabilities GetServerCapabilities() override;
 
     // Not yet developed, temporarily commented out
@@ -62,8 +60,6 @@ private:
 
     // Configuration
     ClientConfig config_;
-    McpClientCapabilities capabilities_;
-
     bool initialized_ = false;
 };
 

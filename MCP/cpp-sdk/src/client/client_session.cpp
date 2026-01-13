@@ -45,10 +45,30 @@ ClientSession::ClientSession(std::shared_ptr<ClientTransport> transport, const C
 {
 }
 
+ClientCapabilities ClientSession::BuildClientCapabilities() const
+{
+    ClientCapabilities caps;
+    // Only advertise `roots` when the client can handle roots/list.
+    if (listRootsCallback_) {
+        // Change the value to true after ListRoot is fully implemented.
+        caps.roots = RootsCapability{.listChanged = false};
+    }
+    return caps;
+}
+
+void ClientSession::SetListRootsCallback(ListRootsCallback cb)
+{
+    listRootsCallback_ = std::move(cb);
+}
+
 // Initialize implementation
 std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
 {
-    auto request = std::make_unique<InitializeRequest>(clientConfig_.name, clientConfig_.version);
+    // Advertise client capabilities based on which callbacks are actually configured.
+    // Only advertise `roots` when the client can handle roots/list.
+    ClientCapabilities caps = BuildClientCapabilities();
+    auto request = std::make_unique<InitializeRequest>(clientConfig_.name, clientConfig_.version, std::move(caps));
+
     auto promise = std::make_shared<std::promise<std::shared_ptr<InitializeResult>>>();
     auto future = promise->get_future();
 
@@ -117,8 +137,6 @@ void ClientSession::SendNotification(std::unique_ptr<Notification> notification,
     notif.jsonrpc_ = JSONRPC_VERSION;
     notif.method_ = notification->method_;
     notif.notification_ = std::move(notification);
-
-    // relatedRequestId is currently unused in wire format; kept for API parity
 
     if (clientTransport_ != nullptr) {
         clientTransport_->SendMessage(message);

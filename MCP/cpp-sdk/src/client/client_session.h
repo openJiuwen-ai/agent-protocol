@@ -39,6 +39,13 @@ public:
     // Send a roots list changed notification
     void SendRootsListChanged();
 
+    // Callback indicating the client can serve roots/list.
+    // If this is not set, we must not advertise the `roots` capability in initialize.
+    // The callback should return a `ListRootsResult` describing available roots.
+    using ListRootsCallback = std::function<ListRootsResult()>;
+
+    void SetListRootsCallback(ListRootsCallback cb);
+
     // Set the logging level
     std::future<EmptyResult> SetLoggingLevel(LoggingLevel level);
 
@@ -95,8 +102,15 @@ private:
     // Feed incoming raw JSON messages from the transport into the session
     void OnMessageReceived(const std::string& message_json);
 
+    // Build client capabilities for initialize request.
+    ClientCapabilities BuildClientCapabilities() const;
+
     // Indicates whether initialize has succeeded
     bool initialized_{false};
+
+    // If set, the client supports roots/list. Used to decide whether to advertise
+    // ClientCapabilities.roots in the initialize request.
+    ListRootsCallback listRootsCallback_{nullptr};
 
     // Client configuration used to build initialize.clientInfo
     ClientConfig clientConfig_;

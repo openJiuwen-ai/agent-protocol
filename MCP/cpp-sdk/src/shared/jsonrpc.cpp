@@ -12,6 +12,66 @@
 #include "mcp_type.h"
 
 namespace nlohmann {
+
+template <>
+struct adl_serializer<Mcp::ClientCapabilities> {
+    static void to_json(json& j, const Mcp::ClientCapabilities& caps)
+    {
+        j = json::object();
+
+        if (caps.sampling.has_value()) {
+            j["sampling"] = json::object();
+        }
+        if (caps.elicitation.has_value()) {
+            j["elicitation"] = json::object();
+        }
+        if (caps.tasks.has_value()) {
+            j["tasks"] = json::object();
+        }
+        if (caps.roots.has_value()) {
+            j["roots"] = json::object();
+            if (caps.roots->listChanged) {
+                j["roots"]["listChanged"] = true;
+            }
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ClientCapabilities& caps)
+    {
+        // Default: no capabilities.
+        caps = Mcp::ClientCapabilities{};
+        if (!j.is_object()) {
+            return;
+        }
+
+        if (j.contains("sampling") && j.at("sampling").is_object()) {
+            caps.sampling = Mcp::SamplingCapability{};
+        } else {
+            caps.sampling.reset();
+        }
+
+        if (j.contains("elicitation") && j.at("elicitation").is_object()) {
+            caps.elicitation = Mcp::ElicitationCapability{};
+        } else {
+            caps.elicitation.reset();
+        }
+
+        if (j.contains("tasks") && j.at("tasks").is_object()) {
+            caps.tasks = Mcp::ClientTasksCapability{};
+        } else {
+            caps.tasks.reset();
+        }
+
+        if (j.contains("roots") && j.at("roots").is_object()) {
+            Mcp::RootsCapability roots;
+            roots.listChanged = j.at("roots").value("listChanged", false);
+            caps.roots = roots;
+        } else {
+            caps.roots.reset();
+        }
+    }
+};
+
 // ListTools params/request serializers
 template <>
 struct adl_serializer<Mcp::ListToolsParams> {
@@ -58,11 +118,10 @@ struct adl_serializer<Mcp::InitializeRequestParams> {
     static void to_json(json& j, const Mcp::InitializeRequestParams& p)
     {
         j["protocolVersion"] = p.protocolVersion_;
-        j["capabilities"] = json::object();
-        j["clientInfo"] = {
-            {"name", p.clientInfo_.name},
-            {"version", p.clientInfo_.version},
-        };
+        j["capabilities"] = p.capabilities_;
+        j["clientInfo"] = json::object();
+        j["clientInfo"]["name"] = p.clientInfo_.name;
+        j["clientInfo"]["version"] = p.clientInfo_.version;
     }
 
     static void from_json(const json& j, Mcp::InitializeRequestParams& p)
@@ -72,11 +131,20 @@ struct adl_serializer<Mcp::InitializeRequestParams> {
         } else {
             p.protocolVersion_ = Mcp::DEFAULT_PROTOCOL_VERSION;
         }
-        p.capabilities_ = Mcp::ClientCapabilities{};
-        if (j.contains("clientInfo")) {
+
+        if (j.contains("capabilities")) {
+            j.at("capabilities").get_to(p.capabilities_);
+        } else {
+            p.capabilities_ = Mcp::ClientCapabilities{};
+        }
+
+        if (j.contains("clientInfo") && j.at("clientInfo").is_object()) {
             const auto& ci = j.at("clientInfo");
             p.clientInfo_.name = ci.value("name", std::string{});
             p.clientInfo_.version = ci.value("version", std::string{});
+        } else {
+            p.clientInfo_.name.clear();
+            p.clientInfo_.version.clear();
         }
     }
 };
@@ -280,6 +348,55 @@ struct adl_serializer<Mcp::ResourceInfo> {
             r.annotations = j.at("annotations").get<Mcp::Annotations>();
         } else {
             r.annotations = std::nullopt;
+        }
+    }
+};
+
+// Root
+template <>
+struct adl_serializer<Mcp::Root> {
+    static void to_json(json& j, const Mcp::Root& r)
+    {
+        j = json::object();
+        j["uri"] = r.uri;
+        if (r.name.has_value()) {
+            j["name"] = r.name.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::Root& r)
+    {
+        j.at("uri").get_to(r.uri);
+        if (j.contains("name")) {
+            r.name = j.at("name").get<std::string>();
+        } else {
+            r.name = std::nullopt;
+        }
+    }
+};
+
+// ListRootsResult
+template <>
+struct adl_serializer<Mcp::ListRootsResult> {
+    static void to_json(json& j, const Mcp::ListRootsResult& res)
+    {
+        j = json::object();
+        j["roots"] = res.roots;
+        if (res.meta.has_value()) {
+            j["_meta"] = res.meta.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ListRootsResult& res)
+    {
+        res.roots.clear();
+        if (j.contains("roots") && j.at("roots").is_array()) {
+            res.roots = j.at("roots").get<std::vector<Mcp::Root>>();
+        }
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            res.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        } else {
+            res.meta = std::nullopt;
         }
     }
 };
@@ -1168,10 +1285,11 @@ InitializeRequest::InitializeRequest()
                                                         Implementation());
 }
 
-InitializeRequest::InitializeRequest(const std::string& clientName, const std::string& clientVersion)
+InitializeRequest::InitializeRequest(const std::string& clientName, const std::string& clientVersion,
+                                     ClientCapabilities capabilities)
 {
     method_ = "initialize";
-    auto params = std::make_unique<InitializeRequestParams>(Mcp::DEFAULT_PROTOCOL_VERSION, ClientCapabilities(),
+    auto params = std::make_unique<InitializeRequestParams>(Mcp::DEFAULT_PROTOCOL_VERSION, std::move(capabilities),
                                                             Implementation());
     params->clientInfo_.name = clientName.empty() ? Mcp::DEFAULT_CLIENT_NAME : clientName;
     params->clientInfo_.version = clientVersion.empty() ? Mcp::DEFAULT_VERSION : clientVersion;
@@ -1455,6 +1573,12 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
                 throw std::runtime_error("Failed to cast result to ListResourceTemplatesResult");
             }
             j["result"] = *listTemplateResult;
+        } else if (method == "roots/list") {
+            auto* listRootsResult = dynamic_cast<const ListRootsResult*>(result_.get());
+            if (listRootsResult == nullptr) {
+                throw std::runtime_error("Failed to cast result to ListRootsResult");
+            }
+            j["result"] = *listRootsResult;
         } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
             auto* emptyResult = dynamic_cast<const EmptyResult*>(result_.get());
             if (emptyResult == nullptr) {
@@ -1521,6 +1645,12 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
         result_ = std::move(p);
     } else if (method == "resources/templates/list") {
         auto p = std::make_shared<ListResourceTemplatesResult>();
+        if (j.contains("result")) {
+            j.at("result").get_to(*p);
+        }
+        result_ = std::move(p);
+    } else if (method == "roots/list") {
+        auto p = std::make_shared<ListRootsResult>();
         if (j.contains("result")) {
             j.at("result").get_to(*p);
         }
