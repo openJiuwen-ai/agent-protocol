@@ -104,7 +104,7 @@ else()
 	set(_mcp_libevent_target event)
 endif()
 
-target_link_libraries(mcp PUBLIC ${_mcp_libevent_target} nlohmann_json::nlohmann_json)
+target_link_libraries(mcp PUBLIC ${_mcp_libevent_target} nlohmann_json::nlohmann_json nlohmann_json_schema_validator)
 target_link_libraries(mcp PRIVATE http_parser)
 
 if(MCP_BUILD_CLIENT AND MCP_WITH_HTTP)

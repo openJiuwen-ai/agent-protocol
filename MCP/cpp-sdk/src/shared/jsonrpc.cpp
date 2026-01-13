@@ -624,6 +624,9 @@ struct adl_serializer<Mcp::CallToolResult> {
     static void to_json(json& j, const Mcp::CallToolResult& r)
     {
         j["content"] = r.content;
+        if (r.structuredContent.has_value()) {
+            j["structuredContent"] = r.structuredContent.value();
+        }
         j["isError"] = r.isError;
     }
 
@@ -633,6 +636,9 @@ struct adl_serializer<Mcp::CallToolResult> {
             j.at("content").get_to(r.content);
         } else {
             r.content.clear();
+        }
+        if (j.contains("structuredContent")) {
+            r.structuredContent = j.at("structuredContent").get<std::string>();
         }
         r.isError = j.value("isError", false);
     }

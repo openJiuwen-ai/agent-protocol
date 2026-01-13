@@ -278,9 +278,14 @@ protected:
                 if (arguments.contains("user_query") && arguments.at("user_query").is_string()) {
                     userQuery = arguments.at("user_query").get<std::string>();
                 }
+
                 Mcp::TextContent textContent;
                 textContent.text = "Echo: " + userQuery;
                 result.content.push_back(textContent);
+
+                Mcp::JsonValue outputObj;
+                outputObj["result"] = textContent.text;
+                result.structuredContent = outputObj.dump();
             } catch (const std::exception &e) {
                 result.isError = true;
                 Mcp::TextContent errorContent;
@@ -421,9 +426,9 @@ protected:
             }
             std::cout << "Initialized. protocolVersion=" << initResult->protocolVersion << std::endl;
 
-            // 调用echo工具
+            // 调用echo工具，参数需满足 input schema 要求的 user_query
             JsonValue args = JsonValue::object();
-            args["text"] = "hello tls";
+            args["user_query"] = "hello tls";
             auto callFuture = client->CallTool("echo", args);
             auto callResult = callFuture.get();
             if (!callResult) {

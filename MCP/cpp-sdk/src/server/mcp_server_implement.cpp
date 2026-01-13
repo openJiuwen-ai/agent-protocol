@@ -118,8 +118,13 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
     }
 
     std::string args = params->arguments.has_value() ? params->arguments->dump() : "{}";
-    auto result = std::make_unique<CallToolResult>(toolManager_.CallTool(params->name, args));
-    session->SendResponse(requestId, std::move(result), ctx);
+    try {
+        auto result = std::make_unique<CallToolResult>(toolManager_.CallTool(params->name, args));
+        session->SendResponse(requestId, std::move(result), ctx);
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool: caught exception: " + std::string(e.what()));
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx);
+    }
 }
 
 void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx)

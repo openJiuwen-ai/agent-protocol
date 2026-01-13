@@ -6,12 +6,21 @@
 #define MCP_SERVER_INCLUDE_H_
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <variant>
+#include <vector>
 
 #include "mcp_type.h"
 
 namespace Mcp {
+
+// Use plain string for structured tool output (JSON text)
+using ToolReturn = std::variant<CallToolResult, std::string>;
+using ToolFunc = std::function<ToolReturn(const std::string& name, const JsonValue& arguments,
+                                          const std::optional<JsonValue>& ctx)>;
 
 /**
  * Optional parameters for AddTool method.

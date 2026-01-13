@@ -18,7 +18,7 @@ static constexpr int TOOL_NUM = 2;
 
 namespace Mcp {
 
-static CallToolResult TestToolFunc(const std::string& name, const JsonValue& arguments,
+static ToolReturn TestToolFunc(const std::string& name, const JsonValue& arguments,
     std::optional<JsonValue> context)
 {
     (void)context;
@@ -34,7 +34,7 @@ static CallToolResult TestToolFunc(const std::string& name, const JsonValue& arg
     return result;
 }
 
-static CallToolResult TestCallbackToolFunc(const std::string& name, const JsonValue& arguments,
+static ToolReturn TestCallbackToolFunc(const std::string& name, const JsonValue& arguments,
     std::optional<JsonValue> context)
 {
     (void)arguments;
@@ -96,7 +96,7 @@ protected:
     ServerTool CreateErrorThrowingTool(const std::string& name = "error_tool")
     {
         auto errorFunc = [](const std::string& name, const JsonValue& arguments,
-                           std::optional<JsonValue> context) -> CallToolResult {
+                           std::optional<JsonValue> context) -> ToolReturn {
             (void)arguments;
             (void)context;
 
@@ -454,6 +454,106 @@ TEST_F(ToolManagerTest, CallToolExceptionMessages)
     } catch (const std::runtime_error& e) {
         EXPECT_TRUE(std::string(e.what()).find("Tool execution failed") != std::string::npos);
     }
+}
+
+// ================ Output Schema Validation Tests ================
+
+static ToolReturn StructuredOutputToolFunc(const std::string& name, const JsonValue& arguments,
+    std::optional<JsonValue> context)
+{
+    (void)name;
+    (void)context;
+    if (arguments.contains("returnData")) {
+        return arguments["returnData"].dump();
+    }
+    return R"({"status": "success", "code": 200})";
+}
+
+static ToolReturn ErrorResultToolFunc(const std::string& name, const JsonValue& arguments,
+    std::optional<JsonValue> context)
+{
+    (void)name;
+    (void)arguments;
+    (void)context;
+    CallToolResult result;
+    result.isError = true;
+    result.structuredContent = R"({"invalid": "data"})";
+    return result;
+}
+
+// 覆盖: outputSchema存在且验证通过
+TEST_F(ToolManagerTest, OutputSchemaValidation_Pass)
+{
+    ServerTool tool;
+    tool.name = "test";
+    tool.outputSchema = R"({"type": "object", "properties": {"status": {"type": "string"},
+        "code": {"type": "number"}}, "required": ["status", "code"]})";
+    tool.func = StructuredOutputToolFunc;
+    toolManager->AddTool(tool);
+    
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({})"));
+}
+
+// 覆盖: outputSchema存在但验证失败
+TEST_F(ToolManagerTest, OutputSchemaValidation_Fail)
+{
+    ServerTool tool;
+    tool.name = "test";
+    tool.outputSchema = R"({"type": "object", "properties": {"required_field": {"type": "string"}},
+        "required": ["required_field"]})";
+    tool.func = StructuredOutputToolFunc;
+    toolManager->AddTool(tool);
+    
+    EXPECT_THROW(toolManager->CallTool("test", R"({})"), std::runtime_error);
+}
+
+// 覆盖: structuredContent不是对象
+TEST_F(ToolManagerTest, OutputSchemaValidation_NotObject)
+{
+    auto arrayFunc = [](const std::string&, const JsonValue&, std::optional<JsonValue>) -> ToolReturn {
+        return R"([1, 2, 3])";
+    };
+    
+    ServerTool tool;
+    tool.name = "test";
+    tool.outputSchema = R"({"type": "object"})";
+    tool.func = arrayFunc;
+    toolManager->AddTool(tool);
+    
+    EXPECT_THROW(toolManager->CallTool("test", R"({})"), std::runtime_error);
+}
+
+// 覆盖: structuredContent为空，跳过验证
+TEST_F(ToolManagerTest, OutputSchemaValidation_NoStructuredContent)
+{
+    auto noStructuredFunc = [](const std::string&, const JsonValue&, std::optional<JsonValue>) -> ToolReturn {
+        CallToolResult result;
+        TextContent text;
+        text.text = "no structured";
+        result.content.push_back(text);
+        return result;
+    };
+    
+    ServerTool tool;
+    tool.name = "test";
+    tool.outputSchema = R"({"type": "object"})";
+    tool.func = noStructuredFunc;
+    toolManager->AddTool(tool);
+    
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({})"));
+}
+
+// 覆盖: isError为true，跳过验证
+TEST_F(ToolManagerTest, OutputSchemaValidation_ErrorSkipValidation)
+{
+    ServerTool tool;
+    tool.name = "test";
+    tool.outputSchema = R"({"type": "object",
+        "properties": {"required": {"type": "string"}}, "required": ["required"]})";
+    tool.func = ErrorResultToolFunc;
+    toolManager->AddTool(tool);
+    
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({})"));
 }
 
 } // namespace Mcp

@@ -249,6 +249,24 @@ fetch_or_find_package(
     JSON_Install OFF
 )
 
+# Fetch json-schema-validator (download only, no build)
+FetchContent_Declare(
+  json_schema_validator
+  GIT_REPOSITORY https://github.com/pboettch/json-schema-validator.git
+  GIT_TAG 2.3.0
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(json_schema_validator)
+if(TARGET nlohmann_json_schema_validator)
+  set_target_properties(nlohmann_json_schema_validator PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+  )
+else()
+  get_property(_allTargets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  message(FATAL_ERROR "json-schema-validator did not define target nlohmann_json_schema_validator. Targets: ${_allTargets}")
+endif()
+target_link_libraries(third_party_headers INTERFACE nlohmann_json_schema_validator)
+
 find_path(_mcp_http_parser_include_dir
     NAMES http_parser.h
 )
