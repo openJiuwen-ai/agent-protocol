@@ -149,7 +149,7 @@ std::string StreamableHttpServerTransport::CreateEventData(const EventMessage& e
 
 void StreamableHttpServerTransport::HandleRequest(const HttpRequest& request, RequestContext& ctx)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Hanle request for session " + ctx.sessionId +
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Handle request for session " + ctx.sessionId +
             ", request.sessionid is " + GetSessionId(request));
     if (ctx.httpSendFunc == nullptr) {
         throw std::runtime_error("HTTP callback not set");
