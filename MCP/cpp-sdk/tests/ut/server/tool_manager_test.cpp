@@ -13,6 +13,9 @@
 
 #include "server/tool_manager.h"
 
+static constexpr int LOOP_NUM = 3;
+static constexpr int TOOL_NUM = 2;
+
 namespace Mcp {
 
 static CallToolResult TestToolFunc(const std::string& name, const JsonValue& arguments,
@@ -48,6 +51,8 @@ static CallToolResult TestCallbackToolFunc(const std::string& name, const JsonVa
 }
 
 class ToolManagerTest : public ::testing::Test {
+public:
+    ~ToolManagerTest() {}
 protected:
     void SetUp() override
     {
@@ -214,9 +219,8 @@ TEST_F(ToolManagerTest, AddMultipleTools)
 {
     std::vector<ServerTool> tools;
 
-    for (int i = 0; i < 5; i++) {
-        ServerTool tool = CreateTestTool("tool_" + std::to_string(i),
-                                      "Tool " + std::to_string(i));
+    for (int i = 0; i < LOOP_NUM; i++) {
+        ServerTool tool = CreateTestTool("tool_" + std::to_string(i), "Tool " + std::to_string(i));
         EXPECT_NO_THROW(toolManager->AddTool(tool));
     }
 }
@@ -269,11 +273,10 @@ TEST_F(ToolManagerTest, ListToolsSingleTool)
 
 TEST_F(ToolManagerTest, ListToolsMultipleTools)
 {
-    const int numTools = 5;
+    const int numTools = LOOP_NUM;
 
     for (int i = 0; i < numTools; i++) {
-        ServerTool tool = CreateTestTool("tool_" + std::to_string(i),
-                                      "Tool " + std::to_string(i));
+        ServerTool tool = CreateTestTool("tool_" + std::to_string(i), "Tool " + std::to_string(i));
         toolManager->AddTool(tool);
     }
 
@@ -296,7 +299,7 @@ TEST_F(ToolManagerTest, ListToolsMultipleTools)
 
 TEST_F(ToolManagerTest, ListToolsAfterRemove)
 {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < LOOP_NUM; i++) {
         ServerTool tool = CreateTestTool("tool_" + std::to_string(i));
         toolManager->AddTool(tool);
     }
@@ -304,7 +307,7 @@ TEST_F(ToolManagerTest, ListToolsAfterRemove)
     toolManager->RemoveTool("tool_1");
 
     ListToolsResult result = toolManager->ListTools();
-    EXPECT_EQ(result.tools.size(), 2);
+    EXPECT_EQ(result.tools.size(), TOOL_NUM);
 
     std::set<std::string> expectedNames = {"tool_0", "tool_2"};
     std::set<std::string> actualNames;
@@ -349,7 +352,8 @@ TEST_F(ToolManagerTest, CallNonExistentTool)
     EXPECT_THROW(toolManager->CallTool("non_existent_tool", R"({})"), std::runtime_error);
 }
 
-TEST_F(ToolManagerTest, CallToolEmptyName) {
+TEST_F(ToolManagerTest, CallToolEmptyName)
+{
     EXPECT_THROW(toolManager->CallTool("", R"({})"), std::runtime_error);
 }
 

@@ -13,18 +13,25 @@
 
 using namespace std::chrono_literals;
 
+static constexpr int INVALID_PORT = 65534;
+static constexpr int LOOP_NUM = 3;
+
 namespace Mcp::Http {
 
 // Test fixture for HttpClient tests
 class HttpClientTest : public ::testing::Test {
+public:
+    ~HttpClientTest() {}
 protected:
-    void SetUp() override {
+    void SetUp() override
+    {
         // 测试使用无效的主机和端口确保快速失败
         invalidHost = "localhost";
-        invalidPort = 65534; // 不太可能被占用的高端口
+        invalidPort = INVALID_PORT; // 不太可能被占用的高端口
     }
 
-    void TearDown() override {
+    void TearDown() override
+    {
         // 不需要特殊清理
     }
 
@@ -32,7 +39,8 @@ protected:
     uint16_t invalidPort;
 
     // 创建测试HTTP请求
-    HttpRequest CreateTestRequest() {
+    HttpRequest CreateTestRequest()
+    {
         HttpRequest request;
         request.method = "GET";
         request.url = "/test";
@@ -42,7 +50,8 @@ protected:
     }
 
     // 创建POST请求
-    HttpRequest CreatePostRequest() {
+    HttpRequest CreatePostRequest()
+    {
         HttpRequest request;
         request.method = "POST";
         request.url = "/api";
@@ -53,14 +62,16 @@ protected:
 };
 
 // 构造函数测试
-TEST_F(HttpClientTest, Constructor) {
+TEST_F(HttpClientTest, Constructor)
+{
     HttpClient client;
     // 构造函数不应崩溃
     SUCCEED();
 }
 
 // SendRequest测试 - 使用无效地址
-TEST_F(HttpClientTest, SendRequestToInvalidAddress) {
+TEST_F(HttpClientTest, SendRequestToInvalidAddress)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
@@ -71,7 +82,8 @@ TEST_F(HttpClientTest, SendRequestToInvalidAddress) {
     EXPECT_FALSE(response.has_value());
 }
 
-TEST_F(HttpClientTest, SendRequestToInvalidAddressWithCustomTimeout) {
+TEST_F(HttpClientTest, SendRequestToInvalidAddressWithCustomTimeout)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
@@ -80,7 +92,8 @@ TEST_F(HttpClientTest, SendRequestToInvalidAddressWithCustomTimeout) {
     EXPECT_FALSE(response.has_value());
 }
 
-TEST_F(HttpClientTest, SendRequestToInvalidAddressWithZeroTimeout) {
+TEST_F(HttpClientTest, SendRequestToInvalidAddressWithZeroTimeout)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
@@ -89,7 +102,8 @@ TEST_F(HttpClientTest, SendRequestToInvalidAddressWithZeroTimeout) {
     EXPECT_FALSE(response.has_value());
 }
 
-TEST_F(HttpClientTest, SendRequestToInvalidAddressWithNegativeTimeout) {
+TEST_F(HttpClientTest, SendRequestToInvalidAddressWithNegativeTimeout)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
@@ -99,7 +113,8 @@ TEST_F(HttpClientTest, SendRequestToInvalidAddressWithNegativeTimeout) {
 }
 
 // 测试POST请求
-TEST_F(HttpClientTest, SendPostRequestToInvalidAddress) {
+TEST_F(HttpClientTest, SendPostRequestToInvalidAddress)
+{
     HttpClient client;
     HttpRequest request = CreatePostRequest();
 
@@ -108,7 +123,8 @@ TEST_F(HttpClientTest, SendPostRequestToInvalidAddress) {
 }
 
 // 测试空主机名
-TEST_F(HttpClientTest, SendRequestToEmptyHost) {
+TEST_F(HttpClientTest, SendRequestToEmptyHost)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
@@ -117,7 +133,8 @@ TEST_F(HttpClientTest, SendRequestToEmptyHost) {
 }
 
 // 测试空请求
-TEST_F(HttpClientTest, SendEmptyRequest) {
+TEST_F(HttpClientTest, SendEmptyRequest)
+{
     HttpClient client;
     HttpRequest request;
 
@@ -126,7 +143,8 @@ TEST_F(HttpClientTest, SendEmptyRequest) {
 }
 
 // 测试带有自定义头部的请求
-TEST_F(HttpClientTest, SendRequestWithCustomHeaders) {
+TEST_F(HttpClientTest, SendRequestWithCustomHeaders)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
     request.headers["X-Custom-Header"] = "CustomValue";
@@ -137,19 +155,21 @@ TEST_F(HttpClientTest, SendRequestWithCustomHeaders) {
 }
 
 // 测试重复调用
-TEST_F(HttpClientTest, MultipleSendRequests) {
+TEST_F(HttpClientTest, MultipleSendRequests)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
     // 多次调用SendRequest
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < LOOP_NUM; i++) {
         auto response = client.SendRequest(invalidHost, invalidPort, request, 1);
         EXPECT_FALSE(response.has_value());
     }
 }
 
 // 测试不同的HTTP方法
-TEST_F(HttpClientTest, SendRequestWithDifferentMethods) {
+TEST_F(HttpClientTest, SendRequestWithDifferentMethods)
+{
     HttpClient client;
 
     std::vector<std::string> methods = {"GET", "POST", "PUT", "DELETE", "HEAD"};
@@ -166,7 +186,8 @@ TEST_F(HttpClientTest, SendRequestWithDifferentMethods) {
 }
 
 // 测试大超时值
-TEST_F(HttpClientTest, SendRequestWithLargeTimeout) {
+TEST_F(HttpClientTest, SendRequestWithLargeTimeout)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 
@@ -176,26 +197,21 @@ TEST_F(HttpClientTest, SendRequestWithLargeTimeout) {
 }
 
 // 测试客户端生命周期
-TEST_F(HttpClientTest, ClientLifecycle) {
+TEST_F(HttpClientTest, ClientLifecycle)
+{
     // 测试客户端可以重复使用
     HttpClient client;
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < LOOP_NUM; i++) {
         HttpRequest request = CreateTestRequest();
         auto response = client.SendRequest(invalidHost, invalidPort, request, 1);
         EXPECT_FALSE(response.has_value());
     }
 }
 
-// 测试HttpResponse解析辅助函数（间接测试）
-TEST(HttpClientStaticTest, BuildAndParseHelpers) {
-    // 这些函数在匿名命名空间中，我们无法直接测试
-    // 但我们可以通过SendRequest间接测试它们
-    SUCCEED();
-}
-
 // 测试错误处理
-TEST_F(HttpClientTest, ErrorHandling) {
+TEST_F(HttpClientTest, ErrorHandling)
+{
     HttpClient client;
 
     // 使用各种无效参数组合
@@ -220,7 +236,8 @@ TEST_F(HttpClientTest, ErrorHandling) {
 }
 
 // 测试快速失败
-TEST_F(HttpClientTest, QuickFailure) {
+TEST_F(HttpClientTest, QuickFailure)
+{
     HttpClient client;
     HttpRequest request = CreateTestRequest();
 

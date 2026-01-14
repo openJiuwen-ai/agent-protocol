@@ -80,16 +80,20 @@ constexpr const char* RESOURCE_TITLE = "Example Title";
 
 static constexpr int DEFAULT_ID = 123;
 static constexpr int ARGS_NUM = 2;
+static constexpr int ARGS_LEN = 500;
+static constexpr int RESOURCE_SIZE = 1024;
 static constexpr int ERR_CODE = -32700;
 
 
-class JSONRPCSerializationTest : public ::testing::Test {
+class JSONRPCTest : public ::testing::Test {
+public:
+    ~JSONRPCTest() {}
 protected:
     Implementation clientImpl = {CLIENT_NAME, CLIENT_VERSION};
     Implementation serverImpl = {SERVER_NAME, SERVER_VERSION};
 };
 
-TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationSuccess)
+TEST_F(JSONRPCTest, JSONRPCRequestSerializationSuccess)
 {
     JSONRPCRequest req;
 
@@ -125,7 +129,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationSuccess)
     EXPECT_EQ(PROTOCOL_VERSION, params2->protocolVersion_);
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCRequestWithStringIdSuccess)
+TEST_F(JSONRPCTest, JSONRPCRequestWithStringIdSuccess)
 {
     JSONRPCRequest req;
 
@@ -142,7 +146,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestWithStringIdSuccess)
     EXPECT_EQ(REQUEST_ID, req2.id_);
 }
 
-TEST_F(JSONRPCSerializationTest, InitializeRequestDefaultConstruction)
+TEST_F(JSONRPCTest, InitializeRequestDefaultConstruction)
 {
     InitializeRequest req;
 
@@ -150,7 +154,7 @@ TEST_F(JSONRPCSerializationTest, InitializeRequestDefaultConstruction)
     EXPECT_NE(nullptr, req.params_);
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCNotificationSerializationSuccess)
+TEST_F(JSONRPCTest, JSONRPCNotificationSerializationSuccess)
 {
     JSONRPCNotification notif;
     notif.method_ = TEST_METHOD;
@@ -165,7 +169,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCNotificationSerializationSuccess)
     EXPECT_EQ(TEST_METHOD, notif2.method_);
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationSuccess)
+TEST_F(JSONRPCTest, JSONRPCResponseSerializationSuccess)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -180,7 +184,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationSuccess)
     EXPECT_EQ(REQUEST_ID, resp2.id_);
 }
 
-TEST_F(JSONRPCSerializationTest, ListPromptsRequestSerialization)
+TEST_F(JSONRPCTest, ListPromptsRequestSerialization)
 {
     // Construct a prompts/list request and serialize it
     auto listReq = std::make_unique<ListPromptsRequest>();
@@ -198,7 +202,7 @@ TEST_F(JSONRPCSerializationTest, ListPromptsRequestSerialization)
     ASSERT_TRUE(j.contains("params"));
 }
 
-TEST_F(JSONRPCSerializationTest, GetPromptRequestSerialization)
+TEST_F(JSONRPCTest, GetPromptRequestSerialization)
 {
     // Construct a prompts/get request
     nlohmann::json args;
@@ -228,7 +232,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptRequestSerialization)
     EXPECT_EQ(std::string{"short"}, argsJson.at("detail").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, PromptContentAndMessageSerialization)
+TEST_F(JSONRPCTest, PromptContentAndMessageSerialization)
 {
     PromptArgument arg;
     arg.name = "topic";
@@ -260,7 +264,7 @@ TEST_F(JSONRPCSerializationTest, PromptContentAndMessageSerialization)
     EXPECT_EQ(std::string{"Hello"}, firstContent.at("text").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, ListPromptResultDeserialization_MultiplePrompts)
+TEST_F(JSONRPCTest, ListPromptResultDeserialization_MultiplePrompts)
 {
     // Keep the original JSON but test only the overall structure
     std::string jsonStr = R"({
@@ -315,10 +319,7 @@ TEST_F(JSONRPCSerializationTest, ListPromptResultDeserialization_MultiplePrompts
     EXPECT_EQ(std::string{"documentation_summary"}, listResult->prompts.at(1).name);
 }
 
-TEST_F(JSONRPCSerializationTest, ListPromptResultDeserialization_PromptArgumentDetails)
-{
-    // Test detailed parsing of a single prompt with arguments
-    std::string jsonStr = R"({
+static std::string PROMPT_JSON_STR = R"({
         "jsonrpc": "2.0",
         "id": 1,
         "result": {
@@ -344,8 +345,10 @@ TEST_F(JSONRPCSerializationTest, ListPromptResultDeserialization_PromptArgumentD
         }
     })";
 
+TEST_F(JSONRPCTest, ListPromptResultDeserialization_PromptArgumentDetails)
+{
     JSONRPCResponse resp;
-    int result = resp.Deserialize(jsonStr, "prompts/list");
+    int result = resp.Deserialize(PROMPT_JSON_STR, "prompts/list");
 
     ASSERT_EQ(0, result);
 
@@ -384,7 +387,7 @@ TEST_F(JSONRPCSerializationTest, ListPromptResultDeserialization_PromptArgumentD
     EXPECT_FALSE(arg2.required.value());
 }
 
-TEST_F(JSONRPCSerializationTest, GetPromptResultDeserialization)
+TEST_F(JSONRPCTest, GetPromptResultDeserialization)
 {
     // Construct a JSON string for GetPromptResult
     std::string jsonStr = R"({
@@ -429,7 +432,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptResultDeserialization)
     EXPECT_EQ(std::string{"Please summarize the following article."}, contentPtr->text);
 }
 
-TEST_F(JSONRPCSerializationTest, GetPromptResultDeserializationWithoutDescription)
+TEST_F(JSONRPCTest, GetPromptResultDeserializationWithoutDescription)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -459,7 +462,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptResultDeserializationWithoutDescriptio
     ASSERT_EQ(1, getResult->messages.size());
 }
 
-TEST_F(JSONRPCSerializationTest, GetPromptRequestDeserializationComplexArguments)
+TEST_F(JSONRPCTest, GetPromptRequestDeserializationComplexArguments)
 {
     // Construct a JSON string for GetPromptRequest containing complex arguments
     std::string jsonStr = R"({
@@ -501,7 +504,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptRequestDeserializationComplexArguments
 
     const auto& args = params->arguments.value();
     EXPECT_EQ(std::string{"Technology"}, args.at("topic").get<std::string>());
-    EXPECT_EQ(500, args.at("length").get<int>());
+    EXPECT_EQ(ARGS_LEN, args.at("length").get<int>());
     EXPECT_TRUE(args.at("include_images").get<bool>());
 
     const auto& metadata = args.at("metadata");
@@ -509,7 +512,7 @@ TEST_F(JSONRPCSerializationTest, GetPromptRequestDeserializationComplexArguments
     EXPECT_EQ(std::string{"2024-01-01"}, metadata.at("date").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, ReadResourceRequestSerializationIncludesUri)
+TEST_F(JSONRPCTest, ReadResourceRequestSerializationIncludesUri)
 {
     auto readReq = std::make_unique<ReadResourceRequest>();
     readReq->params_ = std::make_unique<ReadResourceRequestParams>(RESOURCE_URI);
@@ -529,7 +532,7 @@ TEST_F(JSONRPCSerializationTest, ReadResourceRequestSerializationIncludesUri)
     EXPECT_EQ(std::string{RESOURCE_URI}, j.at("params").at("uri").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, SubscribeRequestSerializationIncludesUri)
+TEST_F(JSONRPCTest, SubscribeRequestSerializationIncludesUri)
 {
     auto subReq = std::make_unique<SubscribeRequest>();
     subReq->params_ = std::make_unique<SubscribeRequestParams>(RESOURCE_URI);
@@ -547,7 +550,7 @@ TEST_F(JSONRPCSerializationTest, SubscribeRequestSerializationIncludesUri)
     EXPECT_EQ(std::string{RESOURCE_URI}, j.at("params").at("uri").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, UnsubscribeRequestSerializationIncludesUri)
+TEST_F(JSONRPCTest, UnsubscribeRequestSerializationIncludesUri)
 {
     auto unsubReq = std::make_unique<UnsubscribeRequest>();
     unsubReq->params_ = std::make_unique<UnsubscribeRequestParams>(RESOURCE_URI);
@@ -565,7 +568,7 @@ TEST_F(JSONRPCSerializationTest, UnsubscribeRequestSerializationIncludesUri)
     EXPECT_EQ(std::string{RESOURCE_URI}, j.at("params").at("uri").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, ListResourcesRequestSerializationHasParamsKey)
+TEST_F(JSONRPCTest, ListResourcesRequestSerializationHasParamsKey)
 {
     auto listReq = std::make_unique<ListResourcesRequest>();
 
@@ -581,7 +584,7 @@ TEST_F(JSONRPCSerializationTest, ListResourcesRequestSerializationHasParamsKey)
     ASSERT_TRUE(j.contains("params"));
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationReadResource)
+TEST_F(JSONRPCTest, JSONRPCResponseSerializationReadResource)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -606,7 +609,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationReadResource)
     ASSERT_TRUE(j.at("result").at("contents").is_array());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationListResources)
+TEST_F(JSONRPCTest, JSONRPCResponseSerializationListResources)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -618,7 +621,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationListResources)
     resource1.title = RESOURCE_TITLE;
     resource1.description = "Test resource";
     resource1.mimeType = RESOURCE_MIME;
-    resource1.size = 1024;
+    resource1.size = RESOURCE_SIZE;
     result.resources.push_back(resource1);
 
     ResourceInfo resource2;
@@ -639,7 +642,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationListResources)
     EXPECT_EQ(ARGS_NUM, j.at("result").at("resources").size());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeResourceTemplatesList)
+TEST_F(JSONRPCTest, JSONRPCResponseSerializeResourceTemplatesList)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -671,7 +674,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeResourceTemplatesList)
     EXPECT_EQ(ARGS_NUM, j.at("result").at("resourceTemplates").size());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeSubscribeResource)
+TEST_F(JSONRPCTest, JSONRPCResponseSerializeSubscribeResource)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -689,7 +692,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeSubscribeResource)
     EXPECT_TRUE(j.at("result").empty());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeUnsubscribeResource)
+TEST_F(JSONRPCTest, JSONRPCResponseSerializeUnsubscribeResource)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -707,7 +710,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeUnsubscribeResource)
     EXPECT_TRUE(j.at("result").empty());
 }
 
-TEST_F(JSONRPCSerializationTest, ListResourceTemplatesRequestSerializationHasParamsKey)
+TEST_F(JSONRPCTest, ListResourceTemplatesRequestSerializationHasParamsKey)
 {
     auto listReq = std::make_unique<ListResourceTemplatesRequest>();
 
@@ -723,7 +726,7 @@ TEST_F(JSONRPCSerializationTest, ListResourceTemplatesRequestSerializationHasPar
     ASSERT_TRUE(j.contains("params"));
 }
 
-TEST_F(JSONRPCSerializationTest, ReadResourceResultDeserializationParsesTextAndBlob)
+TEST_F(JSONRPCTest, ReadResourceResultDeserializationParsesTextAndBlob)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -769,7 +772,7 @@ TEST_F(JSONRPCSerializationTest, ReadResourceResultDeserializationParsesTextAndB
     EXPECT_FALSE(blob->mimeType.has_value());
 }
 
-TEST_F(JSONRPCSerializationTest, ListResourcesResultDeserializationParsesResourceInfo)
+TEST_F(JSONRPCTest, ListResourcesResultDeserializationParsesResourceInfo)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -823,7 +826,7 @@ TEST_F(JSONRPCSerializationTest, ListResourcesResultDeserializationParsesResourc
     EXPECT_FALSE(r2.size.has_value());
 }
 
-TEST_F(JSONRPCSerializationTest, ToolsCallResultDeserializationParsesEmbeddedResourceAndLink)
+TEST_F(JSONRPCTest, ToolsCallResultDeserializationParsesEmbeddedResourceAndLink)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -874,7 +877,7 @@ TEST_F(JSONRPCSerializationTest, ToolsCallResultDeserializationParsesEmbeddedRes
     EXPECT_EQ(std::string{RESOURCE_NAME}, link->name);
 }
 
-TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesRequest)
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesRequest)
 {
     JSONRPCRequest req;
     req.id_ = REQUEST_ID;
@@ -891,7 +894,7 @@ TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesRequest)
     EXPECT_EQ(METHOD_NAME, parsedReq.method_);
 }
 
-TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesResponse)
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesResponse)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
@@ -906,7 +909,7 @@ TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesResponse)
     EXPECT_EQ(REQUEST_ID, parsedResp.id_);
 }
 
-TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesNotification)
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesNotification)
 {
     JSONRPCNotification notif;
     notif.method_ = TEST_METHOD;
@@ -921,7 +924,7 @@ TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageParsesNotification)
     EXPECT_EQ(TEST_METHOD, parsedNotif.method_);
 }
 
-TEST_F(JSONRPCSerializationTest, SerializeJSONRPCMessageRoundTripRequest)
+TEST_F(JSONRPCTest, SerializeJSONRPCMessageRoundTripRequest)
 {
     JSONRPCRequest req;
     req.id_ = REQUEST_ID;
@@ -939,13 +942,13 @@ TEST_F(JSONRPCSerializationTest, SerializeJSONRPCMessageRoundTripRequest)
     EXPECT_EQ(METHOD_NAME, parsedReq.method_);
 }
 
-TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessageInvalidJsonThrows)
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessageInvalidJsonThrows)
 {
     std::string invalidJson = "not valid json";
     EXPECT_THROW(DeserializeJSONRPCMessage(invalidJson, METHOD_NAME), nlohmann::json::parse_error);
 }
 
-TEST_F(JSONRPCSerializationTest, CallToolRequestSerializationRoundTrip)
+TEST_F(JSONRPCTest, CallToolRequestSerializationRoundTrip)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -975,7 +978,7 @@ TEST_F(JSONRPCSerializationTest, CallToolRequestSerializationRoundTrip)
     EXPECT_EQ(1, j.at("params").at("arguments").at("limit").get<int>());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCError_DefaultConstructor)
+TEST_F(JSONRPCTest, JSONRPCError_DefaultConstructor)
 {
     JSONRPCError error;
     std::string jsonStr = error.Serialize();
@@ -987,7 +990,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCError_DefaultConstructor)
     EXPECT_EQ("Internal error", j.at("error").at("message").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCError_DeserializeValidError)
+TEST_F(JSONRPCTest, JSONRPCError_DeserializeValidError)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -1011,7 +1014,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCError_DeserializeValidError)
     EXPECT_EQ("Invalid JSON", j.at("error").at("data").at("details").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, CompleteToolCallScenario)
+TEST_F(JSONRPCTest, CompleteToolCallScenario)
 {
     // 1. 客户端发送工具调用请求
     std::string requestJson = R"({
@@ -1057,7 +1060,7 @@ TEST_F(JSONRPCSerializationTest, CompleteToolCallScenario)
     EXPECT_FALSE(responseJ.at("result").at("isError").get<bool>());
 }
 
-TEST_F(JSONRPCSerializationTest, InitializeRequestResponseScenario)
+TEST_F(JSONRPCTest, InitializeRequestResponseScenario)
 {
     // 客户端初始化请求
     std::string initRequest = R"({
@@ -1104,7 +1107,7 @@ TEST_F(JSONRPCSerializationTest, InitializeRequestResponseScenario)
     EXPECT_EQ("Welcome!", responseJ.at("result").at("instructions").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, PromptsListRequestResponse)
+TEST_F(JSONRPCTest, PromptsListRequestResponse)
 {
     std::string requestJson = R"({
         "jsonrpc": "2.0",
@@ -1120,7 +1123,7 @@ TEST_F(JSONRPCSerializationTest, PromptsListRequestResponse)
     EXPECT_EQ("prompts/list", j.at("method").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, ResourcesReadRequestResponse)
+TEST_F(JSONRPCTest, ResourcesReadRequestResponse)
 {
     std::string requestJson = R"({
         "jsonrpc": "2.0",
@@ -1139,7 +1142,7 @@ TEST_F(JSONRPCSerializationTest, ResourcesReadRequestResponse)
     EXPECT_EQ("file:///test.txt", j.at("params").at("uri").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, ResourcesSubscribeUnsubscribe)
+TEST_F(JSONRPCTest, ResourcesSubscribeUnsubscribe)
 {
     // 订阅请求
     std::string subscribeJson = R"({
@@ -1174,7 +1177,7 @@ TEST_F(JSONRPCSerializationTest, ResourcesSubscribeUnsubscribe)
     EXPECT_EQ("resources/unsubscribe", unsubscribeJ.at("method").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, JSONRPCVersionIsAlways20)
+TEST_F(JSONRPCTest, JSONRPCVersionIsAlways20)
 {
     std::string jsonStr = R"({
         "jsonrpc": "2.0",
@@ -1190,7 +1193,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCVersionIsAlways20)
     EXPECT_EQ("2.0", j.at("jsonrpc").get<std::string>());
 }
 
-TEST_F(JSONRPCSerializationTest, DeserializeJSONRPCMessage_InvalidJSON)
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_InvalidJSON)
 {
     EXPECT_THROW({
         DeserializeJSONRPCMessage("invalid json", "initialize");

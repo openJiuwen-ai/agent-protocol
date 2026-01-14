@@ -17,12 +17,17 @@
 
 using namespace std::chrono_literals;
 
+static constexpr int LOOP_NUM = 3;
+
 namespace Mcp {
 
 // Test fixture for StreamableHttpClientTransport tests
 class StreamableHttpClientTransportTest : public ::testing::Test {
+public:
+    ~StreamableHttpClientTransportTest() {}
 protected:
-    void SetUp() override {
+    void SetUp() override
+    {
         // 使用无效URL确保快速失败
         testUrl = "http://localhost:99999"; // 本地无效端口
         headers["Test-Header"] = "Test-Value";
@@ -32,7 +37,8 @@ protected:
         sseTimeout = 2ms;   // 2ms SSE超时
     }
 
-    void TearDown() override {
+    void TearDown() override
+    {
         if (transport) {
             transport->Terminate();
         }
@@ -49,11 +55,14 @@ protected:
     // 简化回调类，只记录调用次数
     class TestCallback : public TransportCallback {
     public:
-        void OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx) override {
+        ~TestCallback() {}
+        void OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx) override
+        {
             messageCount++;
         }
 
-        void OnDisconnected(const std::string& reason) override {
+        void OnDisconnected(const std::string& reason) override
+        {
             disconnectCount++;
         }
 
@@ -63,27 +72,31 @@ protected:
 };
 
 // 基础构造函数测试
-TEST_F(StreamableHttpClientTransportTest, ConstructorSuccess) {
+TEST_F(StreamableHttpClientTransportTest, ConstructorSuccess)
+{
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         testUrl, headers, timeout, sseTimeout));
     ASSERT_NE(transport, nullptr);
 }
 
-TEST_F(StreamableHttpClientTransportTest, ConstructorWithDefaultHeaders) {
+TEST_F(StreamableHttpClientTransportTest, ConstructorWithDefaultHeaders)
+{
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         testUrl, std::unordered_map<std::string, std::string>{}, timeout, sseTimeout));
     ASSERT_NE(transport, nullptr);
 }
 
 // 析构函数测试
-TEST_F(StreamableHttpClientTransportTest, DestructorWithoutTerminate) {
+TEST_F(StreamableHttpClientTransportTest, DestructorWithoutTerminate)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
     EXPECT_NO_THROW(transport.reset());
 }
 
 // SetCallback测试
-TEST_F(StreamableHttpClientTransportTest, SetCallback) {
+TEST_F(StreamableHttpClientTransportTest, SetCallback)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -91,13 +104,15 @@ TEST_F(StreamableHttpClientTransportTest, SetCallback) {
     EXPECT_NO_THROW(transport->SetCallback(testCallback));
 }
 
-TEST_F(StreamableHttpClientTransportTest, SetNullCallback) {
+TEST_F(StreamableHttpClientTransportTest, SetNullCallback)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
     EXPECT_NO_THROW(transport->SetCallback(nullptr));
 }
 
-TEST_F(StreamableHttpClientTransportTest, SetCallbackMultipleTimes) {
+TEST_F(StreamableHttpClientTransportTest, SetCallbackMultipleTimes)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -111,13 +126,15 @@ TEST_F(StreamableHttpClientTransportTest, SetCallbackMultipleTimes) {
 }
 
 // Connect测试
-TEST_F(StreamableHttpClientTransportTest, Connect) {
+TEST_F(StreamableHttpClientTransportTest, Connect)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
     EXPECT_NO_THROW(transport->Connect());
 }
 
-TEST_F(StreamableHttpClientTransportTest, ConnectMultipleTimes) {
+TEST_F(StreamableHttpClientTransportTest, ConnectMultipleTimes)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -126,7 +143,8 @@ TEST_F(StreamableHttpClientTransportTest, ConnectMultipleTimes) {
     EXPECT_NO_THROW(transport->Connect());
 }
 
-TEST_F(StreamableHttpClientTransportTest, ConnectAfterSetCallback) {
+TEST_F(StreamableHttpClientTransportTest, ConnectAfterSetCallback)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -135,7 +153,8 @@ TEST_F(StreamableHttpClientTransportTest, ConnectAfterSetCallback) {
     EXPECT_NO_THROW(transport->Connect());
 }
 
-TEST_F(StreamableHttpClientTransportTest, ConnectBeforeSetCallback) {
+TEST_F(StreamableHttpClientTransportTest, ConnectBeforeSetCallback)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -145,13 +164,15 @@ TEST_F(StreamableHttpClientTransportTest, ConnectBeforeSetCallback) {
 }
 
 // Terminate测试
-TEST_F(StreamableHttpClientTransportTest, Terminate) {
+TEST_F(StreamableHttpClientTransportTest, Terminate)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
     EXPECT_NO_THROW(transport->Terminate());
 }
 
-TEST_F(StreamableHttpClientTransportTest, DoubleTerminate) {
+TEST_F(StreamableHttpClientTransportTest, DoubleTerminate)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -160,7 +181,8 @@ TEST_F(StreamableHttpClientTransportTest, DoubleTerminate) {
     EXPECT_NO_THROW(transport->Terminate());
 }
 
-TEST_F(StreamableHttpClientTransportTest, TerminateAfterConnect) {
+TEST_F(StreamableHttpClientTransportTest, TerminateAfterConnect)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -168,7 +190,8 @@ TEST_F(StreamableHttpClientTransportTest, TerminateAfterConnect) {
     EXPECT_NO_THROW(transport->Terminate());
 }
 
-TEST_F(StreamableHttpClientTransportTest, TerminateAfterSetCallback) {
+TEST_F(StreamableHttpClientTransportTest, TerminateAfterSetCallback)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -177,7 +200,8 @@ TEST_F(StreamableHttpClientTransportTest, TerminateAfterSetCallback) {
     EXPECT_NO_THROW(transport->Terminate());
 }
 
-TEST_F(StreamableHttpClientTransportTest, TerminateWithoutConnect) {
+TEST_F(StreamableHttpClientTransportTest, TerminateWithoutConnect)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -185,21 +209,24 @@ TEST_F(StreamableHttpClientTransportTest, TerminateWithoutConnect) {
 }
 
 // URL边界测试
-TEST_F(StreamableHttpClientTransportTest, EmptyUrl) {
+TEST_F(StreamableHttpClientTransportTest, EmptyUrl)
+{
     std::string emptyUrl = "";
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         emptyUrl, headers, timeout, sseTimeout));
     ASSERT_NE(transport, nullptr);
 }
 
-TEST_F(StreamableHttpClientTransportTest, VeryLongUrl) {
+TEST_F(StreamableHttpClientTransportTest, VeryLongUrl)
+{
     std::string longUrl = "http://" + std::string(1000, 'a') + ".com";
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         longUrl, headers, timeout, sseTimeout));
     ASSERT_NE(transport, nullptr);
 }
 
-TEST_F(StreamableHttpClientTransportTest, HttpsUrl) {
+TEST_F(StreamableHttpClientTransportTest, HttpsUrl)
+{
     std::string httpsUrl = "https://example.com";
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         httpsUrl, headers, timeout, sseTimeout));
@@ -207,14 +234,16 @@ TEST_F(StreamableHttpClientTransportTest, HttpsUrl) {
 }
 
 // 超时边界测试
-TEST_F(StreamableHttpClientTransportTest, LargeTimeoutValues) {
+TEST_F(StreamableHttpClientTransportTest, LargeTimeoutValues)
+{
     auto largeTimeout = 150ms;
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         testUrl, headers, largeTimeout, largeTimeout));
     ASSERT_NE(transport, nullptr);
 }
 
-TEST_F(StreamableHttpClientTransportTest, DifferentHttpAndSseTimeouts) {
+TEST_F(StreamableHttpClientTransportTest, DifferentHttpAndSseTimeouts)
+{
     auto httpTimeout = 10ms;
     auto sseTimeout = 100ms;
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
@@ -223,14 +252,16 @@ TEST_F(StreamableHttpClientTransportTest, DifferentHttpAndSseTimeouts) {
 }
 
 // Headers边界测试
-TEST_F(StreamableHttpClientTransportTest, EmptyHeaders) {
+TEST_F(StreamableHttpClientTransportTest, EmptyHeaders)
+{
     std::unordered_map<std::string, std::string> emptyHeaders;
     EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
         testUrl, emptyHeaders, timeout, sseTimeout));
     ASSERT_NE(transport, nullptr);
 }
 
-TEST_F(StreamableHttpClientTransportTest, MultipleHeaders) {
+TEST_F(StreamableHttpClientTransportTest, MultipleHeaders)
+{
     std::unordered_map<std::string, std::string> multiHeaders = {
         {"Header1", "Value1"},
         {"Header2", "Value2"},
@@ -244,7 +275,8 @@ TEST_F(StreamableHttpClientTransportTest, MultipleHeaders) {
 }
 
 // 生命周期管理测试
-TEST_F(StreamableHttpClientTransportTest, CompleteLifecycle) {
+TEST_F(StreamableHttpClientTransportTest, CompleteLifecycle)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -254,9 +286,10 @@ TEST_F(StreamableHttpClientTransportTest, CompleteLifecycle) {
     EXPECT_NO_THROW(transport->Terminate());
 }
 
-TEST_F(StreamableHttpClientTransportTest, MultipleLifecycles) {
+TEST_F(StreamableHttpClientTransportTest, MultipleLifecycles)
+{
     // 测试重复创建和销毁
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < LOOP_NUM; ++i) {
         EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
             testUrl, headers, timeout, sseTimeout));
         ASSERT_NE(transport, nullptr);
@@ -270,8 +303,8 @@ TEST_F(StreamableHttpClientTransportTest, MultipleLifecycles) {
     }
 }
 
-// 并发测试（简化版）
-TEST_F(StreamableHttpClientTransportTest, ConcurrentSetCallback) {
+TEST_F(StreamableHttpClientTransportTest, ConcurrentSetCallback)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -291,8 +324,8 @@ TEST_F(StreamableHttpClientTransportTest, ConcurrentSetCallback) {
     EXPECT_NO_THROW(transport->Terminate());
 }
 
-// 状态查询测试（通过观察行为）
-TEST_F(StreamableHttpClientTransportTest, StateQueriesThroughBehavior) {
+TEST_F(StreamableHttpClientTransportTest, StateQueriesThroughBehavior)
+{
     transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
     ASSERT_NE(transport, nullptr);
 
@@ -306,7 +339,8 @@ TEST_F(StreamableHttpClientTransportTest, StateQueriesThroughBehavior) {
 }
 
 // 性能测试（快速执行）
-TEST_F(StreamableHttpClientTransportTest, RapidConstructionDestruction) {
+TEST_F(StreamableHttpClientTransportTest, RapidConstructionDestruction)
+{
     const int iterations = 10;
     for (int i = 0; i < iterations; ++i) {
         EXPECT_NO_THROW(transport = std::make_unique<StreamableHttpClientTransport>(
@@ -319,9 +353,9 @@ TEST_F(StreamableHttpClientTransportTest, RapidConstructionDestruction) {
 }
 
 // 内存泄漏测试（通过多次创建销毁）
-TEST_F(StreamableHttpClientTransportTest, MemoryLeakCheck) {
-    const int cycles = 5;
-    for (int i = 0; i < cycles; ++i) {
+TEST_F(StreamableHttpClientTransportTest, MemoryLeakCheck)
+{
+    for (int i = 0; i < LOOP_NUM; ++i) {
         transport = std::make_unique<StreamableHttpClientTransport>(testUrl, headers, timeout, sseTimeout);
         ASSERT_NE(transport, nullptr);
 
@@ -337,7 +371,8 @@ TEST_F(StreamableHttpClientTransportTest, MemoryLeakCheck) {
 }
 
 // TLS配置测试
-TEST_F(StreamableHttpClientTransportTest, ConstructorWithTlsConfig) {
+TEST_F(StreamableHttpClientTransportTest, ConstructorWithTlsConfig)
+{
     TlsConfig tlsConfig;
     tlsConfig.enabled = false; // 测试关闭TLS
 

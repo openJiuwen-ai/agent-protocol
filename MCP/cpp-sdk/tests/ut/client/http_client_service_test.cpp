@@ -24,14 +24,20 @@ namespace Mcp {
 namespace Http {
 
 // Test constants
-constexpr int TEST_REQUEST_TIMEOUT_MS = 10;  // Default timeout for test requests (milliseconds)
+static constexpr int TEST_REQUEST_TIMEOUT_MS = 10;
+static constexpr int TEST_ID = 123;
+static constexpr int LOOP_NUM = 3;
+static constexpr int THREAD_NUM = 2;
 
 // Test fixture for HttpClientService tests
 class HttpClientServiceTest : public ::testing::Test {
+public:
+    ~HttpClientServiceTest() {}
 protected:
-    void SetUp() override {
+    void SetUp() override
+    {
         config_.connectionTimeoutMs = 1;
-        config_.requestTimeoutMs = 2;
+        config_.requestTimeoutMs = TEST_REQUEST_TIMEOUT_MS;
         config_.eventLoopTimeout = std::chrono::milliseconds(1);
 
         testUrl = "http://localhost:99999";
@@ -47,7 +53,8 @@ protected:
         callbackResponses.clear();
     }
 
-    void TearDown() override {
+    void TearDown() override
+    {
         if (service && service->IsRunning()) {
             service->Stop();
         }
@@ -69,7 +76,8 @@ protected:
     static std::vector<HttpResponse> callbackResponses;
     static std::mutex callbackMutex;
 
-    static void TestCallback(const HttpResponse& response) {
+    static void TestCallback(const HttpResponse& response)
+    {
         callbackExecutedCount++;
         lastResponseSuccess = response.success;
         lastResponseStatusCode = response.statusCode;
@@ -82,7 +90,8 @@ protected:
     }
 
     // 创建一个简单的测试请求
-    HttpRequest CreateTestRequest(const std::string& url = "") {
+    HttpRequest CreateTestRequest(const std::string& url = "")
+    {
         HttpRequest request;
         request.url = url.empty() ? testUrl : url;
         request.method = "GET";
@@ -93,7 +102,8 @@ protected:
     }
 
     // 创建带body的POST请求
-    HttpRequest CreatePostRequest(const std::string& body = "{}") {
+    HttpRequest CreatePostRequest(const std::string& body = "{}")
+    {
         HttpRequest request = CreateTestRequest();
         request.method = "POST";
         request.body = body;
@@ -101,13 +111,15 @@ protected:
         return request;
     }
 
-    UserData CreateUserData(uint64_t requestId = 1) {
+    UserData CreateUserData(uint64_t requestId = 1)
+    {
         UserData userData;
         userData.requestId = requestId;
         return userData;
     }
 
-    bool WaitForCallback(int expectedCount, std::chrono::milliseconds timeout = 10ms) {
+    bool WaitForCallback(int expectedCount, std::chrono::milliseconds timeout = 10ms)
+    {
         auto start = std::chrono::steady_clock::now();
         while (callbackExecutedCount < expectedCount) {
             auto elapsed = std::chrono::steady_clock::now() - start;
@@ -127,13 +139,15 @@ std::string HttpClientServiceTest::lastResponseErrorMessage;
 std::vector<HttpResponse> HttpClientServiceTest::callbackResponses;
 std::mutex HttpClientServiceTest::callbackMutex;
 
-TEST_F(HttpClientServiceTest, ConstructorBasic) {
+TEST_F(HttpClientServiceTest, ConstructorBasic)
+{
     service = std::make_unique<HttpClientService>(config_);
     ASSERT_NE(service, nullptr);
     EXPECT_FALSE(service->IsRunning());
 }
 
-TEST_F(HttpClientServiceTest, ConstructorWithDifferentConfigs) {
+TEST_F(HttpClientServiceTest, ConstructorWithDifferentConfigs)
+{
     {
         HttpClientServiceConfig customConfig;
         customConfig.connectionTimeoutMs = 0;
@@ -144,8 +158,8 @@ TEST_F(HttpClientServiceTest, ConstructorWithDifferentConfigs) {
 
     {
         HttpClientServiceConfig customConfig;
-        customConfig.connectionTimeoutMs = 10000;
-        customConfig.requestTimeoutMs = 30000;
+        customConfig.connectionTimeoutMs = TEST_REQUEST_TIMEOUT_MS;
+        customConfig.requestTimeoutMs = TEST_REQUEST_TIMEOUT_MS;
         customConfig.tlsVerifyPeer = false;
         customConfig.tlsVerifyHost = false;
         customConfig.tlsCaFile = "/path/to/ca.crt";
@@ -154,23 +168,26 @@ TEST_F(HttpClientServiceTest, ConstructorWithDifferentConfigs) {
     }
 }
 
-TEST_F(HttpClientServiceTest, FactoryCreate) {
+TEST_F(HttpClientServiceTest, FactoryCreate)
+{
     auto factoryService = HttpClientServiceFactory::Create(config_);
     ASSERT_NE(factoryService, nullptr);
     EXPECT_FALSE(factoryService->IsRunning());
 }
 
-TEST_F(HttpClientServiceTest, FactoryCreateWithCustomConfig) {
+TEST_F(HttpClientServiceTest, FactoryCreateWithCustomConfig)
+{
     HttpClientServiceConfig customConfig;
-    customConfig.connectionTimeoutMs = 5000;
-    customConfig.requestTimeoutMs = 10000;
+    customConfig.connectionTimeoutMs = TEST_REQUEST_TIMEOUT_MS;
+    customConfig.requestTimeoutMs = TEST_REQUEST_TIMEOUT_MS;
 
     auto factoryService = HttpClientServiceFactory::Create(customConfig);
     ASSERT_NE(factoryService, nullptr);
     EXPECT_FALSE(factoryService->IsRunning());
 }
 
-TEST_F(HttpClientServiceTest, StartStopBasic) {
+TEST_F(HttpClientServiceTest, StartStopBasic)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
     EXPECT_TRUE(service->IsRunning());
@@ -181,19 +198,20 @@ TEST_F(HttpClientServiceTest, StartStopBasic) {
     EXPECT_FALSE(service->IsRunning());
 }
 
-TEST_F(HttpClientServiceTest, StartWhenAlreadyRunning) {
+TEST_F(HttpClientServiceTest, StartWhenAlreadyRunning)
+{
     service = std::make_unique<HttpClientService>(config_);
+
     EXPECT_TRUE(service->Start());
     EXPECT_TRUE(service->IsRunning());
-
-
     EXPECT_TRUE(service->Start());
     EXPECT_TRUE(service->IsRunning());
 
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, StopWhenNotRunning) {
+TEST_F(HttpClientServiceTest, StopWhenNotRunning)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_FALSE(service->IsRunning());
 
@@ -202,7 +220,8 @@ TEST_F(HttpClientServiceTest, StopWhenNotRunning) {
     EXPECT_FALSE(service->IsRunning());
 }
 
-TEST_F(HttpClientServiceTest, DoubleStop) {
+TEST_F(HttpClientServiceTest, DoubleStop)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
     EXPECT_TRUE(service->IsRunning());
@@ -215,7 +234,8 @@ TEST_F(HttpClientServiceTest, DoubleStop) {
     EXPECT_FALSE(service->IsRunning());
 }
 
-TEST_F(HttpClientServiceTest, DestroyWhileRunning) {
+TEST_F(HttpClientServiceTest, DestroyWhileRunning)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
     EXPECT_TRUE(service->IsRunning());
@@ -235,7 +255,8 @@ TEST_F(HttpClientServiceTest, DestroyWhileRunning) {
     SUCCEED();
 }
 
-TEST_F(HttpClientServiceTest, SendBasicRequest) {
+TEST_F(HttpClientServiceTest, SendBasicRequest)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -250,7 +271,8 @@ TEST_F(HttpClientServiceTest, SendBasicRequest) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithNullCallback) {
+TEST_F(HttpClientServiceTest, SendWithNullCallback)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -265,11 +287,12 @@ TEST_F(HttpClientServiceTest, SendWithNullCallback) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendMultipleRequests) {
+TEST_F(HttpClientServiceTest, SendMultipleRequests)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
-    const int numRequests = 5;
+    const int numRequests = LOOP_NUM;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
@@ -286,7 +309,8 @@ TEST_F(HttpClientServiceTest, SendMultipleRequests) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithDifferentMethods) {
+TEST_F(HttpClientServiceTest, SendWithDifferentMethods)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -313,13 +337,14 @@ TEST_F(HttpClientServiceTest, SendWithDifferentMethods) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithRequestBody) {
+TEST_F(HttpClientServiceTest, SendWithRequestBody)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
     std::string jsonBody = R"({
         "name": "test",
-        "value": 123,
+        "value": TEST_ID,
         "nested": {
             "field": "data"
         }
@@ -335,7 +360,8 @@ TEST_F(HttpClientServiceTest, SendWithRequestBody) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithCustomHeaders) {
+TEST_F(HttpClientServiceTest, SendWithCustomHeaders)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -354,7 +380,8 @@ TEST_F(HttpClientServiceTest, SendWithCustomHeaders) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithEmptyUrl) {
+TEST_F(HttpClientServiceTest, SendWithEmptyUrl)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -371,7 +398,8 @@ TEST_F(HttpClientServiceTest, SendWithEmptyUrl) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithHttpsUrl) {
+TEST_F(HttpClientServiceTest, SendWithHttpsUrl)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -385,7 +413,8 @@ TEST_F(HttpClientServiceTest, SendWithHttpsUrl) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithDifferentTimeouts) {
+TEST_F(HttpClientServiceTest, SendWithDifferentTimeouts)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -405,7 +434,8 @@ TEST_F(HttpClientServiceTest, SendWithDifferentTimeouts) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendWithZeroTimeout) {
+TEST_F(HttpClientServiceTest, SendWithZeroTimeout)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -419,12 +449,13 @@ TEST_F(HttpClientServiceTest, SendWithZeroTimeout) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls) {
+TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
-    const int numThreads = 2;
-    const int requestsPerThread = 3;
+    const int numThreads = THREAD_NUM;
+    const int requestsPerThread = LOOP_NUM;
     std::vector<std::thread> threads;
     std::vector<std::string> urls = {
         "http://localhost:99991",
@@ -467,7 +498,8 @@ TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, SendDuringShutdown) {
+TEST_F(HttpClientServiceTest, SendDuringShutdown)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -495,11 +527,12 @@ TEST_F(HttpClientServiceTest, SendDuringShutdown) {
     SUCCEED();
 }
 
-TEST_F(HttpClientServiceTest, ManyRequestsWithShortTimeout) {
+TEST_F(HttpClientServiceTest, ManyRequestsWithShortTimeout)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
-    const int numRequests = 10;
+    const int numRequests = LOOP_NUM;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
@@ -514,15 +547,16 @@ TEST_F(HttpClientServiceTest, ManyRequestsWithShortTimeout) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, RequestIdUniqueness) {
+TEST_F(HttpClientServiceTest, RequestIdUniqueness)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
-    const int numRequests = 5;
+    const int numRequests = LOOP_NUM;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
-        UserData userData = CreateUserData(i + 1000); // 使用不同的ID
+        UserData userData = CreateUserData(i + TEST_ID); // 使用不同的ID
 
         EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
     }
@@ -533,10 +567,11 @@ TEST_F(HttpClientServiceTest, RequestIdUniqueness) {
 }
 
 // ============ 配置相关测试 ============
-TEST_F(HttpClientServiceTest, TLSConfiguration) {
+TEST_F(HttpClientServiceTest, TLSConfiguration)
+{
     HttpClientServiceConfig tlsConfig;
     tlsConfig.connectionTimeoutMs = 1;
-    tlsConfig.requestTimeoutMs = 2;
+    tlsConfig.requestTimeoutMs = TEST_REQUEST_TIMEOUT_MS;
     tlsConfig.tlsVerifyPeer = false;
     tlsConfig.tlsVerifyHost = false;
     tlsConfig.tlsMinVersion = CURL_SSLVERSION_TLSv1_2;
@@ -561,7 +596,8 @@ TEST_F(HttpClientServiceTest, TLSConfiguration) {
 }
 
 // ============ 回调验证测试 ============
-TEST_F(HttpClientServiceTest, CallbackVerification) {
+TEST_F(HttpClientServiceTest, CallbackVerification)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -570,7 +606,7 @@ TEST_F(HttpClientServiceTest, CallbackVerification) {
     callbackResponses.clear();
 
     HttpRequest request = CreateTestRequest();
-    UserData userData = CreateUserData(123);
+    UserData userData = CreateUserData(TEST_ID);
 
     EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
 
@@ -587,7 +623,8 @@ TEST_F(HttpClientServiceTest, CallbackVerification) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, MultipleCallbacksOrder) {
+TEST_F(HttpClientServiceTest, MultipleCallbacksOrder)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
@@ -595,11 +632,11 @@ TEST_F(HttpClientServiceTest, MultipleCallbacksOrder) {
     callbackExecutedCount = 0;
     callbackResponses.clear();
 
-    const int numRequests = 3;
+    const int numRequests = LOOP_NUM;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
-        UserData userData = CreateUserData(i + 100);
+        UserData userData = CreateUserData(i + TEST_ID);
 
         EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
     }
@@ -618,11 +655,12 @@ TEST_F(HttpClientServiceTest, MultipleCallbacksOrder) {
     service->Stop();
 }
 
-TEST_F(HttpClientServiceTest, PerformanceMultipleRequests) {
+TEST_F(HttpClientServiceTest, PerformanceMultipleRequests)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
-    const int numRequests = 20;
+    const int numRequests = LOOP_NUM;
     auto startTime = std::chrono::steady_clock::now();
 
     for (int i = 0; i < numRequests; i++) {
@@ -643,12 +681,13 @@ TEST_F(HttpClientServiceTest, PerformanceMultipleRequests) {
 }
 
 // ============ 资源清理测试 ============
-TEST_F(HttpClientServiceTest, ResourceCleanupOnStop) {
+TEST_F(HttpClientServiceTest, ResourceCleanupOnStop)
+{
     service = std::make_unique<HttpClientService>(config_);
     EXPECT_TRUE(service->Start());
 
     // 发送一些请求
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < LOOP_NUM; i++) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 1);
         EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));

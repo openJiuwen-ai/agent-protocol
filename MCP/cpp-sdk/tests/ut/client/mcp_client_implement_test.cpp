@@ -18,12 +18,18 @@
 
 using json = nlohmann::json;
 
+static constexpr int TIMEOUT_MS = 1000;
+static constexpr int LOOP_NUM = 3;
+
 namespace Mcp {
 
 // Test fixture for McpClientImplement tests
 class McpClientImplementTest : public ::testing::Test {
+public:
+    ~McpClientImplementTest() {}
 protected:
-    void SetUp() override {
+    void SetUp() override
+    {
         // 创建基础配置
         config_.name = "TestClient";
         config_.version = "1.0";
@@ -32,7 +38,8 @@ protected:
         stdioConfig_.command = "";
     }
 
-    void TearDown() override {
+    void TearDown() override
+    {
         if (client_) {
             // 确保client被销毁
             client_.reset();
@@ -49,25 +56,29 @@ protected:
 };
 
 // 构造函数测试
-TEST_F(McpClientImplementTest, ConstructorWithConfig) {
+TEST_F(McpClientImplementTest, ConstructorWithConfig)
+{
     EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport));
     ASSERT_NE(client_, nullptr);
 }
 
-TEST_F(McpClientImplementTest, ConstructorWithAuthProvider) {
+TEST_F(McpClientImplementTest, ConstructorWithAuthProvider)
+{
     auto authProvider = std::make_shared<BearerTokenProvider>("test_token");
     EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport, authProvider));
     ASSERT_NE(client_, nullptr);
 }
 
-TEST_F(McpClientImplementTest, ConstructorWithNullAuthProvider) {
+TEST_F(McpClientImplementTest, ConstructorWithNullAuthProvider)
+{
     // nullptr authProvider应该被接受（内部会创建默认的BearerTokenProvider）
     EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport, nullptr));
     ASSERT_NE(client_, nullptr);
 }
 
 // Initialize方法测试
-TEST_F(McpClientImplementTest, InitializeWithStdioTransport) {
+TEST_F(McpClientImplementTest, InitializeWithStdioTransport)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -78,12 +89,13 @@ TEST_F(McpClientImplementTest, InitializeWithStdioTransport) {
     });
 }
 
-TEST_F(McpClientImplementTest, InitializeWithStreamableHttpTransport) {
+TEST_F(McpClientImplementTest, InitializeWithStreamableHttpTransport)
+{
     // 配置为STREAMABLE_HTTP传输
     httpConfig_.endpoint = "http://localhost:99999"; // 无效地址
     httpConfig_.headers = {};
-    httpConfig_.timeout = std::chrono::milliseconds(1000);
-    httpConfig_.sseTimeout = std::chrono::milliseconds(1000);
+    httpConfig_.timeout = std::chrono::milliseconds(TIMEOUT_MS);
+    httpConfig_.sseTimeout = std::chrono::milliseconds(TIMEOUT_MS);
     httpConfig_.tlsConfig = {}; // 空TLS配置
     std::shared_ptr<ClientTransport> transport1 = std::make_shared<StreamableHttpClientTransport>(
         httpConfig_.endpoint, httpConfig_.headers, httpConfig_.timeout,
@@ -98,7 +110,8 @@ TEST_F(McpClientImplementTest, InitializeWithStreamableHttpTransport) {
     });
 }
 
-TEST_F(McpClientImplementTest, DoubleInitialize) {
+TEST_F(McpClientImplementTest, DoubleInitialize)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -113,7 +126,8 @@ TEST_F(McpClientImplementTest, DoubleInitialize) {
 }
 
 // 测试未初始化时调用方法
-TEST_F(McpClientImplementTest, CallMethodBeforeInitialize) {
+TEST_F(McpClientImplementTest, CallMethodBeforeInitialize)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -140,7 +154,8 @@ TEST_F(McpClientImplementTest, CallMethodBeforeInitialize) {
 }
 
 // 测试资源相关方法
-TEST_F(McpClientImplementTest, ResourceMethodsAfterInitialize) {
+TEST_F(McpClientImplementTest, ResourceMethodsAfterInitialize)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -170,7 +185,8 @@ TEST_F(McpClientImplementTest, ResourceMethodsAfterInitialize) {
 }
 
 // 测试CallTool的不同参数
-TEST_F(McpClientImplementTest, CallToolWithArguments) {
+TEST_F(McpClientImplementTest, CallToolWithArguments)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -189,7 +205,8 @@ TEST_F(McpClientImplementTest, CallToolWithArguments) {
     });
 }
 
-TEST_F(McpClientImplementTest, CallToolWithTimeout) {
+TEST_F(McpClientImplementTest, CallToolWithTimeout)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -200,16 +217,16 @@ TEST_F(McpClientImplementTest, CallToolWithTimeout) {
     });
 
     std::string toolName = "test_tool";
-    int timeoutMs = 1000;
 
     EXPECT_NO_THROW({
-        auto future = client_->CallTool(toolName, std::nullopt, timeoutMs);
+        auto future = client_->CallTool(toolName, std::nullopt, TIMEOUT_MS);
         EXPECT_TRUE(future.valid());
     });
 }
 
 // 测试GetPrompt的不同参数
-TEST_F(McpClientImplementTest, GetPromptWithArguments) {
+TEST_F(McpClientImplementTest, GetPromptWithArguments)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -229,7 +246,8 @@ TEST_F(McpClientImplementTest, GetPromptWithArguments) {
 }
 
 // 测试空方法名
-TEST_F(McpClientImplementTest, EdgeCaseEmptyToolName) {
+TEST_F(McpClientImplementTest, EdgeCaseEmptyToolName)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -247,7 +265,8 @@ TEST_F(McpClientImplementTest, EdgeCaseEmptyToolName) {
     });
 }
 
-TEST_F(McpClientImplementTest, EdgeCaseEmptyPromptName) {
+TEST_F(McpClientImplementTest, EdgeCaseEmptyPromptName)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -266,7 +285,8 @@ TEST_F(McpClientImplementTest, EdgeCaseEmptyPromptName) {
 }
 
 // 测试SendPing方法
-TEST_F(McpClientImplementTest, SendPingAfterInitialize) {
+TEST_F(McpClientImplementTest, SendPingAfterInitialize)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -283,7 +303,8 @@ TEST_F(McpClientImplementTest, SendPingAfterInitialize) {
 }
 
 // 测试SendRootsListChanged方法
-TEST_F(McpClientImplementTest, SendRootsListChangedAfterInitialize) {
+TEST_F(McpClientImplementTest, SendRootsListChangedAfterInitialize)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -298,7 +319,8 @@ TEST_F(McpClientImplementTest, SendRootsListChangedAfterInitialize) {
 }
 
 // 测试SetClientCapabilities方法（目前可能未完全实现）
-TEST_F(McpClientImplementTest, SetClientCapabilitiesAfterInitialize) {
+TEST_F(McpClientImplementTest, SetClientCapabilitiesAfterInitialize)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -314,7 +336,8 @@ TEST_F(McpClientImplementTest, SetClientCapabilitiesAfterInitialize) {
 }
 
 // 测试重复调用方法
-TEST_F(McpClientImplementTest, MultipleMethodCalls) {
+TEST_F(McpClientImplementTest, MultipleMethodCalls)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -337,7 +360,8 @@ TEST_F(McpClientImplementTest, MultipleMethodCalls) {
 }
 
 // 测试快速连续调用
-TEST_F(McpClientImplementTest, RapidMethodCalls) {
+TEST_F(McpClientImplementTest, RapidMethodCalls)
+{
     client_ = std::make_unique<McpClientImplement>(config_, transport);
     ASSERT_NE(client_, nullptr);
 
@@ -352,7 +376,7 @@ TEST_F(McpClientImplementTest, RapidMethodCalls) {
         std::vector<std::future<std::shared_ptr<ListToolsResult>>> toolFutures;
         std::vector<std::future<std::shared_ptr<ListPromptsResult>>> promptFutures;
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < LOOP_NUM; i++) {
             toolFutures.push_back(client_->ListTools());
             promptFutures.push_back(client_->ListPrompts());
         }
@@ -368,8 +392,9 @@ TEST_F(McpClientImplementTest, RapidMethodCalls) {
 }
 
 // 测试客户端生命周期
-TEST_F(McpClientImplementTest, ClientLifecycle) {
-    for (int i = 0; i < 2; i++) {
+TEST_F(McpClientImplementTest, ClientLifecycle)
+{
+    for (int i = 0; i < LOOP_NUM; i++) {
         client_ = std::make_unique<McpClientImplement>(config_, transport);
         ASSERT_NE(client_, nullptr);
 
@@ -388,7 +413,8 @@ TEST_F(McpClientImplementTest, ClientLifecycle) {
 }
 
 // 测试子进程配置
-TEST_F(McpClientImplementTest, SubprocessConfiguration) {
+TEST_F(McpClientImplementTest, SubprocessConfiguration)
+{
     // 配置子进程命令
     stdioConfig_.command = "echo";
     stdioConfig_.args = {"hello", "world"};

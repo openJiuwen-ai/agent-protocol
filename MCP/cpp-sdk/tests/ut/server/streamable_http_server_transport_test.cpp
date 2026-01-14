@@ -18,12 +18,15 @@ namespace Mcp {
 
 class MockTransportCallback : public TransportCallback {
 public:
-    void OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx) override {
+    ~MockTransportCallback() {}
+    void OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx) override
+    {
         messageCount++;
         lastCtx = &ctx;
     }
 
-    void OnDisconnected(const std::string& reason) override {
+    void OnDisconnected(const std::string& reason) override
+    {
         disconnectCount++;
         lastDisconnectReason = reason;
     }
@@ -36,7 +39,8 @@ public:
 
 class MockHttpSendFunc {
 public:
-    void operator()(const HttpResponse& response, const RequestContext& ctx) {
+    void operator()(const HttpResponse& response, const RequestContext& ctx)
+    {
         responses.push_back(response);
         contexts.push_back(ctx);
     }
@@ -44,29 +48,37 @@ public:
     std::vector<HttpResponse> responses;
     std::vector<RequestContext> contexts;
 
-    void clear() {
+    void Clear()
+    {
         responses.clear();
         contexts.clear();
     }
 
-    HttpResponse lastResponse() const {
+    HttpResponse lastResponse() const
+    {
         return responses.empty() ? HttpResponse() : responses.back();
     }
+    ~MockHttpSendFunc() {}
 };
 
 class StreamableHttpServerTransportTest : public ::testing::Test {
+public:
+    ~StreamableHttpServerTransportTest() {}
 protected:
-    void SetUp() override {
-        mockHttpSendFunc.clear();
+    void SetUp() override
+    {
+        mockHttpSendFunc.Clear();
         validSessionId = "test-session-12345-ABCDE";
         invalidSessionId = "test-session-©";
     }
 
-    void TearDown() override {
-        mockHttpSendFunc.clear();
+    void TearDown() override
+    {
+        mockHttpSendFunc.Clear();
     }
 
-    RequestContext CreateRequestContext(const std::string& method = "") {
+    RequestContext CreateRequestContext(const std::string& method = "")
+    {
         RequestContext ctx;
         ctx.method = method;
         ctx.httpSendFunc = [this](const HttpResponse& response, const RequestContext& context) {
@@ -79,7 +91,8 @@ protected:
         const std::string& method = "POST",
         const std::unordered_map<std::string, std::string>& headers = {},
         const std::string& body = ""
-    ) {
+    )
+    {
         Http::HttpRequest request;
         request.method = method;
         request.headers = headers;
@@ -87,7 +100,8 @@ protected:
         return request;
     }
 
-    std::string CreateInitializeRequestJson() {
+    std::string CreateInitializeRequestJson()
+    {
         return R"({
             "jsonrpc": "2.0",
             "id": 1,
@@ -103,7 +117,8 @@ protected:
         })";
     }
 
-    std::string CreateNonInitializeRequestJson() {
+    std::string CreateNonInitializeRequestJson()
+    {
         return R"({
             "jsonrpc": "2.0",
             "id": 2,
@@ -117,68 +132,79 @@ protected:
     MockHttpSendFunc mockHttpSendFunc;
 };
 
-TEST_F(StreamableHttpServerTransportTest, ConstructorValidSessionId) {
+TEST_F(StreamableHttpServerTransportTest, ConstructorValidSessionId)
+{
     EXPECT_NO_THROW({
         StreamableHttpServerTransport transport(validSessionId, false);
     });
 }
 
-TEST_F(StreamableHttpServerTransportTest, ConstructorInvalidSessionId) {
+TEST_F(StreamableHttpServerTransportTest, ConstructorInvalidSessionId)
+{
     EXPECT_THROW({
         StreamableHttpServerTransport transport(invalidSessionId, false);
     }, std::invalid_argument);
 }
 
-TEST_F(StreamableHttpServerTransportTest, ConstructorEmptySessionId) {
+TEST_F(StreamableHttpServerTransportTest, ConstructorEmptySessionId)
+{
     EXPECT_NO_THROW({
         StreamableHttpServerTransport transport("", false);
     });
 }
 
-TEST_F(StreamableHttpServerTransportTest, ConstructorWithJsonResponseEnabled) {
+TEST_F(StreamableHttpServerTransportTest, ConstructorWithJsonResponseEnabled)
+{
     EXPECT_NO_THROW({
         StreamableHttpServerTransport transport(validSessionId, true);
     });
 }
 
-TEST_F(StreamableHttpServerTransportTest, ConstructorWithJsonResponseDisabled) {
+TEST_F(StreamableHttpServerTransportTest, ConstructorWithJsonResponseDisabled)
+{
     EXPECT_NO_THROW({
         StreamableHttpServerTransport transport(validSessionId, false);
     });
 }
 
-TEST_F(StreamableHttpServerTransportTest, SetCallback) {
+TEST_F(StreamableHttpServerTransportTest, SetCallback)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
 
     EXPECT_NO_THROW(transport.SetCallback(callback));
 }
 
-TEST_F(StreamableHttpServerTransportTest, SetNullCallback) {
+TEST_F(StreamableHttpServerTransportTest, SetNullCallback)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
 
     EXPECT_NO_THROW(transport.SetCallback(nullptr));
 }
 
-TEST_F(StreamableHttpServerTransportTest, Listen) {
+TEST_F(StreamableHttpServerTransportTest, Listen)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
 
     EXPECT_NO_THROW(transport.Listen());
 }
 
-TEST_F(StreamableHttpServerTransportTest, Terminate) {
+TEST_F(StreamableHttpServerTransportTest, Terminate)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
 
     EXPECT_NO_THROW(transport.Terminate());
 }
 
-TEST_F(StreamableHttpServerTransportTest, TerminateEmptySessionId) {
+TEST_F(StreamableHttpServerTransportTest, TerminateEmptySessionId)
+{
     StreamableHttpServerTransport transport("", false);
 
     EXPECT_NO_THROW(transport.Terminate());
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleRequestNoHttpCallback) {
+TEST_F(StreamableHttpServerTransportTest, HandleRequestNoHttpCallback)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     RequestContext ctx = CreateRequestContext();
     ctx.httpSendFunc = nullptr;
@@ -190,7 +216,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleRequestNoHttpCallback) {
     }, std::runtime_error);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleRequestTerminatedSession) {
+TEST_F(StreamableHttpServerTransportTest, HandleRequestTerminatedSession)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     transport.Terminate();
 
@@ -203,9 +230,9 @@ TEST_F(StreamableHttpServerTransportTest, HandleRequestTerminatedSession) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_FOUND);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNoCallback) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNoCallback)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
-
 
     RequestContext ctx = CreateRequestContext();
     Http::HttpRequest request = CreateHttpRequest("POST");
@@ -216,7 +243,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNoCallback) {
     }, std::runtime_error);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidAcceptHeader) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidAcceptHeader)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -235,7 +263,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidAcceptHeader) 
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestMissingContentType) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestMissingContentType)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -253,7 +282,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestMissingContentType) {
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidContentType) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidContentType)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -272,7 +302,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidContentType) {
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidJson) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidJson)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -291,7 +322,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidJson) {
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeNoSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeNoSessionId)
+{
     StreamableHttpServerTransport transport("", false); // 空session ID
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -309,7 +341,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeNoSessionId
     EXPECT_EQ(callback->messageCount, 1);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeWithSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeWithSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -328,7 +361,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeWithSession
     EXPECT_EQ(callback->messageCount, 1);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeMissingSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeMissingSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -348,7 +382,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeMissingS
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeInvalidSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeInvalidSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -368,7 +403,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeInvalidS
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeValidSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeValidSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -386,7 +422,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNonInitializeValidSes
     EXPECT_EQ(callback->messageCount, 1);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestUnsupportedProtocolVersion) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestUnsupportedProtocolVersion)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -407,7 +444,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestUnsupportedProtocolVe
     EXPECT_EQ(callback->messageCount, 0);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestSupportedProtocolVersion) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestSupportedProtocolVersion)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -427,7 +465,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestSupportedProtocolVers
 }
 
 // ============ GET请求测试 ============
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestNoAcceptHeader) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestNoAcceptHeader)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -441,7 +480,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestNoAcceptHeader) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_ACCEPTABLE);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestNoSseAccept) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestNoSseAccept)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -458,7 +498,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestNoSseAccept) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_ACCEPTABLE);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestMissingSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestMissingSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -475,7 +516,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestMissingSessionId) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestInvalidSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestInvalidSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -493,7 +535,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestInvalidSessionId) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestUnsupportedProtocolVersion) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestUnsupportedProtocolVersion)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -512,7 +555,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestUnsupportedProtocolVer
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestValid) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestValid)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -532,7 +576,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestValid) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().headers[Http::CONTENT_TYPE_HEADER], Http::CONTENT_TYPE_SSE);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestDuplicateStream) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestDuplicateStream)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -551,13 +596,14 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestDuplicateStream) {
 
     // 第二次GET请求（应该冲突）
     RequestContext ctx2 = CreateRequestContext();
-    mockHttpSendFunc.clear();
+    mockHttpSendFunc.Clear();
     transport.HandleRequest(request, ctx2);
 
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_CONFLICT);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleGetRequestEmptySessionIdTransport) {
+TEST_F(StreamableHttpServerTransportTest, HandleGetRequestEmptySessionIdTransport)
+{
     StreamableHttpServerTransport transport("", false); // 空session ID
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -576,7 +622,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestEmptySessionIdTranspor
 }
 
 // ============ DELETE请求测试 ============
-TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestEmptySessionIdTransport) {
+TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestEmptySessionIdTransport)
+{
     StreamableHttpServerTransport transport("", false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -590,7 +637,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestEmptySessionIdTrans
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_METHOD_NOT_ALLOWED);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestMissingSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestMissingSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -604,7 +652,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestMissingSessionId) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestInvalidSessionId) {
+TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestInvalidSessionId)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -621,7 +670,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestInvalidSessionId) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestValid) {
+TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestValid)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -639,7 +689,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleDeleteRequestValid) {
 }
 
 // ============ 不支持的方法测试 ============
-TEST_F(StreamableHttpServerTransportTest, HandleUnsupportedMethod) {
+TEST_F(StreamableHttpServerTransportTest, HandleUnsupportedMethod)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -655,7 +706,8 @@ TEST_F(StreamableHttpServerTransportTest, HandleUnsupportedMethod) {
 }
 
 // ============ 边缘情况测试 ============
-TEST_F(StreamableHttpServerTransportTest, EmptyJsonBody) {
+TEST_F(StreamableHttpServerTransportTest, EmptyJsonBody)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -674,7 +726,8 @@ TEST_F(StreamableHttpServerTransportTest, EmptyJsonBody) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, WhitespaceJsonBody) {
+TEST_F(StreamableHttpServerTransportTest, WhitespaceJsonBody)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -693,7 +746,8 @@ TEST_F(StreamableHttpServerTransportTest, WhitespaceJsonBody) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
 }
 
-TEST_F(StreamableHttpServerTransportTest, CaseInsensitiveHeaders) {
+TEST_F(StreamableHttpServerTransportTest, CaseInsensitiveHeaders)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -716,7 +770,8 @@ TEST_F(StreamableHttpServerTransportTest, CaseInsensitiveHeaders) {
 }
 
 // ============ 综合测试 ============
-TEST_F(StreamableHttpServerTransportTest, CompleteWorkflow) {
+TEST_F(StreamableHttpServerTransportTest, CompleteWorkflow)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -733,7 +788,7 @@ TEST_F(StreamableHttpServerTransportTest, CompleteWorkflow) {
     EXPECT_EQ(callback->messageCount, 1);
 
     // 2. GET请求建立SSE流
-    mockHttpSendFunc.clear();
+    mockHttpSendFunc.Clear();
     RequestContext ctx2 = CreateRequestContext();
     std::unordered_map<std::string, std::string> getHeaders = {
         {"accept", "text/event-stream"},
@@ -746,7 +801,7 @@ TEST_F(StreamableHttpServerTransportTest, CompleteWorkflow) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_OK);
 
     // 3. DELETE请求终止会话
-    mockHttpSendFunc.clear();
+    mockHttpSendFunc.Clear();
     RequestContext ctx3 = CreateRequestContext();
     std::unordered_map<std::string, std::string> deleteHeaders = {
         {"mcp-session-id", validSessionId}
@@ -757,7 +812,7 @@ TEST_F(StreamableHttpServerTransportTest, CompleteWorkflow) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_OK);
 
     // 4. 会话终止后请求应该失败
-    mockHttpSendFunc.clear();
+    mockHttpSendFunc.Clear();
     RequestContext ctx4 = CreateRequestContext();
     Http::HttpRequest postRequest2 = CreateHttpRequest("POST", postHeaders, CreateNonInitializeRequestJson());
 
