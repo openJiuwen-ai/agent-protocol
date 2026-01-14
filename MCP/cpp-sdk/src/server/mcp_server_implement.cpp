@@ -83,7 +83,7 @@ void McpServerImplement::SendErrorResponse(int64_t requestId, JsonRpcErrorCode c
 {
     auto session = serverManager_ ? serverManager_->GetSession(ctx.sessionId) : nullptr;
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found for error response: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found for error response: " + ctx.sessionId);
         return;
     }
 
@@ -127,7 +127,7 @@ void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& req
     (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -139,7 +139,7 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -162,7 +162,7 @@ void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& r
     (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -178,7 +178,7 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -205,7 +205,7 @@ void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Reque
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -234,7 +234,7 @@ void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Req
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -264,7 +264,7 @@ void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const R
     (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
         return;
     }
 
@@ -450,7 +450,9 @@ bool McpServerImplement::ValidateStreamableHttpConfig(const StreamableHttpServer
     }
 
     if (config.ioThreads == 0 || config.ioThreads > MAX_THREAD_NUM) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "IO threads count (%u) should be in (0, %u)", config.ioThreads, MAX_THREAD_NUM);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("IO threads count (") + std::to_string(config.ioThreads) +
+                    ") should be in (0, " + std::to_string(MAX_THREAD_NUM) + ")");
         return false;
     }
 
@@ -473,8 +475,9 @@ bool McpServerImplement::ValidateConfig(const ServerConfig& config)
     }
 
     if (config_.workerThreads == 0 || config_.workerThreads > MAX_THREAD_NUM) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Worker threads count (%u) should be in (0, %u)",
-            config.workerThreads, MAX_THREAD_NUM);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Worker threads count (") + std::to_string(config.workerThreads) +
+                    ") should be in (0, " + std::to_string(MAX_THREAD_NUM) + ")");
         return false;
     }
 
@@ -502,7 +505,7 @@ bool McpServerImplement::InitializeServerManager()
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager start successfully");
         return true;
     } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Exception while creating ServerManager: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Exception while creating ServerManager: ") + e.what());
         return false;
     }
 }
@@ -515,14 +518,13 @@ static bool ValidateFilePathWithRealpath(const std::string& path, const char* wh
 
     char* canonical = realpath(path.c_str(), nullptr);
     if (canonical == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "%s realpath failed: %s (errno=%d, %s)",
-            what, path.c_str(), errno, std::strerror(errno));
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string(what) + " realpath failed: " + path +
+                " (errno=" + std::to_string(errno) + ", " + std::strerror(errno) + ")");
         return false;
     }
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "%s validated: %s", what, canonical);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, std::string(what) + " validated: " + std::string(canonical));
     free(canonical);
-
     return true;
 }
 
@@ -534,7 +536,9 @@ bool McpServerImplement::ValidateTlsConfig(const TlsConfig& config)
 
     if (!config.serverName.empty()) {
         if (config.serverName.length() > MAX_HOSTNAME_LENGTH) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "TLS server name too long: %zu characters", config.serverName.length());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                    std::string("TLS server name too long: ") +
+                        std::to_string(config.serverName.length()) + " characters");
             return false;
         }
 

@@ -43,7 +43,7 @@ int main()
         initFuture.get();
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Initialize success");
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Initialize failed: ") + e.what());
         return -1;
     }
 
@@ -57,15 +57,17 @@ int main()
             return -1;
         }
         auto resourceList = listFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListResources success, resource count: %zu", resourceList->resources.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("ListResources success, resource count: ") +
+                    std::to_string(resourceList->resources.size()));
         for (const auto &resource : resourceList->resources) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Resource: %s (uri: %s)", resource.name.c_str(), resource.uri.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Resource: " + resource.name + " (uri: " + resource.uri + ")");
         }
         if (!resourceList->resources.empty()) {
             targetUri = resourceList->resources.front().uri;
         }
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResources failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListResources failed: ") + e.what());
         return -1;
     }
 
@@ -79,7 +81,7 @@ int main()
                 return -1;
             }
             subFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "SubscribeResource success: %s", targetUri.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "SubscribeResource success: " + targetUri);
 
             auto unsubFuture = mcpClient->UnsubscribeResource(targetUri);
             if (unsubFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
@@ -87,9 +89,9 @@ int main()
                 return -1;
             }
             unsubFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "UnsubscribeResource success: %s", targetUri.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "UnsubscribeResource success: " + targetUri);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Subscribe/Unsubscribe failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Subscribe/Unsubscribe failed: ") + e.what());
             return -1;
         }
     }
@@ -104,10 +106,10 @@ int main()
                 return -1;
             }
             auto readResult = readFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "ReadResource success: %s, content count: %zu", targetUri.c_str(),
-                    readResult->contents.size());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "ReadResource success: " + targetUri + ", content count: " +
+                std::to_string(readResult->contents.size()));
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "ReadResource failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ReadResource failed: ") + e.what());
             return -1;
         }
     }
@@ -121,14 +123,15 @@ int main()
             return -1;
         }
         auto templates = templateFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListResourcesTemplates success, template count: %zu",
-                templates->resourceTemplates.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("ListResourcesTemplates success, template count: ") +
+                    std::to_string(templates->resourceTemplates.size()));
         for (const auto &tmpl : templates->resourceTemplates) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Template: %s (mimeType: %s)", tmpl.uriTemplate.c_str(),
-                    tmpl.mimeType.has_value() ? tmpl.mimeType.value().c_str() : "none");
+            std::string mimeType = tmpl.mimeType.has_value() ? tmpl.mimeType.value() : std::string("none");
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Template: " + tmpl.uriTemplate + " (mimeType: " + mimeType + ")");
         }
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResourcesTemplates failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListResourcesTemplates failed: ") + e.what());
         return -1;
     }
 

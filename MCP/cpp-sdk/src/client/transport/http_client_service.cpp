@@ -32,7 +32,7 @@ HttpClientService::~HttpClientService()
     try {
         Stop();
     } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Exception caught in destructor: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Exception caught in destructor: ") + e.what());
     }
 }
 
@@ -49,7 +49,8 @@ bool HttpClientService::Start()
     // Initialize libcurl
     CURLcode code = curl_global_init(CURL_GLOBAL_DEFAULT);
     if (code != CURLE_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to initialize CURL: %s", curl_easy_strerror(code));
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Failed to initialize CURL: ") + std::string(curl_easy_strerror(code)));
         return false;
     }
 
@@ -72,7 +73,7 @@ bool HttpClientService::Start()
             return false;
         }
     } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create EventSystem: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to create EventSystem: ") + e.what());
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
         curl_global_cleanup();
@@ -194,7 +195,8 @@ void HttpClientService::Send(const HttpRequest& request, void* userData, int tim
     }
 
     uint64_t requestId = ((UserData*)userData)->requestId;
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request %llu: %s %s", requestId, request.method.c_str(), request.url.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request " + std::to_string(requestId) + ": " +
+            request.method + " " + request.url);
 
     auto requestContext = std::make_shared<RequestContext>(request, callback, timeoutMs, userData);
 
@@ -216,7 +218,7 @@ void HttpClientService::IoThreadMain()
 void HttpClientService::HandleErrorResponse(const std::shared_ptr<RequestContext>& request,
                                             const std::string& errorMessage)
 {
-    MCP_LOG(MCP_LOG_LEVEL_ERROR, "Request %llu error: %s", request->userData.requestId, errorMessage.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "Request " + std::to_string(request->userData.requestId) + " error: " + errorMessage);
     HttpResponse errorResponse;
     errorResponse.success = false;
     errorResponse.userData = request->userData;
@@ -235,8 +237,9 @@ void HttpClientService::HandleSuccessResponse(const std::shared_ptr<RequestConte
     response.body = request->responseData;
     response.headers = headers;
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request %llu completed with status %ld, headers_count=%zu",
-            request->userData.requestId, statusCode, response.headers.size());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request " + std::to_string(request->userData.requestId) +
+            " completed with status " + std::to_string(statusCode) +
+            ", headers_count=" + std::to_string(response.headers.size()));
     ExecuteCallback(request, response);
 }
 
@@ -248,13 +251,14 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
     }
 
     uint64_t requestId = request->userData.requestId;
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Processing request %llu in I/O thread: %s %s (timeout=%dms)", requestId,
-            request->request.method.c_str(), request->request.url.c_str(), request->timeoutMs);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Processing request " + std::to_string(requestId) +
+            " in I/O thread: " + request->request.method + " " +
+            request->request.url + " (timeout=" + std::to_string(request->timeoutMs) + "ms)");
 
     // Create CURL handle
     request->easyHandle = curl_easy_init();
     if (request->easyHandle == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create CURL handle for request %llu", requestId);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create CURL handle for request " + std::to_string(requestId));
         HandleErrorResponse(request, "Failed to create CURL handle");
         return;
     }
@@ -278,18 +282,17 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
 
     activeRequests_[requestId] = request;
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request %llu added to libcurl multi handle", requestId);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request " + std::to_string(requestId) + " added to libcurl multi handle");
 }
 
 void HttpClientService::HandleStopRequestInIOThread()
 {
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Processing stop request in I/O thread");
-
     // 1. Process remaining requests in queue
     size_t remaining = requestQueue_.GetQueueSize();
     if (remaining > 0) {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Processing %zu remaining requests in queue before stop", remaining);
-
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Processing " + std::to_string(remaining) +
+                " remaining requests in queue before stop");
         std::shared_ptr<RequestContext> request;
         int processed = 0;
         // Process up to 1000 requests to prevent infinite loop
@@ -301,55 +304,50 @@ void HttpClientService::HandleStopRequestInIOThread()
             HandleErrorResponse(request, "Service is stopping");
             processed++;
         }
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Processed %d requests from queue during stop", processed);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Processed " + std::to_string(processed) +
+                " requests from queue during stop");
     }
-
     // 3. Wait for active requests to complete (max 3 seconds)
     if (!activeRequests_.empty()) {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Waiting for %zu active requests to complete", activeRequests_.size());
-
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Waiting for " + std::to_string(activeRequests_.size()) +
+                " active requests to complete");
         auto start = std::chrono::steady_clock::now();
         while (!activeRequests_.empty()) {
             // Trigger socket action to allow requests to complete
             int running = 0;
             curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &running);
             CheckMultiInfo();
-
             // Check timeout
             auto elapsed =
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
             if (elapsed > GRACEFUL_STOP_TIMEOUT) {
-                MCP_LOG(MCP_LOG_LEVEL_WARN, "Timeout waiting for active requests");
                 break;
             }
-
             // Short sleep to avoid busy waiting
             std::this_thread::sleep_for(std::chrono::milliseconds(GRACEFUL_STOP_SLEEP_TIME));
         }
     }
-
     // 4. Force cancel remaining active requests
     if (!activeRequests_.empty()) {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Cancelling %zu remaining active requests", activeRequests_.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Cancelling " + std::to_string(activeRequests_.size()) +
+                " remaining active requests");
         CancelAllActiveRequests();
     }
-
     // 5. Cleanup socket contexts before stopping event loop
     for (auto& [sockfd, context] : socketContexts_) {
         if (context != nullptr) {
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Cleaning up socket context: sockfd=%d", sockfd);
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Cleaning up socket context: sockfd=" + std::to_string(sockfd));
+
             // Remove event if still active
             if (context->eventId != -1 && eventSystem_ != nullptr) {
                 eventSystem_->RemoveEvent(context->eventId);
-                context->eventId = -1;
+                context->eventId = -1; // Clear to prevent double removal
             }
         }
     }
     socketContexts_.clear();
-
     // 6. Set state to stopped before stopping event loop
     state_.store(ServiceState::STOPPED, std::memory_order_release);
-
     // 7. Stop event loop
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Stopping event loop");
     eventSystem_->Stop();
@@ -478,7 +476,7 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
 
     // Remove existing timer
     if (service->timerEventId_ != -1) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "remove event id: %d", service->timerEventId_);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "remove event id: " + std::to_string(service->timerEventId_));
         if (service->eventSystem_ != nullptr) {
             service->eventSystem_->RemoveEvent(service->timerEventId_);
         }
@@ -501,7 +499,8 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
             timeoutMs, [service](int fd, short events, void* arg) { service->OnTimeout(fd, events, arg); }, nullptr,
             false);
 
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "add Timer id: %d, timeout: %llu ms", service->timerEventId_, timeoutMs);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "add Timer id: " + std::to_string(service->timerEventId_) +
+                ", timeout: " + std::to_string(timeoutMs) + " ms");
     }
 
     return 0;
@@ -523,7 +522,8 @@ void HttpClientService::OnTimeout(int fd, short events, void* arg)
     int running_before = 0;
     CURLMcode code = curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &running_before);
     if (code != CURLM_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "OnTimeout() - curl_multi_socket_action failed: %s", curl_multi_strerror(code));
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "OnTimeout() - curl_multi_socket_action failed: " +
+                std::string(curl_multi_strerror(code)));
     }
 
     // Check for completed requests
@@ -539,7 +539,7 @@ void HttpClientService::OnSocketEvent(int fd, short events, void* arg)
 
     CurlSocketContext* context = static_cast<CurlSocketContext*>(arg);
     if (context == nullptr || !context->isValid()) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket context is null or invalid for fd=%d", fd);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket context is null or invalid for fd=" + std::to_string(fd));
         return;
     }
 
@@ -552,14 +552,15 @@ void HttpClientService::OnSocketEvent(int fd, short events, void* arg)
         curlAction |= CURL_CSELECT_OUT;
     }
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket activity: fd=%d, sockfd=%d, events=0x%02x, curlAction=%d", fd, context->sockfd,
-            events, curlAction);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket activity: fd=" + std::to_string(fd) +
+            ", sockfd=" + std::to_string(context->sockfd) +
+            ", events=0x" + std::to_string(events) + ", curlAction=" + std::to_string(curlAction));
 
     // Notify libcurl of socket activity
     int running_before = 0;
     CURLMcode code = curl_multi_socket_action(multiHandle_, context->sockfd, curlAction, &running_before);
     if (code != CURLM_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "curl_multi_socket_action failed: %s", curl_multi_strerror(code));
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "curl_multi_socket_action failed: " + std::string(curl_multi_strerror(code)));
     }
 
     // Check for completed requests
@@ -579,7 +580,8 @@ void HttpClientService::DestroySocketContext(const std::shared_ptr<CurlSocketCon
         return;
     }
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket destroy: fd=%d, sockfd=%d", context->eventId, context->sockfd);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Socket destroy: fd=" + std::to_string(context->eventId) +
+            ", sockfd=" + std::to_string(context->sockfd));
 
     // Mark as invalid first to prevent concurrent access
     context->invalidate();
@@ -674,7 +676,7 @@ void HttpClientService::ExecuteCallback(const std::shared_ptr<RequestContext>& r
     try {
         request->callback(response);
     } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Callback execution failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Callback execution failed: " + std::string(e.what()));
     }
 }
 
@@ -725,7 +727,7 @@ std::unordered_map<std::string, std::string> HttpClientService::ParseHeaderData(
             header_value.erase(header_value.find_last_not_of(" \t") + 1);
 
             headers[header_name] = header_value;
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Parsed header [%s: %s]", header_name.c_str(), header_value.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Parsed header [" + header_name + ": " + header_value + "]");
         }
     }
 
@@ -753,13 +755,15 @@ void HttpClientService::CancelRequest(const std::shared_ptr<RequestContext>& req
         curl_easy_cleanup(request->easyHandle);
         request->easyHandle = nullptr;
 
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request %llu cancelled successfully", request->userData.requestId);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, std::string("Request ") +
+                std::to_string(request->userData.requestId) + " cancelled successfully");
     }
 }
 
 void HttpClientService::CancelAllActiveRequests()
 {
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Cancelling %zu active requests", activeRequests_.size());
+    MCP_LOG(MCP_LOG_LEVEL_INFO,
+            std::string("Cancelling ") + std::to_string(activeRequests_.size()) + " active requests");
 
     // Create a copy to avoid iterator invalidation
     std::vector<std::shared_ptr<RequestContext>> requestsToCancel;

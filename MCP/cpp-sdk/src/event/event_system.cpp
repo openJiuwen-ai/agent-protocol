@@ -111,7 +111,8 @@ struct EventSystem::Impl {
 
             if (!savedPersistent && eventOwner != nullptr) {
                 MCP_LOG(MCP_LOG_LEVEL_DEBUG,
-                        "EventSystem::eventCallbackAdapter: removing non-persistent event, eventId=%d", savedId);
+                        std::string("EventSystem::eventCallbackAdapter: removing non-persistent event, eventId=") +
+                            std::to_string(savedId));
                 eventOwner->RemoveEvent(savedId);
             }
         }
@@ -210,7 +211,7 @@ int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void
 
     event* ev = event_new(event_base_, fd, flags, &Impl::EventData::eventCallbackAdapter, data.get());
     if (ev == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create event for fd=%d", fd);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to create event for fd=") + std::to_string(fd));
         return -1;
     }
 
@@ -218,7 +219,7 @@ int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void
 
     timeval tv{};
     if (event_add(ev, ToTimeval(timeoutMs, tv)) != 0) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to add event for fd=%d", fd);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to add event for fd=") + std::to_string(fd));
         data->handle.reset();
         return -1;
     }
@@ -231,7 +232,8 @@ int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void
 int EventSystem::AddTimer(long timeoutMs, EventCallback callback, void* arg, bool repeat)
 {
     if (timeoutMs <= 0) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid timer timeout: %ldms", timeoutMs);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Invalid timer timeout: ") + std::to_string(timeoutMs) + "ms");
         return -1;
     }
 

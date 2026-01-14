@@ -48,7 +48,8 @@ void signalHandler(int signal)
     }
 }
 
-void FileLogCallback(MCP_LOG_LEVEL logLevel, const char *format, ...)
+// Use C++ style callback with std::string instead of C-style variadic function
+void FileLogCallback(MCP_LOG_LEVEL logLevel, std::string message)
 {
     if (!g_logFile) {
         return;
@@ -58,12 +59,7 @@ void FileLogCallback(MCP_LOG_LEVEL logLevel, const char *format, ...)
         return;
     }
 
-    va_list args;
-    va_start(args, format);
-    vfprintf(g_logFile, format, args);
-    va_end(args);
-
-    fprintf(g_logFile, "\n");
+    fprintf(g_logFile, "%s\n", message.c_str());
     fflush(g_logFile);
 }
 
@@ -137,9 +133,9 @@ int main()
             toolParams.inputSchema = std::cref(echoInputSchema);
             toolParams.outputSchema = std::cref(echoOutputSchema);
             server->AddTool(ECHO_TOOL_NAME, echoFunc, toolParams);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", ECHO_TOOL_NAME);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("add tool success: ") + ECHO_TOOL_NAME);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add tool failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("add tool failed: ") + e.what());
         } catch (...) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool failed as expected");
         }
@@ -182,9 +178,9 @@ int main()
                                   result.messages.push_back(msg);
                                   return result;
                               }, promptParams);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt success: %s", PROMPT_NAME);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("add prompt success: ") + PROMPT_NAME);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add prompt failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("add prompt failed: ") + e.what());
         } catch (...) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt failed as expected");
         }
@@ -210,9 +206,9 @@ int main()
             resourceParams.icons = std::cref(resourceIcons);
 
             server->AddResource(RESOURCE_URI, RESOURCE_NAME, readResourceFunc, resourceParams);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource success: %s", RESOURCE_URI);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("add resource success: ") + RESOURCE_URI);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add resource failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("add resource failed: ") + e.what());
         } catch (...) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource failed as expected");
         }
@@ -225,9 +221,9 @@ int main()
             resourceTemplateParams.description = std::cref(resourceTemplateDescription);
             resourceTemplateParams.mimeType = std::cref(resourceTemplateMimeType);
             server->AddResourceTemplate(RESOURCE_TEMPLATE_URI, RESOURCE_TEMPLATE_NAME, resourceTemplateParams);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource template success: %s", RESOURCE_TEMPLATE_URI);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("add resource template success: ") + RESOURCE_TEMPLATE_URI);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add resource template failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("add resource template failed: ") + e.what());
         } catch (...) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource template failed as expected");
         }
@@ -243,41 +239,42 @@ int main()
             MCP_LOG(MCP_LOG_LEVEL_WARN, "Server status check: NOT RUNNING");
             return -1;
         }
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP server started successfully on %s",
-                streamableHttpConfig.endpoint.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP server started successfully on " + streamableHttpConfig.endpoint);
 
         std::cout << "Server is now running. Press Ctrl+C to stop gracefully..." << std::endl;
-        std::cout << "  - Name: " << config.name.c_str() << std::endl;
-        std::cout << "  - Version: " << config.version.c_str() << std::endl;
+        std::cout << "  - Name: " << config.name << std::endl;
+        std::cout << "  - Version: " << config.version << std::endl;
         std::cout << "  - IO Threads: " << streamableHttpConfig.ioThreads << std::endl;
         std::cout << "  - Worker Threads: " << config.workerThreads
                   << std::endl;
-        std::cout << "  - Endpoint: " << streamableHttpConfig.endpoint.c_str() << std::endl;
+        std::cout << "  - Endpoint: " << streamableHttpConfig.endpoint << std::endl;
         std::cout << "Test endpoints:" << std::endl;
-        std::cout << "  - Health check: " << streamableHttpConfig.endpoint.c_str() << "/health"
+        std::cout << "  - Health check: " << streamableHttpConfig.endpoint << "/health"
                   << std::endl;
-        std::cout << "  - MCP endpoint: " << streamableHttpConfig.endpoint.c_str() << std::endl;
+        std::cout << "  - MCP endpoint: " << streamableHttpConfig.endpoint << std::endl;
 
         int counter = 0;
         while (!stopFlag && server->IsRunning()) {
             std::this_thread::sleep_for(std::chrono::seconds(HEARTBEAT_INTERVAL_SECONDS));
             counter++;
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Server heartbeat %d - still running...", counter);
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, std::string("Server heartbeat ") + std::to_string(counter) +
+                " - still running...");
             if (counter % LOG_INTERVAL_COUNT == 0) {  // Every 30 seconds
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "Server active for %d seconds", counter * HEARTBEAT_INTERVAL_SECONDS);
+                MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("Server active for ") +
+                    std::to_string(counter * HEARTBEAT_INTERVAL_SECONDS) + " seconds");
             }
         }
 
         server->Stop();
         MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP server shutdown completed successfully");
     } catch (const std::invalid_argument &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Configuration error: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Configuration error: ") + e.what());
         return -1;
     } catch (const std::runtime_error &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Runtime error: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Runtime error: ") + e.what());
         return -1;
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Unexpected error: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Unexpected error: ") + e.what());
         return -1;
     }
 

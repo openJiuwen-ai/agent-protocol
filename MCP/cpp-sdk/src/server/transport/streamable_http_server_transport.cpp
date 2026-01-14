@@ -149,8 +149,8 @@ std::string StreamableHttpServerTransport::CreateEventData(const EventMessage& e
 
 void StreamableHttpServerTransport::HandleRequest(const HttpRequest& request, RequestContext& ctx)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Hanle request for session %s, request.sessionid is %s", ctx.sessionId.c_str(),
-        GetSessionId(request));
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Hanle request for session " + ctx.sessionId +
+            ", request.sessionid is " + GetSessionId(request));
     if (ctx.httpSendFunc == nullptr) {
         throw std::runtime_error("HTTP callback not set");
     }
@@ -187,7 +187,7 @@ bool StreamableHttpServerTransport::ValidatePostRequestHeaders(RequestContext& c
     if (!hasJson || !hasSse) {
         // print headers
         for (const auto& header : request.headers) {
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Header: %s: %s", header.first.c_str(), header.second.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Header: " + header.first + ": " + header.second);
         }
         HttpResponse response = CreateErrorResponse(
             "Not Acceptable: Client must accept both application/json and text/event-stream",
@@ -221,8 +221,7 @@ bool StreamableHttpServerTransport::ValidateSessionId(RequestContext& ctx, const
         return false;
     }
     if (requestSessionId != mcpSessionId_) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Invalid session ID: %s, expected: %s", requestSessionId.c_str(),
-            mcpSessionId_.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Invalid session ID: " + requestSessionId + ", expected: " + mcpSessionId_);
         HttpResponse response = CreateErrorResponse("Not Found: Invalid or expired session ID",
             Http::HTTP_STATUS_NOT_FOUND, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
         ctx.httpSendFunc(response, ctx);
@@ -248,7 +247,7 @@ bool StreamableHttpServerTransport::ParseJsonBody(RequestContext& ctx, const Htt
 
 void StreamableHttpServerTransport::HandleNonRequestMessage(RequestContext& ctx, const JSONRPCMessage& message)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Handle non request message for session %s", ctx.sessionId.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Handle non request message for session " + ctx.sessionId);
     HttpResponse response = CreateJsonResponse(std::nullopt, Http::HTTP_STATUS_ACCEPTED, {}, ctx);
     ctx.httpSendFunc(response, ctx);
     if (callback_ != nullptr) {
@@ -270,7 +269,8 @@ void StreamableHttpServerTransport::HandlePostRequest(RequestContext& ctx, const
     }
 
     bool isInitializationRequest = messageJson.contains("method") && messageJson["method"] == "initialize";
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "isInitializationRequest %s", isInitializationRequest ? "true" : "false");
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, std::string("isInitializationRequest ") +
+            (isInitializationRequest ? "true" : "false"));
 
     if (!ValidateSessionId(ctx, request, isInitializationRequest)) {
         return;
@@ -286,7 +286,7 @@ void StreamableHttpServerTransport::HandlePostRequest(RequestContext& ctx, const
     }
 
     if (callback_ != nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "handle request %s", ctx.method.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "handle request " + ctx.method);
         callback_->OnMessageReceived(message, ctx);
     }
 }
@@ -317,8 +317,7 @@ void StreamableHttpServerTransport::HandleGetRequest(RequestContext& ctx, const 
     if (!mcpSessionId_.empty()) {
         std::string requestSessionId = GetSessionId(request);
         if (requestSessionId.empty() || requestSessionId != mcpSessionId_) {
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Invalid session ID: %s, expected: %s", requestSessionId.c_str(),
-                mcpSessionId_.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Invalid session ID: " + requestSessionId + ", expected: " + mcpSessionId_);
             HttpResponse response = CreateErrorResponse("Bad Request: Invalid session ID",
                 Http::HTTP_STATUS_BAD_REQUEST,
                 static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
@@ -455,7 +454,7 @@ void StreamableHttpServerTransport::Listen()
 
 void StreamableHttpServerTransport::Terminate()
 {
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Terminating session: %s", mcpSessionId_.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Terminating session: " + mcpSessionId_);
     isTerminated_ = true;
     getStreamRequestContext_.reset();
     mcpSessionId_.clear();

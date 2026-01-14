@@ -107,9 +107,11 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
     bool error = false;
     HttpResponse response;
 
-    connection->OnError([&](const Mcp::Net::SocketPtr& socket, int errorCode, const std::string& message) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] error fd=%d err=%d msg=%s", (socket ? socket->Fd() : -1), errorCode,
-                message.c_str());
+    connection->OnError([&](const Mcp::Net::SocketPtr& socket, int errorCode,
+                           const std::string& message) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] error fd=" +
+                std::to_string(socket ? socket->Fd() : -1) +
+                " err=" + std::to_string(errorCode) + " msg=" + message);
         error = true;
         done = true;
         eventSystem.Stop();
@@ -150,7 +152,9 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
             timeoutMs,
             [&](int /* fileDescriptor */, short /* events */, void* /* argument */) {
                 if (!done) {
-                    MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] request timeout after %d ms", timeoutMs);
+                    MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                            std::string("[http_client] request timeout after ") +
+                                std::to_string(timeoutMs) + " ms");
                     error = true;
                     done = true;
                     if (connection) {

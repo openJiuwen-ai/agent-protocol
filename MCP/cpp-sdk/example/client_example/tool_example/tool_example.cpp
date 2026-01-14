@@ -44,7 +44,7 @@ int main()
         auto initResult = initFuture.get();
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Initialize success");
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Initialize failed: ") + e.what());
         return -1;
     }
 
@@ -57,13 +57,14 @@ int main()
             return -1;
         }
         auto listResult = listFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListTools success, tool count: %zu", listResult->tools.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("ListTools success, tool count: ") + std::to_string(listResult->tools.size()));
         for (const auto &tool : listResult->tools) {
-            const char* desc = tool.description.has_value() ? tool.description->c_str() : "";
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Tool: %s - %s", tool.name.c_str(), desc);
+            std::string desc = tool.description.has_value() ? tool.description.value() : std::string{};
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Tool: " + tool.name + " - " + desc);
         }
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListTools failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListTools failed: ") + e.what());
         return -1;
     }
 
@@ -78,19 +79,20 @@ int main()
             return -1;
         }
         auto callResult = callFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool success, isError: %d, content count: %zu", callResult->isError,
-                callResult->content.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("CallTool success, isError: ") + std::to_string(static_cast<int>(callResult->isError)) +
+                    ", content count: " + std::to_string(callResult->content.size()));
         for (const auto &content : callResult->content) {
             if (std::holds_alternative<Mcp::TextContent>(content)) {
                 const auto &text = std::get<Mcp::TextContent>(content);
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "  TextContent: %s", text.text.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  TextContent: " + text.text);
             } else if (std::holds_alternative<Mcp::ImageContent>(content)) {
                 const auto &image = std::get<Mcp::ImageContent>(content);
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "  ImageContent: mimeType=%s", image.mimeType.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  ImageContent: mimeType=" + image.mimeType);
             }
         }
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "CallTool failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("CallTool failed: ") + e.what());
         return -1;
     }
 

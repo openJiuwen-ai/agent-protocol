@@ -43,7 +43,7 @@ int main()
         initFuture.get();
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Initialize success");
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Initialize failed: ") + e.what());
         return -1;
     }
 
@@ -56,12 +56,13 @@ int main()
             return -1;
         }
         auto promptList = listFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListPrompts success, prompt count: %zu", promptList->prompts.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListPrompts success, prompt count: " + std::to_string(promptList->prompts.size()));
         for (const auto &prompt : promptList->prompts) {
             if (prompt.arguments.has_value()) {
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Prompt: %s (arguments: %zu)", prompt.name.c_str(), prompt.arguments.value().size());
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Prompt: " + prompt.name + " (arguments: " +
+                    std::to_string(prompt.arguments.value().size()) + ")");
             } else {
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Prompt: %s (no arguments)", prompt.name.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Prompt: " + prompt.name + " (no arguments)");
             }
         }
 
@@ -82,11 +83,11 @@ int main()
                 return -1;
             }
             auto promptDetail = getFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "GetPrompt success, prompt: %s, message count: %zu", firstPrompt.name.c_str(),
-                    promptDetail->messages.size());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "GetPrompt success, prompt: " + firstPrompt.name + ", message count: " +
+                std::to_string(promptDetail->messages.size()));
         }
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Prompt example failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Prompt example failed: " + std::string(e.what()));
         return -1;
     }
 

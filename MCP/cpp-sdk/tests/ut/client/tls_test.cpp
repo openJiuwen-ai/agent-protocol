@@ -309,9 +309,9 @@ protected:
             toolParams.inputSchema = std::cref(echoInputSchema);
             toolParams.outputSchema = std::cref(echoOutputSchema);
             server->AddTool(ECHO_TOOL_NAME, echoFunc, toolParams);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", ECHO_TOOL_NAME);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("add tool success: ") + ECHO_TOOL_NAME);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add tool failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("add tool failed: ") + e.what());
         } catch (...) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool failed as expected");
         }

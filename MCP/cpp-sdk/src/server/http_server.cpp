@@ -151,7 +151,8 @@ void HttpServer::Run()
     }
     listener_->OnError([](const Mcp::Net::SocketPtr& socket, int errorCode, const std::string& message) {
         int fileDescriptor = socket ? socket->Fd() : -1;
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "listener error fd=%d err=%d msg=%s", fileDescriptor, errorCode, message.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "listener error fd=" + std::to_string(fileDescriptor) +
+                " err=" + std::to_string(errorCode) + " msg=" + message);
     });
 
     listener_->OnNewConnection(
@@ -176,9 +177,9 @@ void HttpServer::Run()
     }
 
     if (useTls) {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "HTTPS listening on %s:%u", host_.c_str(), port_);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "HTTPS listening on " + host_ + ":" + std::to_string(port_));
     } else {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "listening on %s:%u", host_.c_str(), port_);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "listening on " + host_ + ":" + std::to_string(port_));
     }
 
     eventThread_ = std::thread([this]() {
@@ -300,7 +301,7 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
 
     int written = BIO_write(context.rbio, encryptedData.data(), static_cast<int>(encryptedData.size()));
     if (written <= 0) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "BIO_write failed for HTTPS connection, fd=%d", fileDescriptor);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "BIO_write failed for HTTPS connection, fd=" + std::to_string(fileDescriptor));
         CleanupConnection(fileDescriptor);
         return;
     }
@@ -314,7 +315,7 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
             }
 
             if (!context.connection || !context.connection->Send(outBuffer, static_cast<size_t>(pending))) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "failed to send TLS handshake data, fd=%d", fileDescriptor);
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "failed to send TLS handshake data, fd=" + std::to_string(fileDescriptor));
                 CleanupConnection(fileDescriptor);
                 return false;
             }
@@ -326,7 +327,8 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
         int result = SSL_accept(context.ssl);
         if (result == 1) {
             context.handshaked = true;
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "SSL_accept succeeded for HTTPS connection, fd=%d", fileDescriptor);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "SSL_accept succeeded for HTTPS connection, fd=" +
+                    std::to_string(fileDescriptor));
 
             if (!flushTlsPendingData()) {
                 return;
@@ -339,8 +341,8 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
                 }
                 return;
             }
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSL_accept failed for HTTPS connection, fd=%d, err=%d", fileDescriptor,
-                    errorCode);
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSL_accept failed for HTTPS connection, fd=" +
+                std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
             CleanupConnection(fileDescriptor);
             return;
         }
@@ -354,8 +356,9 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
             if (errorCode == SSL_ERROR_WANT_READ || errorCode == SSL_ERROR_WANT_WRITE) {
                 break;
             }
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "SSL_read returned %d (err=%d), closing HTTPS connection fd=%d", bytesRead,
-                    errorCode, fileDescriptor);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "SSL_read returned " + std::to_string(bytesRead) +
+                    " (err=" + std::to_string(errorCode) + "), closing HTTPS connection fd=" +
+                    std::to_string(fileDescriptor));
             CleanupConnection(fileDescriptor);
             return;
         }
@@ -367,7 +370,7 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
 void HttpServer::HandleClose(const Mcp::Net::SocketPtr& socket)
 {
     int fileDescriptor = socket ? socket->Fd() : -1;
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "connection closed, fd=%d", fileDescriptor);
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
     }
@@ -376,7 +379,8 @@ void HttpServer::HandleClose(const Mcp::Net::SocketPtr& socket)
 void HttpServer::HandleError(const Mcp::Net::SocketPtr& socket, int errorCode, const std::string& message)
 {
     int fileDescriptor = socket ? socket->Fd() : -1;
-    MCP_LOG(MCP_LOG_LEVEL_ERROR, "conn error fd=%d err=%d msg=%s", fileDescriptor, errorCode, message.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
+            " err=" + std::to_string(errorCode) + " msg=" + message);
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
     }
@@ -455,13 +459,13 @@ void HttpServer::OnRead(int connectionFd, const std::string& data)
 void HttpServer::HandleRequest(int fileDescriptor, ConnectionContext& context)
 {
     HttpResponse response;
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Method: %s", context.currentRequest.method.c_str());
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request URL: %s", context.currentRequest.url.c_str());
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Version: %s", context.currentRequest.version.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Method: " + context.currentRequest.method);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request URL: " + context.currentRequest.url);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Version: " + context.currentRequest.version);
     for (const auto& header : context.currentRequest.headers) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Header: %s: %s", header.first.c_str(), header.second.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Header: " + header.first + ": " + header.second);
     }
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Body: %s", context.currentRequest.body.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request Body: " + context.currentRequest.body);
     // Build a minimal RequestContext so the handler signature matches HttpHandler.
     RequestContext requestContext{};
     requestContext.connectionId = static_cast<ConnectionId>(fileDescriptor);
@@ -545,8 +549,8 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
     if (writeResult <= 0) {
         int errorCode = SSL_get_error(context.ssl, writeResult);
         if (errorCode != SSL_ERROR_WANT_READ && errorCode != SSL_ERROR_WANT_WRITE) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSL_write failed for HTTPS response, fd=%d, err=%d", fileDescriptor,
-                    errorCode);
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSL_write failed for HTTPS response, fd=" +
+                    std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
             CleanupConnection(fileDescriptor);
             return false;
         }
@@ -570,11 +574,11 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
 
 bool HttpServer::SendResponse(int connectionFd, const HttpResponse& response)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Status: %d %s", response.statusCode, response.statusText.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Status: " + std::to_string(response.statusCode) + " " + response.statusText);
     for (const auto& header : response.headers) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Header: %s: %s", header.first.c_str(), header.second.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Header: " + header.first + ": " + header.second);
     }
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Body: %s", response.body.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Body: " + response.body);
     std::string rawResponse = BuildHttpResponse(response);
     return SendRawResponse(connectionFd, rawResponse);
 }

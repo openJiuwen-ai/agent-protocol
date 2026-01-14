@@ -44,7 +44,7 @@ void ServerSession::ReceivedRequest(int64_t requestId, const Request& request, R
         }
     } else {
         if (!isInitialized_) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Received request before initialization: %s", request.method_.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Received request before initialization: " + request.method_);
             return;
         }
         if (incomingRequestCallback_) {

@@ -323,7 +323,7 @@ bool TestDifferentMethods()
 
         request.headers["X-Method-Test"] = methods[i];
         userDataArray[i].requestId = REQUEST_ID_BASE_METHODS + static_cast<int>(i);
-        userDataArray[i].method = methods[i].c_str();
+        userDataArray[i].method = methods[i];
 
         env.service->Send(request, &userDataArray[i], TIMEOUT_REQUEST_DEFAULT_MS, CreateStandardCallback(results));
     }

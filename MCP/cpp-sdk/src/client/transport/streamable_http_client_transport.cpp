@@ -35,14 +35,16 @@ StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
       callback_(nullptr)
 {
     if (timeout_.count() <= 0 || timeout_.count() > MAX_TIMEOUT_MS.count()) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid timeout value: %lld milliseconds, max is %lu milliseconds",
-            timeout_.count(), MAX_TIMEOUT_MS.count());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Invalid timeout value: ") + std::to_string(timeout_.count()) +
+                    " milliseconds, max is " + std::to_string(MAX_TIMEOUT_MS.count()) + " milliseconds");
         throw std::invalid_argument("Invalid timeout value");
     }
 
     if (sseReadTimeout_.count() <= 0 || sseReadTimeout_.count() > MAX_TIMEOUT_MS.count()) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid SSE read timeout value: %lld milliseconds, max is %lu milliseconds",
-            sseReadTimeout_.count(), MAX_TIMEOUT_MS.count());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Invalid SSE read timeout value: ") + std::to_string(sseReadTimeout_.count()) +
+                    " milliseconds, max is " + std::to_string(MAX_TIMEOUT_MS.count()) + " milliseconds");
         throw std::invalid_argument("Invalid SSE read timeout value");
     }
     // Create HttpClientServiceConfig with timeout settings
@@ -141,18 +143,18 @@ void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message)
     try {
         httpClientService_->Send(httpRequest, &userData, static_cast<int>(sseReadTimeout_.count()), callback);
     } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to enqueue HTTP request: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to enqueue HTTP request: ") + e.what());
         throw std::runtime_error(std::string("Failed to enqueue HTTP request: ") + e.what());
     }
 }
 
 void StreamableHttpClientTransport::HandleResponse(const HttpResponse& response)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received HTTP status %d", response.statusCode);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received HTTP status " + std::to_string(response.statusCode));
 
     // Check low-level HTTP client success flag first
     if (!response.success) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP request failed: %s", response.errorMessage.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP request failed: " + response.errorMessage);
         if (callback_ != nullptr) {
             std::string reason = "HTTP request failed";
             if (!response.errorMessage.empty()) {
@@ -165,19 +167,20 @@ void StreamableHttpClientTransport::HandleResponse(const HttpResponse& response)
 
     // Check status code
     if (response.statusCode == Http::HTTP_STATUS_ACCEPTED) {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Received %d Accepted", Http::HTTP_STATUS_ACCEPTED);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Received " + std::to_string(Http::HTTP_STATUS_ACCEPTED) + " Accepted");
         return;
     }
 
     if (response.statusCode == Http::HTTP_STATUS_NOT_FOUND) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "Session not found or expired (%d)", Http::HTTP_STATUS_NOT_FOUND);
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "Session not found or expired (" +
+                std::to_string(Http::HTTP_STATUS_NOT_FOUND) + ")");
         // 404 Not Found - Session not found or expired
         SendSessionTerminatedError(response);
         return;
     }
 
     if (response.statusCode != Http::HTTP_STATUS_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status %d", response.statusCode);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status " + std::to_string(response.statusCode));
         // Handle other error responses
         return;
     }
@@ -188,7 +191,7 @@ void StreamableHttpClientTransport::HandleResponse(const HttpResponse& response)
     if (isInitialization) {
         MayExtractSessionIdFromResponse(response);
         if (!sessionId_.empty()) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted session ID: %s", sessionId_.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted session ID: " + sessionId_);
         }
     }
 
@@ -285,7 +288,7 @@ void StreamableHttpClientTransport::HandleJsonResponse(const HttpResponse& respo
 void StreamableHttpClientTransport::HandleSseResponse(const HttpResponse& response, bool isInitialization)
 {
     if (response.statusCode != Http::HTTP_STATUS_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSE response error status %d", response.statusCode);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSE response error status " + std::to_string(response.statusCode));
         // Handle error response
         return;
     }
@@ -348,7 +351,7 @@ void StreamableHttpClientTransport::HandleSseEvent(const EventData& eventData, b
 {
     // Per MCP spec: Only process "message" events
     if (eventData.event != "message" && !eventData.event.empty()) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "Ignoring unknown SSE event type: %s", eventData.event.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "Ignoring unknown SSE event type: " + eventData.event);
         return;
     }
 
@@ -356,7 +359,7 @@ void StreamableHttpClientTransport::HandleSseEvent(const EventData& eventData, b
     if (isInitialization) {
         MayExtractProtocolVersionFromMessage(eventData.data);
         if (!protocolVersion_.empty()) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted protocol version: %s", protocolVersion_.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted protocol version: " + protocolVersion_);
         }
     }
 
@@ -373,7 +376,7 @@ void StreamableHttpClientTransport::HandleUnexpectedContentType(const HttpRespon
 {
     auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
     std::string contentType = contentTypeIter != response.headers.end() ? contentTypeIter->second : "<missing>";
-    MCP_LOG(MCP_LOG_LEVEL_ERROR, "Unexpected content type: %s", contentType.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "Unexpected content type: " + contentType);
 }
 
 void StreamableHttpClientTransport::MayExtractSessionIdFromResponse(const HttpResponse& response)

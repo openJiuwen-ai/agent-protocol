@@ -248,7 +248,7 @@ void StdioConnection::ProcessReceivedData()
     // Process received data to extract complete messages
     auto messages = ProcessReceivedMessages(readBuffer_);
     for (const auto& message : messages) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received complete message: %s", message.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received complete message: " + message);
         if (onMessageReceived_) {
             onMessageReceived_(message);
         }
@@ -272,7 +272,7 @@ ssize_t StdioConnection::Write(std::string message)
             } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             } else {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "write failed: %s", strerror(errno));
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "write failed: " + std::string(strerror(errno)));
                 return -1;
             }
         }
@@ -289,7 +289,7 @@ void StdioConnection::SendQueuedMessages()
 
     while (!writeQueue_.empty()) {
         const std::string& message = writeQueue_.front();
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Sending queued message: %s", message.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Sending queued message: " + message);
         // Apply message framing
         std::string framedMessage = FrameMessage(message);
         ssize_t bytesWritten = Write(framedMessage);
@@ -299,8 +299,8 @@ void StdioConnection::SendQueuedMessages()
                 // Partial write, adjust the message in the queue
                 std::string remaining = framedMessage.substr(bytesWritten);
                 writeQueue_.front() = remaining;
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "Partial write of message %s, %zu bytes remaining", message.c_str(),
-                        remaining.length());
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Partial write of message " + message + ", " +
+                    std::to_string(remaining.length()) + " bytes remaining");
                 break; // Exit to try again later
             } else {
                 writeQueue_.pop();
@@ -389,7 +389,7 @@ bool StdioConnection::StartSubprocess()
 
         // Execute command
         execvp(subprocessCommand_.c_str(), argv.data());
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to exec subprocess: %s", strerror(errno));
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to exec subprocess: " + std::string(strerror(errno)));
 
         // If we get here, exec failed
         exit(1);
@@ -406,7 +406,7 @@ bool StdioConnection::StartSubprocess()
         stdinFd_ = subprocessOutputPipe_[0];
         stdoutFd_ = subprocessInputPipe_[1];
 
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Subprocess started with PID: %d", subprocessPid_);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Subprocess started with PID: " + std::to_string(subprocessPid_));
         return true;
     }
 }
@@ -417,7 +417,7 @@ void StdioConnection::StopSubprocess()
         // Send SIGTERM to subprocess
         int ret = kill(subprocessPid_, SIGTERM);
         if (ret == -1) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to send SIGTERM to subprocess: %s", strerror(errno));
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to send SIGTERM to subprocess: " + std::string(strerror(errno)));
         }
 
         // Wait for process to terminate
@@ -449,7 +449,7 @@ void StdioConnection::StopSubprocess()
 
 void StdioConnection::NotifyError(const std::string& error)
 {
-    MCP_LOG(MCP_LOG_LEVEL_ERROR, "StdioConnection error: %s", error.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "StdioConnection error: " + error);
     if (onError_) {
         onError_(error);
     }
@@ -580,7 +580,7 @@ void StdioClientTransport::SendMessage(const JSONRPCMessage& message)
         GetMessageMethod(message);
         // Convert JSONRPCMessage to string for sending
         std::string data = SerializeJSONRPCMessage(message);
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioClientTransport sending message: %s", data.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioClientTransport sending message: " + data);
         connection_->SendMessage(data);
     } else {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Cannot send message: no connection available");
@@ -593,16 +593,18 @@ void StdioClientTransport::SetupConnectionCallbacks()
         // Set message received callback
         connection_->SetMessageReceivedCallback([this](const std::string& message) {
             try {
-                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioClientTransport received message: %s", message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioClientTransport received message: " + message);
                 JSONRPCMessage rpcMessage = DeserializeJSONRPCMessage(message, method_);
                 callback_->OnMessageReceived(rpcMessage, ctx_);
             } catch (const nlohmann::json::parse_error& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse JSON message: %s, Message: %s", e.what(),
-                        message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse JSON message: " +
+                        std::string(e.what()) + ", Message: " + message);
             } catch (const std::runtime_error& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid JSON-RPC message: %s, Message: %s", e.what(), message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid JSON-RPC message: " +
+                        std::string(e.what()) + ", Message: " + message);
             } catch (const std::exception& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error processing message: %s, Message: %s", e.what(), message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error processing message: " +
+                        std::string(e.what()) + ", Message: " + message);
             }
         });
 
@@ -667,7 +669,7 @@ void StdioServerTransport::Terminate()
 
     running_ = false;
     CleanupConnection();
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "ClientStdioTransport terminated");
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "ServerStdioTransport terminated");
 }
 
 void StdioServerTransport::GetMessageMethod(const JSONRPCMessage& message)
@@ -693,16 +695,18 @@ void StdioServerTransport::SetupConnectionCallbacks()
         // Set message received callback
         connection_->SetMessageReceivedCallback([this](const std::string& message) {
             try {
-                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioServerTransport received message: %s", message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioServerTransport received message: " + message);
                 JSONRPCMessage rpcMessage = DeserializeJSONRPCMessage(message, method_);
                 callback_->OnMessageReceived(rpcMessage, ctx_);
             } catch (const nlohmann::json::parse_error& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse JSON message: %s, Message: %s", e.what(),
-                        message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse JSON message: " +
+                        std::string(e.what()) + ", Message: " + message);
             } catch (const std::runtime_error& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid JSON-RPC message: %s, Message: %s", e.what(), message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid JSON-RPC message: " +
+                        std::string(e.what()) + ", Message: " + message);
             } catch (const std::exception& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error processing message: %s, Message: %s", e.what(), message.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error processing message: " +
+                        std::string(e.what()) + ", Message: " + message);
             }
         });
 
@@ -727,7 +731,7 @@ void StdioServerTransport::SendMessage(const JSONRPCMessage& message, const Requ
         GetMessageMethod(message);
         // Convert JSONRPCMessage to string for sending
         std::string data = SerializeJSONRPCMessage(message, ctx.method);
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioServerTransport sending message: %s", data.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioServerTransport sending message: " + data);
         connection_->SendMessage(data);
     } else {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Cannot send message: no connection available");

@@ -36,9 +36,9 @@ ServerManager::ServerManager(const ServerConfig& config) : config_(config) {}
 void ServerManager::ThreadMain(int id)
 {
     // Start EventSystem event loop
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Protocol thread %d started", id);
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Protocol thread " + std::to_string(id) + " started");
     eventSystems_[id]->Start(false); // Block current thread
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Protocol thread %d event loop ended", id);
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Protocol thread " + std::to_string(id) + " event loop ended");
 }
 
 ServerManager::~ServerManager()
@@ -77,7 +77,7 @@ void ServerManager::HttpServerManagerStart()
         // Parse host (required)
         host = matches[URL_REGEX_GROUP_HOST].str();
         if (host.empty()) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Host is required in endpoint: %s", endpoint.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Host is required in endpoint: " + endpoint);
             throw std::runtime_error("Host is required in endpoint: " + endpoint);
         }
 
@@ -85,14 +85,16 @@ void ServerManager::HttpServerManagerStart()
         try {
             int portInt = std::stoi(matches[URL_REGEX_GROUP_PORT].str());
             if (portInt < PORT_MIN || portInt > MAX_PORT_NUMBER) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Port must be between %d and %d in endpoint: %s", PORT_MIN,
-                    MAX_PORT_NUMBER, endpoint.c_str());
-                throw std::runtime_error("Port must be between " + std::to_string(PORT_MIN) + " and " +
-                    std::to_string(MAX_PORT_NUMBER) + " in endpoint: " + endpoint);
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Port must be between " + std::to_string(PORT_MIN) +
+                        " and " + std::to_string(MAX_PORT_NUMBER) +
+                        " in endpoint: " + endpoint);
+                throw std::runtime_error("Port must be between " + std::to_string(PORT_MIN) +
+                                        " and " + std::to_string(MAX_PORT_NUMBER) +
+                                        " in endpoint: " + endpoint);
             }
             port = static_cast<uint16_t>(portInt);
         } catch (const std::exception& e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse port from endpoint '%s': %s", endpoint.c_str(), e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse port from endpoint '" + endpoint + "': " + e.what());
             throw std::runtime_error("Failed to parse port from endpoint '" + endpoint + "': " + e.what());
         }
 
@@ -106,7 +108,8 @@ void ServerManager::HttpServerManagerStart()
         } else {
             uri = "/"; // Default URI when not specified
         }
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "Parsed endpoint - Host: %s, Port: %u, URI: %s", host.c_str(), port, uri.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Parsed endpoint - Host: " + host + ", Port: " +
+            std::to_string(port) + ", URI: " + uri);
     }
 
     // Configure HTTP server manager
@@ -125,7 +128,7 @@ void ServerManager::HttpServerManagerStart()
     try {
         httpServerManager_->Start();
     } catch (const std::exception& e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to start HTTP server manager: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to start HTTP server manager: " + std::string(e.what()));
         throw;
     }
     MCP_LOG(MCP_LOG_LEVEL_INFO, "HTTP server manager started successfully");
@@ -152,7 +155,7 @@ void ServerManager::Start()
 
     // Get the number of worker threads from config
     uint32_t numThreads = config_.workerThreads;
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Starting ServerManager with %u worker threads", numThreads);
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Starting ServerManager with " + std::to_string(numThreads) + " worker threads");
 
     // Reserve space for EventSystems, threads, and their session maps
     eventSystems_.reserve(numThreads);
@@ -168,7 +171,7 @@ void ServerManager::Start()
         auto eventSystem = std::make_unique<EventSystem>();
         if (!eventSystem->Init()) {
             // Handle initialization error
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to initialize EventSystem for thread %u", i);
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to initialize EventSystem for thread " + std::to_string(i));
             throw std::runtime_error("Failed to initialize EventSystem for thread " + std::to_string(i));
         }
 
@@ -187,7 +190,7 @@ void ServerManager::Start()
             notifyArg.get(), // arg - pointer stays valid since notifyArg is stored in notifyArgs_
             true);
         if (eventId == -1) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create event notification for thread %u", i);
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create event notification for thread " + std::to_string(i));
             throw std::runtime_error("Failed to create event notification for thread " + std::to_string(i));
         }
 
@@ -204,7 +207,8 @@ void ServerManager::Start()
     for (uint32_t i = 0; i < numThreads; ++i) {
         workerThreads_.emplace_back(&ServerManager::ThreadMain, this, i);
     }
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "ServerManager started successfully with %u worker threads", numThreads);
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "ServerManager started successfully with " +
+            std::to_string(numThreads) + " worker threads");
 }
 
 void ServerManager::StdioServerManagerStop()
@@ -307,9 +311,10 @@ int ServerManager::GetThreadIdForSession(const std::string& sessionId) const
 
 void ServerManager::HandleRequest(const HttpRequest& request, RequestContext& context)
 {
-    // Get the thread ID from context
+    // Dispatch the request to the appropriate thread
     int threadId = GetThreadIdForSession(context.sessionId);
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Handling request for session %s in thread %d", context.sessionId.c_str(), threadId);
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Handling request for session " + context.sessionId +
+            " in thread " + std::to_string(threadId));
 
     // Find session in the specific thread's session map
     std::shared_ptr<ServerSession> session = nullptr;
@@ -335,7 +340,7 @@ std::string ServerManager::GenerateSessionId() const
     std::uniform_int_distribution<> dis2(8, 11);
 
     std::stringstream ss;
-
+    
     for (int i = 0; i < 32; i++) {
         if (i == 8 || i == 12 || i == 16 || i == 20) {
             ss << "-";
@@ -361,8 +366,8 @@ void ServerManager::DispatchRequest(const HttpRequest& request, RequestContext& 
         context.sessionId = GenerateSessionId();
     }
 
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Get request from connection %u with session ID: %s", context.connectionId,
-            context.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Get request from connection " +
+                std::to_string(context.connectionId) + " with session ID: " + context.sessionId);
     int threadId = GetThreadIdForSession(context.sessionId);
 
     // Push message to the thread's queue
@@ -373,16 +378,16 @@ void ServerManager::DispatchRequest(const HttpRequest& request, RequestContext& 
         // Notify the worker thread via EventSystem
         if (eventSystems_[threadId] && threadQueueEventIds_[threadId] != -1) {
             if (eventSystems_[threadId]->NotifyEventId(threadQueueEventIds_[threadId])) {
-                MCP_LOG(MCP_LOG_LEVEL_INFO, "Dispatched request to thread %d for session %s", threadId,
-                        context.sessionId.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Dispatched request to thread " +
+                        std::to_string(threadId) + " for session " + context.sessionId);
             } else {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to notify thread %d for session %s", threadId,
-                        context.sessionId.c_str());
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to notify thread " +
+                        std::to_string(threadId) + " for session " + context.sessionId);
             }
         }
     } else {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to dispatch request to thread %d for session %s", threadId,
-                context.sessionId.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to dispatch request to thread " +
+                std::to_string(threadId) + " for session " + context.sessionId);
     }
 }
 
@@ -412,8 +417,8 @@ void ServerManager::HandleQueueNotification(int fd, short events, void* arg)
             // Handle the request
             HandleRequest(msg.request, msg.context);
         } catch (const std::exception& e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error handling request for session %s: %s", msg.context.sessionId.c_str(),
-                    e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error handling request for session " +
+                    msg.context.sessionId + ": " + e.what());
             ++errorCount;
         }
         ++processedCount;
@@ -421,16 +426,16 @@ void ServerManager::HandleQueueNotification(int fd, short events, void* arg)
 
     // Log statistics for monitoring
     if (processedCount > 0 || errorCount > 0) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Thread %d processed %zu messages (%zu errors) in batch", notifyEventArg->threadId,
-                processedCount, errorCount);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Thread " + std::to_string(notifyEventArg->threadId) + " processed " +
+            std::to_string(processedCount) + " messages (" +std::to_string(errorCount) + " errors) in batch");
     }
 
     // If we processed MAX_BATCH_SIZE messages and the queue is still not empty,
     // re-trigger the notification to continue processing in the next event loop iteration
     if (processedCount >= MAX_BATCH_SIZE && !queue->Empty()) {
         notifyEventArg->eventSystem->NotifyEventId(fd);
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Thread %d re-triggered notification for remaining messages",
-                notifyEventArg->threadId);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Thread " + std::to_string(notifyEventArg->threadId) +
+                " re-triggered notification for remaining messages");
     }
 }
 
