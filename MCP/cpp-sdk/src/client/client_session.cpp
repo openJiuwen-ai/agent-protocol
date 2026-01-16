@@ -158,12 +158,13 @@ std::future<std::shared_ptr<GetPromptResult>> ClientSession::GetPrompt(const std
     return future;
 }
 
-std::future<EmptyResult> ClientSession::SendPing()
+std::future<std::shared_ptr<EmptyResult>> ClientSession::SendPing()
 {
-    // Empty implementation
-    std::promise<EmptyResult> promise;
-    promise.set_value(EmptyResult{});
-    return promise.get_future();
+    auto promise = std::make_shared<std::promise<std::shared_ptr<EmptyResult>>>();
+    auto future = promise->get_future();
+    auto req = std::make_unique<PingRequest>();
+    SendRequest(std::move(req), MakeTypedCompletion<EmptyResult>(promise, "SendPing"));
+    return future;
 }
 
 void ClientSession::SendRootsListChanged()

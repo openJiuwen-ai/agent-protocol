@@ -41,7 +41,7 @@ public:
         const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt) override;
 
     void SendRootsListChanged() override;
-    std::future<EmptyResult> SendPing() override;
+    std::future<std::shared_ptr<EmptyResult>> SendPing() override;
 
     void SetClientCapabilities(const McpClientCapabilities& caps) override;
     ServerCapabilities GetServerCapabilities() override;

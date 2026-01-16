@@ -70,6 +70,10 @@ void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Reques
             HandleResourcesTemplatesList(requestId, request, ctx);
             return;
         }
+        if (method == "ping") {
+            HandlePing(requestId, request, ctx);
+            return;
+        }
 
         SendErrorResponse(requestId, JsonRpcErrorCode::METHOD_NOT_FOUND, "Method not found: " + method, ctx);
     } catch (const std::exception& e) {
@@ -132,6 +136,19 @@ void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& req
     }
 
     auto result = std::make_unique<ListPromptsResult>(promptManager_.ListPrompts());
+    session->SendResponse(requestId, std::move(result), ctx);
+}
+
+void McpServerImplement::HandlePing(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    (void)request;
+    auto session = serverManager_->GetSession(ctx.sessionId);
+    if (session == nullptr) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
+        return;
+    }
+
+    auto result = std::make_unique<EmptyResult>();
     session->SendResponse(requestId, std::move(result), ctx);
 }
 

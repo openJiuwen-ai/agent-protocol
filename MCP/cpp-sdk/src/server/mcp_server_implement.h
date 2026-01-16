@@ -59,6 +59,7 @@ private:
     void HandleToolsCall(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandlePromptsGet(int64_t requestId, const Request& request, RequestContext& ctx);
+    void HandlePing(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandleResourcesList(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandleResourcesRead(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandleResourcesSubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
