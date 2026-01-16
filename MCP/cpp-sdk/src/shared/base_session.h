@@ -36,9 +36,8 @@ public:
 
     void OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx) override;
 
-    void OnDisconnected(const std::string& reason) override
+    void OnDisconnected([[maybe_unused]] const std::string& reason) override
     {
-        (void)reason;
     }
 
 private:
@@ -92,7 +91,7 @@ public:
      * @param progressCallback Optional callback for progress notifications (defaults to nullopt).
      */
     void SendRequest(std::unique_ptr<Request> request, std::function<void(std::shared_ptr<Result>)> completion,
-                     std::optional<std::chrono::seconds> requestTimeout,
+                     [[maybe_unused]] std::optional<std::chrono::seconds> requestTimeout,
                      std::optional<ProgressCallback> progressCallback);
 
     // Convenience overload: only completion callback

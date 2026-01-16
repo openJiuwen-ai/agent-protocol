@@ -107,9 +107,7 @@ bool HttpClientService::Start()
 
     // Create stop notify event
     stopNotifyEventId_ = eventSystem_->CreateNotifyEventId(
-        [this](int fd, short events, void* arg) {
-            (void)events;
-            (void)arg;
+        [this](int fd, [[maybe_unused]] short events, [[maybe_unused]] void* arg) {
             // Clear the eventfd
             uint64_t value;
             while (eventSystem_->ReadEventFd(fd, value)) {
@@ -402,7 +400,7 @@ void HttpClientService::CheckMultiInfo()
 
 int HttpClientService::SocketCallback(CURL* easy, curl_socket_t sockfd, int action, void* userp, void* socketp)
 {
-    (void)easy;
+    [[maybe_unused]] CURL* unusedEasy = easy;
     auto* service = static_cast<HttpClientService*>(userp);
     // Allow socket operations in RUNNING and STOPPING states
     // (STOPPING allows active requests to finish)
@@ -466,7 +464,7 @@ int HttpClientService::SocketCallback(CURL* easy, curl_socket_t sockfd, int acti
 
 int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
 {
-    (void)multi;
+    [[maybe_unused]] CURLM* unusedMulti = multi;
     auto* service = static_cast<HttpClientService*>(userp);
     // Allow timer operations in RUNNING and STOPPING states
     auto currentState = service->state_.load(std::memory_order_acquire);
@@ -506,11 +504,8 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
     return 0;
 }
 
-void HttpClientService::OnTimeout(int fd, short events, void* arg)
+void HttpClientService::OnTimeout([[maybe_unused]] int fd, [[maybe_unused]] short events, [[maybe_unused]] void* arg)
 {
-    (void)fd;
-    (void)events;
-    (void)arg;
     auto currentState = state_.load(std::memory_order_acquire);
     if (currentState == ServiceState::STOPPED) {
         return;
