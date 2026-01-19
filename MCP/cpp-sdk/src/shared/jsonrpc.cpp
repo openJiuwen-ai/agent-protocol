@@ -628,6 +628,9 @@ struct adl_serializer<Mcp::CallToolResult> {
             j["structuredContent"] = r.structuredContent.value();
         }
         j["isError"] = r.isError;
+        if (r.meta.has_value()) {
+            j["_meta"] = r.meta.value();
+        }
     }
 
     static void from_json(const json& j, Mcp::CallToolResult& r)
@@ -641,6 +644,9 @@ struct adl_serializer<Mcp::CallToolResult> {
             r.structuredContent = j.at("structuredContent").get<std::string>();
         }
         r.isError = j.value("isError", false);
+        if (j.contains("_meta")) {
+            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        }
     }
 };
 
