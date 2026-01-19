@@ -9,7 +9,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "mcp_type.h"
+#include "mcp_server.h"
 #include "shared/jsonrpc.h"
 
 namespace Mcp {

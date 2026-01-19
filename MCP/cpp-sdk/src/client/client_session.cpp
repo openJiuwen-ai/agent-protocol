@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <nlohmann/json-schema.hpp>
 #include <thread>
 
 #include "mcp_log.h"
@@ -20,12 +21,12 @@ std::function<void(std::shared_ptr<Mcp::Result>)> MakeTypedCompletion(
 {
     return [promise, opName](std::shared_ptr<Mcp::Result> resultPtr) {
         try {
-            if (!resultPtr) {
+            if (resultPtr == nullptr) {
                 throw std::runtime_error(std::string(opName) + " failed: null result");
             }
 
             auto typed = std::dynamic_pointer_cast<T>(resultPtr);
-            if (!typed) {
+            if (typed == nullptr) {
                 throw std::runtime_error(std::string(opName) + " failed: result type mismatch");
             }
 
@@ -55,7 +56,7 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
     auto completion = [this, promise](std::shared_ptr<Result> resultPtr) {
         try {
             auto initPtr = std::dynamic_pointer_cast<InitializeResult>(resultPtr);
-            if (!initPtr) {
+            if (initPtr == nullptr) {
                 throw std::runtime_error("Result type mismatch: cannot cast to InitializeResult");
             }
             SendInitializedNotification();
@@ -80,7 +81,23 @@ std::future<std::shared_ptr<CallToolResult>> ClientSession::CallTool(const std::
     auto params = std::make_unique<CallToolParams>(name, arguments);
     auto req = std::make_unique<CallToolRequest>();
     req->params_ = std::move(params);
-    SendRequest(std::move(req), MakeTypedCompletion<CallToolResult>(promise, "CallTool"));
+
+    auto completion = [this, promise, name](std::shared_ptr<Result> resultPtr) {
+        try {
+            auto callToolPtr = std::dynamic_pointer_cast<CallToolResult>(resultPtr);
+            if (callToolPtr == nullptr) {
+                throw std::runtime_error("Result type mismatch: cannot cast to CallToolResult");
+            }
+            if (callToolPtr->isError == false && toolOutputSchemas_.find(name) != toolOutputSchemas_.end()) {
+                ValidateToolResult(name, *callToolPtr);
+            }
+            promise->set_value(callToolPtr);
+        } catch (...) {
+            promise->set_exception(std::current_exception());
+        }
+    };
+
+    SendRequest(std::move(req), completion);
 
     return future;
 }
@@ -90,7 +107,21 @@ std::future<std::shared_ptr<ListToolsResult>> ClientSession::ListTools()
     auto promise = std::make_shared<std::promise<std::shared_ptr<ListToolsResult>>>();
     auto future = promise->get_future();
     auto req = std::make_unique<ListToolsRequest>();
-    SendRequest(std::move(req), MakeTypedCompletion<ListToolsResult>(promise, "ListTools"));
+
+    auto completion = [this, promise](std::shared_ptr<Result> resultPtr) {
+        try {
+            auto listToolPtr = std::dynamic_pointer_cast<ListToolsResult>(resultPtr);
+            if (listToolPtr == nullptr) {
+                throw std::runtime_error("Result type mismatch: cannot cast to ListToolsResult");
+            }
+            CacheToolSchemas(*listToolPtr);
+            promise->set_value(listToolPtr);
+        } catch (...) {
+            promise->set_exception(std::current_exception());
+        }
+    };
+
+    SendRequest(std::move(req), completion);
 
     return future;
 }
@@ -133,6 +164,39 @@ void ClientSession::HandleRequest(const Mcp::JSONRPCRequest& request)
 // OnMessageReceived implementation
 void ClientSession::OnMessageReceived(const std::string& messageJson)
 {
+}
+
+void ClientSession::CacheToolSchemas(const ListToolsResult& r)
+{
+    for (const auto& tool : r.tools) {
+        if (tool.outputSchema.has_value()) {
+            auto schemaJson = nlohmann::json::parse(tool.outputSchema.value());
+            toolOutputSchemas_[tool.name] = schemaJson;
+        }
+    }
+}
+
+void ClientSession::ValidateToolResult(const std::string& name, const CallToolResult& result)
+{
+    if (result.structuredContent.has_value() == false) {
+        return;
+    }
+    auto it = toolOutputSchemas_.find(name);
+    if (it == toolOutputSchemas_.end()) {
+        return;
+    }
+
+    try {
+        nlohmann::json data = nlohmann::json::parse(result.structuredContent.value());
+        if (data.is_object() == false) {
+            throw std::runtime_error("structuredContent must be a JSON object");
+        }
+        nlohmann::json_schema::json_validator validator;
+        validator.set_root_schema(it->second);
+        validator.validate(data);
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Invalid structured content for tool ") + name + ": " + e.what());
+    }
 }
 
 std::future<std::shared_ptr<ListPromptsResult>> ClientSession::ListPrompts()

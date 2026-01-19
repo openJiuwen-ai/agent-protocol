@@ -176,11 +176,9 @@ using ContentType = std::variant<TextContent, ImageContent, AudioContent, Resour
 
 struct CallToolResult : public Result {
     std::vector<ContentType> content;
+    std::optional<std::string> structuredContent;
     bool isError = false;
 };
-
-using ToolFunc = std::function<CallToolResult(const std::string& name, const JsonValue& arguments,
-                                              const std::optional<JsonValue>& ctx)>;
 
 //Struct for list_tool result
 struct Tool {

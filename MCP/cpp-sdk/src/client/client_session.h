@@ -100,6 +100,15 @@ private:
 
     // Client configuration used to build initialize.clientInfo
     ClientConfig clientConfig_;
+
+    // Cache for tool output schemas
+    std::unordered_map<std::string, JsonValue> toolOutputSchemas_;
+
+    // Cache schemas from ListTools result
+    void CacheToolSchemas(const ListToolsResult& r);
+
+    // Validate tool result against cached output schema
+    void ValidateToolResult(const std::string& name, const CallToolResult& result);
 };
 
 } // namespace Mcp
