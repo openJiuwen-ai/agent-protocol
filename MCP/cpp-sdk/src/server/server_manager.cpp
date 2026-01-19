@@ -14,6 +14,7 @@
 
 #include "event/event_system.h"
 #include "mcp_log.h"
+#include "shared/thread_utils.h"
 #include "server/transport/streamable_http_server_transport.h"
 #include "transport/stdio_transport.h"
 
@@ -35,6 +36,8 @@ ServerManager::ServerManager(const ServerConfig& config) : config_(config) {}
 
 void ServerManager::ThreadMain(int id)
 {
+    // Set thread name
+    SetCurrentThreadName("MCP-Worker-" + std::to_string(id));
     // Start EventSystem event loop
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Protocol thread " + std::to_string(id) + " started");
     eventSystems_[id]->Start(false); // Block current thread
@@ -167,8 +170,8 @@ void ServerManager::Start()
 
     // Create EventSystems and queues for each thread BEFORE starting HTTP server
     for (uint32_t i = 0; i < numThreads; ++i) {
-        // Create EventSystem
-        auto eventSystem = std::make_unique<EventSystem>();
+        // Create EventSystem with index
+        auto eventSystem = std::make_unique<EventSystem>(true, i);
         if (!eventSystem->Init()) {
             // Handle initialization error
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to initialize EventSystem for thread " + std::to_string(i));

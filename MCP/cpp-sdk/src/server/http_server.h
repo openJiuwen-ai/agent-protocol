@@ -29,7 +29,8 @@ using RouteMap = std::unordered_map<std::string, HttpHandler>;
 class HttpServer {
 public:
     HttpServer();
-    explicit HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes);
+    explicit HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes,
+        size_t ioThreadIndex = 0);
 
     void Run();
 
@@ -82,6 +83,7 @@ private:
     uint16_t port_{0};
     TlsConfig tlsConfig_;
     SSL_CTX* sslContext_{nullptr};
+    size_t ioThreadIndex_{0};  // Index for naming IO threads
 };
 
 } // namespace Mcp::Http

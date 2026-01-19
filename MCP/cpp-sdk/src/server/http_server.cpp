@@ -22,6 +22,7 @@ extern "C" {
 
 #include "mcp_log.h"
 #include "shared/http_common.h"
+#include "shared/thread_utils.h"
 
 #define HTTP_TASK_QUEUE_CAPACITY 1024
 #define HTTP_TASK_QUEUE_BATCH_SIZE 64
@@ -106,13 +107,15 @@ int HandleMessageCompleteCallback(http_parser* parser)
 
 } // namespace
 
-HttpServer::HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes)
-    : eventSystem_(),
+HttpServer::HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes,
+    size_t ioThreadIndex)
+    : eventSystem_(true, ioThreadIndex),
       listener_(std::make_unique<Mcp::Net::TcpListener>(eventSystem_)),
       routes_(routes),
       host_(host),
       port_(port),
-      tlsConfig_(tlsConfig)
+      tlsConfig_(tlsConfig),
+      ioThreadIndex_(ioThreadIndex)
 {
 }
 
@@ -183,6 +186,7 @@ void HttpServer::Run()
     }
 
     eventThread_ = std::thread([this]() {
+        Mcp::SetCurrentThreadName("MCP-IO-" + std::to_string(ioThreadIndex_));
         eventSystem_.Start(false);
         running_ = false;
     });

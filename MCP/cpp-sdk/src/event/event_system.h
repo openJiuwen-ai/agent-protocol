@@ -65,7 +65,7 @@ using EventCallback = std::function<void(int fd, short events, void* arg)>;
      */
 class EventSystem {
 public:
-    explicit EventSystem(bool enableThreadSupport = true);
+    explicit EventSystem(bool enableThreadSupport = true, int eventThreadIndex = 0);
     ~EventSystem();
 
     // Non-copyable, non-movable
@@ -165,6 +165,7 @@ private:
     std::mutex mutex_;
     std::atomic<bool> running_{false};
     struct event_base* event_base_{nullptr};
+    int eventThreadIndex_{0};
 };
 
 } // namespace Mcp

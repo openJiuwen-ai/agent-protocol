@@ -13,6 +13,7 @@
 
 #include "event_system.h"
 #include "mcp_log.h"
+#include "shared/thread_utils.h"
 
 namespace Mcp {
 namespace Http {
@@ -24,8 +25,9 @@ constexpr int DEFAULT_QUEUE_CAPACITY = 1024;
 constexpr int DEFAULT_QUEUE_MAX_BATCH_SIZE = 16;
 
 // Constructor and destructor
-HttpClientService::HttpClientService(const HttpClientServiceConfig& config)
-    : config_(config), requestQueue_(DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_MAX_BATCH_SIZE) {}
+HttpClientService::HttpClientService(const HttpClientServiceConfig& config, size_t ioThreadIndex)
+    : config_(config), requestQueue_(DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_MAX_BATCH_SIZE),
+    ioThreadIndex_(ioThreadIndex) {}
 
 HttpClientService::~HttpClientService()
 {
@@ -64,7 +66,7 @@ bool HttpClientService::Start()
 
     // Initialize EventSystem
     try {
-        eventSystem_ = std::make_unique<EventSystem>(true);
+        eventSystem_ = std::make_unique<EventSystem>(true, static_cast<int>(ioThreadIndex_));
         if (!eventSystem_->Init()) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to initialize EventSystem");
             curl_multi_cleanup(multiHandle_);
@@ -208,6 +210,7 @@ void HttpClientService::Send(const HttpRequest& request, void* userData, int tim
 
 void HttpClientService::IoThreadMain()
 {
+    SetCurrentThreadName("MCP-IO-" + std::to_string(ioThreadIndex_));
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Starting EventSystem event loop...");
     eventSystem_->Start(false); // Block current thread
     MCP_LOG(MCP_LOG_LEVEL_INFO, "I/O thread event loop ended");
@@ -778,9 +781,10 @@ void HttpClientService::CancelAllActiveRequests()
 }
 
 // Factory method implementation
-std::unique_ptr<HttpClientService> HttpClientServiceFactory::Create(const HttpClientServiceConfig& config)
+std::unique_ptr<HttpClientService> HttpClientServiceFactory::Create(const HttpClientServiceConfig& config,
+    size_t ioThreadIndex)
 {
-    return std::make_unique<HttpClientService>(config);
+    return std::make_unique<HttpClientService>(config, ioThreadIndex);
 }
 
 } // namespace Http

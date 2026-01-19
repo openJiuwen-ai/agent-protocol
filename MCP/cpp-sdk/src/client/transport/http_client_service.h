@@ -122,7 +122,7 @@ struct CurlSocketContext {
  */
 class HttpClientService {
 public:
-    explicit HttpClientService(const HttpClientServiceConfig& config);
+    explicit HttpClientService(const HttpClientServiceConfig& config, size_t ioThreadIndex = 0);
     ~HttpClientService();
 
     /**
@@ -171,6 +171,7 @@ private:
     int timerEventId_{-1}; // Timer event ID
     int stopNotifyEventId_{-1}; // Event ID for stopping the service
     std::thread ioThread_; // I/O thread for event processing
+    size_t ioThreadIndex_{0};  // Index for naming IO threads
 
     /**
      * @brief Main I/O thread function for event-driven HTTP processing
@@ -327,9 +328,10 @@ public:
     /**
      * @brief Create HTTP client service instance
      * @param config Service configuration
+     * @param ioThreadIndex Index for naming IO threads (default 0)
      * @return Unique pointer to created service
      */
-    static std::unique_ptr<HttpClientService> Create(const HttpClientServiceConfig& config);
+    static std::unique_ptr<HttpClientService> Create(const HttpClientServiceConfig& config, size_t ioThreadIndex = 0);
 };
 
 } // namespace Http

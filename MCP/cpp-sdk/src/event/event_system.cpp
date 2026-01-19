@@ -18,6 +18,7 @@
 #include <unordered_map>
 
 #include "mcp_log.h"
+#include "shared/thread_utils.h"
 
 namespace Mcp {
 
@@ -135,7 +136,8 @@ struct EventSystem::Impl {
     std::thread eventThread;
 };
 
-EventSystem::EventSystem(bool enableThreadSupport) : impl_(std::make_unique<Impl>(enableThreadSupport))
+EventSystem::EventSystem(bool enableThreadSupport, int eventThreadIndex)
+    : impl_(std::make_unique<Impl>(enableThreadSupport)), eventThreadIndex_(eventThreadIndex)
 {
 }
 
@@ -383,6 +385,7 @@ void EventSystem::Start(bool run_in_background)
         }
 
         impl_->eventThread = std::thread([this]() {
+            SetCurrentThreadName("MCP-Event-" + std::to_string(eventThreadIndex_));
             event_base_dispatch(event_base_);
             running_.store(false);
         });
