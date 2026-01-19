@@ -1259,6 +1259,11 @@ ListResourceTemplatesRequest::ListResourceTemplatesRequest()
     method_ = "resources/templates/list";
 }
 
+PingRequest::PingRequest()
+{
+    method_ = "ping";
+}
+
 std::string JSONRPCRequest::Serialize() const
 {
     json j;
@@ -1315,6 +1320,8 @@ std::string JSONRPCRequest::Serialize() const
         if (listReq != nullptr) {
             j["params"] = *listReq;
         }
+    } else if (request_ != nullptr && request_->method_ == "ping") {
+        // ping has no params
     }
 
     return j.dump();
@@ -1375,6 +1382,10 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr)
     } else if (method_ == "resources/templates/list") {
         ListResourceTemplatesRequest listReq = j.get<ListResourceTemplatesRequest>();
         auto reqPtr = std::make_unique<ListResourceTemplatesRequest>(std::move(listReq));
+        request_ = std::move(reqPtr);
+    } else if (method_ == "ping") {
+        auto reqPtr = std::make_unique<PingRequest>();
+        reqPtr->method_ = method_;
         request_ = std::move(reqPtr);
     }
 
@@ -1437,6 +1448,12 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
             }
             j["result"] = *listTemplateResult;
         } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
+            auto* emptyResult = dynamic_cast<const EmptyResult*>(result_.get());
+            if (emptyResult == nullptr) {
+                throw std::runtime_error("Failed to cast result to EmptyResult");
+            }
+            j["result"] = json::object();
+        } else if (method == "ping") {
             auto* emptyResult = dynamic_cast<const EmptyResult*>(result_.get());
             if (emptyResult == nullptr) {
                 throw std::runtime_error("Failed to cast result to EmptyResult");
@@ -1507,6 +1524,8 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
         }
         result_ = std::move(p);
     } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
+        result_ = std::make_shared<EmptyResult>();
+    } else if (method == "ping") {
         result_ = std::make_shared<EmptyResult>();
     }
 

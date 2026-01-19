@@ -216,6 +216,11 @@ struct ListResourceTemplatesRequest : public Request {
     ListResourceTemplatesRequest();
 };
 
+// ping
+struct PingRequest : public Request {
+    PingRequest();
+};
+
 } // namespace Mcp
 
 #endif // MCP_JSONRPC_INCLUDE_H_

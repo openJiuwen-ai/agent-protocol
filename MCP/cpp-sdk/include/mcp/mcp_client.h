@@ -123,6 +123,17 @@ public:
         const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt) = 0;
 
     /**
+     * @brief Send a ping to the server to check connectivity.
+     *
+     * Sends a ping message and waits for the response to verify the client/server link.
+     * Returns an empty result object on success.
+     *
+     * @return A future to a shared pointer of EmptyResult indicating the ping outcome.
+     * @throw std::runtime_error If the client is not initialized.
+     */
+    virtual std::future<std::shared_ptr<EmptyResult>> SendPing() = 0;
+
+    /**
      * @brief Notify the server that the list of root resources has changed.
      *
      * Sends a notification to the server indicating that the set of root resources has been updated.
@@ -130,15 +141,6 @@ public:
      * @throw std::runtime_error If the client is not initialized.
      */
     virtual void SendRootsListChanged() = 0;
-    /**
-     * @brief Send a ping to the server to check connectivity.
-     *
-     * Sends a ping message to the server and waits for a response to verify connectivity.
-     *
-     * @return A future to an EmptyResult indicating the outcome of the ping.
-     * @throw std::runtime_error If the client is not initialized.
-     */
-    virtual std::future<EmptyResult> SendPing() = 0;
 
     /**
      * @brief Set the capabilities supported by the client.

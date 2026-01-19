@@ -404,6 +404,29 @@ TEST_F(McpIntegrationTest, ClientInitialization)
     }
 }
 
+// 测试Ping
+TEST_F(McpIntegrationTest, SendPing)
+{
+    auto client = CreateTestClient();
+    ASSERT_NE(client, nullptr);
+
+    auto initFuture = client->Initialize();
+    auto initStatus = initFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
+    ASSERT_EQ(initStatus, std::future_status::ready);
+    ASSERT_NO_THROW(initFuture.get());
+
+    auto pingFuture = client->SendPing();
+    auto status = pingFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
+    ASSERT_EQ(status, std::future_status::ready);
+
+    try {
+        auto pingResult = pingFuture.get();
+        ASSERT_NE(pingResult, nullptr);
+    } catch (const std::exception &e) {
+        FAIL() << "SendPing failed with exception: " << e.what();
+    }
+}
+
 // 测试列出工具
 TEST_F(McpIntegrationTest, ListTools)
 {

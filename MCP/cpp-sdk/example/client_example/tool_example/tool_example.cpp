@@ -48,6 +48,22 @@ int main()
         return -1;
     }
 
+    // Example 1.5: Ping
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example Ping ===");
+    try {
+        auto pingFuture = mcpClient->SendPing();
+        if (pingFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Ping timeout");
+            return -1;
+        }
+        auto pingResult = pingFuture.get();
+        (void)pingResult; // EmptyResult
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Ping success");
+    } catch (const std::exception &e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Ping failed: ") + e.what());
+        return -1;
+    }
+
     // Example 2: List tools
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListTools ===");
     try {

@@ -34,7 +34,7 @@ public:
     std::future<std::shared_ptr<InitializeResult>> Initialize();
 
     // Send a ping request and wait for a response
-    std::future<EmptyResult> SendPing();
+    std::future<std::shared_ptr<EmptyResult>> SendPing();
 
     // Send a roots list changed notification
     void SendRootsListChanged();

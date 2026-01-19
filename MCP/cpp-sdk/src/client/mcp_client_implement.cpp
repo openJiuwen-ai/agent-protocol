@@ -98,7 +98,7 @@ void McpClientImplement::SendRootsListChanged()
     session_->SendRootsListChanged();
 }
 
-std::future<EmptyResult> McpClientImplement::SendPing()
+std::future<std::shared_ptr<EmptyResult>> McpClientImplement::SendPing()
 {
     CheckInitialized();
     return session_->SendPing();
