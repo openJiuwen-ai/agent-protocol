@@ -81,6 +81,10 @@ public:
         return initialized_;
     }
 
+    // Get the capabilities advertised by the connected server.
+    // Populated when the client receives the InitializeResult.
+    ServerCapabilities GetServerCapabilities() const;
+
     // Send notifications/initialized after successful initialize handshake
     void SendInitializedNotification();
 
@@ -107,6 +111,9 @@ private:
 
     // Indicates whether initialize has succeeded
     bool initialized_{false};
+
+    // Capabilities advertised by the server during the MCP handshake.
+    std::optional<ServerCapabilities> serverCapabilities_{std::nullopt};
 
     // If set, the client supports roots/list. Used to decide whether to advertise
     // ClientCapabilities.roots in the initialize request.

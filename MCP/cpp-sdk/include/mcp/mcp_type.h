@@ -61,10 +61,34 @@ struct ClientConfig {
     std::string version{DEFAULT_VERSION};
 };
 
+struct LoggingCapabilities {};
+
+struct PromptsCapabilities {
+    std::optional<bool> listChanged;
+};
+
+struct ResourcesCapabilities {
+    std::optional<bool> subscribe;
+    std::optional<bool> listChanged;
+};
+
+struct ToolsCapabilities {
+    std::optional<bool> listChanged;
+};
+
+struct ServerCapabilities {
+    std::optional<std::unordered_map<std::string, JsonValue>> experimental;
+    std::optional<LoggingCapabilities> logging;
+    std::optional<PromptsCapabilities> prompts;
+    std::optional<ResourcesCapabilities> resources;
+    std::optional<ToolsCapabilities> tools;
+};
+
 struct ServerConfig {
     std::string name = DEFAULT_SERVER_NAME;
     std::string version = DEFAULT_VERSION;
     uint32_t workerThreads{1};
+    ServerCapabilities capabilities{};
 };
 
 struct MCPBaseType {
@@ -247,29 +271,6 @@ struct Implementation {
     std::string version;
     std::optional<std::string> websiteUrl;
     std::optional<std::vector<Icon>> icons;
-};
-
-struct LoggingCapabilities {};
-
-struct PromptsCapabilities {
-    std::optional<bool> listChanged;
-};
-
-struct ResourcesCapabilities {
-    std::optional<bool> subscribe;
-    std::optional<bool> listChanged;
-};
-
-struct ToolsCapabilities {
-    std::optional<bool> listChanged;
-};
-
-struct ServerCapabilities {
-    std::optional<std::unordered_map<std::string, JsonValue>> experimental;
-    std::optional<LoggingCapabilities> logging;
-    std::optional<PromptsCapabilities> prompts;
-    std::optional<ResourcesCapabilities> resources;
-    std::optional<ToolsCapabilities> tools;
 };
 
 struct InitializeResult : public Result {

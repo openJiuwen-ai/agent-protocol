@@ -107,7 +107,10 @@ std::future<EmptyResult> McpClientImplement::SendPing()
 ServerCapabilities McpClientImplement::GetServerCapabilities()
 {
     CheckInitialized();
-    throw std::runtime_error("GetServerCapabilities is not implemented.");
+    if (session_ == nullptr) {
+        throw std::runtime_error("client session is not created.");
+    }
+    return session_->GetServerCapabilities();
 }
 
 std::future<void> McpClientImplement::SendProgressNotification(std::string progressToken, float progress, float total,

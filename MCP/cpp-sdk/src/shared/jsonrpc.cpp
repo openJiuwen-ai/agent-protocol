@@ -150,11 +150,130 @@ struct adl_serializer<Mcp::InitializeRequestParams> {
 };
 
 template <>
+struct adl_serializer<Mcp::PromptsCapabilities> {
+    static void to_json(json& j, const Mcp::PromptsCapabilities& c)
+    {
+        j = json::object();
+        if (c.listChanged.has_value()) {
+            j["listChanged"] = c.listChanged.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::PromptsCapabilities& c)
+    {
+        if (j.contains("listChanged")) {
+            c.listChanged = j.at("listChanged").get<bool>();
+        } else {
+            c.listChanged.reset();
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ResourcesCapabilities> {
+    static void to_json(json& j, const Mcp::ResourcesCapabilities& c)
+    {
+        j = json::object();
+        if (c.subscribe.has_value()) {
+            j["subscribe"] = c.subscribe.value();
+        }
+        if (c.listChanged.has_value()) {
+            j["listChanged"] = c.listChanged.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ResourcesCapabilities& c)
+    {
+        if (j.contains("subscribe")) {
+            c.subscribe = j.at("subscribe").get<bool>();
+        } else {
+            c.subscribe.reset();
+        }
+
+        if (j.contains("listChanged")) {
+            c.listChanged = j.at("listChanged").get<bool>();
+        } else {
+            c.listChanged.reset();
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ToolsCapabilities> {
+    static void to_json(json& j, const Mcp::ToolsCapabilities& c)
+    {
+        j = json::object();
+        if (c.listChanged.has_value()) {
+            j["listChanged"] = c.listChanged.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ToolsCapabilities& c)
+    {
+        if (j.contains("listChanged")) {
+            c.listChanged = j.at("listChanged").get<bool>();
+        } else {
+            c.listChanged.reset();
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ServerCapabilities> {
+    static void to_json(json& j, const Mcp::ServerCapabilities& c)
+    {
+        j = json::object();
+
+        if (c.logging.has_value()) {
+            j["logging"] = json::object();
+        }
+        if (c.prompts.has_value()) {
+            j["prompts"] = c.prompts.value();
+        }
+        if (c.resources.has_value()) {
+            j["resources"] = c.resources.value();
+        }
+        if (c.tools.has_value()) {
+            j["tools"] = c.tools.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ServerCapabilities& c)
+    {
+        c.experimental.reset();
+
+        if (j.contains("logging")) {
+            c.logging = Mcp::LoggingCapabilities{};
+        } else {
+            c.logging.reset();
+        }
+
+        if (j.contains("prompts")) {
+            c.prompts = j.at("prompts").get<Mcp::PromptsCapabilities>();
+        } else {
+            c.prompts.reset();
+        }
+
+        if (j.contains("resources")) {
+            c.resources = j.at("resources").get<Mcp::ResourcesCapabilities>();
+        } else {
+            c.resources.reset();
+        }
+
+        if (j.contains("tools")) {
+            c.tools = j.at("tools").get<Mcp::ToolsCapabilities>();
+        } else {
+            c.tools.reset();
+        }
+    }
+};
+
+template <>
 struct adl_serializer<Mcp::InitializeResult> {
     static void to_json(json& j, const Mcp::InitializeResult& r)
     {
         j["protocolVersion"] = r.protocolVersion;
-        j["capabilities"] = json::object();
+        j["capabilities"] = r.capabilities;
         j["serverInfo"] = {
             {"name", r.serverInfo.name},
             {"version", r.serverInfo.version},
@@ -174,7 +293,11 @@ struct adl_serializer<Mcp::InitializeResult> {
         } else {
             r.protocolVersion = Mcp::DEFAULT_PROTOCOL_VERSION;
         }
-        r.capabilities = Mcp::ServerCapabilities{};
+        if (j.contains("capabilities")) {
+            j.at("capabilities").get_to(r.capabilities);
+        } else {
+            r.capabilities = Mcp::ServerCapabilities{};
+        }
         if (j.contains("serverInfo")) {
             const auto& si = j.at("serverInfo");
             r.serverInfo.name = si.value("name", std::string{});

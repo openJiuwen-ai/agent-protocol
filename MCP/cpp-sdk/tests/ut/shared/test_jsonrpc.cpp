@@ -21,6 +21,10 @@ using Mcp::DeserializeJSONRPCMessage;
 using Mcp::SerializeJSONRPCMessage;
 using Mcp::ClientCapabilities;
 using Mcp::ServerCapabilities;
+using Mcp::SamplingCapability;
+using Mcp::ElicitationCapability;
+using Mcp::RootsCapability;
+using Mcp::ClientTasksCapability;
 using Mcp::Implementation;
 using Mcp::ListPromptsRequest;
 using Mcp::ListPromptsResult;
@@ -62,6 +66,10 @@ using Mcp::CallToolParams;
 using Mcp::Tool;
 using Mcp::Root;
 using Mcp::ListRootsResult;
+using Mcp::PromptsCapabilities;
+using Mcp::ResourcesCapabilities;
+using Mcp::ToolsCapabilities;
+using Mcp::ServerCapabilities;
 using nlohmann::json;
 
 constexpr const char* PROTOCOL_VERSION = "2025-03-26";
@@ -141,6 +149,90 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestWithStringIdSuccess) {
     EXPECT_EQ(REQUEST_ID, req2.id_);
 }
 
+TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationInitializeIncludesClientCapabilities)
+{
+    ClientCapabilities caps;
+    caps.sampling = SamplingCapability{};
+    caps.elicitation = ElicitationCapability{};
+    caps.tasks = ClientTasksCapability{};
+    RootsCapability roots;
+    roots.listChanged = true;
+    caps.roots = roots;
+
+    JSONRPCRequest req;
+    req.id_ = REQUEST_ID;
+    req.method_ = METHOD_NAME;
+    req.request_ = std::make_unique<InitializeRequest>(CLIENT_NAME, CLIENT_VERSION, caps);
+
+    auto* initReq = dynamic_cast<InitializeRequest*>(req.request_.get());
+    ASSERT_NE(nullptr, initReq);
+    ASSERT_NE(nullptr, initReq->params_);
+    auto* params = dynamic_cast<InitializeRequestParams*>(initReq->params_.get());
+    ASSERT_NE(nullptr, params);
+    params->protocolVersion_ = PROTOCOL_VERSION;
+
+    std::string serialized = req.Serialize(METHOD_NAME);
+    auto j = json::parse(serialized);
+
+    ASSERT_TRUE(j.contains("params"));
+    const auto& p = j.at("params");
+    ASSERT_TRUE(p.contains("capabilities"));
+    const auto& capJson = p.at("capabilities");
+
+    ASSERT_TRUE(capJson.contains("sampling"));
+    EXPECT_TRUE(capJson.at("sampling").is_object());
+    ASSERT_TRUE(capJson.contains("elicitation"));
+    EXPECT_TRUE(capJson.at("elicitation").is_object());
+    ASSERT_TRUE(capJson.contains("tasks"));
+    EXPECT_TRUE(capJson.at("tasks").is_object());
+
+    ASSERT_TRUE(capJson.contains("roots"));
+    EXPECT_TRUE(capJson.at("roots").is_object());
+    EXPECT_TRUE(capJson.at("roots").at("listChanged").get<bool>());
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCRequestDeserializationInitializeParsesClientCapabilities)
+{
+    std::string jsonStr = R"({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {
+                "sampling": {},
+                "elicitation": {},
+                "tasks": {},
+                "roots": {"listChanged": true}
+            },
+            "clientInfo": {"name": "TestClient", "version": "1.0.0"}
+        }
+    })";
+
+    JSONRPCRequest req;
+    int rc = req.Deserialize(jsonStr, METHOD_NAME);
+
+    EXPECT_EQ(0, rc);
+    EXPECT_EQ(JSONRPC_VERSION, req.jsonrpc_);
+    EXPECT_EQ(REQUEST_ID, req.id_);
+    EXPECT_EQ(METHOD_NAME, req.method_);
+    ASSERT_NE(nullptr, req.request_);
+
+    auto* initReq = dynamic_cast<InitializeRequest*>(req.request_.get());
+    ASSERT_NE(nullptr, initReq);
+    ASSERT_NE(nullptr, initReq->params_);
+
+    auto* params = dynamic_cast<InitializeRequestParams*>(initReq->params_.get());
+    ASSERT_NE(nullptr, params);
+    EXPECT_EQ(std::string{PROTOCOL_VERSION}, params->protocolVersion_);
+
+    EXPECT_TRUE(params->capabilities_.sampling.has_value());
+    EXPECT_TRUE(params->capabilities_.elicitation.has_value());
+    EXPECT_TRUE(params->capabilities_.tasks.has_value());
+    ASSERT_TRUE(params->capabilities_.roots.has_value());
+    EXPECT_TRUE(params->capabilities_.roots->listChanged);
+}
+
 // ---------------------------------------------------------------------
 // InitializeRequest
 // ---------------------------------------------------------------------
@@ -186,6 +278,88 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationSuccess) {
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, resp2.jsonrpc_);
     EXPECT_EQ(REQUEST_ID, resp2.id_);
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationInitializeIncludesServerCapabilities)
+{
+    JSONRPCResponse resp;
+    resp.id_ = REQUEST_ID;
+
+    ServerCapabilities caps;
+    PromptsCapabilities prompts;
+    prompts.listChanged = true;
+    caps.prompts = prompts;
+    ResourcesCapabilities resources;
+    resources.subscribe = false;
+    resources.listChanged = false;
+    caps.resources = resources;
+    ToolsCapabilities tools;
+    tools.listChanged = true;
+    caps.tools = tools;
+
+    Implementation serverInfo;
+    serverInfo.name = SERVER_NAME;
+    serverInfo.version = SERVER_VERSION;
+
+    auto init = std::make_shared<InitializeResult>(std::string{PROTOCOL_VERSION}, caps, serverInfo);
+    resp.result_ = init;
+
+    std::string serialized = resp.Serialize(METHOD_NAME);
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(REQUEST_ID, j.at("id").get<int>());
+    ASSERT_TRUE(j.contains("result"));
+    const auto& result = j.at("result");
+    ASSERT_TRUE(result.contains("capabilities"));
+
+    const auto& capJson = result.at("capabilities");
+    ASSERT_TRUE(capJson.contains("prompts"));
+    EXPECT_TRUE(capJson.at("prompts").at("listChanged").get<bool>());
+    ASSERT_TRUE(capJson.contains("resources"));
+    EXPECT_FALSE(capJson.at("resources").at("subscribe").get<bool>());
+    EXPECT_FALSE(capJson.at("resources").at("listChanged").get<bool>());
+    ASSERT_TRUE(capJson.contains("tools"));
+    EXPECT_TRUE(capJson.at("tools").at("listChanged").get<bool>());
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCResponseDeserializationInitializeParsesServerCapabilities)
+{
+    std::string jsonStr = R"({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {
+                "prompts": {"listChanged": true},
+                "resources": {"subscribe": false, "listChanged": false},
+                "tools": {"listChanged": true}
+            },
+            "serverInfo": {"name": "TestServer", "version": "2.0.0"}
+        }
+    })";
+
+    JSONRPCResponse resp;
+    int rc = resp.Deserialize(jsonStr, METHOD_NAME);
+    EXPECT_EQ(0, rc);
+    ASSERT_NE(nullptr, resp.result_);
+
+    auto* initResult = dynamic_cast<InitializeResult*>(resp.result_.get());
+    ASSERT_NE(nullptr, initResult);
+
+    ASSERT_TRUE(initResult->capabilities.prompts.has_value());
+    ASSERT_TRUE(initResult->capabilities.prompts->listChanged.has_value());
+    EXPECT_TRUE(initResult->capabilities.prompts->listChanged.value());
+
+    ASSERT_TRUE(initResult->capabilities.resources.has_value());
+    ASSERT_TRUE(initResult->capabilities.resources->subscribe.has_value());
+    EXPECT_FALSE(initResult->capabilities.resources->subscribe.value());
+    ASSERT_TRUE(initResult->capabilities.resources->listChanged.has_value());
+    EXPECT_FALSE(initResult->capabilities.resources->listChanged.value());
+
+    ASSERT_TRUE(initResult->capabilities.tools.has_value());
+    ASSERT_TRUE(initResult->capabilities.tools->listChanged.has_value());
+    EXPECT_TRUE(initResult->capabilities.tools->listChanged.value());
 }
 
 // ---------------------------------------------------------------------
