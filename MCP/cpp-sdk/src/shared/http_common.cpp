@@ -68,7 +68,7 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     }
 
     std::size_t contentLength = 0;
-    auto contentLengthIterator = headers.find("Content-Length");
+    auto contentLengthIterator = headers.find(CONTENT_LENGTH_HEADER);
     if (contentLengthIterator != headers.end()) {
         try {
             contentLength = static_cast<std::size_t>(std::stoul(contentLengthIterator->second));

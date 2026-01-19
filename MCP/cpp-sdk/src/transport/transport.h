@@ -87,7 +87,7 @@ public:
      * @brief Send a JSON-RPC message through the transport.
      * @param message JSON-RPC message to send.
      */
-    virtual void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) = 0;
+    virtual void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) = 0;
 
     /**
      * @brief Set callback interface for handling transport events.

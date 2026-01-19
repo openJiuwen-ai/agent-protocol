@@ -51,6 +51,7 @@ private:
         BIO* rbio{nullptr};
         BIO* wbio{nullptr};
         bool handshaked{false};
+        bool sseChunked{false};
     };
 
     void HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection);
@@ -60,6 +61,7 @@ private:
 
     void HandleRequest(int fileDescriptor, ConnectionContext& context);
     std::string BuildHttpResponse(const HttpResponse& response) const;
+    std::string BuildchunkedResponse(const HttpResponse& response, bool& chunkedEnabled) const;
     bool SendRawResponse(int fileDescriptor, const std::string& response);
     void CleanupConnection(int fileDescriptor);
 
