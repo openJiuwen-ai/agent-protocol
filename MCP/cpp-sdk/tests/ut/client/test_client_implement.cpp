@@ -124,7 +124,6 @@ TEST_F(McpClientImplementTest, CallMethodBeforeInitialize) {
     EXPECT_THROW(client_->GetPrompt("test"), std::runtime_error);
     EXPECT_THROW(client_->SendRootsListChanged(), std::runtime_error);
     EXPECT_THROW(client_->SendPing(), std::runtime_error);
-    EXPECT_THROW(client_->SetClientCapabilities({}), std::runtime_error);
     EXPECT_THROW(client_->GetServerCapabilities(), std::runtime_error);
 
     // 这些方法可能还未完全实现，但应该会抛出未初始化异常
@@ -295,22 +294,6 @@ TEST_F(McpClientImplementTest, SendRootsListChangedAfterInitialize) {
 
     // 这个方法应该不会抛出异常
     EXPECT_NO_THROW(client_->SendRootsListChanged());
-}
-
-// 测试SetClientCapabilities方法（目前可能未完全实现）
-TEST_F(McpClientImplementTest, SetClientCapabilitiesAfterInitialize) {
-    client_ = std::make_unique<McpClientImplement>(config_, transport);
-    ASSERT_NE(client_, nullptr);
-
-    // 先初始化
-    EXPECT_NO_THROW({
-        auto initFuture = client_->Initialize();
-        EXPECT_TRUE(initFuture.valid());
-    });
-
-    McpClientCapabilities caps;
-    // 目前这个方法可能只是检查初始化状态，不执行其他操作
-    EXPECT_NO_THROW(client_->SetClientCapabilities(caps));
 }
 
 // 测试重复调用方法

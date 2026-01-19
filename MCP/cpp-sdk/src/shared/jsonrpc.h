@@ -132,7 +132,8 @@ struct InitializeRequestParams : public RequestParams {
 
 struct InitializeRequest : public Request {
     InitializeRequest();
-    InitializeRequest(const std::string& clientName, const std::string& clientVersion);
+    InitializeRequest(const std::string& clientName, const std::string& clientVersion,
+                      ClientCapabilities capabilities = ClientCapabilities{});
 };
 
 struct ListPromptsRequest : public Request {

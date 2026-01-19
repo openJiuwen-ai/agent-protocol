@@ -77,13 +77,6 @@ struct Result : public MCPBaseType {
     virtual ~Result() = default;
 };
 
-struct McpClientCapabilities {
-    struct RootsCapability {
-        std::optional<bool> listChanged;
-    } roots;
-    std::optional<bool> sampling;
-};
-
 struct ClientInfo {
     std::string name;
     std::string version;
@@ -292,6 +285,16 @@ struct InitializeResult : public Result {
 // Result type for listing available prompts.
 struct ListPromptsResult : public Result {
     std::vector<PromptInfo> prompts;
+};
+
+// Root entry for roots/list
+struct Root {
+    std::optional<std::string> name;
+    std::string uri;
+};
+
+struct ListRootsResult : public Result {
+    std::vector<Root> roots;
 };
 
 // A response that indicates success but carries no data.
