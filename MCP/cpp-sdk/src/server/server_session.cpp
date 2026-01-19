@@ -10,10 +10,23 @@ namespace Mcp {
 
 ServerSession::~ServerSession() = default;
 
+ClientCapabilities ServerSession::GetClientCapabilities() const
+{
+    if (clientCapabilities_.has_value()) {
+        return clientCapabilities_.value();
+    }
+    return ClientCapabilities{};
+}
+
 void ServerSession::SetServerCapabilities(const ServerCapabilities& capabilities)
 {
     // Stored and later returned in the InitializeResult during the MCP handshake.
     capabilities_ = capabilities;
+
+    if (capabilities_.resources.has_value()) {
+        // NOTE: The server currently does not support resource subscription.
+        capabilities_.resources->subscribe = false;
+    }
 }
 
 void ServerSession::SetIncomingRequestCallback(IncomingRequestCallback callback)
@@ -68,7 +81,9 @@ void ServerSession::ReceivedNotification(const Notification& notification)
 void ServerSession::HandleInitializeRequest(int64_t requestId, const InitializeRequestParams& requestParams,
                                             RequestContext& ctx)
 {
-    (void)requestParams;
+    // Store client-advertised capabilities for later use by server handlers.
+    clientCapabilities_ = requestParams.capabilities_;
+
     // Reply to the client with server capabilities and implementation info.
     SendInitializeResponse(requestId, capabilities_, ctx);
 }

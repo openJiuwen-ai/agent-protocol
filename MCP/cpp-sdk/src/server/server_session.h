@@ -5,6 +5,8 @@
 #ifndef MCP_SERVER_SESSION_INCLUDE_H_
 #define MCP_SERVER_SESSION_INCLUDE_H_
 
+#include <optional>
+
 #include "mcp_type.h"
 #include "shared/base_session.h"
 #include "shared/jsonrpc.h"
@@ -82,6 +84,14 @@ public:
      * the resource list.
      */
     void SendResourceListChangedNotification();
+
+    /**
+     * @brief Get the capabilities advertised by the connected client.
+     *
+     * Populated when the server receives the client's Initialize request.
+     * If called before that, this returns an empty/default capabilities object.
+     */
+    ClientCapabilities GetClientCapabilities() const;
 protected:
     /**
     * @brief Handle an incoming JSON-RPC request from the client.
@@ -135,6 +145,9 @@ private:
 
     // Capabilities that the server advertises to the client.
     ServerCapabilities capabilities_{};
+
+    // Capabilities that the client advertised to the server.
+    std::optional<ClientCapabilities> clientCapabilities_{std::nullopt};
 
     // Whether the MCP initialization handshake has completed.
     bool isInitialized_{false};

@@ -66,8 +66,8 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
 {
     // Advertise client capabilities based on which callbacks are actually configured.
     // Only advertise `roots` when the client can handle roots/list.
-    ClientCapabilities caps = BuildClientCapabilities();
-    auto request = std::make_unique<InitializeRequest>(clientConfig_.name, clientConfig_.version, std::move(caps));
+    auto request = std::make_unique<InitializeRequest>(clientConfig_.name, clientConfig_.version,
+                                                       BuildClientCapabilities());
 
     auto promise = std::make_shared<std::promise<std::shared_ptr<InitializeResult>>>();
     auto future = promise->get_future();
@@ -78,6 +78,9 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
             if (!initPtr) {
                 throw std::runtime_error("Result type mismatch: cannot cast to InitializeResult");
             }
+
+            // Persist server capabilities for users to query later.
+            serverCapabilities_ = initPtr->capabilities;
             initialized_ = true;
             promise->set_value(initPtr);
             SendInitializedNotification();
@@ -89,6 +92,14 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
     SendRequest(std::move(request), completion);
 
     return future;
+}
+
+ServerCapabilities ClientSession::GetServerCapabilities() const
+{
+    if (serverCapabilities_.has_value()) {
+        return serverCapabilities_.value();
+    }
+    return ServerCapabilities{};
 }
 
 std::future<std::shared_ptr<CallToolResult>> ClientSession::CallTool(const std::string& name,

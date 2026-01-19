@@ -136,6 +136,7 @@ void ServerManager::StdioServerManagerStart()
 {
     std::shared_ptr<ServerTransport> stdioTransport_ = std::make_shared<StdioServerTransport>();
     stdioSession_ = std::make_shared<ServerSession>(stdioTransport_, config_, GenerateSessionId());
+    stdioSession_->SetServerCapabilities(config_.capabilities);
     // Set incoming request callback if provided
     if (requestCallback_) {
         stdioSession_->SetIncomingRequestCallback(requestCallback_);
@@ -292,6 +293,7 @@ std::shared_ptr<ServerSession> ServerManager::NewSession(const std::string& sess
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create session layer.");
         throw std::runtime_error("Failed to create session layer.");
     }
+    session->SetServerCapabilities(config_.capabilities);
     // Set incoming request callback if provided
     if (requestCallback_) {
         session->SetIncomingRequestCallback(requestCallback_);
