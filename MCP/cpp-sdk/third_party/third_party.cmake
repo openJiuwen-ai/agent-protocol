@@ -14,11 +14,12 @@ add_library(third_party_headers INTERFACE)
 #   GIT_REPO <git_repository_url>
 #   GIT_TAG <git_tag>
 #   [SYSTEM_PACKAGE_NAME <name>]  # Optional, defaults to NAME
+#   [TARGET_NAME <name>]  # Optional, expected target name after fetch
 #   [OPTIONS <var1> <val1> <var2> <val2> ...]  # Optional build options
 # )
 function(fetch_or_find_package)
   set(options "")
-  set(oneValueArgs NAME GIT_REPO GIT_TAG SYSTEM_PACKAGE_NAME)
+  set(oneValueArgs NAME GIT_REPO GIT_TAG SYSTEM_PACKAGE_NAME TARGET_NAME)
   set(multiValueArgs OPTIONS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -209,6 +210,14 @@ function(fetch_or_find_package)
     message(STATUS "${ARG_NAME} source dir: ${${ARG_NAME}_SOURCE_DIR}")
     message(STATUS "${ARG_NAME} binary dir: ${${ARG_NAME}_BINARY_DIR}")
 
+    # Handle target name mismatch if TARGET_NAME is specified
+    if(ARG_TARGET_NAME AND NOT TARGET ${ARG_NAME})
+      if(TARGET ${ARG_TARGET_NAME})
+        add_library(${ARG_NAME} ALIAS ${ARG_TARGET_NAME})
+        message(STATUS "Created alias ${ARG_NAME} -> ${ARG_TARGET_NAME}")
+      endif()
+    endif()
+
     if (${ARG_NAME} STREQUAL "http_parser")
       target_include_directories(third_party_headers INTERFACE
         "${${ARG_NAME}_BINARY_DIR}/"
@@ -249,23 +258,78 @@ fetch_or_find_package(
     JSON_Install OFF
 )
 
-# Fetch json-schema-validator (download only, no build)
-FetchContent_Declare(
-  json_schema_validator
-  GIT_REPOSITORY https://github.com/pboettch/json-schema-validator.git
+# Fetch json-schema-validator (with existing source priority)
+# Ensure /usr/local is in the search path for find_package
+list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+fetch_or_find_package(
+  NAME nlohmann_json_schema_validator
+  GIT_REPO https://github.com/pboettch/json-schema-validator.git
   GIT_TAG 2.3.0
-  GIT_SHALLOW TRUE
+  SYSTEM_PACKAGE_NAME nlohmann_json_schema_validator
+  TARGET_NAME nlohmann_json_schema_validator
 )
-FetchContent_MakeAvailable(json_schema_validator)
+
+# Normalize and link json-schema-validator target
+# Handle common system target name variants and create a unified alias if needed
+if(NOT TARGET nlohmann_json_schema_validator)
+  # Check for common exported target names from the CMake config
+  if(TARGET nlohmann_json_schema_validator::nlohmann_json_schema_validator)
+    add_library(nlohmann_json_schema_validator ALIAS nlohmann_json_schema_validator::nlohmann_json_schema_validator)
+    message(STATUS "Aliased nlohmann_json_schema_validator::nlohmann_json_schema_validator -> nlohmann_json_schema_validator")
+  elseif(TARGET json-schema-validator)
+    add_library(nlohmann_json_schema_validator ALIAS json-schema-validator)
+    message(STATUS "Aliased json-schema-validator -> nlohmann_json_schema_validator")
+  elseif(TARGET nlohmann_json_schema_validator::json-schema-validator)
+    add_library(nlohmann_json_schema_validator ALIAS nlohmann_json_schema_validator::json-schema-validator)
+    message(STATUS "Aliased nlohmann_json_schema_validator::json-schema-validator -> nlohmann_json_schema_validator")
+  elseif(DEFINED nlohmann_json_schema_validator_LIBRARIES OR DEFINED nlohmann_json_schema_validator_INCLUDE_DIRS)
+    # Create imported interface target from find_package variables
+    add_library(nlohmann_json_schema_validator INTERFACE IMPORTED)
+    if(DEFINED nlohmann_json_schema_validator_LIBRARIES)
+      set_target_properties(nlohmann_json_schema_validator PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${nlohmann_json_schema_validator_LIBRARIES}"
+      )
+    endif()
+    if(DEFINED nlohmann_json_schema_validator_INCLUDE_DIRS)
+      set_target_properties(nlohmann_json_schema_validator PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${nlohmann_json_schema_validator_INCLUDE_DIRS}"
+      )
+    endif()
+    message(STATUS "Created imported target nlohmann_json_schema_validator from find_package variables")
+  endif()
+endif()
+
+# Fallback: try to manually locate headers and library if package provided no target/variables
+if(NOT TARGET nlohmann_json_schema_validator)
+  find_path(_mcp_json_schema_validator_include_dir
+    NAMES json-schema.hpp
+    PATHS /usr/include /usr/local/include
+    PATH_SUFFIXES nlohmann
+  )
+  find_library(_mcp_json_schema_validator_lib
+    NAMES nlohmann_json_schema_validator json-schema-validator
+    PATHS /usr/lib /usr/lib64 /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/local/lib64
+  )
+  if(_mcp_json_schema_validator_include_dir AND _mcp_json_schema_validator_lib)
+    add_library(nlohmann_json_schema_validator SHARED IMPORTED)
+    set_target_properties(nlohmann_json_schema_validator PROPERTIES
+      IMPORTED_LOCATION "${_mcp_json_schema_validator_lib}"
+      INTERFACE_INCLUDE_DIRECTORIES "${_mcp_json_schema_validator_include_dir}"
+    )
+    message(STATUS "Created imported target nlohmann_json_schema_validator from manual discovery: lib=${_mcp_json_schema_validator_lib}, include=${_mcp_json_schema_validator_include_dir}")
+  else()
+    message(STATUS "Manual discovery failed: include=${_mcp_json_schema_validator_include_dir}, lib=${_mcp_json_schema_validator_lib}")
+  endif()
+endif()
+
 if(TARGET nlohmann_json_schema_validator)
   set_target_properties(nlohmann_json_schema_validator PROPERTIES
     POSITION_INDEPENDENT_CODE ON
   )
+  target_link_libraries(third_party_headers INTERFACE nlohmann_json_schema_validator)
 else()
-  get_property(_allTargets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
-  message(FATAL_ERROR "json-schema-validator did not define target nlohmann_json_schema_validator. Targets: ${_allTargets}")
+  message(FATAL_ERROR "json-schema-validator target not found; tried variants, variables, and manual discovery")
 endif()
-target_link_libraries(third_party_headers INTERFACE nlohmann_json_schema_validator)
 
 find_path(_mcp_http_parser_include_dir
     NAMES http_parser.h
