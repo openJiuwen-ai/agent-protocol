@@ -54,7 +54,7 @@ def main() -> None:
         stateless_http=args.stateless_http,
     )
 
-    @mcp.tool(name="echo")
+    @mcp.tool(name="echo", description="Echoes back the input message")
     def echo(user_query: str = "", message: str = "") -> str:
         return user_query or message
 

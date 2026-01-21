@@ -43,7 +43,7 @@ third_party/googletest-*/
 third_party/libevent-*/
 third_party/nlohmann_json-*/
 third_party/http_parser-*/
-third_party/json-schema-validator*/
+third_party/nlohmann_json_schema_validator-*/
 
 # Temporary files
 *.txt

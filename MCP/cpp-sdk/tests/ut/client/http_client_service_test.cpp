@@ -243,7 +243,7 @@ TEST_F(HttpClientServiceTest, DestroyWhileRunning)
     // 发送一个请求
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(1);
-    EXPECT_NO_THROW(service->Send(request, &userData, 1, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, 1, nullptr, TestCallback));
 
     // 不停止直接销毁（析构函数应该处理清理）
     service.reset();
@@ -263,7 +263,7 @@ TEST_F(HttpClientServiceTest, SendBasicRequest)
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
 
     // 等待回调（请求会快速失败）
     WaitForCallback(1, 50ms);
@@ -279,7 +279,7 @@ TEST_F(HttpClientServiceTest, SendWithNullCallback)
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, [](const HttpResponse&) {}));
 
     // 不应崩溃
     std::this_thread::sleep_for(10ms);
@@ -298,7 +298,7 @@ TEST_F(HttpClientServiceTest, SendMultipleRequests)
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 1);
 
-        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
     }
 
     // 等待回调
@@ -328,7 +328,7 @@ TEST_F(HttpClientServiceTest, SendWithDifferentMethods)
 
         UserData userData = CreateUserData(requestId++);
 
-        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
     }
 
     // 等待回调
@@ -353,7 +353,7 @@ TEST_F(HttpClientServiceTest, SendWithRequestBody)
     HttpRequest request = CreatePostRequest(jsonBody);
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
 
     WaitForCallback(1, 50ms);
 
@@ -373,7 +373,7 @@ TEST_F(HttpClientServiceTest, SendWithCustomHeaders)
 
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
 
     WaitForCallback(1, 50ms);
 
@@ -391,7 +391,7 @@ TEST_F(HttpClientServiceTest, SendWithEmptyUrl)
 
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
 
     WaitForCallback(1, 50ms);
 
@@ -406,7 +406,7 @@ TEST_F(HttpClientServiceTest, SendWithHttpsUrl)
     HttpRequest request = CreateTestRequest(testHttpsUrl);
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
 
     WaitForCallback(1, 50ms);
 
@@ -426,7 +426,7 @@ TEST_F(HttpClientServiceTest, SendWithDifferentTimeouts)
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(requestId++);
 
-        EXPECT_NO_THROW(service->Send(request, &userData, timeout, TestCallback));
+        EXPECT_NO_THROW(service->Send(request, &userData, timeout, nullptr, TestCallback));
     }
 
     WaitForCallback(timeouts.size(), 150ms);
@@ -442,7 +442,7 @@ TEST_F(HttpClientServiceTest, SendWithZeroTimeout)
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, 0, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, 0, nullptr, TestCallback));
 
     WaitForCallback(1, 50ms);
 
@@ -475,7 +475,7 @@ TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls)
             UserData userData = CreateUserData(requestId);
 
             try {
-                service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback);
+                service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback);
                 successfulSends++;
             } catch (...) {
                 // 发送失败，计数器不增加
@@ -516,7 +516,7 @@ TEST_F(HttpClientServiceTest, SendDuringShutdown)
     // 可能抛出异常也可能成功，取决于时机
     // 我们只确保不崩溃
     try {
-        service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback);
+        service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback);
     } catch (const std::runtime_error&) {
         // 预期的异常
     }
@@ -538,7 +538,7 @@ TEST_F(HttpClientServiceTest, ManyRequestsWithShortTimeout)
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 1);
 
-        EXPECT_NO_THROW(service->Send(request, &userData, 1, TestCallback)); // 1ms超时
+        EXPECT_NO_THROW(service->Send(request, &userData, 1, nullptr, TestCallback)); // 1ms超时
     }
 
     // 等待所有请求完成（应该很快）
@@ -558,7 +558,7 @@ TEST_F(HttpClientServiceTest, RequestIdUniqueness)
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + TEST_ID); // 使用不同的ID
 
-        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
     }
 
     WaitForCallback(numRequests, 100ms);
@@ -588,7 +588,7 @@ TEST_F(HttpClientServiceTest, TLSConfiguration)
     HttpRequest request = CreateTestRequest(testHttpsUrl);
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
 
     WaitForCallback(1, 50ms);
 
@@ -608,7 +608,8 @@ TEST_F(HttpClientServiceTest, CallbackVerification)
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(TEST_ID);
 
-    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+    HttpCallback headerCallback = [](const HttpResponse&) {};
+    EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, headerCallback, TestCallback));
 
     // 等待回调
     EXPECT_TRUE(WaitForCallback(1, 100ms));
@@ -638,7 +639,8 @@ TEST_F(HttpClientServiceTest, MultipleCallbacksOrder)
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + TEST_ID);
 
-        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+        HttpCallback headerCallback = [](const HttpResponse&) {};
+        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, headerCallback, TestCallback));
     }
 
     // 等待所有回调
@@ -666,7 +668,7 @@ TEST_F(HttpClientServiceTest, PerformanceMultipleRequests)
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 1);
-        EXPECT_NO_THROW(service->Send(request, &userData, 1, nullptr));
+        EXPECT_NO_THROW(service->Send(request, &userData, 1, nullptr, [](const HttpResponse&) {}));
     }
 
     auto sendDuration = std::chrono::steady_clock::now() - startTime;
@@ -690,7 +692,7 @@ TEST_F(HttpClientServiceTest, ResourceCleanupOnStop)
     for (int i = 0; i < LOOP_NUM; i++) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 1);
-        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, TestCallback));
+        EXPECT_NO_THROW(service->Send(request, &userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback));
     }
 
     // 立即停止（可能还有请求在处理）

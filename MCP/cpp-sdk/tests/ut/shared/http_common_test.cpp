@@ -241,8 +241,7 @@ TEST(HttpCommonTest, HttpResponse_DefaultConstructor)
     EXPECT_EQ(response.statusText, "OK");
     EXPECT_TRUE(response.errorMessage.empty());
     EXPECT_TRUE(response.body.empty());
-    EXPECT_EQ(response.headers.size(), HEADER_SIZE);
-    EXPECT_EQ(response.headers[CONTENT_TYPE_HEADER], "text/plain");
+    EXPECT_EQ(response.headers.size(), 1);
     EXPECT_EQ(response.headers["Connection"], "keep-alive");
     EXPECT_EQ(response.userData.requestId, 0);
     EXPECT_TRUE(response.userData.method.empty());

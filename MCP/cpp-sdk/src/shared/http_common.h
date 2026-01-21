@@ -62,6 +62,27 @@ constexpr int HTTP_CLIENT_DEFAULT_TIMEOUT_MS = 5000;
 
 constexpr std::size_t HTTP_HEADER_BODY_SEPARATOR_LENGTH = 4; // length of "\r\n\r\n"
 
+// SSE field prefix lengths
+constexpr size_t SSE_EVENT_PREFIX_LEN = sizeof("event:") - 1; // "event:"
+constexpr size_t SSE_ID_PREFIX_LEN = sizeof("id:") - 1; // "id:"
+constexpr size_t SSE_DATA_PREFIX_LEN = sizeof("data:") - 1; // "data:"
+
+// SSE event data structure
+struct ServerSentEvent {
+    std::string event;
+    std::string id;
+    std::string data;
+    int retry;
+
+    ServerSentEvent() : event("message"), id(""), data(""), retry(0)
+    {
+    }
+    ServerSentEvent(const std::string& evt, const std::string& evtId, const std::string& evtData, int retry)
+        : event(evt), id(evtId), data(evtData), retry(retry)
+    {
+    }
+};
+
 struct UserData {
     uint64_t requestId = 0;
     std::string method;
@@ -91,13 +112,13 @@ struct HttpResponse {
     int statusCode = 0;
     std::string errorMessage; // Error message (when success is false)
     std::string statusText;
+    ServerSentEvent sseEvent;
     HttpSendType type = HttpSendType::HTTPRESPONSE;
     std::unordered_map<std::string, std::string> headers;
     std::string body;
 
     HttpResponse() : statusCode(HTTP_STATUS_OK), statusText("OK")
     {
-        headers[CONTENT_TYPE_HEADER] = CONTENT_TYPE_TEXT_PLAIN;
         headers[CONNECTION_HEADER] = CONNECTION_KEEP_ALIVE;
     }
 };
@@ -129,6 +150,11 @@ void TrimInPlace(std::string& value);
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
                          std::unordered_map<std::string, std::string>& headers, std::string& body,
                          std::size_t& consumedBytes);
+
+
+std::string getContentType(const HttpResponse& response);
+
+bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent);
 
 } // namespace Mcp::Http
 

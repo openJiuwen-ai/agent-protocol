@@ -188,17 +188,23 @@ void HttpClientService::Stop()
 }
 
 // Core sending interface
-void HttpClientService::Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback)
+void HttpClientService::Send(const HttpRequest& request, UserData* userData, int timeoutMs,
+    HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback)
 {
     if (state_.load(std::memory_order_acquire) != ServiceState::RUNNING) {
         throw std::runtime_error("Failed to send HTTP request: Service is not running");
     }
 
-    uint64_t requestId = ((UserData*)userData)->requestId;
+    if (responseBodyCallback == nullptr) {
+        throw std::runtime_error("Response body callback is required");
+    }
+
+    uint64_t requestId = userData->requestId;
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request " + std::to_string(requestId) + ": " +
             request.method + " " + request.url);
 
-    auto requestContext = std::make_shared<RequestContext>(request, callback, timeoutMs, userData);
+    auto requestContext = std::make_shared<RequestContext>(request, responseHeaderCallback, responseBodyCallback,
+        timeoutMs, userData);
 
     // Submit to queue and return immediately
     if (!requestQueue_.Send(requestContext)) {
@@ -228,20 +234,23 @@ void HttpClientService::HandleErrorResponse(const std::shared_ptr<RequestContext
     ExecuteCallback(request, errorResponse);
 }
 
-void HttpClientService::HandleSuccessResponse(const std::shared_ptr<RequestContext>& request, long statusCode,
-                                              const std::unordered_map<std::string, std::string>& headers)
+void HttpClientService::HandleFinishedResponse(const std::shared_ptr<RequestContext>& request)
 {
-    HttpResponse response;
-    response.success = true;
-    response.userData = request->userData;
-    response.statusCode = static_cast<int>(statusCode);
+    HttpResponse &response = request->response;
+    if (request->responseData.empty()) {
+        return;
+    }
     response.body = request->responseData;
-    response.headers = headers;
 
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request " + std::to_string(request->userData.requestId) +
-            " completed with status " + std::to_string(statusCode) +
+            " completed with status " + std::to_string(response.statusCode) +
             ", headers_count=" + std::to_string(response.headers.size()));
-    ExecuteCallback(request, response);
+
+    try {
+        request->responseBodyCallback(response);
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Callback execution failed: " + std::string(e.what()));
+    }
 }
 
 void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request)
@@ -386,10 +395,7 @@ void HttpClientService::CheckMultiInfo()
 
             // Process response based on result
             if (msg->data.result == CURLE_OK) {
-                long statusCode;
-                curl_easy_getinfo(easyHandle, CURLINFO_RESPONSE_CODE, &statusCode);
-                std::unordered_map<std::string, std::string> parsedHeaders = ParseHeaderData(request->headerData);
-                HandleSuccessResponse(request, statusCode, parsedHeaders);
+                HandleFinishedResponse(request);
             } else {
                 HandleErrorResponse(request, curl_easy_strerror(msg->data.result));
             }
@@ -667,12 +673,11 @@ void HttpClientService::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<
 
 void HttpClientService::ExecuteCallback(const std::shared_ptr<RequestContext>& request, const HttpResponse& response)
 {
-    if (request->callback == nullptr) {
-        return;
-    }
-
     try {
-        request->callback(response);
+        if (request->responseHeaderCallback != nullptr) {
+            request->responseHeaderCallback(response);
+        }
+        request->responseBodyCallback(response);
     } catch (const std::exception& e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Callback execution failed: " + std::string(e.what()));
     }
@@ -683,9 +688,45 @@ size_t HttpClientService::WriteCallback(char* contents, size_t size, size_t nmem
 {
     size_t totalSize = size * nmemb;
     auto* request = static_cast<RequestContext*>(userp);
-    if (request != nullptr) {
-        request->responseData.append(contents, totalSize);
+    if (request == nullptr) {
+        return totalSize;
     }
+
+    const bool isSse = (getContentType(request->response).find(CONTENT_TYPE_SSE) != std::string::npos);
+    if (!isSse) {
+        request->responseData.append(contents, totalSize);
+        return totalSize;
+    }
+
+    for (size_t i = 0; i < totalSize; ++i) {
+        // get a line
+        if (contents[i] != '\n') {
+            request->responseData.push_back(contents[i]);
+            continue;
+        }
+
+        // normalize CRLF -> LF
+        if (!request->responseData.empty() && request->responseData.back() == '\r') {
+            request->responseData.pop_back();
+        }
+
+        // parse sse line, and check end of event
+        bool isSseEnd = parseSseLine(request->responseData, request->response.sseEvent);
+        request->responseData.clear();
+
+        // end of event, callback
+        if (isSseEnd) {
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "SSE event end,event data:" + request->response.sseEvent.data);
+            try {
+                request->responseBodyCallback(request->response);
+            } catch (const std::exception& e) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "responseBodyCallback failed: " + std::string(e.what()));
+            }
+            request->response.sseEvent = ServerSentEvent();
+            continue;
+        }
+    }
+
     return totalSize;
 }
 
@@ -693,8 +734,31 @@ size_t HttpClientService::HeaderCallback(char* contents, size_t size, size_t nme
 {
     size_t totalSize = size * nmemb;
     auto* request = static_cast<RequestContext*>(userp);
-    if (request != nullptr) {
-        request->headerData.append(contents, totalSize);
+    if (request == nullptr) {
+        return totalSize;
+    }
+    request->headerData.append(contents, totalSize);
+
+    // check header finish
+    bool isfinish = totalSize == 2 && contents[0] == '\r' && contents[1] == '\n';
+    if (!isfinish) {
+        isfinish = totalSize == 1 && contents[0] == '\n';
+    }
+
+    if (isfinish) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "header finished");
+        request->response.headers = HttpClientService::ParseHeaderData(request->headerData);
+        request->response.success = true;
+        request->response.userData = request->userData;
+        long statusCode;
+        curl_easy_getinfo(request->easyHandle, CURLINFO_RESPONSE_CODE, &statusCode);
+        request->response.statusCode = statusCode;
+
+        try {
+            request->responseHeaderCallback(request->response);
+        } catch (const std::exception& e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "responseHeaderCallback failed: " + std::string(e.what()));
+        }
     }
     return totalSize;
 }
@@ -725,7 +789,6 @@ std::unordered_map<std::string, std::string> HttpClientService::ParseHeaderData(
             header_value.erase(header_value.find_last_not_of(" \t") + 1);
 
             headers[header_name] = header_value;
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Parsed header [" + header_name + ": " + header_value + "]");
         }
     }
 

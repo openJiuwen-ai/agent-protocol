@@ -64,7 +64,9 @@ struct HttpClientServiceConfig {
 struct RequestContext {
     UserData userData;
     HttpRequest request;
-    HttpCallback callback;
+    HttpResponse response;
+    HttpCallback responseHeaderCallback;
+    HttpCallback responseBodyCallback;
     CURL* easyHandle = nullptr;
     std::string responseData;
     std::string headerData;
@@ -72,10 +74,12 @@ struct RequestContext {
     std::chrono::steady_clock::time_point startTime;
     struct curl_slist* headers = nullptr; // Store headers for cleanup
 
-    RequestContext(const HttpRequest& req, HttpCallback cb, int timeout, void* userData)
-        : userData(*(UserData*)userData),
+    RequestContext(const HttpRequest& req, HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback,
+        int timeout, UserData* userData)
+        : userData(*userData),
           request(req),
-          callback(cb),
+          responseHeaderCallback(responseHeaderCallback),
+          responseBodyCallback(responseBodyCallback),
           timeoutMs(timeout),
           startTime(std::chrono::steady_clock::now()),
           headers(nullptr)
@@ -150,9 +154,11 @@ public:
      * @param request HTTP request structure with URL, method, headers, and body
      * @param userData User data pointer
      * @param timeoutMs Request timeout in milliseconds
-     * @param callback Response callback function called on completion
+     * @param responseHeaderCallback Response header callback function called on completion
+     * @param responseBodyCallback Response body callback function called on completion
      */
-    void Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback);
+    void Send(const HttpRequest& request, UserData* userData, int timeoutMs, HttpCallback responseHeaderCallback,
+        HttpCallback responseBodyCallback);
 
 private:
     // Core components
@@ -186,13 +192,10 @@ private:
     void HandleErrorResponse(const std::shared_ptr<RequestContext>& request, const std::string& errorMessage);
 
     /**
-     * @brief Handle successful HTTP response
+     * @brief Handle finished HTTP response
      * @param request Shared pointer to request context
-     * @param statusCode HTTP status code
-     * @param headers Response headers from curl_easy_getinfo
      */
-    void HandleSuccessResponse(const std::shared_ptr<RequestContext>& request, long statusCode,
-                               const std::unordered_map<std::string, std::string>& headers = {});
+    void HandleFinishedResponse(const std::shared_ptr<RequestContext>& request);
 
     /**
      * @brief Handle request in I/O thread (called from queue callback)
@@ -317,7 +320,7 @@ private:
      * @param headerData Raw header data string from HTTP response
      * @return Unordered map of header name to header value
      */
-    std::unordered_map<std::string, std::string> ParseHeaderData(const std::string& headerData);
+    static std::unordered_map<std::string, std::string> ParseHeaderData(const std::string& headerData);
 };
 
 /**
