@@ -30,6 +30,7 @@ using ClientEvent = std::variant<Message, std::pair<Task, UpdateEvent>>;
 
 // Consumer: receives ClientEvent or Message with AgentCard
 using Consumer = std::function<void(const ClientEvent&, const A2A::AgentCard&)>;
+using ResponseHandler = std::function<void(const ClientEvent&, const A2A::AgentCard&)>;
 
 class Client {
 public:
@@ -45,11 +46,11 @@ public:
      *
      * @param[in] msg message to be sent
      * @param[in] context client call context
-     * @param[in] consumers client consumers
+     * @param[in] handler response handler
      * @return future to void
      */
     virtual std::future<void> SendMessage(const Message& msg, const ClientCallContext* context,
-        const std::vector<Consumer>& consumers) = 0;
+        ResponseHandler handler) = 0;
 
     /**
      * @brief retrive a task by query params
@@ -120,11 +121,11 @@ public:
      *
      * @param[in] params task id params
      * @param[in] context client call context
-     * @param[in] consumers callback function to be called when a ClientEvent is received
+     * @param[in] handler response handler
      * @return future to void
      */
     virtual std::future<void> Resubscribe(const TaskIdParams& params, const ClientCallContext* context,
-        const std::vector<Consumer>& consumers) = 0;
+        ResponseHandler handler) = 0;
 
     /**
      * @brief retrive card information of agent
