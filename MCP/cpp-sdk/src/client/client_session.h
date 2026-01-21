@@ -47,7 +47,7 @@ public:
     void SetListRootsCallback(ListRootsCallback cb);
 
     // Set the logging level
-    std::future<EmptyResult> SetLoggingLevel(LoggingLevel level);
+    std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(LoggingLevel level);
 
     // Call a tool on the server
     std::future<std::shared_ptr<CallToolResult>> CallTool(const std::string& name,

@@ -8,7 +8,7 @@
 #include <netdb.h>
 #include <stdarg.h>
 #include <sys/socket.h>
-
+#include <iostream>
 #include <algorithm>
 #include <cstdlib>
 #include <cerrno>
@@ -73,6 +73,10 @@ void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Reques
         }
         if (method == "resources/templates/list") {
             HandleResourcesTemplatesList(requestId, request, ctx);
+            return;
+        }
+        if (method == "logging/setLevel") {
+            HandleSetLoggingLevel(requestId, request, ctx);
             return;
         }
 
@@ -276,6 +280,33 @@ void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const R
     try {
         auto result = std::make_unique<ListResourceTemplatesResult>(resourceManager_.ListResourceTemplates());
         session->SendResponse(requestId, std::move(result), ctx);
+    } catch (const std::exception& e) {
+        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
+    }
+}
+
+void McpServerImplement::HandleSetLoggingLevel(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    auto session = serverManager_->GetSession(ctx.sessionId);
+    if (session == nullptr) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
+        return;
+    }
+
+    auto params = dynamic_cast<SetLoggingLevelParams*>(request.params_.get());
+    if (params == nullptr) {
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for logging/setLevel", ctx);
+        return;
+    }
+
+    try {
+        if (setLevelHandler_ == nullptr) {
+            SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "not set LoggingLevelHandler", ctx);
+        } else {
+            setLevelHandler_(params->level);
+            auto result = std::make_unique<EmptyResult>();
+            session->SendResponse(requestId, std::move(result), ctx);
+        }
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }

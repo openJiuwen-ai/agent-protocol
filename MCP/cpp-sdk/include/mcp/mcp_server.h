@@ -106,6 +106,8 @@ public:
      * @param uriTemplate URI template of the resource template to remove
      */
     virtual void RemoveResourceTemplate(const std::string& uriTemplate) = 0;
+
+    virtual void RegisterSetLoggingLevelHandler(std::function<void(const std::string& level)> h) = 0;
 };
 
 /**

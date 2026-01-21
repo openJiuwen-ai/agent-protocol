@@ -140,6 +140,8 @@ public:
      */
     virtual std::future<EmptyResult> SendPing() = 0;
 
+    virtual std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(const LoggingLevel level) = 0;
+
     /**
      * @brief Get the capabilities supported by the server.
      *

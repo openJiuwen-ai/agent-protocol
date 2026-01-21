@@ -73,6 +73,12 @@ std::future<std::shared_ptr<EmptyResult>> McpClientImplement::UnsubscribeResourc
     return session_->UnsubscribeResource(uri);
 }
 
+std::future<std::shared_ptr<EmptyResult>> McpClientImplement::SetLoggingLevel(const LoggingLevel level)
+{
+    CheckInitialized();
+    return session_->SetLoggingLevel(level);
+}
+
 std::future<std::shared_ptr<ListResourceTemplatesResult>> McpClientImplement::ListResourcesTemplates()
 {
     CheckInitialized();

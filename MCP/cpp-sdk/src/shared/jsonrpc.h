@@ -220,6 +220,16 @@ struct ListResourcesRequest : public Request {
     ListResourcesRequest();
 };
 
+struct SetLoggingLevelParams : public RequestParams {
+    std::string level;
+
+    explicit SetLoggingLevelParams(const std::string& level) : level(level) {}
+};
+
+struct SetLoggingLevelRequest : public Request {
+    SetLoggingLevelRequest();
+};
+
 // resources/templates/list
 struct ListResourceTemplatesRequest : public Request {
     ListResourceTemplatesRequest();
@@ -246,6 +256,21 @@ struct PromptListChangedNotification : public Notification {
 struct ResourceListChangedNotification : public Notification {
     ResourceListChangedNotification();
 };
+
+inline const char* ToString(LoggingLevel lvl)
+{
+    switch (lvl) {
+        case LoggingLevel::Debug:    return "debug";
+        case LoggingLevel::Info:     return "info";
+        case LoggingLevel::Notice:   return "notice";
+        case LoggingLevel::Warning:  return "warning";
+        case LoggingLevel::Error:    return "error";
+        case LoggingLevel::Critical: return "critical";
+        case LoggingLevel::Alert:    return "alert";
+        case LoggingLevel::Emergency:return "emergency";
+    }
+    return "unknown";
+}
 
 } // namespace Mcp
 

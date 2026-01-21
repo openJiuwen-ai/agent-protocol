@@ -34,6 +34,7 @@ public:
     std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri) override;
     std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri) override;
     std::future<std::shared_ptr<EmptyResult>> UnsubscribeResource(const std::string& uri) override;
+    std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(const LoggingLevel level) override;
     std::future<std::shared_ptr<ListResourceTemplatesResult>> ListResourcesTemplates() override;
 
     std::future<std::shared_ptr<ListPromptsResult>> ListPrompts() override;

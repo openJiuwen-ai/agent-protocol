@@ -340,6 +340,8 @@ struct ListResourceTemplatesResult : public Result {
     std::vector<ResourceTemplate> resourceTemplates;
 };
 
+enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Alert, Emergency };
+
 } // namespace Mcp
 
 #endif // MCP_TYPE_INCLUDE_H_

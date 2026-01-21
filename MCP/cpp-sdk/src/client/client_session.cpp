@@ -253,4 +253,15 @@ std::future<std::shared_ptr<EmptyResult>> ClientSession::UnsubscribeResource(con
     return future;
 }
 
+std::future<std::shared_ptr<EmptyResult>> ClientSession::SetLoggingLevel(LoggingLevel level)
+{
+    auto promise = std::make_shared<std::promise<std::shared_ptr<EmptyResult>>>();
+    auto future = promise->get_future();
+    auto req = std::make_unique<SetLoggingLevelRequest>();
+    req->params_ = std::make_unique<SetLoggingLevelParams>(Mcp::ToString(level));
+    SendRequest(std::move(req), MakeTypedCompletion<EmptyResult>(promise, "SetLoggingLevel"));
+
+    return future;
+}
+
 } // namespace Mcp

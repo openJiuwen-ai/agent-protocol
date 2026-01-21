@@ -121,12 +121,6 @@ struct JsonRpcResponse {
     }
 };
 
-enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Alert, Emergency };
-
-struct SetLevelRequestParams {
-    LoggingLevel level;
-};
-
 // forward declaration
 struct RequestContext;
 

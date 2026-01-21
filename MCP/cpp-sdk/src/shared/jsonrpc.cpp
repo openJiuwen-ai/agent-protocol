@@ -858,6 +858,30 @@ struct adl_serializer<Mcp::CallToolRequest> {
     }
 };
 
+// SetLoggingLevelRequest -> {"method":"logging/Set:Level", "params":{level}}
+template <>
+struct adl_serializer<Mcp::SetLoggingLevelRequest> {
+    static void to_json(json& j, const Mcp::SetLoggingLevelRequest& req)
+    {
+        if (req.params_) {
+            auto p = static_cast<const Mcp::SetLoggingLevelParams*>(req.params_.get());
+            j["level"] = p->level;
+        }
+    }
+
+    static void from_json(const json& j, Mcp::SetLoggingLevelRequest& req)
+    {
+        j.at("method").get_to(req.method_);
+        if (j.contains("params")) {
+            const auto& paramsJson = j.at("params");
+            std::string level;
+            paramsJson.at("level").get_to(level);
+
+            req.params_ = std::make_unique<Mcp::SetLoggingLevelParams>(std::move(level));
+        }
+    }
+};
+
 // CallToolResult
 template <>
 struct adl_serializer<Mcp::CallToolResult> {
@@ -1499,6 +1523,11 @@ ReadResourceRequest::ReadResourceRequest()
     method_ = "resources/read";
 }
 
+SetLoggingLevelRequest::SetLoggingLevelRequest()
+{
+    method_ = "logging/setLevel";
+}
+
 ListResourcesRequest::ListResourcesRequest()
 {
     method_ = "resources/list";
@@ -1554,6 +1583,11 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
         const auto* readReq = dynamic_cast<const ReadResourceRequest*>(request_.get());
         if (readReq != nullptr) {
             j["params"] = *readReq;
+        }
+    } else if (request_ != nullptr && request_->method_ == "logging/setLevel") {
+        const auto* levelReq = dynamic_cast<const SetLoggingLevelRequest*>(request_.get());
+        if (levelReq != nullptr) {
+            j["params"] = *levelReq;
         }
     } else if (request_ != nullptr && request_->method_ == "resources/subscribe") {
         const auto* subReq = dynamic_cast<const SubscribeRequest*>(request_.get());
@@ -1620,6 +1654,10 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& m
         ReadResourceRequest readReq = j.get<ReadResourceRequest>();
         auto reqPtr = std::make_unique<ReadResourceRequest>(std::move(readReq));
         request_ = std::move(reqPtr);
+    } else if (method_ == "logging/setLevel") {
+        SetLoggingLevelRequest levelReq = j.get<SetLoggingLevelRequest>();
+        auto levelPtr = std::make_unique<SetLoggingLevelRequest>(std::move(levelReq));
+        request_ = std::move(levelPtr);
     } else if (method_ == "resources/subscribe") {
         SubscribeRequest subReq = j.get<SubscribeRequest>();
         auto reqPtr = std::make_unique<SubscribeRequest>(std::move(subReq));
@@ -1708,6 +1746,12 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
                 throw std::runtime_error("Failed to cast result to EmptyResult");
             }
             j["result"] = json::object();
+        } else if (method == "logging/setLevel") {
+            auto* emptyResult = dynamic_cast<const EmptyResult*>(result_.get());
+            if (emptyResult == nullptr) {
+                throw std::runtime_error("Failed to cast result to EmptyResult");
+            }
+            j["result"] = json::object();
         }
     }
 
@@ -1779,6 +1823,8 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
         }
         result_ = std::move(p);
     } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
+        result_ = std::make_shared<EmptyResult>();
+    } else if (method == "logging/setLevel") {
         result_ = std::make_shared<EmptyResult>();
     }
 

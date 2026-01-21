@@ -49,6 +49,12 @@ public:
     void AddResourceTemplate(const ResourceTemplate& resourceTemplate) override;
     void RemoveResourceTemplate(const std::string& uriTemplate) override;
 
+    using SetLoggingLevelHandler = std::function<void(const std::string& level)>;
+    void RegisterSetLoggingLevelHandler(SetLoggingLevelHandler h) override
+    {
+        setLevelHandler_ = std::move(h);
+    }
+
 private:
     void ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandleToolsList(int64_t requestId, const Request& request, RequestContext& ctx);
@@ -60,6 +66,7 @@ private:
     void HandleResourcesSubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandleResourcesUnsubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
     void HandleResourcesTemplatesList(int64_t requestId, const Request& request, RequestContext& ctx);
+    void HandleSetLoggingLevel(int64_t requestId, const Request& request, RequestContext& ctx);
 
     void SendErrorResponse(int64_t requestId, JsonRpcErrorCode code, const std::string& message, RequestContext& ctx);
 
@@ -77,6 +84,8 @@ private:
     ToolManager toolManager_;
     PromptManager promptManager_;
     ResourceManager resourceManager_;
+
+    SetLoggingLevelHandler setLevelHandler_;
 };
 
 } // namespace Mcp
