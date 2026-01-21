@@ -57,25 +57,37 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    // Example 1: List resources
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListResources ===");
+    // Example 1: List resources (paginated)
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListResources (paginated) ===");
     std::string targetUri;
     try {
-        auto listFuture = mcpClient->ListResources();
-        if (listFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResources timeout");
-            return -1;
-        }
-        auto resourceList = listFuture.get();
+        std::optional<std::string> cursor;
+        std::size_t totalCount = 0;
+        bool firstPage = true;
+
+        do {
+            auto listFuture = mcpClient->ListResources(cursor);
+            if (listFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResources timeout");
+                return -1;
+            }
+            auto resourceList = listFuture.get();
+            MCP_LOG(MCP_LOG_LEVEL_INFO,
+                    std::string("ListResources page fetched, resource count: ") +
+                        std::to_string(resourceList->resources.size()));
+            for (const auto &resource : resourceList->resources) {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Resource: " + resource.name + " (uri: " + resource.uri + ")");
+            }
+            if (firstPage && !resourceList->resources.empty()) {
+                targetUri = resourceList->resources.front().uri;
+                firstPage = false;
+            }
+            totalCount += resourceList->resources.size();
+            cursor = resourceList->nextCursor;
+        } while (cursor.has_value());
+
         MCP_LOG(MCP_LOG_LEVEL_INFO,
-                std::string("ListResources success, resource count: ") +
-                    std::to_string(resourceList->resources.size()));
-        for (const auto &resource : resourceList->resources) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Resource: " + resource.name + " (uri: " + resource.uri + ")");
-        }
-        if (!resourceList->resources.empty()) {
-            targetUri = resourceList->resources.front().uri;
-        }
+                std::string("ListResources completed, total resource count: ") + std::to_string(totalCount));
     } catch (const std::exception &e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListResources failed: ") + e.what());
         return -1;

@@ -40,6 +40,7 @@ const char* const RESOURCE_TEMPLATE_MIME_TYPE = "text/plain";
 const int HEARTBEAT_INTERVAL_SECONDS = 5;
 const int LOG_INTERVAL_COUNT = 6;
 const int SECONDS_PER_LOG = 30;
+const int EXAMPLE_BULK_COUNT = 120;
 
 void signalHandler(int signal)
 {
@@ -159,6 +160,19 @@ int main(int argc, char** argv)
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool failed as expected");
         }
 
+        // minimal placeholders: register more tools to create multiple pages
+        try {
+            for (int i = 0; i < EXAMPLE_BULK_COUNT; ++i) {
+                std::string toolName = std::string("echo_") + std::to_string(i);
+                Mcp::AddToolOptionalParams tp; // keep minimal, no extra fields
+                server->AddTool(toolName, echoFunc, tp);
+            }
+            MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("bulk add tools completed: ") + std::to_string(EXAMPLE_BULK_COUNT));
+        } catch (const std::exception &e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("bulk add tools failed: ") + e.what());
+        }
+
         // add Prompt
         try {
             std::string promptDescription = PROMPT_DESCRIPTION;
@@ -230,6 +244,20 @@ int main(int argc, char** argv)
             MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("add resource failed: ") + e.what());
         } catch (...) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource failed as expected");
+        }
+
+        // minimal placeholders: register more resources to create multiple pages
+        try {
+            for (int i = 0; i < EXAMPLE_BULK_COUNT; ++i) {
+                std::string uri = std::string("http://example.com/resource/") + std::to_string(i);
+                std::string name = std::string("res_") + std::to_string(i);
+                Mcp::AddResourceOptionalParams rp; // minimal
+                server->AddResource(uri, name, readResourceFunc, rp);
+            }
+            MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("bulk add resources completed: ") + std::to_string(EXAMPLE_BULK_COUNT));
+        } catch (const std::exception &e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("bulk add resources failed: ") + e.what());
         }
 
         // add ResourceTemplate

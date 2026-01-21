@@ -47,14 +47,18 @@ public:
                                                           const std::optional<JsonValue>& arguments = std::nullopt,
                                                           int timeout = 0);
 
-    // List available tools
+    // List available tools. When cursor is provided, the server will return
+    // a page of tools starting from that cursor and may include nextCursor in
+    // the result for subsequent pages.
     std::future<std::shared_ptr<ListToolsResult>> ListTools();
+    std::future<std::shared_ptr<ListToolsResult>> ListTools(const std::optional<std::string>& cursor);
 
     // List prompts
     std::future<std::shared_ptr<ListPromptsResult>> ListPrompts();
 
     // --- Resources ---
     std::future<std::shared_ptr<ListResourcesResult>> ListResources();
+    std::future<std::shared_ptr<ListResourcesResult>> ListResources(const std::optional<std::string>& cursor);
     std::future<std::shared_ptr<ListResourceTemplatesResult>> ListResourcesTemplates();
     std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri);
     std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri);

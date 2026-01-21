@@ -47,14 +47,19 @@ struct ServerTool {
 
 class ToolManager {
 public:
-    explicit ToolManager(bool overwrite = true) : overwrite_(overwrite)
+    explicit ToolManager(bool overwrite = true,
+                         std::size_t pageSize = DEFAULT_TOOLS_PAGE_SIZE)
+        : overwrite_(overwrite), pageSize_(pageSize)
     {
     }
 
     void AddTool(const ServerTool& tool);
     void RemoveTool(const std::string& name);
 
-    ListToolsResult ListTools() const;
+    // List tools with optional cursor-based pagination. When cursor is not set,
+    // listing starts from the beginning. The returned ListToolsResult may
+    // carry nextCursor to indicate there are more tools to fetch.
+    ListToolsResult ListTools(const std::optional<std::string>& cursor = std::nullopt) const;
     CallToolResult CallTool(const std::string& name, const std::string& arguments) const;
 
     void SetOverwrite(bool overwrite)
@@ -66,10 +71,16 @@ public:
         return overwrite_;
     }
 
+    void SetPageSize(std::size_t pageSize)
+    {
+        pageSize_ = pageSize;
+    }
+
 private:
     bool overwrite_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, ServerTool> tools_;
+    std::size_t pageSize_;
 };
 
 } // namespace Mcp

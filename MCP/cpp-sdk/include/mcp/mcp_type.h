@@ -24,6 +24,8 @@ constexpr char DEFAULT_SERVER_NAME[] = "MCP Server";
 constexpr char DEFAULT_CLIENT_NAME[] = "MCP Client";
 constexpr char DEFAULT_VERSION[] = "1.0.0";
 constexpr uint32_t DEFAULT_TIMEOUT = 30000; // 30s
+constexpr std::size_t DEFAULT_TOOLS_PAGE_SIZE = 50;
+constexpr std::size_t DEFAULT_RESOURCES_PAGE_SIZE = 50;
 
 struct StdioClientConfig {
     std::string command;
@@ -66,6 +68,8 @@ struct ServerConfig {
     std::string name = DEFAULT_SERVER_NAME;
     std::string version = DEFAULT_VERSION;
     uint32_t workerThreads{1};
+    std::size_t toolsPageSize{DEFAULT_TOOLS_PAGE_SIZE};
+    std::size_t resourcesPageSize{DEFAULT_RESOURCES_PAGE_SIZE};
 };
 
 struct MCPBaseType {
@@ -74,8 +78,15 @@ struct MCPBaseType {
 
 struct Result : public MCPBaseType {
     std::optional<std::unordered_map<std::string, JsonValue>> meta;
-
     virtual ~Result() = default;
+};
+
+// Base class for paginated results. List-style methods that support pagination
+// (e.g., tools/list, resources/list) should derive from this instead of Result.
+struct PaginatedResult : public Result {
+    // Optional pagination cursor used by list-style methods in responses.
+    // Non-paginated methods should not use this.
+    std::optional<std::string> nextCursor;
 };
 
 struct McpClientCapabilities {
@@ -191,7 +202,7 @@ struct Tool {
     std::optional<std::vector<Icon>> icons;
 };
 
-struct ListToolsResult : public Result {
+struct ListToolsResult : public PaginatedResult {
     std::vector<Tool> tools;
 };
 
@@ -321,7 +332,7 @@ struct ResourceTemplate {
 };
 
 // resources/list
-struct ListResourcesResult : public Result {
+struct ListResourcesResult : public PaginatedResult {
     std::vector<ResourceInfo> resources;
 };
 
@@ -334,7 +345,7 @@ struct ReadResourceResult : public Result {
 using ReadResourceFunc = std::function<ReadResourceResult(const std::string& uri)>;
 
 // resources/templates/list
-struct ListResourceTemplatesResult : public Result {
+struct ListResourceTemplatesResult : public PaginatedResult {
     std::vector<ResourceTemplate> resourceTemplates;
 };
 

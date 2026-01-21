@@ -75,21 +75,31 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    // Example 2: List tools
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListTools ===");
+    // Example 2: List tools (paginated)
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListTools (paginated) ===");
     try {
-        auto listFuture = mcpClient->ListTools();
-        if (listFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListTools timeout");
-            return -1;
-        }
-        auto listResult = listFuture.get();
+        std::optional<std::string> cursor;
+        std::size_t totalCount = 0;
+
+        do {
+            auto listFuture = mcpClient->ListTools(cursor);
+            if (listFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListTools timeout");
+                return -1;
+            }
+            auto listResult = listFuture.get();
+            MCP_LOG(MCP_LOG_LEVEL_INFO,
+                    std::string("ListTools page fetched, tool count: ") + std::to_string(listResult->tools.size()));
+            for (const auto &tool : listResult->tools) {
+                std::string desc = tool.description.has_value() ? tool.description.value() : std::string{};
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Tool: " + tool.name + " - " + desc);
+            }
+            totalCount += listResult->tools.size();
+            cursor = listResult->nextCursor;
+        } while (cursor.has_value());
+
         MCP_LOG(MCP_LOG_LEVEL_INFO,
-                std::string("ListTools success, tool count: ") + std::to_string(listResult->tools.size()));
-        for (const auto &tool : listResult->tools) {
-            std::string desc = tool.description.has_value() ? tool.description.value() : std::string{};
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Tool: " + tool.name + " - " + desc);
-        }
+                std::string("ListTools completed, total tool count: ") + std::to_string(totalCount));
     } catch (const std::exception &e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListTools failed: ") + e.what());
         return -1;

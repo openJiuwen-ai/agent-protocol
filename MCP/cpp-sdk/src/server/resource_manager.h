@@ -19,7 +19,9 @@ namespace Mcp {
 
 class ResourceManager {
 public:
-    explicit ResourceManager(bool overwrite = true) : overwrite_(overwrite)
+    explicit ResourceManager(bool overwrite = true,
+                             std::size_t pageSize = DEFAULT_RESOURCES_PAGE_SIZE)
+        : overwrite_(overwrite), pageSize_(pageSize)
     {
     }
 
@@ -34,9 +36,17 @@ public:
     void RemoveResourceTemplate(const std::string& uriTemplate);
 
     // Get operations
-    ListResourcesResult ListResources();
+    // List resources with optional cursor-based pagination. When cursor is not
+    // provided, listing starts from the beginning. The returned
+    // ListResourcesResult may carry nextCursor to indicate more resources.
+    ListResourcesResult ListResources(const std::optional<std::string>& cursor = std::nullopt);
     ReadResourceResult ReadResource(const std::string& uri);
-    ListResourceTemplatesResult ListResourceTemplates();
+    ListResourceTemplatesResult ListResourceTemplates() const;
+
+    void SetPageSize(std::size_t pageSize)
+    {
+        pageSize_ = pageSize;
+    }
 
     // Subscription operations
     void SubscribeResource(const std::string& uri);
@@ -52,7 +62,8 @@ private:
     std::unordered_map<std::string, ResourceEntry> resources_;
     std::unordered_map<std::string, ResourceTemplate> resourceTemplates_;
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
+    std::size_t pageSize_;
 };
 
 } // namespace Mcp

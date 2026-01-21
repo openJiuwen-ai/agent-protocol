@@ -25,12 +25,14 @@ public:
 
     std::future<std::shared_ptr<InitializeResult>> Initialize() override;
 
-    std::future<std::shared_ptr<ListToolsResult>> ListTools() override;
+    std::future<std::shared_ptr<ListToolsResult>> ListTools(
+        const std::optional<std::string>& cursor = std::nullopt) override;
     std::future<std::shared_ptr<CallToolResult>> CallTool(const std::string& name,
                                                           const std::optional<JsonValue>& arguments = std::nullopt,
                                                           int timeout = 0) override;
 
-    std::future<std::shared_ptr<ListResourcesResult>> ListResources() override;
+    std::future<std::shared_ptr<ListResourcesResult>> ListResources(
+        const std::optional<std::string>& cursor = std::nullopt) override;
     std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri) override;
     std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri) override;
     std::future<std::shared_ptr<EmptyResult>> UnsubscribeResource(const std::string& uri) override;

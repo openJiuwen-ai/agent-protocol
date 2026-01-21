@@ -104,9 +104,19 @@ std::future<std::shared_ptr<CallToolResult>> ClientSession::CallTool(const std::
 
 std::future<std::shared_ptr<ListToolsResult>> ClientSession::ListTools()
 {
+    return ListTools(std::nullopt);
+}
+
+std::future<std::shared_ptr<ListToolsResult>> ClientSession::ListTools(const std::optional<std::string>& cursor)
+{
     auto promise = std::make_shared<std::promise<std::shared_ptr<ListToolsResult>>>();
     auto future = promise->get_future();
     auto req = std::make_unique<ListToolsRequest>();
+    if (cursor.has_value()) {
+        auto params = std::make_unique<RequestParams>();
+        params->cursor = cursor;
+        req->params_ = std::move(params);
+    }
 
     auto completion = [this, promise](std::shared_ptr<Result> resultPtr) {
         try {
@@ -238,9 +248,22 @@ void ClientSession::SendRootsListChanged()
 
 std::future<std::shared_ptr<ListResourcesResult>> ClientSession::ListResources()
 {
+    return ListResources(std::nullopt);
+}
+
+std::future<std::shared_ptr<ListResourcesResult>> ClientSession::ListResources(
+    const std::optional<std::string>& cursor)
+{
     auto promise = std::make_shared<std::promise<std::shared_ptr<ListResourcesResult>>>();
     auto future = promise->get_future();
     auto req = std::make_unique<ListResourcesRequest>();
+
+    if (cursor.has_value()) {
+        auto params = std::make_unique<RequestParams>();
+        params->cursor = cursor;
+        req->params_ = std::move(params);
+    }
+
     SendRequest(std::move(req), MakeTypedCompletion<ListResourcesResult>(promise, "ListResources"));
 
     return future;

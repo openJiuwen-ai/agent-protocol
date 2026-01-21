@@ -82,14 +82,46 @@ void ResourceManager::RemoveResourceTemplate(const std::string& uriTemplate)
     resourceTemplates_.erase(it);
 }
 
-ListResourcesResult ResourceManager::ListResources()
+ListResourcesResult ResourceManager::ListResources(const std::optional<std::string>& cursor)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     ListResourcesResult result;
-    result.resources.reserve(resources_.size());
 
-    for (const auto& [uri, entry] : resources_) {
-        result.resources.push_back(entry.info);
+    // Build a stable ordering of URIs.
+    std::vector<std::string> uris;
+    uris.reserve(resources_.size());
+    for (const auto& entry : resources_) {
+        uris.push_back(entry.first);
+    }
+    std::sort(uris.begin(), uris.end());
+
+    // Decode cursor as starting index; invalid values fall back to 0.
+    std::size_t startIndex = 0;
+    if (cursor.has_value()) {
+        try {
+            startIndex = static_cast<std::size_t>(std::stoll(cursor.value()));
+        } catch (...) {
+            startIndex = 0;
+        }
+        if (startIndex > uris.size()) {
+            startIndex = uris.size();
+        }
+    }
+
+    const std::size_t endIndex = std::min(startIndex + pageSize_, uris.size());
+    result.resources.reserve(endIndex - startIndex);
+
+    for (std::size_t i = startIndex; i < endIndex; ++i) {
+        const auto& uri = uris[i];
+        const auto it = resources_.find(uri);
+        if (it == resources_.end()) {
+            continue;
+        }
+        result.resources.push_back(it->second.info);
+    }
+
+    if (endIndex < uris.size()) {
+        result.nextCursor = std::to_string(endIndex);
     }
 
     return result;
@@ -110,7 +142,7 @@ ReadResourceResult ResourceManager::ReadResource(const std::string& uri)
     return readFunc(uri);
 }
 
-ListResourceTemplatesResult ResourceManager::ListResourceTemplates()
+ListResourceTemplatesResult ResourceManager::ListResourceTemplates() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     ListResourceTemplatesResult result;

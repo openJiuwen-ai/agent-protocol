@@ -35,9 +35,13 @@ std::future<std::shared_ptr<InitializeResult>> McpClientImplement::Initialize()
     return session_->Initialize();
 }
 
-std::future<std::shared_ptr<ListToolsResult>> McpClientImplement::ListTools()
+std::future<std::shared_ptr<ListToolsResult>> McpClientImplement::ListTools(
+    const std::optional<std::string>& cursor)
 {
     CheckInitialized();
+    if (cursor.has_value()) {
+        return session_->ListTools(cursor);
+    }
     return session_->ListTools();
 }
 
@@ -49,9 +53,13 @@ std::future<std::shared_ptr<CallToolResult>> McpClientImplement::CallTool(const 
     return session_->CallTool(name, arguments, timeout);
 }
 
-std::future<std::shared_ptr<ListResourcesResult>> McpClientImplement::ListResources()
+std::future<std::shared_ptr<ListResourcesResult>> McpClientImplement::ListResources(
+    const std::optional<std::string>& cursor)
 {
     CheckInitialized();
+    if (cursor.has_value()) {
+        return session_->ListResources(cursor);
+    }
     return session_->ListResources();
 }
 

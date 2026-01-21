@@ -29,13 +29,17 @@ public:
     virtual std::future<std::shared_ptr<InitializeResult>> Initialize() = 0;
 
     /**
-     * @brief List all available tools on the server.
+     * @brief List available tools starting from the specified cursor.
      *
-     * Retrieves a list of tools that are registered and available for use on the server.
+     * Retrieves a list (page) of tools. When cursor is std::nullopt, listing
+     * starts from the beginning. The returned result may contain nextCursor for
+     * subsequent pages.
      *
+     * @param cursor Optional cursor indicating the starting position. Defaults to std::nullopt.
      * @throw std::runtime_error If the client is not initialized.
      */
-    virtual std::future<std::shared_ptr<ListToolsResult>> ListTools() = 0;
+    virtual std::future<std::shared_ptr<ListToolsResult>> ListTools(
+        const std::optional<std::string>& cursor = std::nullopt) = 0;
     
     /**
      * @brief Call a tool by name with optional arguments and timeout.
@@ -54,13 +58,17 @@ public:
         const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt, int timeout = 0) = 0;
     
     /**
-     * @brief List all available resources on the server.
+     * @brief List available resources starting from the specified cursor.
      *
-     * Retrieves a list of resources that are available for access on the server.
+     * Retrieves a list (page) of resources. When cursor is std::nullopt,
+     * listing starts from the beginning. The returned result may contain
+     * nextCursor for subsequent pages.
      *
+     * @param cursor Optional cursor indicating the starting position. Defaults to std::nullopt.
      * @throw std::runtime_error If the client is not initialized.
      */
-    virtual std::future<std::shared_ptr<ListResourcesResult>> ListResources() = 0;
+    virtual std::future<std::shared_ptr<ListResourcesResult>> ListResources(
+        const std::optional<std::string>& cursor = std::nullopt) = 0;
 
     /**
      * @brief Read the content of a resource by URI.

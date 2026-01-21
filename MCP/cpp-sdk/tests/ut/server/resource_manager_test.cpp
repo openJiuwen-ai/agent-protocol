@@ -628,8 +628,15 @@ TEST_F(ResourceManagerTest, LargeNumberOfResources)
         EXPECT_NO_THROW(manager.AddResource(resource, readFunc));
     }
 
-    ListResourcesResult result = manager.ListResources();
-    EXPECT_EQ(result.resources.size(), kNumResources);
+    std::optional<std::string> cursor;
+    std::size_t total = 0;
+    do {
+        ListResourcesResult page = manager.ListResources(cursor);
+        total += page.resources.size();
+        cursor = page.nextCursor;
+    } while (cursor.has_value());
+
+    EXPECT_EQ(total, static_cast<std::size_t>(kNumResources));
 
     // Verify we can read resources from the middle
     EXPECT_NO_THROW(manager.ReadResource("resource://batch/resource50.txt"));

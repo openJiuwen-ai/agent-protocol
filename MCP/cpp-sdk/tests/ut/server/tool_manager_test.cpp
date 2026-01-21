@@ -415,8 +415,15 @@ TEST_F(ToolManagerTest, AddManyTools)
         EXPECT_NO_THROW(toolManager->AddTool(tool));
     }
 
-    ListToolsResult result = toolManager->ListTools();
-    EXPECT_EQ(result.tools.size(), numTools);
+    std::optional<std::string> cursor;
+    std::size_t total = 0;
+    do {
+        ListToolsResult page = toolManager->ListTools(cursor);
+        total += page.tools.size();
+        cursor = page.nextCursor;
+    } while (cursor.has_value());
+
+    EXPECT_EQ(total, static_cast<std::size_t>(numTools));
 }
 
 TEST_F(ToolManagerTest, RemoveToolExceptionMessages)

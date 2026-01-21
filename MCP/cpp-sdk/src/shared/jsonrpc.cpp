@@ -12,43 +12,31 @@
 #include "mcp_type.h"
 
 namespace nlohmann {
-// ListTools params/request serializers
-template <>
-struct adl_serializer<Mcp::ListToolsParams> {
-    static void to_json(json& j, const Mcp::ListToolsParams& p)
-    {
-        if (p.cursor.has_value()) {
-            j["cursor"] = p.cursor.value();
-        }
-    }
-
-    static void from_json(const json& j, Mcp::ListToolsParams& p)
-    {
-        if (j.contains("cursor")) {
-            p.cursor = j.at("cursor").get<std::string>();
-        } else {
-            p.cursor.reset();
-        }
-    }
-};
-
+// ListToolsRequest -> {cursor?}
 template <>
 struct adl_serializer<Mcp::ListToolsRequest> {
     static void to_json(json& j, const Mcp::ListToolsRequest& req)
     {
         if (req.params_) {
-            auto p = static_cast<const Mcp::ListToolsParams*>(req.params_.get());
-            j["params"] = *p;
+            auto p = static_cast<const Mcp::RequestParams*>(req.params_.get());
+            if (p->cursor.has_value()) {
+                j["cursor"] = p->cursor.value();
+            }
         }
     }
 
     static void from_json(const json& j, Mcp::ListToolsRequest& req)
     {
-        j.at("method").get_to(req.method_);
+        if (j.contains("method")) {
+            j.at("method").get_to(req.method_);
+        }
         if (j.contains("params")) {
-            Mcp::ListToolsParams p;
-            j.at("params").get_to(p);
-            req.params_ = std::make_unique<Mcp::ListToolsParams>(std::move(p));
+            const auto& paramsJson = j.at("params");
+            if (paramsJson.contains("cursor")) {
+                auto p = std::make_unique<Mcp::RequestParams>();
+                p->cursor = paramsJson.at("cursor").get<std::string>();
+                req.params_ = std::move(p);
+            }
         }
     }
 };
@@ -576,6 +564,12 @@ struct adl_serializer<Mcp::ListResourcesResult> {
     static void to_json(json& j, const Mcp::ListResourcesResult& r)
     {
         j["resources"] = r.resources;
+        if (r.meta.has_value()) {
+            j["_meta"] = r.meta.value();
+        }
+        if (r.nextCursor.has_value()) {
+            j["nextCursor"] = r.nextCursor.value();
+        }
     }
 
     static void from_json(const json& j, Mcp::ListResourcesResult& r)
@@ -584,6 +578,16 @@ struct adl_serializer<Mcp::ListResourcesResult> {
             j.at("resources").get_to(r.resources);
         } else {
             r.resources.clear();
+        }
+        if (j.contains("_meta")) {
+            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        } else {
+            r.meta.reset();
+        }
+        if (j.contains("nextCursor")) {
+            r.nextCursor = j.at("nextCursor").get<std::string>();
+        } else {
+            r.nextCursor.reset();
         }
     }
 };
@@ -751,6 +755,9 @@ struct adl_serializer<Mcp::ListToolsResult> {
         if (r.meta.has_value()) {
             j["_meta"] = r.meta.value();
         }
+        if (r.nextCursor.has_value()) {
+            j["nextCursor"] = r.nextCursor.value();
+        }
     }
 
     static void from_json(const json& j, Mcp::ListToolsResult& r)
@@ -762,6 +769,13 @@ struct adl_serializer<Mcp::ListToolsResult> {
         }
         if (j.contains("_meta")) {
             r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        } else {
+            r.meta.reset();
+        }
+        if (j.contains("nextCursor")) {
+            r.nextCursor = j.at("nextCursor").get<std::string>();
+        } else {
+            r.nextCursor.reset();
         }
     }
 };
@@ -1099,16 +1113,32 @@ struct adl_serializer<Mcp::UnsubscribeRequest> {
     }
 };
 
-// ListResourcesRequest -> {"method":"resources/list", "params":{}}
+// ListResourcesRequest -> {cursor?}
 template <>
 struct adl_serializer<Mcp::ListResourcesRequest> {
     static void to_json(json& j, const Mcp::ListResourcesRequest& req)
     {
+        if (req.params_) {
+            auto p = static_cast<const Mcp::RequestParams*>(req.params_.get());
+            if (p->cursor.has_value()) {
+                j["cursor"] = p->cursor.value();
+            }
+        }
     }
 
     static void from_json(const json& j, Mcp::ListResourcesRequest& req)
     {
-        j.at("method").get_to(req.method_);
+        if (j.contains("method")) {
+            j.at("method").get_to(req.method_);
+        }
+        if (j.contains("params")) {
+            const auto& paramsJson = j.at("params");
+            if (paramsJson.contains("cursor")) {
+                auto p = std::make_unique<Mcp::RequestParams>();
+                p->cursor = paramsJson.at("cursor").get<std::string>();
+                req.params_ = std::move(p);
+            }
+        }
     }
 };
 

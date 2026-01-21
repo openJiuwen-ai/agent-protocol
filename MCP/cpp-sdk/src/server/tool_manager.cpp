@@ -56,14 +56,44 @@ void ToolManager::RemoveTool(const std::string& name)
     tools_.erase(it);
 }
 
-ListToolsResult ToolManager::ListTools() const
+ListToolsResult ToolManager::ListTools(const std::optional<std::string>& cursor) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    ListToolsResult result;
-    result.tools.reserve(tools_.size());
+    // Build a stable ordering of tool names.
+    std::vector<std::string> names;
+    names.reserve(tools_.size());
+    for (const auto& entry : tools_) {
+        names.push_back(entry.first);
+    }
+    std::sort(names.begin(), names.end());
 
-    for (const auto& [_, item] : tools_) {
+    // Decode cursor as starting index; invalid values fall back to 0.
+    std::size_t startIndex = 0;
+    if (cursor.has_value()) {
+        try {
+            startIndex = static_cast<std::size_t>(std::stoll(cursor.value()));
+        } catch (...) {
+            startIndex = 0;
+        }
+        if (startIndex > names.size()) {
+            startIndex = names.size();
+        }
+    }
+
+    ListToolsResult result;
+
+    const std::size_t endIndex = std::min(startIndex + pageSize_, names.size());
+    result.tools.reserve(endIndex - startIndex);
+
+    for (std::size_t i = startIndex; i < endIndex; ++i) {
+        const auto& name = names[i];
+        const auto it = tools_.find(name);
+        if (it == tools_.end()) {
+            continue;
+        }
+        const auto& item = it->second;
+
         Tool tool;
         tool.name = item.name;
         tool.title = item.title;
@@ -73,6 +103,10 @@ ListToolsResult ToolManager::ListTools() const
         tool.annotations = item.annotations;
         tool.icons = item.icons;
         result.tools.push_back(std::move(tool));
+    }
+
+    if (endIndex < names.size()) {
+        result.nextCursor = std::to_string(endIndex);
     }
 
     return result;

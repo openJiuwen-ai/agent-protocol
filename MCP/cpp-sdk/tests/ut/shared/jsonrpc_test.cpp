@@ -56,11 +56,11 @@ using Mcp::EmptyResult;
 using Mcp::RoleType;
 using Mcp::ListToolsRequest;
 using Mcp::ListToolsResult;
-using Mcp::ListToolsParams;
 using Mcp::CallToolRequest;
 using Mcp::CallToolParams;
 using Mcp::Tool;
 using Mcp::InitializedNotification;
+using Mcp::RequestParams;
 using nlohmann::json;
 
 constexpr const char* PROTOCOL_VERSION = "2025-03-26";
@@ -824,6 +824,93 @@ TEST_F(JSONRPCTest, ListResourcesResultDeserializationParsesResourceInfo)
     EXPECT_FALSE(r2.description.has_value());
     EXPECT_FALSE(r2.mimeType.has_value());
     EXPECT_FALSE(r2.size.has_value());
+}
+
+TEST_F(JSONRPCTest, ListToolsRequestSerializationWithCursor)
+{
+    auto listReq = std::make_unique<ListToolsRequest>();
+    auto params = std::make_unique<RequestParams>();
+    params->cursor = std::string{"10"};
+    listReq->params_ = std::move(params);
+
+    JSONRPCRequest rpcReq;
+    rpcReq.id_ = REQUEST_ID;
+    rpcReq.method_ = "tools/list";
+    rpcReq.request_ = std::move(listReq);
+
+    std::string serialized = rpcReq.Serialize();
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(std::string{"tools/list"}, j.at("method").get<std::string>());
+    ASSERT_TRUE(j.contains("params"));
+    EXPECT_EQ(std::string{"10"}, j.at("params").at("cursor").get<std::string>());
+}
+
+TEST_F(JSONRPCTest, ListToolsResultSerializationWithNextCursor)
+{
+    JSONRPCResponse resp;
+    resp.id_ = REQUEST_ID;
+
+    ListToolsResult result;
+    Tool tool;
+    tool.name = "example_tool";
+    result.tools.push_back(tool);
+    result.nextCursor = std::string{"20"};
+
+    resp.result_ = std::make_shared<ListToolsResult>(std::move(result));
+
+    std::string serialized = resp.Serialize("tools/list");
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(REQUEST_ID, j.at("id").get<int>());
+    ASSERT_TRUE(j.contains("result"));
+    ASSERT_TRUE(j.at("result").contains("tools"));
+    ASSERT_TRUE(j.at("result").contains("nextCursor"));
+    EXPECT_EQ(std::string{"20"}, j.at("result").at("nextCursor").get<std::string>());
+}
+
+TEST_F(JSONRPCTest, ListResourcesRequestSerializationWithCursor)
+{
+    auto listReq = std::make_unique<ListResourcesRequest>();
+    auto params = std::make_unique<RequestParams>();
+    params->cursor = std::string{"5"};
+    listReq->params_ = std::move(params);
+
+    JSONRPCRequest rpcReq;
+    rpcReq.id_ = REQUEST_ID;
+    rpcReq.method_ = "resources/list";
+    rpcReq.request_ = std::move(listReq);
+
+    std::string serialized = rpcReq.Serialize();
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(std::string{"resources/list"}, j.at("method").get<std::string>());
+    ASSERT_TRUE(j.contains("params"));
+    EXPECT_EQ(std::string{"5"}, j.at("params").at("cursor").get<std::string>());
+}
+
+TEST_F(JSONRPCTest, ListResourcesResultDeserializationWithNextCursor)
+{
+    std::string jsonStr = R"({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "resources": [],
+            "nextCursor": "15"
+        }
+    })";
+
+    JSONRPCResponse resp;
+    int result = resp.Deserialize(jsonStr, "resources/list");
+
+    EXPECT_EQ(0, result);
+    ASSERT_NE(nullptr, resp.result_);
+
+    auto* listResult = dynamic_cast<ListResourcesResult*>(resp.result_.get());
+    ASSERT_NE(nullptr, listResult);
+    ASSERT_TRUE(listResult->nextCursor.has_value());
+    EXPECT_EQ(std::string{"15"}, listResult->nextCursor.value());
 }
 
 TEST_F(JSONRPCTest, ToolsCallResultDeserializationParsesEmbeddedResourceAndLink)

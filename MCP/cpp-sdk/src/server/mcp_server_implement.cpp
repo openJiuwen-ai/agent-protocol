@@ -104,7 +104,13 @@ void McpServerImplement::HandleToolsList(int64_t requestId, const Request& reque
     if (session == nullptr) {
         throw std::runtime_error("Session not found: " + ctx.sessionId);
     }
-    auto result = std::make_unique<ListToolsResult>(toolManager_.ListTools());
+
+    std::optional<std::string> cursor;
+    if (request.params_) {
+        cursor = request.params_->cursor;
+    }
+
+    auto result = std::make_unique<ListToolsResult>(toolManager_.ListTools(cursor));
     session->SendResponse(requestId, std::move(result), ctx);
 }
 
@@ -181,7 +187,6 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
 
 void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& request, RequestContext& ctx)
 {
-    (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: " + ctx.sessionId);
@@ -189,7 +194,12 @@ void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& r
     }
 
     try {
-        auto result = std::make_unique<ListResourcesResult>(resourceManager_.ListResources());
+        std::optional<std::string> cursor;
+        if (request.params_) {
+            cursor = request.params_->cursor;
+        }
+
+        auto result = std::make_unique<ListResourcesResult>(resourceManager_.ListResources(cursor));
         session->SendResponse(requestId, std::move(result), ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
@@ -305,6 +315,8 @@ McpServerImplement::McpServerImplement(const ServerConfig& config)
     }
 
     config_ = config;
+    toolManager_.SetPageSize(config.toolsPageSize);
+    resourceManager_.SetPageSize(config.resourcesPageSize);
 }
 
 McpServerImplement::McpServerImplement(const ServerConfig& config, const StreamableHttpServerConfig& transportConfig)
@@ -320,6 +332,8 @@ McpServerImplement::McpServerImplement(const ServerConfig& config, const Streama
 
     config_ = config;
     streamableConfig_ = transportConfig;
+    toolManager_.SetPageSize(config.toolsPageSize);
+    resourceManager_.SetPageSize(config.resourcesPageSize);
 }
 
 McpServerImplement::~McpServerImplement()

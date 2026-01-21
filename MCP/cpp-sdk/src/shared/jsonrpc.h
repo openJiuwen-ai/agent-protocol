@@ -19,8 +19,12 @@
 namespace Mcp {
 
 // Base class for pure parameter data
+// All request-specific parameter structs can optionally use `cursor` for pagination.
 struct RequestParams {
     virtual ~RequestParams() = default;
+
+    // Optional pagination cursor used by list-style methods (e.g., tools/list, resources/list).
+    std::optional<std::string> cursor;
 };
 
 struct Request : public MCPBaseType {
@@ -129,14 +133,6 @@ struct InitializeRequest : public Request {
 
 struct ListPromptsRequest : public Request {
     ListPromptsRequest();
-};
-
-struct ListToolsParams : public RequestParams {
-    std::optional<std::string> cursor;
-
-    ListToolsParams(std::optional<std::string> c = std::nullopt) : cursor(std::move(c))
-    {
-    }
 };
 
 struct ListToolsRequest : public Request {
