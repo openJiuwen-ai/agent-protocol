@@ -129,9 +129,16 @@ int main(int argc, char** argv)
                 if (arguments.contains("user_query") && arguments.at("user_query").is_string()) {
                     userQuery = arguments.at("user_query").get<std::string>();
                 }
+                
+                // Set content
                 Mcp::TextContent textContent;
                 textContent.text = "Echo: " + userQuery;
                 result.content.push_back(textContent);
+
+                // Provide structuredContent when outputSchema is present
+                nlohmann::json structuredJson;
+                structuredJson["result"] = userQuery;
+                result.structuredContent = structuredJson.dump();
             } catch (const std::exception &e) {
                 result.isError = true;
                 Mcp::TextContent errorContent;
@@ -164,7 +171,10 @@ int main(int argc, char** argv)
         try {
             for (int i = 0; i < EXAMPLE_BULK_COUNT; ++i) {
                 std::string toolName = std::string("echo_") + std::to_string(i);
-                Mcp::AddToolOptionalParams tp; // keep minimal, no extra fields
+                Mcp::AddToolOptionalParams tp;
+                std::string minimalInputSchema = R"({"type": "object", "properties": {},
+                    "additionalProperties": true})";
+                tp.inputSchema = std::cref(minimalInputSchema);
                 server->AddTool(toolName, echoFunc, tp);
             }
             MCP_LOG(MCP_LOG_LEVEL_INFO,

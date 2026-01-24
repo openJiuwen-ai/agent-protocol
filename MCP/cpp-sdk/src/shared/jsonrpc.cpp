@@ -629,7 +629,13 @@ struct adl_serializer<Mcp::CallToolResult> {
     {
         j["content"] = r.content;
         if (r.structuredContent.has_value()) {
-            j["structuredContent"] = r.structuredContent.value();
+            // Prefer sending structuredContent as parsed JSON when possible
+            try {
+                j["structuredContent"] = json::parse(r.structuredContent.value());
+            } catch (const json::exception&) {
+                // Fallback to string if parsing fails
+                j["structuredContent"] = r.structuredContent.value();
+            }
         }
         j["isError"] = r.isError;
         if (r.meta.has_value()) {
@@ -640,12 +646,29 @@ struct adl_serializer<Mcp::CallToolResult> {
     static void from_json(const json& j, Mcp::CallToolResult& r)
     {
         if (j.contains("content")) {
-            j.at("content").get_to(r.content);
+            const auto& c = j.at("content");
+            if (c.is_array()) {
+                c.get_to(r.content);
+            } else if (c.is_string()) {
+                // Compatibility: if server returns plain string, wrap as text content
+                Mcp::TextContent tc;
+                tc.text = c.get<std::string>();
+                r.content.clear();
+                r.content.push_back(tc);
+            } else {
+                r.content.clear();
+            }
         } else {
             r.content.clear();
         }
         if (j.contains("structuredContent")) {
-            r.structuredContent = j.at("structuredContent").get<std::string>();
+            const auto& sc = j.at("structuredContent");
+            if (sc.is_object() || sc.is_array()) {
+                // Store internally as string to keep type stable
+                r.structuredContent = sc.dump();
+            } else {
+                r.structuredContent = sc.get<std::string>();
+            }
         }
         r.isError = j.value("isError", false);
         if (j.contains("_meta")) {
