@@ -21,6 +21,7 @@ BUILD_TYPE="Release"
 WITH_TESTS=0
 WITH_COVERAGE=0
 WITH_STDIO=0
+WITH_ASAN=0
 BUILD_DIR="build"
 GENERATOR=""
 
@@ -37,6 +38,7 @@ Options:
   -u, --with-tests             Build unit tests target(s) if available
   -c, --coverage               Enable code coverage (implies --with-tests)
   -s, --stdio                  Enable execute UT about stdio
+  --asan                       Enable AddressSanitizer (GCC/Clang), debug type will be used
   -b, --build-dir <dir>        Build directory (default: build)
   -g, --generator <name>       CMake generator (e.g. "Ninja", "NMake Makefiles")
   --no-client                  Do not build client components
@@ -75,6 +77,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -s|--stdio)
       WITH_STDIO=1;
+      shift;
+      ;;
+    --asan)
+      WITH_ASAN=1;
       shift;
       ;;
     -b|--build-dir)
@@ -123,6 +129,12 @@ esac
 if [[ ${WITH_COVERAGE} -eq 1 && "${BUILD_TYPE}" != "Debug" ]]; then
   echo "[INFO] Coverage is enabled, but build type is ${BUILD_TYPE}. For best results, consider using Debug mode (-t Debug)."
   echo "[INFO] Continuing with ${BUILD_TYPE}..."
+fi
+
+# ASAN default build type is Debug
+if [[ ${WITH_ASAN} -eq 1 ]]; then
+  BUILD_TYPE="Debug"
+  CMAKE_ARGS+=("-DASAN=enable")
 fi
 
 # Determine optimal job count for Linux (CPU cores + 1, but max 8 to avoid memory issues)

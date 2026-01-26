@@ -44,8 +44,24 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2 -D_FORTIFY_SOURCE=2")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -D_FORTIFY_SOURCE=2")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
+set(CMAKE_FLAGS_ASAN
+    -fsanitize=address
+    -fsanitize-recover=address
+    -fsanitize=leak
+    -fno-omit-frame-pointer
+)
+
 # Common compiler flags
 add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal -Wtrampolines -fno-strict-aliasing -fstack-protector-strong)
+
+if (ASAN STREQUAL "enable")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(${CMAKE_FLAGS_ASAN})
+        add_link_options(${CMAKE_FLAGS_ASAN})
+    else()
+        message(WARNING "ASAN not supported for compiler: ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
 
 # Linker flags for security hardening
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic -pie")
