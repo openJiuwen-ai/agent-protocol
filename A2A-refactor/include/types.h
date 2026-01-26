@@ -102,19 +102,6 @@ struct Task {
     TaskStatus status;
 };
 
-// JSON-RPC error and responses (subset)
-struct JSONRPCError {
-    int code;
-    std::optional<nlohmann::json> data;
-    std::string message;
-};
-
-struct JSONRPCErrorResponse {
-    nlohmann::json id;
-    std::string jsonrpc = "2.0";
-    JSONRPCError error;
-};
-
 // Push Notifications and Task params
 struct PushNotificationAuthenticationInfo {
     std::optional<std::string> credentials;
@@ -194,46 +181,6 @@ struct DeleteTaskPushNotificationConfigParams {
     std::string id;
     std::optional<nlohmann::json> metadata;
     std::string pushNotificationConfigId;
-};
-
-// Requests/Responses (subset, enough to wire server/client)
-struct SendMessageRequest {
-    std::string id;
-    std::string jsonrpc = "2.0";
-    std::string method = "message/send";
-    MessageSendParams params;
-};
-
-struct SendMessageSuccessResponse {
-    std::optional<std::string> id;
-    std::string jsonrpc = "2.0";
-    std::variant<Task, Message> result;
-};
-
-struct GetTaskRequest {
-    std::string id;
-    std::string jsonrpc = "2.0";
-    std::string method = "tasks/get";
-    TaskIdParams params;
-};
-
-struct GetTaskSuccessResponse {
-    std::optional<std::string> id;
-    std::string jsonrpc = "2.0";
-    Task result;
-};
-
-struct CancelTaskRequest {
-    std::string id;
-    std::string jsonrpc = "2.0";
-    std::string method = "tasks/cancel";
-    TaskIdParams params;
-};
-
-struct CancelTaskSuccessResponse {
-    std::optional<std::string> id;
-    std::string jsonrpc = "2.0";
-    Task result;
 };
 
 // Error models (A2A + JSON-RPC)

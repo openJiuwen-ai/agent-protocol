@@ -185,9 +185,7 @@ namespace nlohmann {
             // file is a union, emit discriminated by presence of field
             std::visit(
                 [&](auto&& f) {
-                    nlohmann::json jf;
-                    to_json(jf, f);
-                    j["file"] = jf;
+                    j["file"] = json(f);
                 },
                 p.file);
         }
@@ -210,13 +208,9 @@ namespace nlohmann {
             }
             const auto& jf = j.at("file");
             if (jf.contains("bytes")) {
-                FileWithBytes fb;
-                from_json(jf, fb);
-                p.file = fb;
+                p.file = jf.get<A2A::FileWithBytes>();
             } else if (jf.contains("uri")) {
-                FileWithUri fu;
-                from_json(jf, fu);
-                p.file = fu;
+                p.file = jf.get<A2A::FileWithUri>();
             } else {
                 throw std::runtime_error("File must contain either 'bytes' or 'uri' field");
             }
@@ -228,30 +222,24 @@ namespace nlohmann {
     struct adl_serializer<A2A::Part> {
         static void to_json(nlohmann::json& j, const A2A::Part& p)
         {
-            std::visit([&](auto&& part) { to_json(j, part); }, p);
+            std::visit([&](auto&& part) { j = json(part); }, p);
         }
 
         static void from_json(const nlohmann::json& j, A2A::Part& p)
         {
             const auto kind = j.value<std::string>("kind", "");
             if (kind == "text") {
-                TextPart t;
-                from_json(j, t);
-                p = t;
+                p = j.get<A2A::TextPart>();
                 return;
             }
 
             if (kind == "data") {
-                DataPart d;
-                from_json(j, d);
-                p = d;
+                p = j.get<A2A::DataPart>();
                 return;
             }
 
             if (kind == "file") {
-                FilePart f;
-                from_json(j, f);
-                p = f;
+                p = j.get<A2A::FilePart>();
                 return;
             }
 
@@ -270,9 +258,7 @@ namespace nlohmann {
 
             nlohmann::json parts_array = nlohmann::json::array();
             for (const auto& p : a.parts) {
-                nlohmann::json jp;
-                to_json(jp, p);
-                parts_array.push_back(jp);
+                parts_array.push_back(json(p));
             }
 
             j = nlohmann::json{{"artifactId", a.artifactId}, {"parts", parts_array}};
@@ -323,9 +309,7 @@ namespace nlohmann {
 
             a.parts.clear();
             for (const auto& jp : j.at("parts")) {
-                Part p;
-                from_json(jp, p);
-                a.parts.push_back(std::move(p));
+                a.parts.push_back(jp.get<A2A::Part>());
             }
         }
     };
@@ -345,7 +329,7 @@ namespace nlohmann {
             j = nlohmann::json{{"kind", m.kind},
                                {"messageId", m.messageId},
                                {"parts", nlohmann::json::array()},
-                               {"role", m.role == Role::AGENT ? "agent" : "user"}};
+                               {"role", m.role == A2A::Role::AGENT ? "agent" : "user"}};
 
             if (m.contextId) {
                 j["contextId"] = *m.contextId;
@@ -368,9 +352,7 @@ namespace nlohmann {
             }
 
             for (const auto& p : m.parts) {
-                nlohmann::json jp;
-                to_json(jp, p);
-                j["parts"].push_back(jp);
+                j["parts"].push_back(json(p));
             }
         }
 
@@ -410,9 +392,7 @@ namespace nlohmann {
 
             m.parts.clear();
             for (const auto& jp : j.at("parts")) {
-                Part p;
-                from_json(jp, p);
-                m.parts.push_back(std::move(p));
+                m.parts.push_back(jp.get<A2A::Part>());
             }
 
             if (j.contains("referenceTaskIds")) {
@@ -420,7 +400,7 @@ namespace nlohmann {
             }
 
             if (j.contains("role")) {
-                from_json(j.at("role"), m.role);
+                m.role = j.at("role").get<A2A::Role>();
             } else {
                 m.role = A2A::Role::USER;
             }
@@ -562,44 +542,85 @@ namespace nlohmann {
         }
     };
 
-    // JSONRPCError serializers
+    // PushNotificationAuthenticationInfo serializers
     template<>
-    struct adl_serializer<A2A::JSONRPCError> {
-        static void to_json(nlohmann::json& j, const A2A::JSONRPCError& e)
+    struct adl_serializer<A2A::PushNotificationAuthenticationInfo> {
+        static void to_json(nlohmann::json& j, const A2A::PushNotificationAuthenticationInfo& i)
         {
-            j = nlohmann::json{{"code", e.code}, {"message", e.message}};
-
-            if (e.data) {
-                j["data"] = *e.data;
+            j = {{"schemes", i.schemes}};
+            if (i.credentials) {
+                j["credentials"] = *i.credentials;
             }
         }
 
-        static void from_json(const nlohmann::json& j, A2A::JSONRPCError& e)
+        static void from_json(const nlohmann::json& j, A2A::PushNotificationAuthenticationInfo& i)
         {
-            j.at("code").get_to(e.code);
-            j.at("message").get_to(e.message);
-            if (j.contains("data")) {
-                e.data = j.at("data");
+            if (!j.contains("schemes")) {
+                throw std::runtime_error("PushNotificationAuthenticationInfo must contain 'schemes' field");
+            }
+
+            const auto& schemes_json = j.at("schemes");
+            if (!schemes_json.is_array()) {
+                throw std::runtime_error("PushNotificationAuthenticationInfo.schemes must be an array");
+            }
+            i.schemes.clear();
+            for (const auto& scheme : schemes_json) {
+                if (!scheme.is_string()) {
+                    throw std::runtime_error("PushNotificationAuthenticationInfo.schemes must contain only strings");
+                }
+                i.schemes.push_back(scheme.get<std::string>());
+            }
+
+            if (j.contains("credentials")) {
+                i.credentials = j.at("credentials").get<std::string>();
             }
         }
     };
 
-    // JSONRPCErrorResponse serializers
+    // PushNotificationConfig serializers
     template<>
-    struct adl_serializer<A2A::JSONRPCErrorResponse> {
-        static void to_json(nlohmann::json& j, const A2A::JSONRPCErrorResponse& r)
+    struct adl_serializer<A2A::PushNotificationConfig> {
+        static void to_json(nlohmann::json& j, const A2A::PushNotificationConfig& c)
         {
-            j = nlohmann::json{{"jsonrpc", r.jsonrpc}, {"id", r.id}, {"error", r.error}};
-        }
+            if (c.url.empty()) {
+                throw std::runtime_error("PushNotificationConfig.url cannot be empty");
+            }
+            j = {{"url", c.url}};
 
-        static void from_json(const nlohmann::json& j, A2A::JSONRPCErrorResponse& r)
-        {
-            r.id = j.at("id");
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
+            if (c.authentication) {
+                j["authentication"] = *c.authentication;
             }
 
-            r.error = j.at("error").get<A2A::JSONRPCError>();
+            if (c.id) {
+                j["id"] = *c.id;
+            }
+
+            if (c.token) {
+                j["token"] = *c.token;
+            }
+        }
+
+        static void from_json(const nlohmann::json& j, A2A::PushNotificationConfig& c)
+        {
+            if (!j.contains("url")) {
+                throw std::runtime_error("PushNotificationConfig must contain 'url' field");
+            }
+            j.at("url").get_to(c.url);
+            if (c.url.empty()) {
+                throw std::runtime_error("PushNotificationConfig.url cannot be empty");
+            }
+
+            if (j.contains("authentication")) {
+                c.authentication = j.at("authentication").get<A2A::PushNotificationAuthenticationInfo>();
+            }
+
+            if (j.contains("id")) {
+                c.id = j.at("id").get<std::string>();
+            }
+
+            if (j.contains("token")) {
+                c.token = j.at("token").get<std::string>();
+            }
         }
     };
 
@@ -647,7 +668,7 @@ namespace nlohmann {
             }
 
             if (j.contains("pushNotificationConfig")) {
-                c.pushNotificationConfig = j.at("pushNotificationConfig").get<PushNotificationConfig>();
+                c.pushNotificationConfig = j.at("pushNotificationConfig").get<A2A::PushNotificationConfig>();
             }
 
             if (j.contains("blocking")) {
@@ -680,9 +701,7 @@ namespace nlohmann {
             p.message = j.at("message").get<A2A::Message>();
 
             if (j.contains("configuration")) {
-                MessageSendConfiguration config;
-                from_json(j.at("configuration"), config);
-                p.configuration = std::move(config);
+                p.configuration = j.at("configuration").get<A2A::MessageSendConfiguration>();
             }
 
             if (j.contains("metadata")) {
@@ -804,87 +823,6 @@ namespace nlohmann {
         }
     };
 
-    // PushNotificationAuthenticationInfo serializers
-    template<>
-    struct adl_serializer<A2A::PushNotificationAuthenticationInfo> {
-        static void to_json(nlohmann::json& j, const A2A::PushNotificationAuthenticationInfo& i)
-        {
-            j = {{"schemes", i.schemes}};
-            if (i.credentials) {
-                j["credentials"] = *i.credentials;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::PushNotificationAuthenticationInfo& i)
-        {
-            if (!j.contains("schemes")) {
-                throw std::runtime_error("PushNotificationAuthenticationInfo must contain 'schemes' field");
-            }
-
-            const auto& schemes_json = j.at("schemes");
-            if (!schemes_json.is_array()) {
-                throw std::runtime_error("PushNotificationAuthenticationInfo.schemes must be an array");
-            }
-            i.schemes.clear();
-            for (const auto& scheme : schemes_json) {
-                if (!scheme.is_string()) {
-                    throw std::runtime_error("PushNotificationAuthenticationInfo.schemes must contain only strings");
-                }
-                i.schemes.push_back(scheme.get<std::string>());
-            }
-
-            if (j.contains("credentials")) {
-                i.credentials = j.at("credentials").get<std::string>();
-            }
-        }
-    };
-
-    // PushNotificationConfig serializers
-    template<>
-    struct adl_serializer<A2A::PushNotificationConfig> {
-        static void to_json(nlohmann::json& j, const A2A::PushNotificationConfig& c)
-        {
-            if (c.url.empty()) {
-                throw std::runtime_error("PushNotificationConfig.url cannot be empty");
-            }
-            j = {{"url", c.url}};
-
-            if (c.authentication) {
-                j["authentication"] = *c.authentication;
-            }
-
-            if (c.id) {
-                j["id"] = *c.id;
-            }
-
-            if (c.token) {
-                j["token"] = *c.token;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::PushNotificationConfig& c)
-        {
-            if (!j.contains("url")) {
-                throw std::runtime_error("PushNotificationConfig must contain 'url' field");
-            }
-            j.at("url").get_to(c.url);
-            if (c.url.empty()) {
-                throw std::runtime_error("PushNotificationConfig.url cannot be empty");
-            }
-
-            if (j.contains("authentication")) {
-                c.authentication = j.at("authentication").get<A2A::PushNotificationAuthenticationInfo>();
-            }
-
-            if (j.contains("id")) {
-                c.id = j.at("id").get<std::string>();
-            }
-
-            if (j.contains("token")) {
-                c.token = j.at("token").get<std::string>();
-            }
-        }
-    };
 
     // TaskIdParams serializers
     template<>
@@ -1088,188 +1026,6 @@ namespace nlohmann {
             if (j.contains("metadata")) {
                 p.metadata = j.at("metadata");
             }
-        }
-    };
-
-    // SendMessageRequest serializers
-    template<>
-    struct adl_serializer<A2A::SendMessageRequest> {
-        static void to_json(nlohmann::json& j, const A2A::SendMessageRequest& r)
-        {
-            j = {{"jsonrpc", r.jsonrpc}, {"id", r.id}, {"method", r.method}, {"params", r.params}};
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::SendMessageRequest& r)
-        {
-            if (!j.contains("id") || !j.contains("params")) {
-                throw std::runtime_error("SendMessageRequest missing required fields");
-            }
-            r.id = j.at("id");
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
-            } else {
-                r.jsonrpc = "2.0";
-            }
-
-            if (j.contains("method")) {
-                r.method = j.at("method").get<std::string>();
-            } else {
-                r.method = "message/send";
-            }
-
-            r.params = j.at("params").get<A2A::MessageSendParams>();
-        }
-    };
-
-    // SendMessageSuccessResponse serializers
-    template<>
-    struct adl_serializer<A2A::SendMessageSuccessResponse> {
-        static void to_json(nlohmann::json& j, const A2A::SendMessageSuccessResponse& r)
-        {
-            j = {{"jsonrpc", r.jsonrpc},
-                 {"result", std::holds_alternative<Message>(r.result) ? nlohmann::json(std::get<A2A::Message>(r.result))
-                                                                      : nlohmann::json(std::get<A2A::Task>(r.result))}};
-
-            if (r.id) {
-                j["id"] = *r.id;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::SendMessageSuccessResponse& r)
-        {
-            if (j.contains("id")) {
-                r.id = j.at("id");
-            }
-
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
-            } else {
-                r.jsonrpc = "2.0";
-            }
-
-            const auto& res = j.at("result");
-            if (res.contains("kind") && res.at("kind") == "message") {
-                r.result = res.get<A2A::Message>();
-            } else {
-                r.result = res.get<A2A::Task>();
-            }
-        }
-    };
-
-    // GetTaskRequest serializers
-    template<>
-    struct adl_serializer<A2A::GetTaskRequest> {
-        static void to_json(nlohmann::json& j, const A2A::GetTaskRequest& r)
-        {
-            j = {{"jsonrpc", r.jsonrpc}, {"id", r.id}, {"method", r.method}, {"params", r.params}};
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::GetTaskRequest& r)
-        {
-            if (!j.contains("id") || !j.contains("params")) {
-                throw std::runtime_error("GetTaskRequest missing required fields");
-            }
-
-            r.id = j.at("id");
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
-            } else {
-                r.jsonrpc = "2.0";
-            }
-
-            if (j.contains("method")) {
-                r.method = j.at("method").get<std::string>();
-            } else {
-                r.method = "tasks/get";
-            }
-
-            r.params = j.at("params").get<A2A::TaskIdParams>();
-        }
-    };
-
-    // GetTaskSuccessResponse serializers
-    template<>
-    struct adl_serializer<A2A::GetTaskSuccessResponse> {
-        static void to_json(nlohmann::json& j, const A2A::GetTaskSuccessResponse& r)
-        {
-            j = {{"jsonrpc", r.jsonrpc}, {"result", r.result}};
-
-            if (r.id) {
-                j["id"] = *r.id;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::GetTaskSuccessResponse& r)
-        {
-            if (j.contains("id")) {
-                r.id = j.at("id");
-            }
-
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
-            } else {
-                r.jsonrpc = "2.0";
-            }
-
-            r.result = j.at("result").get<A2A::Task>();
-        }
-    };
-
-    // CancelTaskRequest serializers
-    template<>
-    struct adl_serializer<A2A::CancelTaskRequest> {
-        static void to_json(nlohmann::json& j, const A2A::CancelTaskRequest& r)
-        {
-            j = {{"jsonrpc", r.jsonrpc}, {"id", r.id}, {"method", r.method}, {"params", r.params}};
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::CancelTaskRequest& r)
-        {
-            if (!j.contains("id") || !j.contains("params")) {
-                throw std::runtime_error("CancelTaskRequest missing required fields");
-            }
-            r.id = j.at("id");
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
-            } else {
-                r.jsonrpc = "2.0";
-            }
-
-            if (j.contains("method")) {
-                r.method = j.at("method").get<std::string>();
-            } else {
-                r.jsonrpc = "tasks/cancel";
-            }
-
-            r.params = j.at("params").get<A2A::TaskIdParams>();
-        }
-    };
-
-    // CancelTaskSuccessResponse serializers
-    template<>
-    struct adl_serializer<A2A::CancelTaskSuccessResponse> {
-        static void to_json(nlohmann::json& j, const A2A::CancelTaskSuccessResponse& r)
-        {
-            j = {{"jsonrpc", r.jsonrpc}, {"result", r.result}};
-
-            if (r.id) {
-                j["id"] = *r.id;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::CancelTaskSuccessResponse& r)
-        {
-            if (j.contains("id")) {
-                r.id = j.at("id");
-            }
-
-            if (j.contains("jsonrpc")) {
-                r.jsonrpc = j.at("jsonrpc").get<std::string>();
-            } else {
-                r.jsonrpc = "2.0";
-            }
-
-            r.result = j.at("result").get<A2A::Task>();
         }
     };
 
@@ -1803,19 +1559,19 @@ namespace nlohmann {
         static void from_json(const nlohmann::json& j, A2A::OAuthFlows& f)
         {
             if (j.contains("authorizationCode")) {
-                f.authorizationCode = j.at("authorizationCode").get<AuthorizationCodeOAuthFlow>();
+                f.authorizationCode = j.at("authorizationCode").get<A2A::AuthorizationCodeOAuthFlow>();
             }
 
             if (j.contains("clientCredentials")) {
-                f.clientCredentials = j.at("clientCredentials").get<ClientCredentialsOAuthFlow>();
+                f.clientCredentials = j.at("clientCredentials").get<A2A::ClientCredentialsOAuthFlow>();
             }
 
             if (j.contains("implicit")) {
-                f.implicit = j.at("implicit").get<ImplicitOAuthFlow>();
+                f.implicit = j.at("implicit").get<A2A::ImplicitOAuthFlow>();
             }
 
             if (j.contains("password")) {
-                f.password = j.at("password").get<PasswordOAuthFlow>();
+                f.password = j.at("password").get<A2A::PasswordOAuthFlow>();
             }
         }
     };
@@ -1842,7 +1598,7 @@ namespace nlohmann {
                 s.description = j.at("description").get<std::string>();
             }
 
-            s.flows = j.at("flows").get<OAuthFlows>();
+            s.flows = j.at("flows").get<A2A::OAuthFlows>();
             if (j.contains("oauth2MetadataUrl")) {
                 s.oauth2MetadataUrl = j.at("oauth2MetadataUrl").get<std::string>();
             }
@@ -1908,9 +1664,7 @@ namespace nlohmann {
         {
             std::visit(
                 [&](auto&& s) {
-                    nlohmann::json js;
-                    to_json(js, s);
-                    j = js;
+                    j = json(s);
                 },
                 ss.v);
         }
@@ -1919,25 +1673,15 @@ namespace nlohmann {
         {
             auto t = j.value<std::string>("type", "");
             if (t == "apiKey") {
-                A2A::APIKeySecurityScheme s;
-                from_json(j, s);
-                ss.v = s;
+                ss.v = j.get<A2A::APIKeySecurityScheme>();
             } else if (t == "http") {
-                A2A::HTTPAuthSecurityScheme s;
-                from_json(j, s);
-                ss.v = s;
+                ss.v = j.get<A2A::HTTPAuthSecurityScheme>();
             } else if (t == "oauth2") {
-                A2A::OAuth2SecurityScheme s;
-                from_json(j, s);
-                ss.v = s;
+                ss.v = j.get<A2A::OAuth2SecurityScheme>();
             } else if (t == "openIdConnect") {
-                A2A::OpenIdConnectSecurityScheme s;
-                from_json(j, s);
-                ss.v = s;
+                ss.v = j.get<A2A::OpenIdConnectSecurityScheme>();
             } else if (t == "mutualTLS") {
-                A2A::MutualTLSSecurityScheme s;
-                from_json(j, s);
-                ss.v = s;
+                ss.v = j.get<A2A::MutualTLSSecurityScheme>();
             } else {
                 throw std::runtime_error("UNKNOWN security scheme type");
             }
@@ -2085,7 +1829,7 @@ namespace nlohmann {
             }
 
             if (j.contains("extensions")) {
-                c.extensions = j.at("extensions").get<std::vector<AgentExtension>>();
+                c.extensions = j.at("extensions").get<std::vector<A2A::AgentExtension>>();
             }
         }
     };
@@ -2172,7 +1916,7 @@ namespace nlohmann {
             j.at("skills").get_to(c.skills);
 
             if (j.contains("provider")) {
-                c.provider = j.at("provider").get<AgentProvider>();
+                c.provider = j.at("provider").get<A2A::AgentProvider>();
             }
             if (j.contains("iconUrl")) {
                 c.iconUrl = j.at("iconUrl").get<std::string>();
@@ -2181,7 +1925,7 @@ namespace nlohmann {
                 c.documentationUrl = j.at("documentationUrl").get<std::string>();
             }
             if (j.contains("securitySchemes")) {
-                c.securitySchemes = j.at("securitySchemes").get<std::map<std::string, SecurityScheme>>();
+                c.securitySchemes = j.at("securitySchemes").get<std::map<std::string, A2A::SecurityScheme>>();
             }
             if (j.contains("security")) {
                 c.security = j.at("security").get<std::vector<nlohmann::json>>();
