@@ -138,7 +138,7 @@ void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message)
     HttpCallback responseBodyCallback = [this](const HttpResponse& response) { HandleResponseBody(response); };
 
     try {
-        httpClientService_->Send(httpRequest, &userData, static_cast<int>(sseReadTimeout_.count()),
+        httpClientService_->Send(httpRequest, userData, static_cast<int>(sseReadTimeout_.count()),
             responseHeaderCallback, responseBodyCallback);
     } catch (const std::exception& e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to enqueue HTTP request: ") + e.what());

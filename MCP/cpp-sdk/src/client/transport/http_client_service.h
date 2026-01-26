@@ -75,8 +75,8 @@ struct RequestContext {
     struct curl_slist* headers = nullptr; // Store headers for cleanup
 
     RequestContext(const HttpRequest& req, HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback,
-        int timeout, UserData* userData)
-        : userData(*userData),
+        int timeout, UserData& userData)
+        : userData(userData),
           request(req),
           responseHeaderCallback(responseHeaderCallback),
           responseBodyCallback(responseBodyCallback),
@@ -157,7 +157,7 @@ public:
      * @param responseHeaderCallback Response header callback function called on completion
      * @param responseBodyCallback Response body callback function called on completion
      */
-    void Send(const HttpRequest& request, UserData* userData, int timeoutMs, HttpCallback responseHeaderCallback,
+    void Send(const HttpRequest& request, UserData& userData, int timeoutMs, HttpCallback responseHeaderCallback,
         HttpCallback responseBodyCallback);
 
 private:

@@ -188,7 +188,7 @@ void HttpClientService::Stop()
 }
 
 // Core sending interface
-void HttpClientService::Send(const HttpRequest& request, UserData* userData, int timeoutMs,
+void HttpClientService::Send(const HttpRequest& request, UserData& userData, int timeoutMs,
     HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback)
 {
     if (state_.load(std::memory_order_acquire) != ServiceState::RUNNING) {
@@ -199,7 +199,7 @@ void HttpClientService::Send(const HttpRequest& request, UserData* userData, int
         throw std::runtime_error("Response body callback is required");
     }
 
-    uint64_t requestId = userData->requestId;
+    uint64_t requestId = userData.requestId;
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request " + std::to_string(requestId) + ": " +
             request.method + " " + request.url);
 
