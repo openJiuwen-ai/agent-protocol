@@ -15,3 +15,7 @@ endif()
 if(MCP_BUILD_SERVER)
     add_subdirectory(server)
 endif()
+
+if(MCP_ENABLE_STDIO)
+    add_subdirectory(stdio)
+endif()

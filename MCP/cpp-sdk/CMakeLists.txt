@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(MCP_ENABLE_TESTS "Build unit tests" OFF)
 option(MCP_ENABLE_EXAMPLES "Build examples" OFF)
 option(MCP_ENABLE_COVERAGE "Enable code coverage" OFF)
+option(MCP_ENABLE_STDIO "Enable stdio UT" OFF)
 
 option(MCP_BUILD_CLIENT "Build MCP client components" ON)
 option(MCP_BUILD_SERVER "Build MCP server components" ON)

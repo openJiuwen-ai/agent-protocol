@@ -20,6 +20,7 @@ set -euo pipefail
 BUILD_TYPE="Release"
 WITH_TESTS=0
 WITH_COVERAGE=0
+WITH_STDIO=0
 BUILD_DIR="build"
 GENERATOR=""
 
@@ -35,6 +36,7 @@ Options:
   -t, --type <Debug|Release>   CMake build type (default: Release)
   -u, --with-tests             Build unit tests target(s) if available
   -c, --coverage               Enable code coverage (implies --with-tests)
+  -s, --stdio                  Enable execute UT about stdio
   -b, --build-dir <dir>        Build directory (default: build)
   -g, --generator <name>       CMake generator (e.g. "Ninja", "NMake Makefiles")
   --no-client                  Do not build client components
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
     -c|--coverage)
       WITH_COVERAGE=1;
       WITH_TESTS=1;
+      shift;
+      ;;
+    -s|--stdio)
+      WITH_STDIO=1;
       shift;
       ;;
     -b|--build-dir)
@@ -153,6 +159,12 @@ if [[ ${WITH_COVERAGE} -eq 1 ]]; then
   CMAKE_ARGS+=("-DMCP_ENABLE_COVERAGE=ON")
 else
   CMAKE_ARGS+=("-DMCP_ENABLE_COVERAGE=OFF")
+fi
+
+if [[ ${WITH_STDIO} -eq 1 ]]; then
+  CMAKE_ARGS+=("-DMCP_ENABLE_STDIO=ON")
+else
+  CMAKE_ARGS+=("-DMCP_ENABLE_STDIO=OFF")
 fi
 
 if [[ -n "${GENERATOR}" ]]; then
