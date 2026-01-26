@@ -104,10 +104,10 @@ void StreamableHttpClientTransport::Connect()
     // The connection is established on each request
 }
 
-void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message)
+void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message, std::optional<std::string> method)
 {
     // Serialize the JSON-RPC message
-    std::string messageBody = SerializeJSONRPCMessage(message);
+    std::string messageBody = SerializeJSONRPCMessage(message, method);
 
     // Prepare HTTP request for HttpClientService
     HttpRequest httpRequest{};

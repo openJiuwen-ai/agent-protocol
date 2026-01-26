@@ -57,8 +57,11 @@ public:
     /**
      * @brief Send a JSON-RPC message through the transport.
      * @param message JSON-RPC message to send.
+        * @param method Optional method name used when serializing JSON-RPC responses.
+        *               Responses in this SDK require the original request method name
+        *               to serialize/deserialize typed results.
      */
-    virtual void SendMessage(const JSONRPCMessage& message) = 0;
+        virtual void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) = 0;
 
     /**
      * @brief Set callback interface for handling transport events.

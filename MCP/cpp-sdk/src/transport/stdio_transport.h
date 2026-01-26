@@ -133,7 +133,7 @@ public:
     // Transport interface implementation
     void Connect() override;
     void Terminate() override;
-    void SendMessage(const JSONRPCMessage& message) override;
+    void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) override;
     void SetCallback(std::shared_ptr<TransportCallback> callback) override;
 
 private:

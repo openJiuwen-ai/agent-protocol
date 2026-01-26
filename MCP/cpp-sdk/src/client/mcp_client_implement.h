@@ -52,6 +52,7 @@ public:
     std::future<Result> Complete(std::string type, std::string uri,
                                  std::unordered_map<std::string, std::string> extras) override;
 
+    void SetListRootsCallback(ListRootsCallback cb) override;
 private:
     void CheckInitialized();
 
@@ -62,6 +63,10 @@ private:
     // Configuration
     ClientConfig config_;
     bool initialized_ = false;
+
+    // Allows SetListRootsCallback() to be called before Initialize() creates session_.
+    // Once session_ is created, this callback is applied to the session and cleared.
+    std::optional<ListRootsCallback> listRootsCallback_{std::nullopt};
 };
 
 } // namespace Mcp

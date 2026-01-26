@@ -4,9 +4,38 @@
 
 #include "server/server_session.h"
 
+#include <future>
+#include <memory>
+
 #include "mcp_log.h"
 
 namespace Mcp {
+
+namespace {
+
+template <typename T>
+std::function<void(std::shared_ptr<Mcp::Result>)> MakeTypedCompletion(
+    std::shared_ptr<std::promise<std::shared_ptr<T>>> promise, const char* opName)
+{
+    return [promise, opName](std::shared_ptr<Mcp::Result> resultPtr) {
+        try {
+            if (!resultPtr) {
+                throw std::runtime_error(std::string(opName) + " failed: null result");
+            }
+
+            auto typed = std::dynamic_pointer_cast<T>(resultPtr);
+            if (!typed) {
+                throw std::runtime_error(std::string(opName) + " failed: result type mismatch");
+            }
+
+            promise->set_value(typed);
+        } catch (...) {
+            promise->set_exception(std::current_exception());
+        }
+    };
+}
+
+} // namespace
 
 ServerSession::~ServerSession() = default;
 
@@ -44,6 +73,25 @@ void ServerSession::SetIncomingNotificationCallback(IncomingNotificationCallback
 void ServerSession::HandleRequest(const HttpRequest& request, RequestContext& context)
 {
     serverTransport_->HandleRequest(request, context);
+}
+
+std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
+{
+    if (serverTransport_ == nullptr) {
+        throw std::runtime_error("Server transport is not available");
+    }
+
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<ListRootsResult>>>();
+    auto future = promise->get_future();
+
+    auto req = std::make_unique<ListRootsRequest>();
+    SendRequest(std::move(req), MakeTypedCompletion<ListRootsResult>(promise, "ListRoots"));
+
+    return future;
 }
 
 void ServerSession::ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)

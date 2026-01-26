@@ -154,14 +154,57 @@ void ClientSession::SendNotification(std::unique_ptr<Notification> notification,
     }
 }
 
-// Handle incoming request (example: log the method)
-void ClientSession::HandleRequest(const Mcp::JSONRPCRequest& request)
+void ClientSession::SendJsonRpcError(int64_t requestId, JsonRpcErrorCode code, const std::string& message,
+                                     RequestContext& ctx)
 {
+    JSONRPCError error;
+    error.jsonrpc_ = JSONRPC_VERSION;
+    error.id_ = requestId;
+    error.code_ = static_cast<int>(code);
+    error.message_ = message;
+    SendResponse(requestId, std::move(error), ctx);
 }
 
-// OnMessageReceived implementation
-void ClientSession::OnMessageReceived(const std::string& messageJson)
+void ClientSession::SendMethodNotFound(int64_t requestId, const std::string& method, RequestContext& ctx)
 {
+    SendJsonRpcError(requestId, JsonRpcErrorCode::METHOD_NOT_FOUND, "Method not found: " + method, ctx);
+}
+
+void ClientSession::SendInternalError(int64_t requestId, const std::string& message, RequestContext& ctx)
+{
+    SendJsonRpcError(requestId, JsonRpcErrorCode::INTERNAL_ERROR, message, ctx);
+}
+
+void ClientSession::HandleRootsListRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    if (!listRootsCallback_) {
+        SendMethodNotFound(requestId, request.method_, ctx);
+        return;
+    }
+
+    try {
+        ListRootsResult result = listRootsCallback_();
+        auto resultPtr = std::make_unique<ListRootsResult>(std::move(result));
+        SendResponse(requestId, std::move(resultPtr), ctx);
+    } catch (const std::exception& e) {
+        SendInternalError(requestId, e.what(), ctx);
+    }
+}
+
+void ClientSession::ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    if (clientTransport_ == nullptr) {
+        return;
+    }
+
+    const std::string& method = request.method_;
+    if (method == "roots/list") {
+        HandleRootsListRequest(requestId, request, ctx);
+        return;
+    }
+
+    // Default: explicit JSON-RPC error so the server doesn't hang waiting for a response.
+    SendMethodNotFound(requestId, method, ctx);
 }
 
 std::future<std::shared_ptr<ListPromptsResult>> ClientSession::ListPrompts()

@@ -65,6 +65,7 @@ using Mcp::CallToolResult;
 using Mcp::CallToolParams;
 using Mcp::Tool;
 using Mcp::Root;
+using Mcp::ListRootsRequest;
 using Mcp::ListRootsResult;
 using Mcp::PromptsCapabilities;
 using Mcp::ResourcesCapabilities;
@@ -147,6 +148,34 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestWithStringIdSuccess) {
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(REQUEST_ID, req2.id_);
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCRequestRootsListSerializationAndDeserializationSuccess)
+{
+    JSONRPCRequest req;
+    req.id_ = REQUEST_ID;
+    req.method_ = "roots/list";
+    req.request_ = std::make_unique<ListRootsRequest>();
+
+    std::string serialized = req.Serialize(req.method_);
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.value("jsonrpc", ""));
+    EXPECT_EQ(REQUEST_ID, j.value("id", 0));
+    EXPECT_EQ("roots/list", j.value("method", ""));
+    EXPECT_TRUE(j.contains("params"));
+    EXPECT_TRUE(j.at("params").is_null());
+
+    JSONRPCRequest req2;
+    int rc = req2.Deserialize(serialized, "roots/list");
+    EXPECT_EQ(0, rc);
+    EXPECT_EQ(JSONRPC_VERSION, req2.jsonrpc_);
+    EXPECT_EQ(REQUEST_ID, req2.id_);
+    EXPECT_EQ("roots/list", req2.method_);
+    ASSERT_NE(nullptr, req2.request_);
+    auto* rootsReq = dynamic_cast<ListRootsRequest*>(req2.request_.get());
+    ASSERT_NE(nullptr, rootsReq);
+    EXPECT_EQ("roots/list", rootsReq->method_);
 }
 
 TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationInitializeIncludesClientCapabilities)

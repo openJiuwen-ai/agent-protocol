@@ -1307,6 +1307,21 @@ struct adl_serializer<Mcp::ListResourceTemplatesRequest> {
     }
 };
 
+// ListRootsRequest -> {"method":"roots/list", "params":{}}
+// (This codebase currently serializes empty params as JSON null via an empty to_json,
+// consistent with other no-param list requests like prompts/list/resources/list.)
+template <>
+struct adl_serializer<Mcp::ListRootsRequest> {
+    static void to_json(json& j, const Mcp::ListRootsRequest&)
+    {
+    }
+
+    static void from_json(const json& j, Mcp::ListRootsRequest& req)
+    {
+        j.at("method").get_to(req.method_);
+    }
+};
+
 // ListResourceTemplatesResult
 template <>
 struct adl_serializer<Mcp::ListResourceTemplatesResult> {
@@ -1548,6 +1563,11 @@ ListResourceTemplatesRequest::ListResourceTemplatesRequest()
     method_ = "resources/templates/list";
 }
 
+ListRootsRequest::ListRootsRequest()
+{
+    method_ = "roots/list";
+}
+
 std::string JSONRPCRequest::Serialize(const std::string& method) const
 {
     json j;
@@ -1606,6 +1626,11 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
         }
     } else if (request_ != nullptr && request_->method_ == "resources/templates/list") {
         const auto* listReq = dynamic_cast<const ListResourceTemplatesRequest*>(request_.get());
+        if (listReq != nullptr) {
+            j["params"] = *listReq;
+        }
+    } else if (request_ != nullptr && request_->method_ == "roots/list") {
+        const auto* listReq = dynamic_cast<const ListRootsRequest*>(request_.get());
         if (listReq != nullptr) {
             j["params"] = *listReq;
         }
@@ -1673,6 +1698,10 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& m
     } else if (method_ == "resources/templates/list") {
         ListResourceTemplatesRequest listReq = j.get<ListResourceTemplatesRequest>();
         auto reqPtr = std::make_unique<ListResourceTemplatesRequest>(std::move(listReq));
+        request_ = std::move(reqPtr);
+    } else if (method_ == "roots/list") {
+        ListRootsRequest listReq = j.get<ListRootsRequest>();
+        auto reqPtr = std::make_unique<ListRootsRequest>(std::move(listReq));
         request_ = std::move(reqPtr);
     }
 

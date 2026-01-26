@@ -574,12 +574,24 @@ void StdioClientTransport::GetMessageMethod(const JSONRPCMessage& message)
     method_ = methodName;
 }
 
-void StdioClientTransport::SendMessage(const JSONRPCMessage& message)
+void StdioClientTransport::SendMessage(const JSONRPCMessage& message, std::optional<std::string> method)
 {
     if (connection_) {
-        GetMessageMethod(message);
+        if (std::holds_alternative<JSONRPCRequest>(message) || std::holds_alternative<JSONRPCNotification>(message)) {
+            GetMessageMethod(message);
+        }
+
         // Convert JSONRPCMessage to string for sending
-        std::string data = SerializeJSONRPCMessage(message);
+        std::string data;
+        if (std::holds_alternative<JSONRPCResponse>(message)) {
+            if (!method.has_value()) {
+                throw std::runtime_error("Method name is required for response serialization");
+            }
+            data = SerializeJSONRPCMessage(message, method);
+        } else {
+            data = SerializeJSONRPCMessage(message);
+        }
+
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioClientTransport sending message: %s", data.c_str());
         connection_->SendMessage(data);
     } else {

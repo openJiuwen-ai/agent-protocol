@@ -92,6 +92,15 @@ public:
      * If called before that, this returns an empty/default capabilities object.
      */
     ClientCapabilities GetClientCapabilities() const;
+
+    /**
+     * @brief Request the client's roots list via `roots/list`.
+     *
+     * This sends a JSON-RPC request to the client and resolves the future when
+     * the corresponding response arrives.
+     */
+    std::future<std::shared_ptr<ListRootsResult>> ListRoots();
+
 protected:
     /**
     * @brief Handle an incoming JSON-RPC request from the client.

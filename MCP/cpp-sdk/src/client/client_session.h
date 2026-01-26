@@ -39,11 +39,7 @@ public:
     // Send a roots list changed notification
     void SendRootsListChanged();
 
-    // Callback indicating the client can serve roots/list.
-    // If this is not set, we must not advertise the `roots` capability in initialize.
-    // The callback should return a `ListRootsResult` describing available roots.
-    using ListRootsCallback = std::function<ListRootsResult()>;
-
+    // Set the callback for handling roots/list requests from the server
     void SetListRootsCallback(ListRootsCallback cb);
 
     // Set the logging level
@@ -88,6 +84,9 @@ public:
     // Send notifications/initialized after successful initialize handshake
     void SendInitializedNotification();
 
+protected:
+    void ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx) override;
+
 private:
     // Incremental request ID for tracking (thread-safe)
     std::atomic<int64_t> _request_id{1};
@@ -100,14 +99,18 @@ private:
     // (or via constructor) before making requests.
     std::function<bool(const std::string&)> send_raw_;
 
-    // Method to handle incoming requests (for demonstration)
-    void HandleRequest(const Mcp::JSONRPCRequest& request);
-
-    // Feed incoming raw JSON messages from the transport into the session
-    void OnMessageReceived(const std::string& message_json);
-
     // Build client capabilities for initialize request.
     ClientCapabilities BuildClientCapabilities() const;
+
+    // Handle roots/list request. This is used when the server asks the client to
+    // provide its roots. The request is only supported when listRootsCallback_ is set.
+    void HandleRootsListRequest(int64_t requestId, const Request& request, RequestContext& ctx);
+
+    // Utility helpers for replying to server-initiated requests with JSON-RPC errors.
+    // These helpers centralize error formatting and ensure consistent responses.
+    void SendJsonRpcError(int64_t requestId, JsonRpcErrorCode code, const std::string& message, RequestContext& ctx);
+    void SendMethodNotFound(int64_t requestId, const std::string& method, RequestContext& ctx);
+    void SendInternalError(int64_t requestId, const std::string& message, RequestContext& ctx);
 
     // Indicates whether initialize has succeeded
     bool initialized_{false};

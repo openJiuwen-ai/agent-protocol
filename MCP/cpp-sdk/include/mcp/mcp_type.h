@@ -342,6 +342,10 @@ struct ListResourceTemplatesResult : public Result {
 
 enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Alert, Emergency };
 
+// Callback indicating the client can serve roots/list.
+// If this is not set, the client must not advertise the `roots` capability in initialize.
+using ListRootsCallback = std::function<ListRootsResult()>;
+
 } // namespace Mcp
 
 #endif // MCP_TYPE_INCLUDE_H_

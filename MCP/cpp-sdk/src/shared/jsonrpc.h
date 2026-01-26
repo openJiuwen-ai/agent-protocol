@@ -235,6 +235,11 @@ struct ListResourceTemplatesRequest : public Request {
     ListResourceTemplatesRequest();
 };
 
+// roots/list
+struct ListRootsRequest : public Request {
+    ListRootsRequest();
+};
+
 struct ResourceUpdatedNotificationParams : public NotificationParams {
     std::string uri;
 

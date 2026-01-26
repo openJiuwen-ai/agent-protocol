@@ -54,7 +54,7 @@ public:
     virtual ~StreamableHttpClientTransport();
 
     // Send message to server
-    void SendMessage(const JSONRPCMessage& message) override;
+    void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) override;
 
     void Connect() override;
 

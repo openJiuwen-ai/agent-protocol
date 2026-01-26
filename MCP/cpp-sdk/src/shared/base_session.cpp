@@ -15,6 +15,10 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
         throw std::invalid_argument("Request cannot be null");
     }
 
+    if (clientTransport_ == nullptr && serverTransport_ == nullptr) {
+        throw std::runtime_error("Transport not set");
+    }
+
     int64_t requestId = requestId_.fetch_add(1);
 
     {
@@ -33,7 +37,20 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
     jsonrpcRequest.request_ = std::move(request);
 
     JSONRPCMessage msg = std::move(jsonrpcRequest);
-    clientTransport_->SendMessage(msg);
+
+    if (clientTransport_ != nullptr) {
+        clientTransport_->SendMessage(msg);
+        return;
+    }
+
+    if (serverTransport_ != nullptr) {
+        RequestContext ctx{};
+        ctx.sessionId = GetSessionId();
+        ctx.method = std::get<JSONRPCRequest>(msg).method_;
+        ctx.connectionId = 0;
+        serverTransport_->SendMessage(msg, ctx);
+        return;
+    }
 }
 
 void BaseSession::SendResponse(int64_t requestId, std::unique_ptr<Result> result, RequestContext& ctx)
@@ -43,13 +60,35 @@ void BaseSession::SendResponse(int64_t requestId, std::unique_ptr<Result> result
     response.id_ = requestId;
     response.result_ = std::move(result);
     JSONRPCMessage msg = std::move(response);
-    serverTransport_->SendMessage(msg, ctx);
+
+    if (serverTransport_ != nullptr) {
+        serverTransport_->SendMessage(msg, ctx);
+        return;
+    }
+
+    if (clientTransport_ != nullptr) {
+        clientTransport_->SendMessage(msg, ctx.method);
+        return;
+    }
+
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "SendResponse failed: no transport set");
 }
 
 void BaseSession::SendResponse(int64_t requestId, JSONRPCError error, RequestContext& ctx)
 {
     JSONRPCMessage msg = std::move(error);
-    serverTransport_->SendMessage(msg, ctx);
+
+    if (serverTransport_ != nullptr) {
+        serverTransport_->SendMessage(msg, ctx);
+        return;
+    }
+
+    if (clientTransport_ != nullptr) {
+        clientTransport_->SendMessage(msg);
+        return;
+    }
+
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "SendResponse(error) failed: no transport set");
 }
 
 void BaseSession::HandleResponse(const JSONRPCResponse& response)

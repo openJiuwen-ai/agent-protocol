@@ -130,6 +130,7 @@ public:
      * @throw std::runtime_error If the client is not initialized.
      */
     virtual void SendRootsListChanged() = 0;
+
     /**
      * @brief Send a ping to the server to check connectivity.
      *
@@ -181,6 +182,10 @@ public:
      */
     virtual std::future<Result> Complete(std::string type, std::string uri,
                                          std::unordered_map<std::string, std::string> extras) = 0;
+
+    // Register a callback that will be invoked when the server sends `roots/list`.
+    // This must be called before Initialize() to ensure capabilities are advertised correctly.
+    virtual void SetListRootsCallback(ListRootsCallback cb) = 0;
 };
 
 class McpClientFactory {

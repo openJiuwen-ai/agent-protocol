@@ -31,6 +31,14 @@ std::future<std::shared_ptr<InitializeResult>> McpClientImplement::Initialize()
     if (session_ == nullptr) {
         throw std::runtime_error("Failed to create session layer.");
     }
+
+    // Apply any pre-configured roots/list callback before the Initialize request is built,
+    // so the client advertises the `roots` capability correctly.
+    if (listRootsCallback_.has_value()) {
+        session_->SetListRootsCallback(std::move(*listRootsCallback_));
+        listRootsCallback_.reset();
+    }
+
     initialized_ = true;
     return session_->Initialize();
 }
@@ -136,6 +144,15 @@ std::future<Result> McpClientImplement::Complete(std::string type, std::string u
     std::promise<Result> promise;
     promise.set_exception(std::make_exception_ptr(std::runtime_error("Complete is not implemented.")));
     return promise.get_future();
+}
+
+void McpClientImplement::SetListRootsCallback(ListRootsCallback cb)
+{
+    if (session_) {
+        session_->SetListRootsCallback(std::move(cb));
+        return;
+    }
+    listRootsCallback_ = std::move(cb);
 }
 
 } // namespace Mcp
