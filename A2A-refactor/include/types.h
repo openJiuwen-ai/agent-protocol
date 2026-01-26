@@ -115,13 +115,26 @@ struct JSONRPCErrorResponse {
     JSONRPCError error;
 };
 
+// Push Notifications and Task params
+struct PushNotificationAuthenticationInfo {
+    std::optional<std::string> credentials;
+    std::vector<std::string> schemes;
+};
+
+struct PushNotificationConfig {
+    std::optional<PushNotificationAuthenticationInfo> authentication;
+    std::optional<std::string> id;
+    std::optional<std::string> token;
+    std::string url;
+};
+
 // Minimal parameter and event types used by helpers
 struct MessageSendConfiguration {
     std::vector<std::string> acceptedOutputModes;
     std::optional<int> historyLength;
     std::optional<PushNotificationConfig> pushNotificationConfig;
     std::optional<bool> blocking;
-}
+};
 
 struct MessageSendParams {
     std::optional<MessageSendConfiguration> configuration;
@@ -146,19 +159,6 @@ struct TaskStatusUpdateEvent {
     std::optional<nlohmann::json> metadata;
     TaskStatus status;
     std::string taskId;
-};
-
-// Push Notifications and Task params
-struct PushNotificationAuthenticationInfo {
-    std::optional<std::string> credentials;
-    std::vector<std::string> schemes;
-};
-
-struct PushNotificationConfig {
-    std::optional<PushNotificationAuthenticationInfo> authentication;
-    std::optional<std::string> id;
-    std::optional<std::string> token;
-    std::string url;
 };
 
 struct TaskIdParams {
