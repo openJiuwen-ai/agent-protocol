@@ -22,6 +22,7 @@ WITH_TESTS=0
 WITH_COVERAGE=0
 WITH_STDIO=0
 WITH_ASAN=0
+WITH_INSTALL=0
 BUILD_DIR="build"
 GENERATOR=""
 
@@ -39,6 +40,7 @@ Options:
   -c, --coverage               Enable code coverage (implies --with-tests)
   -s, --stdio                  Enable execute UT about stdio
   --asan                       Enable AddressSanitizer (GCC/Clang), debug type will be used
+  -i, --install                Install after build
   -b, --build-dir <dir>        Build directory (default: build)
   -g, --generator <name>       CMake generator (e.g. "Ninja", "NMake Makefiles")
   --no-client                  Do not build client components
@@ -81,6 +83,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --asan)
       WITH_ASAN=1;
+      shift;
+      ;;
+    -i|--install)
+      WITH_INSTALL=1;
       shift;
       ;;
     -b|--build-dir)
@@ -187,6 +193,12 @@ fi
 
 echo "[INFO] Building with ${OPTIMAL_JOBS} parallel jobs (detected ${CPU_CORES} CPU cores)"
 cmake --build "${BUILD_DIR_ABS}" -j${OPTIMAL_JOBS}
+
+if [[ ${WITH_INSTALL} -eq 1 ]]; then
+  echo "[INFO] Installing (requires sudo)..."
+  sudo cmake --install "${BUILD_DIR_ABS}"
+  echo "[INFO] Installation completed."
+fi
 
 if [[ ${WITH_COVERAGE} -eq 1 ]]; then
   echo "[INFO] Coverage build finished."
