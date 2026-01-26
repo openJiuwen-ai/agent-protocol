@@ -8,7 +8,6 @@
 #include <chrono>
 #include <functional>
 #include <map>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <variant>
@@ -16,8 +15,6 @@
 #include <unordered_map>
 
 namespace Mcp {
-
-using JsonValue = nlohmann::json;
 
 // Constants
 constexpr char DEFAULT_SERVER_NAME[] = "MCP Server";
@@ -77,7 +74,8 @@ struct MCPBaseType {
 };
 
 struct Result : public MCPBaseType {
-    std::optional<std::unordered_map<std::string, JsonValue>> meta;
+    // meta: second string is a JSON-formatted string
+    std::optional<std::unordered_map<std::string, std::string>> meta;
     virtual ~Result() = default;
 };
 
@@ -230,8 +228,9 @@ struct GetPromptResult : public Result {
 // Render function for a prompt definition.
 // The function should take the prompt name and optional arguments, then return a GetPromptResult
 // whose `messages_` are ready to be used as model context.
+// argument: JSON-formatted string
 using RenderPromptFunc =
-    std::function<GetPromptResult(const std::string& name, const std::optional<JsonValue>& argument)>;
+    std::function<GetPromptResult(const std::string& name, const std::optional<std::string>& argument)>;
 
 // Describes a reusable prompt.
 struct PromptInfo {
@@ -253,7 +252,8 @@ struct RootsCapability {
 struct ClientTasksCapability {};
 
 struct ClientCapabilities {
-    std::optional<std::unordered_map<std::string, std::unordered_map<std::string, nlohmann::json>>> experimental;
+    // experimental: second string is a JSON-formatted string
+    std::optional<std::unordered_map<std::string, std::unordered_map<std::string, std::string>>> experimental;
     std::optional<SamplingCapability> sampling;
     std::optional<ElicitationCapability> elicitation;
     std::optional<RootsCapability> roots;
@@ -285,7 +285,8 @@ struct ToolsCapabilities {
 };
 
 struct ServerCapabilities {
-    std::optional<std::unordered_map<std::string, JsonValue>> experimental;
+    // experimental: second string is a JSON-formatted string
+    std::optional<std::unordered_map<std::string, std::string>> experimental;
     std::optional<LoggingCapabilities> logging;
     std::optional<PromptsCapabilities> prompts;
     std::optional<ResourcesCapabilities> resources;

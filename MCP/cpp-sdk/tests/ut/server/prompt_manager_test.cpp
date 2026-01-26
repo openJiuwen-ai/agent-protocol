@@ -47,7 +47,7 @@ TEST_F(PromptManagerTest, AddPrompt_Success)
     PromptManager manager(true);
 
     bool handlerCalled = false;
-    auto handler = [&handlerCalled](const std::string& name, const std::optional<JsonValue>&) {
+    auto handler = [&handlerCalled](const std::string& name, const std::optional<std::string>&) {
         handlerCalled = true;
         return GetPromptResult{};
     };
@@ -62,7 +62,7 @@ TEST_F(PromptManagerTest, AddPrompt_EmptyNameThrows)
     PromptInfo emptyNamePrompt;
     emptyNamePrompt.name = "";
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -83,14 +83,14 @@ TEST_F(PromptManagerTest, AddPrompt_OverwriteExisting)
     // Track which handler was called
     std::string calledHandler;
 
-    auto handler1 = [&calledHandler](const std::string&, const std::optional<JsonValue>&) {
+    auto handler1 = [&calledHandler](const std::string&, const std::optional<std::string>&) {
         calledHandler = "first";
         GetPromptResult result;
         result.description = "First handler";
         return result;
     };
 
-    auto handler2 = [&calledHandler](const std::string&, const std::optional<JsonValue>&) {
+    auto handler2 = [&calledHandler](const std::string&, const std::optional<std::string>&) {
         calledHandler = "second";
         GetPromptResult result;
         result.description = "Second handler";
@@ -113,7 +113,7 @@ TEST_F(PromptManagerTest, AddPrompt_NoOverwriteThrowsWhenExists)
 {
     PromptManager manager(false);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -127,7 +127,7 @@ TEST_F(PromptManagerTest, RemovePrompt_ExistingPrompt)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -147,7 +147,7 @@ TEST_F(PromptManagerTest, RemovePrompt_NonExistentPrompt)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -174,7 +174,7 @@ TEST_F(PromptManagerTest, ListPrompts_MultiplePrompts)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -198,7 +198,7 @@ TEST_F(PromptManagerTest, ListPrompts_OrderMayVary)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -232,7 +232,7 @@ TEST_F(PromptManagerTest, GetPrompt_ExistingPrompt)
     message.content = textContent;
     expectedResult.messages.push_back(message);
 
-    auto handler = [expectedResult](const std::string& name, const std::optional<JsonValue>& argument) {
+    auto handler = [expectedResult](const std::string& name, const std::optional<std::string>& argument) {
         return expectedResult;
     };
 
@@ -251,11 +251,16 @@ TEST_F(PromptManagerTest, GetPrompt_WithArguments)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string& name, const std::optional<JsonValue>& argument) {
+    auto handler = [](const std::string& name, const std::optional<std::string>& argument) {
         GetPromptResult result;
-        if (argument && argument->contains("username")) {
-            std::string username = (*argument)["username"];
-            result.description = "Prompt for " + username;
+        if (argument.has_value()) {
+            nlohmann::json j = nlohmann::json::parse(argument.value());
+            if (j.contains("username")) {
+                std::string username = j["username"];
+                result.description = "Prompt for " + username;
+            } else {
+                result.description = "Default prompt";
+            }
         } else {
             result.description = "Default prompt";
         }
@@ -265,7 +270,7 @@ TEST_F(PromptManagerTest, GetPrompt_WithArguments)
     manager.AddPrompt(prompt1, handler);
 
     // Get prompt with arguments
-    JsonValue args = {{"username", "Alice"}};
+    nlohmann::json args = {{"username", "Alice"}};
     GetPromptResult result = manager.GetPrompt("prompt1", args);
     EXPECT_EQ(result.description, "Prompt for Alice");
 
@@ -278,10 +283,11 @@ TEST_F(PromptManagerTest, GetPrompt_ComplexArguments)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string& name, const std::optional<JsonValue>& argument) {
+    auto handler = [](const std::string& name, const std::optional<std::string>& argument) {
         GetPromptResult result;
-        if (argument) {
-            std::string argsStr = argument->dump();
+        if (argument.has_value()) {
+            JsonValue j = JsonValue::parse(argument.value());
+            std::string argsStr = j.dump();
             result.description = "Prompt with args: " + argsStr;
         }
         return result;
@@ -314,13 +320,13 @@ TEST_F(PromptManagerTest, Concurrency_Basic)
     PromptManager manager(true);
 
     // Test that we can add and get prompts in sequence
-    auto handler1 = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler1 = [](const std::string&, const std::optional<std::string>&) {
         GetPromptResult result;
         result.description = "Handler 1";
         return result;
     };
 
-    auto handler2 = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler2 = [](const std::string&, const std::optional<std::string>&) {
         GetPromptResult result;
         result.description = "Handler 2";
         return result;
@@ -346,7 +352,7 @@ TEST_F(PromptManagerTest, Concurrency_MultiThreadAccess)
     PromptManager manager(true);
 
     std::atomic<int> handlerCallCount{0};
-    auto handler = [&handlerCallCount](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [&handlerCallCount](const std::string&, const std::optional<std::string>&) {
         handlerCallCount++;
         return GetPromptResult{};
     };
@@ -386,7 +392,7 @@ TEST_F(PromptManagerTest, Concurrency_MultiThreadAddAndGet)
             PromptInfo info;
             info.name = promptName;
 
-            auto handler = [promptName](const std::string&, const std::optional<JsonValue>&) {
+            auto handler = [promptName](const std::string&, const std::optional<std::string>&) {
                 GetPromptResult result;
                 result.description = "From " + promptName;
                 return result;
@@ -457,7 +463,7 @@ TEST_F(PromptManagerTest, PromptInfo_FieldsPreserved)
     arg.required = true;
     detailedPrompt.arguments = std::vector<PromptArgument>{arg};
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 
@@ -485,9 +491,11 @@ TEST_F(PromptManagerTest, HandlerCalledWithCorrectParameters)
     std::string receivedName;
     std::optional<JsonValue> receivedArgs;
 
-    auto handler = [&receivedName, &receivedArgs](const std::string& name, const std::optional<JsonValue>& args) {
+    auto handler = [&receivedName, &receivedArgs](const std::string& name, const std::optional<std::string>& args) {
         receivedName = name;
-        receivedArgs = args;
+        if (args.has_value()) {
+            receivedArgs = JsonValue::parse(args.value());
+        }
         return GetPromptResult{};
     };
 
@@ -505,7 +513,7 @@ TEST_F(PromptManagerTest, GetPrompt_HandlerThrowsException)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) -> GetPromptResult {
+    auto handler = [](const std::string&, const std::optional<std::string>&) -> GetPromptResult {
         throw std::runtime_error("Handler error");
     };
 
@@ -521,7 +529,7 @@ TEST_F(PromptManagerTest, PromptManager_DestructorDoesNotThrow)
         PromptManager manager(true);
 
         // Add some prompts
-        auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+        auto handler = [](const std::string&, const std::optional<std::string>&) {
             return GetPromptResult{};
         };
 
@@ -537,7 +545,7 @@ TEST_F(PromptManagerTest, LargeNumberOfPrompts)
 {
     PromptManager manager(true);
 
-    auto handler = [](const std::string&, const std::optional<JsonValue>&) {
+    auto handler = [](const std::string&, const std::optional<std::string>&) {
         return GetPromptResult{};
     };
 

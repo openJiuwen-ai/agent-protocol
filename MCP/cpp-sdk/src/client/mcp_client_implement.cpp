@@ -46,11 +46,16 @@ std::future<std::shared_ptr<ListToolsResult>> McpClientImplement::ListTools(
 }
 
 std::future<std::shared_ptr<CallToolResult>> McpClientImplement::CallTool(const std::string& name,
-                                                                          const std::optional<JsonValue>& arguments,
+                                                                          const std::optional<std::string>& arguments,
                                                                           int timeout)
 {
     CheckInitialized();
-    return session_->CallTool(name, arguments, timeout);
+    // Convert string to JsonValue for internal session usage
+    std::optional<JsonValue> argsJson = std::nullopt;
+    if (arguments.has_value()) {
+        argsJson = JsonValue::parse(arguments.value());
+    }
+    return session_->CallTool(name, argsJson, timeout);
 }
 
 std::future<std::shared_ptr<ListResourcesResult>> McpClientImplement::ListResources(
@@ -94,10 +99,15 @@ std::future<std::shared_ptr<ListPromptsResult>> McpClientImplement::ListPrompts(
 }
 
 std::future<std::shared_ptr<GetPromptResult>> McpClientImplement::GetPrompt(const std::string& name,
-                                                                            const std::optional<JsonValue>& arguments)
+                                                                            const std::optional<std::string>& arguments)
 {
     CheckInitialized();
-    return session_->GetPrompt(name, arguments);
+    // Convert string to JsonValue for internal session usage
+    std::optional<JsonValue> argsJson = std::nullopt;
+    if (arguments.has_value()) {
+        argsJson = JsonValue::parse(arguments.value());
+    }
+    return session_->GetPrompt(name, argsJson);
 }
 
 void McpClientImplement::SendRootsListChanged()

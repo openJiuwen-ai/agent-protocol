@@ -28,7 +28,7 @@ public:
     std::future<std::shared_ptr<ListToolsResult>> ListTools(
         const std::optional<std::string>& cursor = std::nullopt) override;
     std::future<std::shared_ptr<CallToolResult>> CallTool(const std::string& name,
-                                                          const std::optional<JsonValue>& arguments = std::nullopt,
+                                                          const std::optional<std::string>& arguments = std::nullopt,
                                                           int timeout = 0) override;
 
     std::future<std::shared_ptr<ListResourcesResult>> ListResources(
@@ -40,7 +40,7 @@ public:
 
     std::future<std::shared_ptr<ListPromptsResult>> ListPrompts() override;
     std::future<std::shared_ptr<GetPromptResult>> GetPrompt(
-        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt) override;
+        const std::string& name, const std::optional<std::string>& arguments = std::nullopt) override;
 
     void SendRootsListChanged() override;
     std::future<std::shared_ptr<EmptyResult>> SendPing() override;

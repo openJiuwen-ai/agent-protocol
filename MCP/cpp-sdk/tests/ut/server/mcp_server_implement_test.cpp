@@ -36,15 +36,17 @@ static constexpr int LOOP_NUM = 3;
 namespace {
     ServerTool CreateTestTool(const std::string& name = "test_tool") {
         ServerTool tool;
-        auto echoFunc = [](const std::string &name, const Mcp::JsonValue &arguments,
-                           const std::optional<Mcp::JsonValue> &ctx) -> Mcp::CallToolResult
+        auto echoFunc = [](const std::string &name, const std::string &arguments,
+                           const std::optional<std::string> &ctx) -> Mcp::CallToolResult
         {
             Mcp::CallToolResult result;
             result.isError = false;
             try {
                 std::string userQuery = "";
-                if (arguments.contains("user_query") && arguments.at("user_query").is_string()) {
-                    userQuery = arguments.at("user_query").get<std::string>();
+                // Parse string arguments to JSON for internal processing
+                nlohmann::json argumentsJson = nlohmann::json::parse(arguments);
+                if (argumentsJson.contains("user_query") && argumentsJson.at("user_query").is_string()) {
+                    userQuery = argumentsJson.at("user_query").get<std::string>();
                 }
                 Mcp::TextContent textContent;
                 textContent.text = "Echo: " + userQuery;
@@ -232,14 +234,15 @@ TEST(McpServerImplementTest, PromptManagement_AddPrompt)
 
     EXPECT_NO_THROW(server.AddPrompt(prompt.name,
                                     [](const std::string &promptName,
-                                    const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
+                                    const std::optional<std::string> &arguments) -> Mcp::GetPromptResult {
                                     Mcp::GetPromptResult result;
                                     (void)promptName;
                                     std::string who = "friend";
                                     std::string lang = "English";
 
                                     if (arguments.has_value()) {
-                                        const auto &j = arguments.value();
+                                        // Parse string arguments to JSON for internal processing
+                                        nlohmann::json j = nlohmann::json::parse(arguments.value());
                                         if (j.contains("name") && j["name"].is_string()) {
                                             who = j["name"].get<std::string>();
                                         }
@@ -275,14 +278,15 @@ TEST(McpServerImplementTest, PromptManagement_RemovePrompt)
 
     EXPECT_NO_THROW(server.AddPrompt(prompt.name,
                                     [](const std::string &promptName,
-                                    const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
+                                    const std::optional<std::string> &arguments) -> Mcp::GetPromptResult {
                                     Mcp::GetPromptResult result;
                                     (void)promptName;
                                     std::string who = "friend";
                                     std::string lang = "English";
 
                                     if (arguments.has_value()) {
-                                        const auto &j = arguments.value();
+                                        // Parse string arguments to JSON for internal processing
+                                        Mcp::JsonValue j = Mcp::JsonValue::parse(arguments.value());
                                         if (j.contains("name") && j["name"].is_string()) {
                                             who = j["name"].get<std::string>();
                                         }

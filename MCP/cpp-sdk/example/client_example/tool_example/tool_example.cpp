@@ -110,7 +110,8 @@ int main(int argc, char** argv)
     try {
         nlohmann::json arguments;
         arguments["user_query"] = "Shenzhen weather";
-        auto callFuture = mcpClient->CallTool(EXAMPLE_TOOL_NAME, arguments, 30);
+        std::string argsStr = arguments.dump();
+        auto callFuture = mcpClient->CallTool(EXAMPLE_TOOL_NAME, argsStr, 30);
         if (callFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "CallTool timeout");
             return -1;

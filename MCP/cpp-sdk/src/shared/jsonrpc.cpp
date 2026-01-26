@@ -12,6 +12,18 @@
 #include "mcp_type.h"
 
 namespace nlohmann {
+
+// Convert a JSON value map into a stringified map to match public string meta.
+static inline std::unordered_map<std::string, std::string> JsonMapToStringMap
+(const std::unordered_map<std::string, json>& src)
+{
+    std::unordered_map<std::string, std::string> out;
+    out.reserve(src.size());
+    for (const auto& [key, value] : src) {
+        out[key] = value.dump();
+    }
+    return out;
+}
 // ListToolsRequest -> {cursor?}
 template <>
 struct adl_serializer<Mcp::ListToolsRequest> {
@@ -104,7 +116,8 @@ struct adl_serializer<Mcp::InitializeResult> {
             r.instructions = j.at("instructions").get<std::string>();
         }
         if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            auto metaJson = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            r.meta = JsonMapToStringMap(metaJson);
         }
     }
 };
@@ -580,7 +593,8 @@ struct adl_serializer<Mcp::ListResourcesResult> {
             r.resources.clear();
         }
         if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            auto metaJson = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            r.meta = JsonMapToStringMap(metaJson);
         } else {
             r.meta.reset();
         }
@@ -672,7 +686,8 @@ struct adl_serializer<Mcp::CallToolResult> {
         }
         r.isError = j.value("isError", false);
         if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            auto metaJson = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            r.meta = JsonMapToStringMap(metaJson);
         }
     }
 };
@@ -791,7 +806,8 @@ struct adl_serializer<Mcp::ListToolsResult> {
             r.tools.clear();
         }
         if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            auto metaJson = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            r.meta = JsonMapToStringMap(metaJson);
         } else {
             r.meta.reset();
         }
@@ -963,7 +979,8 @@ struct adl_serializer<Mcp::ListPromptsResult> {
             r.prompts.clear();
         }
         if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            auto metaJson = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            r.meta = JsonMapToStringMap(metaJson);
         }
     }
 };
@@ -1197,7 +1214,8 @@ struct adl_serializer<Mcp::ListResourceTemplatesResult> {
             r.resourceTemplates.clear();
         }
         if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            auto metaJson = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            r.meta = JsonMapToStringMap(metaJson);
         } else {
             r.meta = std::nullopt;
         }

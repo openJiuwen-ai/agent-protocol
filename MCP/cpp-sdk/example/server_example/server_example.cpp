@@ -11,6 +11,8 @@
 #include <string>
 #include <thread>
 
+#include <nlohmann/json.hpp>
+
 #include "mcp_log.h"
 #include "mcp_server.h"
 #include "mcp_type.h"
@@ -120,14 +122,16 @@ int main(int argc, char** argv)
         MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP server instance created successfully");
 
         // add tool
-        auto echoFunc = [](const std::string &name, const Mcp::JsonValue &arguments,
-                           const std::optional<Mcp::JsonValue> &ctx) -> Mcp::CallToolResult {
+        auto echoFunc = [](const std::string &name, const std::string &arguments,
+                           const std::optional<std::string> &ctx) -> Mcp::CallToolResult {
             Mcp::CallToolResult result;
             result.isError = false;
             try {
                 std::string userQuery = "";
-                if (arguments.contains("user_query") && arguments.at("user_query").is_string()) {
-                    userQuery = arguments.at("user_query").get<std::string>();
+                // Parse string arguments to JSON for internal processing
+                nlohmann::json argumentsJson = nlohmann::json::parse(arguments);
+                if (argumentsJson.contains("user_query") && argumentsJson.at("user_query").is_string()) {
+                    userQuery = argumentsJson.at("user_query").get<std::string>();
                 }
                 
                 // Set content
@@ -195,7 +199,7 @@ int main(int argc, char** argv)
 
             server->AddPrompt(PROMPT_NAME,
                               [](const std::string &promptName,
-                                 const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
+                                 const std::optional<std::string> &arguments) -> Mcp::GetPromptResult {
                                   Mcp::GetPromptResult result;
 
                                              (void)promptName;
@@ -204,7 +208,8 @@ int main(int argc, char** argv)
                                   std::string lang = "English";
 
                                   if (arguments.has_value()) {
-                                      const auto &j = arguments.value();
+                                      // Parse string arguments to JSON for internal processing
+                                      nlohmann::json j = nlohmann::json::parse(arguments.value());
                                       if (j.contains("name") && j["name"].is_string()) {
                                           who = j["name"].get<std::string>();
                                       }

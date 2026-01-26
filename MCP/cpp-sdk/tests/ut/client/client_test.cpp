@@ -109,9 +109,11 @@ private:
 
     // 添加 Echo 工具
     void AddEchoTool() {
-        auto echoFunc = [](const std::string &name, const Mcp::JsonValue &arguments,
-                           const std::optional<Mcp::JsonValue> &ctx) -> Mcp::CallToolResult {
-            return CreateEchoToolResult(arguments);
+        auto echoFunc = [](const std::string &name, const std::string &arguments,
+                           const std::optional<std::string> &ctx) -> Mcp::CallToolResult {
+            // Parse string arguments to JSON for internal processing
+            nlohmann::json argumentsJson = nlohmann::json::parse(arguments);
+            return CreateEchoToolResult(argumentsJson);
         };
 
         std::string echoInputSchema = R"({"type": "object", "properties": {"user_query": {"type": "string",
@@ -137,7 +139,7 @@ private:
     }
 
     // 创建 Echo 工具的结果
-    static Mcp::CallToolResult CreateEchoToolResult(const Mcp::JsonValue &arguments) {
+    static Mcp::CallToolResult CreateEchoToolResult(const nlohmann::json &arguments) {
         Mcp::CallToolResult result;
         result.isError = false;
         try {
@@ -251,10 +253,10 @@ private:
         return greetingPrompt;
     }
 
-    static std::function<Mcp::GetPromptResult(const std::string&, const std::optional<Mcp::JsonValue>&)>
+    static std::function<Mcp::GetPromptResult(const std::string&, const std::optional<std::string>&)>
     CreatePromptFunction() {
         return [](const std::string &promptName,
-                  const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
+                  const std::optional<std::string> &arguments) -> Mcp::GetPromptResult {
             Mcp::GetPromptResult result;
             result.description = "example_prompt";
 
@@ -262,7 +264,8 @@ private:
             std::string lang = "English";
 
             if (arguments.has_value()) {
-                const auto &j = arguments.value();
+                // Parse string arguments to JSON for internal processing
+                nlohmann::json j = nlohmann::json::parse(arguments.value());
                 if (j.contains("name") && j["name"].is_string()) {
                     who = j["name"].get<std::string>();
                 }
@@ -472,7 +475,8 @@ TEST_F(McpIntegrationTest, CallTool)
     nlohmann::json arguments;
     arguments["user_query"] = "Shenzhen weather"; // 与example一致
 
-    auto callFuture = client->CallTool("echo", arguments, TEST_TIMEOUT_MS);
+    // Convert JSON to string for the interface
+    auto callFuture = client->CallTool("echo", arguments.dump(), TEST_TIMEOUT_MS);
     auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
     ASSERT_EQ(status, std::future_status::ready);
 
@@ -510,7 +514,8 @@ TEST_F(McpIntegrationTest, CallToolWithInvalidArguments)
     // 测试调用工具（缺少必需参数）
     nlohmann::json arguments;
 
-    auto callFuture = client->CallTool("echo", arguments, TEST_TIMEOUT_MS);
+    // Convert JSON to string for the interface
+    auto callFuture = client->CallTool("echo", arguments.dump(), TEST_TIMEOUT_MS);
     auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
     EXPECT_EQ(status, std::future_status::timeout);
 }
@@ -523,7 +528,7 @@ TEST_F(McpIntegrationTest, CallToolWithNullArguments)
     auto initFuture = client->Initialize();
     initFuture.wait();
     // 测试调用工具（缺少必需参数）
-    auto callFuture = client->CallTool("echo", nullptr, TEST_TIMEOUT_MS);
+    auto callFuture = client->CallTool("echo", std::nullopt, TEST_TIMEOUT_MS);
     auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
     EXPECT_EQ(status, std::future_status::timeout);
 }
@@ -674,7 +679,8 @@ TEST_F(McpIntegrationTest, GetPromptWithArguments)
     arguments["language"] = "Chinese";
 
     // 测试获取prompt（带参数）
-    auto getFuture = client->GetPrompt("example_prompt", arguments);
+    // Convert JSON to string for the interface
+    auto getFuture = client->GetPrompt("example_prompt", arguments.dump());
     auto status = getFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
     ASSERT_EQ(status, std::future_status::ready);
 
@@ -774,7 +780,8 @@ TEST_F(McpIntegrationTest, CallToolTimeout)
     // 测试带超时的调用（极短超时）
     nlohmann::json arguments = {{"user_query", "Timeout test"}};
 
-    auto callFuture = client->CallTool("echo", arguments, 1); // 1ms超时
+    // Convert JSON to string for the interface
+    auto callFuture = client->CallTool("echo", arguments.dump(), 1); // 1ms超时
 
     // 由于超时很短，应该立即返回或超时
     auto status = callFuture.wait_for(std::chrono::milliseconds(100));

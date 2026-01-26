@@ -144,7 +144,8 @@ CallToolResult ToolManager::CallTool(const std::string& name, const std::string&
     }
     ToolReturn rawResult;
     try {
-        rawResult = tool.func(name, args, std::nullopt);
+        // Convert JsonValue to string for the ToolFunc interface
+        rawResult = tool.func(name, args.dump(), std::nullopt);
     } catch (const std::exception& e) {
         throw std::runtime_error("Tool execution failed: " + std::string(e.what()));
     }

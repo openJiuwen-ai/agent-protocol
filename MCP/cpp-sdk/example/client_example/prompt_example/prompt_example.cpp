@@ -81,12 +81,12 @@ int main(int argc, char** argv)
         if (!promptList->prompts.empty()) {
             MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example GetPrompt ===");
             const auto &firstPrompt = promptList->prompts.front();
-            std::optional<Mcp::JsonValue> promptArgs = std::nullopt;
+            std::optional<std::string> promptArgs = std::nullopt;
             if (firstPrompt.arguments.has_value() && !firstPrompt.arguments.value().empty()) {
                 nlohmann::json argsJson = nlohmann::json::object();
                 argsJson["name"] = "friend";
                 argsJson["language"] = "English";
-                promptArgs = argsJson;
+                promptArgs = argsJson.dump();
             }
 
             auto getFuture = mcpClient->GetPrompt(firstPrompt.name, promptArgs);

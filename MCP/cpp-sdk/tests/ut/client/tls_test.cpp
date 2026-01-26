@@ -12,6 +12,7 @@
 #include <thread>
 #include <cstdio>
 
+#include <nlohmann/json.hpp>
 #include "gtest/gtest.h"
 #include "mcp_client.h"
 #include "mcp_log.h"
@@ -266,24 +267,26 @@ protected:
     }
 
     // 辅助函数：创建echo工具的回调函数
-    std::function<Mcp::CallToolResult(const std::string&, const Mcp::JsonValue&, const std::optional<Mcp::JsonValue>&)>
+    std::function<Mcp::CallToolResult(const std::string&, const std::string&, const std::optional<std::string>&)>
     CreateEchoToolFunction()
     {
-        return [](const std::string &name, const Mcp::JsonValue &arguments,
-                  const std::optional<Mcp::JsonValue> &ctx) -> Mcp::CallToolResult {
+        return [](const std::string &name, const std::string &arguments,
+                  const std::optional<std::string> &ctx) -> Mcp::CallToolResult {
             Mcp::CallToolResult result;
             result.isError = false;
             try {
                 std::string userQuery = "";
-                if (arguments.contains("user_query") && arguments.at("user_query").is_string()) {
-                    userQuery = arguments.at("user_query").get<std::string>();
+                // Parse string arguments to JSON for internal processing
+                nlohmann::json argumentsJson = nlohmann::json::parse(arguments);
+                if (argumentsJson.contains("user_query") && argumentsJson.at("user_query").is_string()) {
+                    userQuery = argumentsJson.at("user_query").get<std::string>();
                 }
 
                 Mcp::TextContent textContent;
                 textContent.text = "Echo: " + userQuery;
                 result.content.push_back(textContent);
 
-                Mcp::JsonValue outputObj;
+                nlohmann::json outputObj;
                 outputObj["result"] = textContent.text;
                 result.structuredContent = outputObj.dump();
             } catch (const std::exception &e) {
@@ -427,9 +430,10 @@ protected:
             std::cout << "Initialized. protocolVersion=" << initResult->protocolVersion << std::endl;
 
             // 调用echo工具，参数需满足 input schema 要求的 user_query
-            JsonValue args = JsonValue::object();
+            nlohmann::json args = nlohmann::json::object();
             args["user_query"] = "hello tls";
-            auto callFuture = client->CallTool("echo", args);
+            // Convert JSON to string for the interface
+            auto callFuture = client->CallTool("echo", args.dump());
             auto callResult = callFuture.get();
             if (!callResult) {
                 std::cerr << "CallTool returned null" << std::endl;

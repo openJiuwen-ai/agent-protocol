@@ -200,7 +200,8 @@ TEST_F(McpClientImplementTest, CallToolWithArguments)
     json args = {{"param", "value"}};
 
     EXPECT_NO_THROW({
-        auto future = client_->CallTool(toolName, args);
+        // Convert JSON to string for the interface
+        auto future = client_->CallTool(toolName, args.dump());
         EXPECT_TRUE(future.valid());
     });
 }
@@ -240,7 +241,8 @@ TEST_F(McpClientImplementTest, GetPromptWithArguments)
     json args = {{"param", "value"}};
 
     EXPECT_NO_THROW({
-        auto future = client_->GetPrompt(promptName, args);
+        // Convert JSON to string for the interface
+        auto future = client_->GetPrompt(promptName, args.dump());
         EXPECT_TRUE(future.valid());
     });
 }

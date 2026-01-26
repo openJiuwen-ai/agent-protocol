@@ -48,14 +48,14 @@ public:
      * The call is asynchronous and returns a future to the result.
      *
      * @param name The name of the tool to call.
-     * @param arguments Optional arguments to pass to the tool (as a JSON value). Defaults to nullopt.
+     * @param arguments Optional arguments to pass to the tool (as a JSON string). Defaults to nullopt.
      * @param timeout Timeout in milliseconds for the tool call. If 0, uses the default timeout.
      * @return A future to a shared pointer of CallToolResult containing the tool's response.
      *
      * @throw std::runtime_error If the client is not initialized or the call fails to start.
      */
     virtual std::future<std::shared_ptr<CallToolResult>> CallTool(
-        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt, int timeout = 0) = 0;
+        const std::string& name, const std::optional<std::string>& arguments = std::nullopt, int timeout = 0) = 0;
     
     /**
      * @brief List available resources starting from the specified cursor.
@@ -124,11 +124,11 @@ public:
      * Retrieves the specified prompt template from the server, optionally providing arguments for rendering.
      *
      * @param name The name of the prompt to retrieve.
-     * @param arguments Optional arguments for rendering the prompt.
+     * @param arguments Optional arguments for rendering the prompt (as a JSON string).
      * @throw std::runtime_error If the client is not initialized.
      */
     virtual std::future<std::shared_ptr<GetPromptResult>> GetPrompt(
-        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt) = 0;
+        const std::string& name, const std::optional<std::string>& arguments = std::nullopt) = 0;
 
     /**
      * @brief Send a ping to the server to check connectivity.

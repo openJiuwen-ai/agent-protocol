@@ -18,6 +18,9 @@
 
 namespace Mcp {
 
+// Internal type alias for JSON processing
+using JsonValue = nlohmann::json;
+
 // Base class for pure parameter data
 // All request-specific parameter structs can optionally use `cursor` for pagination.
 struct RequestParams {

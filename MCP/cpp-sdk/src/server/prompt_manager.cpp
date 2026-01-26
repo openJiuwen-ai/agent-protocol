@@ -51,7 +51,12 @@ GetPromptResult PromptManager::GetPrompt(const std::string& name, const std::opt
         handler = it->second.handler;
     }
 
-    return handler(name, argument);
+    // Convert JsonValue to string for the RenderPromptFunc interface
+    std::optional<std::string> argStr = std::nullopt;
+    if (argument.has_value()) {
+        argStr = argument.value().dump();
+    }
+    return handler(name, argStr);
 }
 
 } // namespace Mcp

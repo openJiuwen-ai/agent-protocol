@@ -18,8 +18,8 @@ static constexpr int TOOL_NUM = 2;
 
 namespace Mcp {
 
-static ToolReturn TestToolFunc(const std::string& name, const JsonValue& arguments,
-    std::optional<JsonValue> context)
+static ToolReturn TestToolFunc(const std::string& name, const std::string& arguments,
+    std::optional<std::string> context)
 {
     (void)context;
 
@@ -27,15 +27,15 @@ static ToolReturn TestToolFunc(const std::string& name, const JsonValue& argumen
     result.isError = false;
 
     TextContent textContent;
-    textContent.text = R"(Tool )" + name + R"( executed with arguments: )" + arguments.dump();
+    textContent.text = R"(Tool )" + name + R"( executed with arguments: )" + arguments;
 
     result.content.push_back(textContent);
 
     return result;
 }
 
-static ToolReturn TestCallbackToolFunc(const std::string& name, const JsonValue& arguments,
-    std::optional<JsonValue> context)
+static ToolReturn TestCallbackToolFunc(const std::string& name, const std::string& arguments,
+    std::optional<std::string> context)
 {
     (void)arguments;
     (void)context;
@@ -95,8 +95,8 @@ protected:
 
     ServerTool CreateErrorThrowingTool(const std::string& name = "error_tool")
     {
-        auto errorFunc = [](const std::string& name, const JsonValue& arguments,
-                           std::optional<JsonValue> context) -> ToolReturn {
+        auto errorFunc = [](const std::string& name, const std::string& arguments,
+                           std::optional<std::string> context) -> ToolReturn {
             (void)arguments;
             (void)context;
 
@@ -465,19 +465,20 @@ TEST_F(ToolManagerTest, CallToolExceptionMessages)
 
 // ================ Output Schema Validation Tests ================
 
-static ToolReturn StructuredOutputToolFunc(const std::string& name, const JsonValue& arguments,
-    std::optional<JsonValue> context)
+static ToolReturn StructuredOutputToolFunc(const std::string& name, const std::string& arguments,
+    std::optional<std::string> context)
 {
     (void)name;
     (void)context;
-    if (arguments.contains("returnData")) {
-        return arguments["returnData"].dump();
+    JsonValue argumentsJson = JsonValue::parse(arguments);
+    if (argumentsJson.contains("returnData")) {
+        return argumentsJson["returnData"].dump();
     }
     return R"({"status": "success", "code": 200})";
 }
 
-static ToolReturn ErrorResultToolFunc(const std::string& name, const JsonValue& arguments,
-    std::optional<JsonValue> context)
+static ToolReturn ErrorResultToolFunc(const std::string& name, const std::string& arguments,
+    std::optional<std::string> context)
 {
     (void)name;
     (void)arguments;
@@ -517,7 +518,7 @@ TEST_F(ToolManagerTest, OutputSchemaValidation_Fail)
 // 覆盖: structuredContent不是对象
 TEST_F(ToolManagerTest, OutputSchemaValidation_NotObject)
 {
-    auto arrayFunc = [](const std::string&, const JsonValue&, std::optional<JsonValue>) -> ToolReturn {
+    auto arrayFunc = [](const std::string&, const std::string&, std::optional<std::string>) -> ToolReturn {
         return R"([1, 2, 3])";
     };
     
@@ -533,7 +534,7 @@ TEST_F(ToolManagerTest, OutputSchemaValidation_NotObject)
 // 覆盖: structuredContent为空，跳过验证
 TEST_F(ToolManagerTest, OutputSchemaValidation_NoStructuredContent)
 {
-    auto noStructuredFunc = [](const std::string&, const JsonValue&, std::optional<JsonValue>) -> ToolReturn {
+    auto noStructuredFunc = [](const std::string&, const std::string&, std::optional<std::string>) -> ToolReturn {
         CallToolResult result;
         TextContent text;
         text.text = "no structured";
