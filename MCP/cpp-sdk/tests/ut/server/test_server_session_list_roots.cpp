@@ -24,7 +24,7 @@ public:
     void Listen() override {}
     void Terminate() override {}
 
-    void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) override
+    void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override
     {
         (void)ctx;
         // For requests/notifications serialization does not require ctx.method, but pass it anyway.

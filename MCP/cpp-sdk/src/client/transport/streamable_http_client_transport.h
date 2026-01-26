@@ -23,7 +23,6 @@ using UserData = Http::UserData;
 using HttpRequest = Http::HttpRequest;
 using HttpResponse = Http::HttpResponse;
 using HttpCallback = Http::HttpCallback;
-constexpr const char* CONTENT_TYPE_HEADER = Http::CONTENT_TYPE_HEADER;
 
 // SSE event data structure
 struct EventData {

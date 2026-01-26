@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <iostream>
+#include <string>
 #include <thread>
 
 #include "mcp_log.h"
@@ -66,9 +67,27 @@ void FileLogCallback(MCP_LOG_LEVEL logLevel, const char *format, ...)
     fflush(g_logFile);
 }
 
-int main()
+int main(int argc, char** argv)
 {
     std::cout << "=== MCP Server Test Example ===" << std::endl;
+
+    bool isJsonResponseEnabled = true;
+    std::string endpoint = ENDPOINT;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
+        if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: " << (argv[0] ? argv[0] : "ServerExample")
+                      << " [--port=<1-65535>] [--isJsonResponseDisable]" << std::endl;
+            return 0;
+        }
+        if (arg == "--isJsonResponseDisable") {
+            isJsonResponseEnabled = false;
+        } else if (arg.rfind("--port=", 0) == 0) {
+            const std::string value = arg.substr(std::string("--port=").size());
+            int port = std::stoi(value);
+            endpoint = std::string("http://127.0.0.1:") + std::to_string(port) + "/mcp";
+        }
+    }
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
@@ -92,8 +111,8 @@ int main()
         Mcp::StreamableHttpServerConfig streamableHttpConfig;
         streamableHttpConfig.ioThreads = IO_THREADS;
         streamableHttpConfig.tlsConfig.enabled = false;
-        streamableHttpConfig.endpoint = ENDPOINT;
-        streamableHttpConfig.isJsonResponseEnabled = true;
+        streamableHttpConfig.endpoint = endpoint;
+        streamableHttpConfig.isJsonResponseEnabled = isJsonResponseEnabled;
 
         auto server = Mcp::McpServerFactory::CreateStreamableHttpServer(config, streamableHttpConfig);
         if (server == nullptr) {
@@ -248,9 +267,7 @@ int main()
                   << std::endl;
         std::cout << "  - Endpoint: " << streamableHttpConfig.endpoint.c_str() << std::endl;
         std::cout << "Test endpoints:" << std::endl;
-        std::cout << "  - Health check: " << streamableHttpConfig.endpoint.c_str() << "/health"
-                  << std::endl;
-        std::cout << "  - MCP endpoint: " << streamableHttpConfig.endpoint.c_str() << std::endl;
+        std::cout << "  - MCP endpoint: " << streamableHttpConfig.endpoint << std::endl;
 
         int counter = 0;
         while (!stopFlag && server->IsRunning()) {

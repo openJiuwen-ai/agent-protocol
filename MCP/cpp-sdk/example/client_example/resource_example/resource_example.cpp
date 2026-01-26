@@ -17,16 +17,26 @@ constexpr int REQUEST_TIMEOUT = 300;
 constexpr char EXAMPLE_ENDPOINT[] = "http://localhost:8000/mcp";
 constexpr char EXAMPLE_TOKEN[] = "your-token";
 
-int main()
+int main(int argc, char** argv)
 {
     SetLogLevel(MCP_LOG_LEVEL_INFO);
+
+    std::string endpoint = EXAMPLE_ENDPOINT;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
+        if (arg.rfind("--port=", 0) == 0) {
+            const std::string value = arg.substr(std::string("--port=").size());
+            int port = std::stoi(value);
+            endpoint = std::string("http://localhost:") + std::to_string(port) + "/mcp";
+        }
+    }
 
     // Setup client configuration
     Mcp::ClientConfig config;
     config.name = "ResourceExampleClient";
     config.version = "1.0.0";
     Mcp::StreamableHttpClientConfig httpConfig;
-    httpConfig.endpoint = EXAMPLE_ENDPOINT;
+    httpConfig.endpoint = endpoint;
     httpConfig.tlsConfig.enabled = false;
 
     auto authProvider = std::make_shared<Mcp::BearerTokenProvider>(EXAMPLE_TOKEN);

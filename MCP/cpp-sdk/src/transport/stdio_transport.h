@@ -160,7 +160,7 @@ public:
     // Transport interface implementation
     void Listen() override;
     void Terminate() override;
-    void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) override;
+    void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override;
     void SetCallback(std::shared_ptr<TransportCallback> callback) override;
     void HandleRequest(const Http::HttpRequest& request, RequestContext& ctx) override;
 

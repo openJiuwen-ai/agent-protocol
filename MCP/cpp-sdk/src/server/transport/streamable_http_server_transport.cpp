@@ -138,12 +138,12 @@ std::string StreamableHttpServerTransport::CreateEventData(const EventMessage& e
     // SSE format: event: message\ndata: {...}\nid: xxx\n\n
     oss << "event: message\n";
     // Serialize the message
-    std::string messageData = SerializeJSONRPCMessage(eventMessage.message, ctx.method);
-    oss << "data: " << messageData << "\n";
     if (!eventMessage.eventId.empty()) {
         oss << "id: " << eventMessage.eventId << "\n";
     }
-    oss << "\n";
+    std::string messageData = SerializeJSONRPCMessage(eventMessage.message, ctx.method);
+    // Each SSE event must end with a blank line
+    oss << "data: " << messageData << "\n\n";
     return oss.str();
 }
 
@@ -278,11 +278,30 @@ void StreamableHttpServerTransport::HandlePostRequest(RequestContext& ctx, const
     if (!ValidateProtocolVersion(ctx, request)) {
         return;
     }
+
     JSONRPCMessage message = DeserializeJSONRPCMessage(request.body, "");
     bool isRequest = std::holds_alternative<JSONRPCRequest>(message);
     if (!isRequest) {
         HandleNonRequestMessage(ctx, message);
         return;
+    }
+
+    if (!isJsonResponseEnabled_) {
+        HttpResponse response{};
+        response.statusCode = Http::HTTP_STATUS_OK;
+        response.type = HttpSendType::HTTPRESPONSESTART;
+        response.headers[Http::CACHE_CONTROL_HEADER] = Http::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;
+        response.headers[Http::CONNECTION_HEADER] = Http::CONNECTION_KEEP_ALIVE;
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_SSE;
+        response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
+        response.headers[Http::X_ACCEL_BUFFERING_HEADER] = "no";
+
+        if (!mcpSessionId_.empty()) {
+            response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
+        }
+
+        response.body.clear();
+        ctx.httpSendFunc(response, ctx);
     }
 
     if (callback_ != nullptr) {
@@ -342,15 +361,17 @@ void StreamableHttpServerTransport::HandleGetRequest(RequestContext& ctx, const 
     }
 
     // Store the GET stream request context
+    ctx.isGetStream = true;
     getStreamRequestContext_ = ctx;
 
     // Create SSE response
     HttpResponse response{};
     response.statusCode = Http::HTTP_STATUS_OK;
+    response.type = HttpSendType::HTTPRESPONSESTART;
     response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_SSE;
-    response.headers["Cache-Control"] = "no-cache, no-transform";
-    response.headers["Connection"] = "keep-alive";
-    response.headers["Transfer-Encoding"] = "chunked";
+    response.headers[Http::CACHE_CONTROL_HEADER] = Http::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;
+    response.headers[Http::CONNECTION_HEADER] = Http::CONNECTION_KEEP_ALIVE;
+    response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
 
     if (!mcpSessionId_.empty()) {
         response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
@@ -405,10 +426,18 @@ void StreamableHttpServerTransport::HandleUnsupportedRequest(RequestContext& ctx
     ctx.httpSendFunc(response, ctx);
 }
 
-void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, const RequestContext& ctx)
+void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, RequestContext& ctx)
 {
     if (ctx.httpSendFunc == nullptr) {
         throw std::runtime_error("HTTP callback not set");
+    }
+
+    if (ctx.isGetStream) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ctx is get stream");
+        if (!getStreamRequestContext_.has_value()) {
+            throw std::runtime_error("SSE stream request context not set");
+        }
+        ctx = getStreamRequestContext_.value();
     }
 
     if (isJsonResponseEnabled_) {
@@ -432,18 +461,26 @@ void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, c
         EventMessage eventMessage{message, ""}; // Empty event ID
         std::string eventData = CreateEventData(eventMessage, ctx);
 
+        bool isResponse = std::holds_alternative<JSONRPCResponse>(message);
+        bool isError = std::holds_alternative<JSONRPCError>(message);
+
         HttpResponse response{};
         response.statusCode = Http::HTTP_STATUS_OK;
-        response.headers["Cache-Control"] = "no-cache, no-transform";
-        response.headers["Connection"] = "keep-alive";
-        response.headers["Content-Type"] = Http::CONTENT_TYPE_SSE;
-        if (!mcpSessionId_.empty()) {
-            response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
-        }
+        response.type = HttpSendType::HTTPRESPONSEBODY;
+        response.headers.clear();
         response.body = eventData;
 
         // Send to the specified connection
         ctx.httpSendFunc(response, ctx);
+
+        if (isResponse || isError) {
+            // for response, finish stream
+            HttpResponse finishResponse{};
+            finishResponse.type = HttpSendType::HTTPRESPONSEBODY;
+            finishResponse.headers.clear();
+            finishResponse.body = "";
+            ctx.httpSendFunc(finishResponse, ctx);
+        }
     }
 }
 

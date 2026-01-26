@@ -500,23 +500,56 @@ std::string HttpServer::BuildHttpResponse(const HttpResponse& response) const
 {
     std::ostringstream output;
 
-    output << "HTTP/1.1 " << response.statusCode << ' ' << response.statusText << "\r\n";
+    if (response.type == HttpSendType::HTTPRESPONSE || response.type == HttpSendType::HTTPRESPONSESTART) {
+        output << "HTTP/1.1 " << response.statusCode << ' ' << response.statusText << "\r\n";
+        for (const auto& header : response.headers) {
+            output << header.first << ": " << header.second << "\r\n";
+        }
 
-    bool isSse = false;
-    for (const auto &header : response.headers) {
-        output << header.first << ": " << header.second << "\r\n";
-        if (header.first == "Content-Type" && header.second.find("text/event-stream") != std::string::npos) {
-            isSse = true;
+        output << "Content-Length: " << response.body.size() << "\r\n";
+        output << "\r\n";
+    }
+
+    if (response.type == HttpSendType::HTTPRESPONSE || response.type == HttpSendType::HTTPRESPONSEBODY) {
+        output << response.body;
+    }
+
+    return output.str();
+}
+
+std::string HttpServer::BuildchunkedResponse(const HttpResponse& response, bool& chunkedEnabled) const
+{
+    std::ostringstream output;
+
+    bool hasTransferEncoding = false;
+    bool responseChunked = false;
+    auto it = response.headers.find(TRANSFER_ENCODING_HEADER);
+    if (it != response.headers.end()) {
+        hasTransferEncoding = true;
+        if (it->second.find(TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
+            responseChunked = true;
         }
     }
- 
-    if (!isSse) {
-        output << "Content-Length: " << response.body.size() << "\r\n";
+
+    if (hasTransferEncoding) {
+        chunkedEnabled = responseChunked;
     }
 
-    output << "\r\n";
+    if (response.type == HttpSendType::HTTPRESPONSE || response.type == HttpSendType::HTTPRESPONSESTART) {
+        output << "HTTP/1.1 " << response.statusCode << ' ' << response.statusText << "\r\n";
+        for (const auto& header : response.headers) {
+            output << header.first << ": " << header.second << "\r\n";
+        }
+        output << "\r\n";
+    }
 
-    output << response.body;
+    if (chunkedEnabled) {
+        if (response.type == HttpSendType::HTTPRESPONSEBODY ||
+            (response.type == HttpSendType::HTTPRESPONSE && response.body.size() > 0)) {
+                output << std::hex << response.body.size() << "\r\n";
+                output << response.body << "\r\n";
+        }
+    }
 
     return output.str();
 }
@@ -570,12 +603,34 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
 
 bool HttpServer::SendResponse(int connectionFd, const HttpResponse& response)
 {
+    auto iterator = connections_.find(connectionFd);
+    if (iterator == connections_.end()) {
+        return false;
+    }
+
+    ConnectionContext& context = iterator->second;
+
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Status: %d %s", response.statusCode, response.statusText.c_str());
     for (const auto& header : response.headers) {
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Header: %s: %s", header.first.c_str(), header.second.c_str());
     }
+
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Body: %s", response.body.c_str());
-    std::string rawResponse = BuildHttpResponse(response);
+
+    bool isChunked = false;
+    auto it = response.headers.find(TRANSFER_ENCODING_HEADER);
+    if (it != response.headers.end() && it->second.find(TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
+        isChunked = true;
+    } else if (context.sseChunked) {
+        isChunked = true;
+    }
+
+    std::string rawResponse;
+    if (isChunked) {
+        rawResponse = BuildchunkedResponse(response, context.sseChunked);
+    } else {
+        rawResponse = BuildHttpResponse(response);
+    }
     return SendRawResponse(connectionFd, rawResponse);
 }
 
