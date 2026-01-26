@@ -1,11 +1,9 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <nlohmann/json.hpp>
 
-#include "client_task_manager.h"
-#include "utils/errors.h"
 #include "utils/uuid.h"
 #include "default_client.h"
 
@@ -20,7 +18,7 @@ DefaultClient::DefaultClient(const A2A::AgentCard& card, const ClientConfig& con
       consumers_(consumers),
       middleware_(middleware)
 {
-    transport_->SetTransportCallback([this](const std::string& requestId, const TrasnportEvent& event) {
+    transport_->SetTransportCallback([this](const std::string& requestId, const TransportEvent& event) {
         this->TransportEventCb(requestId, event);
     });
 }
@@ -31,14 +29,16 @@ void DefaultClient::SendMessage(const Message& msg, const ClientCallContext* con
 {
     MessageSendParams params;
     params.message = msg;
+    MessageSendConfiguration cfg;
     if (!config_.acceptedOutputModes.empty()) {
-        params.configuration.acceptedOutputModes = config_.acceptedOutputModes;
+        cfg.acceptedOutputModes = config_.acceptedOutputModes;
     }
 
-    params.configuration.blocking = !config_.polling;
+    cfg.blocking = !config_.polling;
     if (!config_.pushNotificationConfigs.empty()) {
-        params.configuration.pushNotificationConfig = config_.pushNotificationConfigs.front();
+        cfg.pushNotificationConfig = config_.pushNotificationConfigs.front();
     }
+    params.configuration = cfg;
 
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
     info->handler = handler;
@@ -46,18 +46,19 @@ void DefaultClient::SendMessage(const Message& msg, const ClientCallContext* con
     callbackInfo_[info->requestId] = info;
     const bool canStream = config_.streaming && card_.capabilities.streaming.value_or(false);
     if (!canStream) {
-        auto result = transport_->SendMessage(info->requestId, params, context);
+        transport_->SendMessage(info->requestId, params, context);
         return;
     }
 
     info->mgr = std::make_shared<ClientTaskManager>();
-    transport_->SendMessageStreaming(requestId, params, context);
+    transport_->SendMessageStreaming(info->requestId, params, context);
 }
 
 std::future<Task> DefaultClient::GetTask(const TaskQueryParams& params, const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<Task>>();
+    auto promise = std::make_shared<std::promise<Task>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->GetTask(info->requestId, params, context);
@@ -67,7 +68,8 @@ std::future<Task> DefaultClient::GetTask(const TaskQueryParams& params, const Cl
 std::future<Task> DefaultClient::CancelTask(const TaskIdParams& params, const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<Task>>();
+    auto promise = std::make_shared<std::promise<Task>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->CancelTask(info->requestId, params, context);
@@ -78,7 +80,8 @@ std::future<TaskPushNotificationConfig> DefaultClient::SetTaskPushNotificationCo
     const TaskPushNotificationConfig& config, const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<TaskPushNotificationConfig>>();
+    auto promise = std::make_shared<std::promise<TaskPushNotificationConfig>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->SetTaskPushNotificationConfig(info->requestId, config, context);
@@ -89,7 +92,8 @@ std::future<TaskPushNotificationConfig> DefaultClient::GetTaskPushNotificationCo
     const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<TaskPushNotificationConfig>>();
+    auto promise = std::make_shared<std::promise<TaskPushNotificationConfig>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->GetTaskPushNotificationConfig(info->requestId, params, context);
@@ -100,7 +104,8 @@ std::future<std::vector<TaskPushNotificationConfig>> DefaultClient::ListTaskPush
     const ListTaskPushNotificationConfigParams& params, const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<std::vector<TaskPushNotificationConfig>>>();
+    auto promise = std::make_shared<std::promise<std::vector<TaskPushNotificationConfig>>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->ListTaskPushNotificationConfigs(info->requestId, params, context);
@@ -111,7 +116,8 @@ std::future<void> DefaultClient::DeleteTaskPushNotificationConfig(const DeleteTa
     const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<void>>();
+    auto promise = std::make_shared<std::promise<void>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->DeleteTaskPushNotificationConfig(info->requestId, params, context);
@@ -138,7 +144,8 @@ void DefaultClient::Resubscribe(const TaskIdParams& params, const ClientCallCont
 std::future<A2A::AgentCard> DefaultClient::GetCard(const ClientCallContext* context)
 {
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
-    info->promise = std::make_shared<std::promise<std::vector<TaskPushNotificationConfig>>>();
+    auto promise = std::make_shared<std::promise<A2A::AgentCard>>();
+    info->promise = promise;
     info->requestId = generateUuid();
     callbackInfo_[info->requestId] = info;
     transport_->GetCard(info->requestId, context);
@@ -150,7 +157,7 @@ void DefaultClient::AddEventConsumer(Consumer c)
     consumers_.push_back(std::move(c));
 }
 
-void DefaultClient::AddRequestMiddleware(ClientCallInterceptor* middleware)
+void DefaultClient::AddRequestMiddleware(std::shared_ptr<ClientCallInterceptor> middleware)
 {
     middleware_.push_back(std::move(middleware));
 }
@@ -167,7 +174,7 @@ void DefaultClient::Consume(const ClientEvent& ev)
     }
 }
 
-void DefaultClient::TransportEventCb(const std::string& requestId, const TrasnportEvent& event)
+void DefaultClient::TransportEventCb(const std::string& requestId, const TransportEvent& event)
 {
 }
 

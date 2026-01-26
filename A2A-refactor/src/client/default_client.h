@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_DEFAULT_CLIENT
@@ -11,6 +11,7 @@
 
 #include "client/client.h"
 #include "client_transport.h"
+#include "client_task_manager.h"
 
 namespace A2A::Client {
 
@@ -134,7 +135,7 @@ public:
      *
      * @param[in] middleware interceptor object
      */
-    void AddRequestMiddleware(ClientCallInterceptor* middleware) override;
+    void AddRequestMiddleware(std::shared_ptr<ClientCallInterceptor> middleware) override;
 
     /**
      * @brief close client connection and release associated resources
@@ -145,11 +146,20 @@ public:
 
 private:
     void Consume(const ClientEvent& ev);
-    void TransportEventCb(const std::string& requestId, const TrasnportEvent& event);
+    void TransportEventCb(const std::string& requestId, const TransportEvent& event);
+
+    using PromisePtrVariant = std::variant<
+        std::shared_ptr<std::promise<Task>>,
+        std::shared_ptr<std::promise<TaskPushNotificationConfig>>,
+        std::shared_ptr<std::promise<std::vector<TaskPushNotificationConfig>>>,
+        std::shared_ptr<std::promise<void>>,
+        std::shared_ptr<std::promise<A2A::AgentCard>>
+    >;
 
     struct CallbackInfo {
+        std::string requestId;
         std::string method;
-        std::shared_ptr<std::promise> promise;
+        PromisePtrVariant promise;
         ResponseHandler handler;
         std::shared_ptr<ClientTaskManager> mgr;
     };
@@ -158,7 +168,7 @@ private:
     ClientConfig config_;
     std::shared_ptr<ClientTransport> transport_;
     std::vector<Consumer> consumers_;
-    std::vector<ClientCallInterceptor*> middleware_;
+    std::vector<std::shared_ptr<ClientCallInterceptor>> middleware_;
     std::unordered_map<std::string, std::shared_ptr<CallbackInfo>> callbackInfo_;
 };
 
