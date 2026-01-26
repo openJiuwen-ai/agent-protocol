@@ -7,9 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(PromptExample prompt_example.cpp)
 
 target_include_directories(PromptExample PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/../../../output/mcp
+    ${CMAKE_CURRENT_LIST_DIR}/../../../include/mcp
 )
 
 target_link_libraries(PromptExample PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/../../../output/libmcp.so
+    ${CMAKE_CURRENT_LIST_DIR}/../../../output/lib/libmcp.so
 )
