@@ -91,7 +91,7 @@ void JsonRpcTransport::GetCard(const std::string& requestId, const ClientCallCon
     UserData userData;
     userData.requestId = requestId;
     userData.method = METHOD_AGENT_CARD_GET;
-    transport_->SendMessage(rpc.dump(), {}, &userData);
+    conn_->SendMessage(rpc.dump(), {}, &userData);
 }
 
 void JsonRpcTransport::SetTransportCallback(TransportEventCallback callback)
@@ -139,7 +139,7 @@ void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const Us
 
 void JsonRpcTransport::Close()
 {
-    transport_->Terminate();
+    conn_->Terminate();
 }
 
 void JsonRpcTransport::ApplyInterceptors(const std::string& method, nlohmann::json& payload,
@@ -166,7 +166,7 @@ void JsonRpcTransport::Send(const std::string& requestId, const std::string& met
     UserData userData;
     userData.requestId = requestId;
     userData.method = method;
-    transport_->SendMessage(rpc.dump(), headers, &userData);
+    conn_->SendMessage(rpc.dump(), headers, &userData);
 }
 
 void JsonRpcTransport::OnStreamResp(const ConnEventData& message, const UserData* userData)

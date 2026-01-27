@@ -38,7 +38,7 @@ constexpr const char* STREAM_RESPONSE_TYPE_STATUS_UPDATE = "status-update";
 constexpr const char* STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE = "artifact-update";
 
 struct UserData {
-    uint64_t requestId = 0;
+    std::string requestId = "";
     std::string method;
 };
 

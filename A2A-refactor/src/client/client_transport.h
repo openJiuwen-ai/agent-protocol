@@ -12,7 +12,7 @@
 #include "client/client.h"
 #include "types.h"
 #include "shared/common_types.h"
-#include "client_conn.h"
+#include "connection/client_conn.h"
 
 namespace A2A::Client {
 
@@ -140,7 +140,7 @@ public:
      * @param[in] message message payload
      * @param[in] userData user data
      */
-    virtual void OnTransportMessage(const TransportEventData& message, const UserData* userData) = 0;
+    virtual void OnTransportMessage(const ConnEventData& message, const UserData* userData) = 0;
 
     /**
      * @brief close client connection and release associated resources

@@ -92,7 +92,7 @@ private:
     std::shared_ptr<A2A::AgentCard> agentCard_;
     std::vector<std::shared_ptr<ClientCallInterceptor>> interceptors_;
     TransportEventCallback transportEventCb_;
-    std::shared_ptr<AbstractClientTransport> transport_;
+    std::shared_ptr<ClientConn> conn_;
 };
 
 } // namespace A2A::Client
