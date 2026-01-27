@@ -431,7 +431,8 @@ void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, R
         throw std::runtime_error("HTTP callback not set");
     }
 
-    if (ctx.isGetStream) {
+    bool isGetStream = ctx.isGetStream || ctx.connectionId == 0;
+    if (isGetStream) {
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ctx is get stream");
         if (!getStreamRequestContext_.has_value()) {
             throw std::runtime_error("SSE stream request context not set");
@@ -444,7 +445,8 @@ void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, R
         // Only send response messages (not notifications/requests)
         bool isResponse = std::holds_alternative<JSONRPCResponse>(message);
 
-        if (isResponse) {
+        // for getstream or response, send message
+        if (isResponse || isGetStream) {
             HttpResponse response{};
             response.statusCode = Http::HTTP_STATUS_OK;
             response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
