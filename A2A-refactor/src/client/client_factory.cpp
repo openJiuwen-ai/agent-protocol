@@ -2,6 +2,8 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
+#include "default_client.h"
+#include "jsonrpc_transport.h"
 #include "client/client_factory.h"
 
 namespace A2A::Client {
@@ -10,7 +12,7 @@ ClientFactory::~ClientFactory() = default;
 
 std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const ClientConfig& config,
     const std::vector<Consumer>& consumers,
-    const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors) const
+    const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
 {
     std::string serverPreferred = card.preferredTransport.value_or("JSONRPC");
     std::map<std::string, std::string> serverSet{{serverPreferred, card.url}};
@@ -49,7 +51,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
 
     std::shared_ptr<ClientTransport> transport = nullptr;
     if (chosenProtocol == "JSONRPC") {
-        transport = std::make_shared<JsonRpcTransport>(url, &card, interceptors);
+        transport = std::make_shared<JsonRpcTransport>(chosenUrl, &card, interceptors);
     }
 
     if (transport == nullptr) {

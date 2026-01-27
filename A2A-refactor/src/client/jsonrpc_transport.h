@@ -21,7 +21,7 @@ class JsonRpcTransport;
 
 class SessionTransportCallback : public ConnCallback {
 public:
-    ~SessionTransportCallback() = default;
+    ~SessionTransportCallback() override = default;
 
     explicit SessionTransportCallback(JsonRpcTransport* t) : t_(t)
     {
@@ -39,7 +39,7 @@ private:
 
 class JsonRpcTransport : public ClientTransport {
 public:
-    JsonRpcTransport(const std::string& url, const A2A::AgentCard* agentCard,
+    JsonRpcTransport(const std::string& url, const AgentCard* agentCard,
         const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors);
 
     ~JsonRpcTransport();
@@ -89,7 +89,7 @@ private:
     void OnStreamResp(const ConnEventData& message, const UserData* userData);
 
     std::string url_;
-    std::shared_ptr<A2A::AgentCard> agentCard_;
+    std::shared_ptr<AgentCard> agentCard_;
     std::vector<std::shared_ptr<ClientCallInterceptor>> interceptors_;
     TransportEventCallback transportEventCb_;
     std::shared_ptr<ClientConn> conn_;

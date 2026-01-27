@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <map>
 
 #include "shared/common_types.h"
 
@@ -74,4 +75,4 @@ public:
 
 } // namespace A2A
 
-#endif // A2A_ABSTRACT_CLIENT_CONN
+#endif // A2A_CLIENT_CONN

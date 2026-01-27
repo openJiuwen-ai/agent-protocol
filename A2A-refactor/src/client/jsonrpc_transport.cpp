@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include "jsonrpc.h"
 #include "shared/common_types.h"
+#include "connection/libcurl_conn.h"
 #include "jsonrpc_transport.h"
 
 namespace A2A::Client {
@@ -16,13 +17,16 @@ void SessionTransportCallback::OnMessageReceived(const ConnEventData& message, c
     }
 }
 
-JsonRpcTransport::JsonRpcTransport(const std::string& url, const A2A::AgentCard* agentCard,
+JsonRpcTransport::JsonRpcTransport(const std::string& url, const AgentCard* agentCard,
     const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
     : url_(url), interceptors_(interceptors)
 {
     if (agentCard != nullptr) {
-        agentCard_ = std::make_shared<A2A::AgentCard>(*agentCard);
+        agentCard_ = std::make_shared<AgentCard>(*agentCard);
     }
+
+    conn_ = std::make_shared<Http::LibcurlConn>(url);
+    conn_->SetCallback(std::make_shared<SessionTransportCallback>(this));
 }
 
 JsonRpcTransport::~JsonRpcTransport() = default;
@@ -166,6 +170,9 @@ void JsonRpcTransport::Send(const std::string& requestId, const std::string& met
     UserData userData;
     userData.requestId = requestId;
     userData.method = method;
+    if (method == METHOD_MESSAGE_STREAM || method == METHOD_TASK_RESUBSCRIBE) {
+        userData.isStream = true;
+    }
     conn_->SendMessage(rpc.dump(), headers, &userData);
 }
 

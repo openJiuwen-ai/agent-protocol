@@ -12,7 +12,7 @@
 #include "event_system.h"
 #include "shared/thread_utils.h"
 #include "a2a_log.h"
-#include "http_client_service.h"
+#include "libcurl_conn.h"
 
 namespace A2A::Http {
 
@@ -22,24 +22,204 @@ constexpr int GRACEFUL_STOP_SLEEP_TIME = 10;
 constexpr int DEFAULT_QUEUE_CAPACITY = 1024;
 constexpr int DEFAULT_QUEUE_MAX_BATCH_SIZE = 16;
 
-// Constructor and destructor
-LibcurlConn::LibcurlConn(const LibcurlConnConfig& config, size_t ioThreadIndex)
-    : config_(config), requestQueue_(DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_MAX_BATCH_SIZE),
-    ioThreadIndex_(ioThreadIndex) {}
+// SSE field prefix lengths
+constexpr int MAX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes in milliseconds
+
+LibcurlConn::LibcurlConn(std::string url, std::unordered_map<std::string, std::string> headers,
+    int timeout, int sseReadTimeout)
+    : url_(std::move(url)),
+      sseReadTimeout_(sseReadTimeout),
+      requestQueue_(DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_MAX_BATCH_SIZE)
+{
+    if (timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
+        throw std::invalid_argument("Invalid timeout value");
+    }
+
+    if (sseReadTimeout_ <= 0 || sseReadTimeout_ > MAX_TIMEOUT_MS) {
+        throw std::invalid_argument("Invalid SSE read timeout value");
+    }
+
+    // Create LibcurlConnConfig with timeout settings
+    config_.connectionTimeoutMs = timeout;
+    config_.requestTimeoutMs = sseReadTimeout;
+
+    // Initialize request headers with Accept and Content-Type, then merge user headers
+    requestHeaders_[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+    for (const auto& [key, value] : headers) {
+        requestHeaders_[key] = value;
+    }
+
+    // Initialize HTTP client service
+    if (!this->Start()) {
+        throw std::runtime_error("Failed to start LibcurlConn");
+    }
+}
+
+void LibcurlConn::SendSessionTerminatedError(const HttpResponse& response)
+{
+    if (callback_ != nullptr) {
+        ConnEventData event;
+        event.errCode = Http::HTTP_STATUS_NOT_FOUND;
+        callback_->OnMessageReceived(event, &response.userData);
+    }
+}
 
 LibcurlConn::~LibcurlConn()
 {
-    try {
-        Stop();
-    } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Exception caught in destructor: ") + e.what());
+    Terminate();
+}
+
+void LibcurlConn::SetCallback(std::shared_ptr<ConnCallback> callback)
+{
+    callback_ = std::move(callback);
+}
+
+void LibcurlConn::Connect()
+{
+    // For HTTP client connection, no persistent connection is required
+    // The connection is established on each request
+}
+
+void LibcurlConn::SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
+    UserData* userData)
+{
+    // Prepare HTTP request for LibcurlConn
+    HttpRequest httpRequest{};
+    httpRequest.headers = requestHeaders_;
+    if (userData->isStream) {
+        httpRequest.headers[Http::ACCEPT_HEADER] = Http::CONTENT_TYPE_SSE;
+        httpRequest.headers[Http::CONNECTION_HEADER] = Http::CONNECTION_KEEP_ALIVE;
+        httpRequest.headers[Http::CACHE_CONTROL_HEADER] = Http::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;
+    } else {
+        httpRequest.headers[Http::ACCEPT_HEADER] = std::string(Http::CONTENT_TYPE_JSON);
     }
+
+    if (userData->method == METHOD_AGENT_CARD_GET) {
+        httpRequest.method = "GET";
+    } else {
+        httpRequest.method = "POST";
+    }
+    httpRequest.url = url_;
+    httpRequest.body = message;
+    httpRequest.headers.insert(headers.begin(), headers.end());
+
+    if (!this->IsRunning()) {
+        throw std::runtime_error("LibcurlConn is not running");
+    }
+
+    // Bind response callback to HandleResponse
+    HttpCallback callback = [this](const HttpResponse& response) { HandleResponse(response); };
+
+    this->Send(httpRequest, userData, sseReadTimeout_, nullptr, callback);
+}
+
+void LibcurlConn::HandleResponse(const HttpResponse& response)
+{
+    // Check low-level HTTP client success flag first
+    if (!response.success) {
+        if (callback_ != nullptr) {
+            std::string reason = "HTTP request failed";
+            if (!response.errorMessage.empty()) {
+                reason += ": " + response.errorMessage;
+            }
+            callback_->OnDisconnected(reason);
+        }
+        return;
+    }
+
+    // Check status code
+    if (response.statusCode == Http::HTTP_STATUS_ACCEPTED) {
+        return;
+    }
+
+    if (response.statusCode == Http::HTTP_STATUS_NOT_FOUND) {
+        // 404 Not Found - Session not found or expired
+        SendSessionTerminatedError(response);
+        return;
+    }
+
+    if (response.statusCode != Http::HTTP_STATUS_OK) {
+        // Handle other error responses
+        return;
+    }
+
+    // Determine content type
+    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    if (contentTypeIter == response.headers.end()) {
+        HandleUnexpectedContentType(response);
+        return;
+    }
+
+    // Handle based on content type
+    const std::string& contentType = contentTypeIter->second;
+    if (contentType.find(Http::CONTENT_TYPE_JSON) != std::string::npos) {
+        HandleJsonResponse(response);
+    } else if (contentType.find(Http::CONTENT_TYPE_SSE) != std::string::npos) {
+        HandleSseResponse(response);
+    } else {
+        HandleUnexpectedContentType(response);
+    }
+}
+
+void LibcurlConn::Terminate()
+{
+    // Stop HTTP client service if running
+    try {
+        this->Stop();
+    } catch (const std::exception& e) {
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Exception caught in terminate: ") + e.what());
+    }
+
+    // Clear session state
+    sessionId_.clear();
+    protocolVersion_.clear();
+    sseConnectionId_ = 0;
+    callback_ = nullptr;
+}
+
+void LibcurlConn::HandleJsonResponse(const HttpResponse& response)
+{
+    // Invoke connection callback
+    if (callback_ != nullptr) {
+        ConnEventData event;
+        if (response.statusCode == Http::HTTP_STATUS_OK) {
+            event.errCode = 0;
+        } else {
+            event.errCode = response.statusCode;
+        }
+        event.isStream = false;
+        event.isStreamFin = false;
+        event.data = response.body;
+        callback_->OnMessageReceived(event, &response.userData);
+    }
+}
+
+void LibcurlConn::HandleSseResponse(const HttpResponse& response)
+{
+    if (callback_ != nullptr) {
+        ConnEventData event;
+        if (response.statusCode == Http::HTTP_STATUS_OK) {
+            event.errCode = 0;
+        } else {
+            event.errCode = response.statusCode;
+        }
+        event.isStream = true;
+        event.isStreamFin = response.sseEvent.data.empty();
+        event.data = response.sseEvent.data;
+        callback_->OnMessageReceived(event, &response.userData);
+    }
+}
+
+void LibcurlConn::HandleUnexpectedContentType(const HttpResponse& response)
+{
+    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    std::string contentType = contentTypeIter != response.headers.end() ? contentTypeIter->second : "<missing>";
 }
 
 // Lifecycle management
 bool LibcurlConn::Start()
 {
-    if (state_.load(std::memory_order_acquire) != ServiceState::STOPPED) {
+    if (state_.load(std::memory_order_acquire) != ConnState::STOPPED) {
         A2A_LOG(A2A_LOG_LEVEL_INFO, "Service already running");
         return true;
     }
@@ -53,13 +233,12 @@ bool LibcurlConn::Start()
     auto f = [this](const std::shared_ptr<RequestContext>& req) {
         // Check if service is stopping
         auto currentState = state_.load(std::memory_order_acquire);
-        if (currentState != ServiceState::RUNNING) {
+        if (currentState != ConnState::RUNNING) {
             HandleErrorResponse(req, "Service is stopping");
             return;
         }
         HandleRequestInIOThread(req);
-    }
-
+    };
     if (!requestQueue_.Initialize(eventSystem_.get(), f)) {
         A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize request queue");
         eventSystem_.reset();
@@ -88,7 +267,7 @@ bool LibcurlConn::Start()
         return false;
     }
 
-    state_.store(ServiceState::RUNNING, std::memory_order_release);
+    state_.store(ConnState::RUNNING, std::memory_order_release);
 
     ioThread_ = std::thread(&LibcurlConn::IoThreadMain, this);
     A2A_LOG(A2A_LOG_LEVEL_INFO, "HTTP client service started successfully");
@@ -98,14 +277,14 @@ bool LibcurlConn::Start()
 void LibcurlConn::Stop()
 {
     auto currentState = state_.load(std::memory_order_acquire);
-    if (currentState != ServiceState::RUNNING) {
+    if (currentState != ConnState::RUNNING) {
         return;
     }
 
     A2A_LOG(A2A_LOG_LEVEL_INFO, "Stopping HTTP client service");
 
     // Transition to stopping state
-    state_.store(ServiceState::STOPPING, std::memory_order_release);
+    state_.store(ConnState::STOPPING, std::memory_order_release);
 
     // Notify I/O thread to handle stop
     if (eventSystem_ != nullptr && stopNotifyEventId_ != -1) {
@@ -153,7 +332,7 @@ void LibcurlConn::Stop()
 void LibcurlConn::Send(const HttpRequest& request, UserData* userData, int timeoutMs,
     HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback)
 {
-    if (state_.load(std::memory_order_acquire) != ServiceState::RUNNING) {
+    if (state_.load(std::memory_order_acquire) != ConnState::RUNNING) {
         throw std::runtime_error("Failed to send HTTP request: Service is not running");
     }
 
@@ -316,7 +495,7 @@ void LibcurlConn::HandleStopRequestInIOThread()
     }
     socketContexts_.clear();
     // 6. Set state to stopped before stopping event loop
-    state_.store(ServiceState::STOPPED, std::memory_order_release);
+    state_.store(ConnState::STOPPED, std::memory_order_release);
     // 7. Stop event loop
     A2A_LOG(A2A_LOG_LEVEL_INFO, "Stopping event loop");
     eventSystem_->Stop();
@@ -375,7 +554,7 @@ int LibcurlConn::SocketCallback(CURL* easy, curl_socket_t sockfd, int action, vo
     // Allow socket operations in RUNNING and STOPPING states
     // (STOPPING allows active requests to finish)
     auto currentState = service->state_.load(std::memory_order_acquire);
-    if (currentState == ServiceState::STOPPED) {
+    if (currentState == ConnState::STOPPED) {
         return -1;
     }
 
@@ -438,7 +617,7 @@ int LibcurlConn::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
     auto* service = static_cast<LibcurlConn*>(userp);
     // Allow timer operations in RUNNING and STOPPING states
     auto currentState = service->state_.load(std::memory_order_acquire);
-    if (currentState == ServiceState::STOPPED) {
+    if (currentState == ConnState::STOPPED) {
         return 0;
     }
 
@@ -477,7 +656,7 @@ int LibcurlConn::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
 void LibcurlConn::OnTimeout([[maybe_unused]] int fd, [[maybe_unused]] short events, [[maybe_unused]] void* arg)
 {
     auto currentState = state_.load(std::memory_order_acquire);
-    if (currentState == ServiceState::STOPPED) {
+    if (currentState == ConnState::STOPPED) {
         return;
     }
 
@@ -498,7 +677,7 @@ void LibcurlConn::OnTimeout([[maybe_unused]] int fd, [[maybe_unused]] short even
 void LibcurlConn::OnSocketEvent(int fd, short events, void* arg)
 {
     auto currentState = state_.load(std::memory_order_acquire);
-    if (currentState == ServiceState::STOPPED) {
+    if (currentState == ConnState::STOPPED) {
         return;
     }
 
@@ -617,15 +796,20 @@ void LibcurlConn::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<Reques
     }
 
     // Set request headers
-    struct curl_slist* headers = nullptr;
+    request->headers = nullptr;
     for (const auto& [name, value] : req.headers) {
         std::string header = name + ": " + value;
-        headers = curl_slist_append(headers, header.c_str());
+        request->headers = curl_slist_append(request->headers, header.c_str());
     }
 
-    if (headers != nullptr) {
-        curl_easy_setopt(easyHandle, CURLOPT_HTTPHEADER, headers);
-        request->headers = headers;
+    if (request->headers != nullptr) {
+        curl_easy_setopt(easyHandle, CURLOPT_HTTPHEADER, request->headers);
+    }
+
+    if (request->userData.isStream) {
+        curl_easy_setopt(easyHandle, CURLOPT_TCP_KEEPALIVE, HTTP_TCP_KEEP_ALIVE_S);
+        curl_easy_setopt(easyHandle, CURLOPT_TCP_KEEPIDLE, HTTP_TCP_KEEP_IDLE_S);
+        curl_easy_setopt(easyHandle, CURLOPT_TCP_KEEPINTVL, HTTP_TCP_KEEP_INTVL_S);
     }
 
     // Store request context for retrieval in callbacks
@@ -848,13 +1032,6 @@ void LibcurlConn::CancelAllActiveRequests()
     activeRequests_.clear();
 
     A2A_LOG(A2A_LOG_LEVEL_INFO, "All active requests cancelled");
-}
-
-// Factory method implementation
-std::unique_ptr<LibcurlConn> LibcurlConnFactory::Create(const LibcurlConnConfig& config,
-    size_t ioThreadIndex)
-{
-    return std::make_unique<LibcurlConn>(config, ioThreadIndex);
 }
 
 } // namespace A2A::Http

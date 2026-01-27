@@ -40,6 +40,7 @@ constexpr const char* STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE = "artifact-update";
 struct UserData {
     std::string requestId = "";
     std::string method;
+    bool isStream = false;
 };
 
 }

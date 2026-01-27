@@ -373,6 +373,11 @@ struct AgentProvider {
     std::string url;
 };
 
+struct AgentInterface {
+    std::string transport;
+    std::string url;
+};
+
 struct AgentCard {
     std::string protocolVersion;
     std::string name;
@@ -390,6 +395,7 @@ struct AgentCard {
     std::vector<AgentSkill> skills;
     std::optional<bool> supportsAuthenticatedExtendedCard;
     std::optional<std::string> preferredTransport;
+    std::optional<std::vector<AgentInterface>> additionalInterfaces;
 };
 } // namespace A2A
 

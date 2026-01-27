@@ -11,7 +11,7 @@
 #include <memory>
 
 #include "client/client_call_interceptor.h"
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Client {
 
@@ -47,9 +47,8 @@ public:
      * @param[in] msg message to be sent
      * @param[in] context client call context
      * @param[in] handler response handler
-     * @return future to void
      */
-    virtual std::future<void> SendMessage(const Message& msg, const ClientCallContext* context,
+    virtual void SendMessage(const Message& msg, const ClientCallContext* context,
         ResponseHandler handler) = 0;
 
     /**
@@ -122,9 +121,8 @@ public:
      * @param[in] params task id params
      * @param[in] context client call context
      * @param[in] handler response handler
-     * @return future to void
      */
-    virtual std::future<void> Resubscribe(const TaskIdParams& params, const ClientCallContext* context,
+    virtual void Resubscribe(const TaskIdParams& params, const ClientCallContext* context,
         ResponseHandler handler) = 0;
 
     /**

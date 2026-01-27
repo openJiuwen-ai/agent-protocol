@@ -9,7 +9,7 @@
 #include <string>
 #include <map>
 
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Client {
 
@@ -32,7 +32,7 @@ public:
      * @param[in] agentCard agent card related to this intercept. may be null
      * @param[in] context client call context. may be null
      */
-    virtual void Intercept(const std::string& methodName, std::map<std::string, std::string>& payload,
+    virtual void Intercept(const std::string& methodName, nlohmann::json& payload,
         std::map<std::string, std::string>& headers, const A2A::AgentCard* agentCard,
         const ClientCallContext* context) = 0;
 };

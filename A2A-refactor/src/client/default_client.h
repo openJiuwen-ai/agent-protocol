@@ -145,15 +145,12 @@ public:
     void Close() override;
 
 private:
-    void Consume(const ClientEvent& ev);
-    void TransportEventCb(const std::string& requestId, const TransportEvent& event);
-
     using PromisePtrVariant = std::variant<
         std::shared_ptr<std::promise<Task>>,
         std::shared_ptr<std::promise<TaskPushNotificationConfig>>,
         std::shared_ptr<std::promise<std::vector<TaskPushNotificationConfig>>>,
         std::shared_ptr<std::promise<void>>,
-        std::shared_ptr<std::promise<A2A::AgentCard>>
+        std::shared_ptr<std::promise<AgentCard>>
     >;
 
     struct CallbackInfo {
@@ -164,7 +161,12 @@ private:
         std::shared_ptr<ClientTaskManager> mgr;
     };
 
-    A2A::AgentCard card_;
+    void Consume(const ClientEvent& ev);
+    void TransportEventCb(const std::string& requestId, const TransportEvent& event);
+    void HandlerErrorResp(std::shared_ptr<CallbackInfo> cb, const TransportError& e);
+    void HandlerSuccessResp(std::shared_ptr<CallbackInfo> cb, const TransportEvent& event);
+
+    AgentCard card_;
     ClientConfig config_;
     std::shared_ptr<ClientTransport> transport_;
     std::vector<Consumer> consumers_;

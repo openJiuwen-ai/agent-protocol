@@ -49,8 +49,6 @@ static void AppendArtifactToTask(Task& task, const TaskArtifactUpdateEvent& even
 
     if (it != list.end()) {
         it->parts.insert(it->parts.end(), newArtifact.parts.begin(), newArtifact.parts.end());
-    } else {
-        // ignore chunk
     }
 }
 

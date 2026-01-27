@@ -2,8 +2,8 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#ifndef A2A_HTTP_CLIENT_SERVICE_INCLUDE_H_
-#define A2A_HTTP_CLIENT_SERVICE_INCLUDE_H_
+#ifndef A2A_LIBCURL_CONN
+#define A2A_LIBCURL_CONN
 
 #include <curl/curl.h>
 
@@ -19,11 +19,12 @@
 #include "event/event_system.h"
 #include "shared/http_common.h"
 #include "shared/message_queue/mpsc_notify_queue.h"
+#include "client_conn.h"
 
 namespace A2A::Http {
 
 // Service state enumeration
-enum class ServiceState {
+enum class ConnState {
     RUNNING,  // Service is running and accepting requests
     STOPPING, // Service is stopping (no new requests, but finishing active ones)
     STOPPED   // Service has stopped completely
@@ -43,7 +44,7 @@ class LibcurlConn;
 struct LibcurlConnConfig {
     int connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS; // Connection timeout in milliseconds
     int requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS; // Request timeout in milliseconds
-    std::chrono::milliseconds eventLoopTimeout{DEFAULT_EVENT_LOOP_TIMEOUT_MS}; // EventSystem loop timeout
+    int eventLoopTimeout = DEFAULT_EVENT_LOOP_TIMEOUT_MS; // EventSystem loop timeout
 
     // TLS configuration (effective when URL scheme is https)
     bool tlsVerifyPeer = true;
@@ -123,11 +124,25 @@ struct CurlSocketContext {
 /**
  * @brief HTTP Client Service using libcurl multi_socket API
  */
-class LibcurlConn {
+class LibcurlConn : public ClientConn {
 public:
-    explicit LibcurlConn(const LibcurlConnConfig& config, size_t ioThreadIndex = 0);
-    ~LibcurlConn();
+    explicit LibcurlConn(
+        std::string url, std::unordered_map<std::string, std::string> headers = {},
+        int timeout = DEFAULT_CONNECTION_TIMEOUT_MS, int sseReadTimeout = DEFAULT_REQUEST_TIMEOUT_MS);
 
+    ~LibcurlConn() override;
+
+    // Send message to server
+    void SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
+        UserData* userData) override;
+
+    void Connect() override;
+
+    void Terminate() override;
+
+    void SetCallback(std::shared_ptr<ConnCallback> callback) override;
+
+private:
     /**
      * @brief Start the HTTP client service and initialize all components
      * @return true if service started successfully, false otherwise
@@ -145,7 +160,7 @@ public:
      */
     bool IsRunning() const
     {
-        return state_.load(std::memory_order_acquire) == ServiceState::RUNNING;
+        return state_.load(std::memory_order_acquire) == ConnState::RUNNING;
     }
 
     /**
@@ -160,10 +175,20 @@ public:
         HttpCallback responseBodyCallback);
 
 private:
+    std::string url_;
+
+    int sseReadTimeout_;
+    std::string sessionId_ = "";
+    std::string protocolVersion_ = "";
+    uint64_t sseConnectionId_ = 0;
+    std::unique_ptr<Http::LibcurlConn> libcurlConn_ = nullptr;
+    std::shared_ptr<ConnCallback> callback_ = nullptr;
+    std::unordered_map<std::string, std::string> requestHeaders_;
+
     // Core components
-    LibcurlConnConfig config_; // Service configuration parameters
+    LibcurlConnConfig config_ = {0}; // Service configuration parameters
     CURLM* multiHandle_{nullptr}; // libcurl multi handle for concurrent transfers
-    std::atomic<ServiceState> state_{ServiceState::STOPPED}; // Service state
+    std::atomic<ConnState> state_{ConnState::STOPPED}; // Service state
     std::unique_ptr<EventSystem> eventSystem_; // Event system for async I/O
 
     // Request queue for async submission from user threads to I/O thread
@@ -325,27 +350,16 @@ private:
      * @brief init curl related resources
      */
     bool CurlInit();
-};
 
-/**
- * @brief Factory class for creating LibcurlConn instances
- */
-class LibcurlConnFactory {
-public:
-    /**
-     * @brief destructor
-     */
-    ~LibcurlConnFactory() = default;
+    void HandleJsonResponse(const HttpResponse& response);
+    void HandleSseResponse(const HttpResponse& response);
+    void SendSessionTerminatedError(const HttpResponse& response);
+    void HandleUnexpectedContentType(const HttpResponse& response);
 
-    /**
-     * @brief Create HTTP client service instance
-     * @param config Service configuration
-     * @param ioThreadIndex Index for naming IO threads (default 0)
-     * @return Unique pointer to created service
-     */
-    static std::unique_ptr<LibcurlConn> Create(const LibcurlConnConfig& config, size_t ioThreadIndex = 0);
+    // Handle response from server (called internally when response received, triggers session callback)
+    void HandleResponse(const HttpResponse& response);
 };
 
 } // namespace A2A::Http
 
-#endif // A2A_HTTP_CLIENT_SERVICE_INCLUDE_H_
+#endif // A2A_LIBCURL_CONN

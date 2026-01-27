@@ -12,7 +12,7 @@
 #include <memory>
 
 #include "server/server_call_context.h"
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Server {
 

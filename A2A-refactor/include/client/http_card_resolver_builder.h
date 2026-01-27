@@ -9,7 +9,7 @@
 #include <string>
 #include <future>
 
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Client {
 
