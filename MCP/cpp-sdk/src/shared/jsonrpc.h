@@ -277,6 +277,24 @@ inline const char* ToString(LoggingLevel lvl)
     return "unknown";
 }
 
+// completion/complete
+struct CompleteRequestParams : public RequestParams {
+    CompleteReference ref;
+    CompletionArgument argument;
+    std::optional<CompletionContext> context;
+
+    CompleteRequestParams() = default;
+    CompleteRequestParams(CompleteReference r, CompletionArgument arg,
+        std::optional<CompletionContext> ctx = std::nullopt)
+        : ref(std::move(r)), argument(std::move(arg)), context(std::move(ctx))
+    {
+    }
+};
+
+struct CompleteRequest : public Request {
+    CompleteRequest();
+};
+
 } // namespace Mcp
 
 #endif // MCP_JSONRPC_INCLUDE_H_

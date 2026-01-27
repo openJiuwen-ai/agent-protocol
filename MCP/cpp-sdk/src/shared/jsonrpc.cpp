@@ -1417,6 +1417,182 @@ struct adl_serializer<Mcp::ResourceListChangedNotification> {
     static void from_json(const json &, Mcp::ResourceListChangedNotification &) {}
 };
 
+// ResourceTemplateReference
+template <>
+struct adl_serializer<Mcp::ResourceTemplateReference> {
+    static void to_json(json& j, const Mcp::ResourceTemplateReference& ref)
+    {
+        j["type"] = ref.type;
+        j["uri"] = ref.uri;
+    }
+
+    static void from_json(const json& j, Mcp::ResourceTemplateReference& ref)
+    {
+        ref.type = j.value("type", std::string("ref/resource"));
+        j.at("uri").get_to(ref.uri);
+    }
+};
+
+// PromptReference
+template <>
+struct adl_serializer<Mcp::PromptReference> {
+    static void to_json(json& j, const Mcp::PromptReference& ref)
+    {
+        j["type"] = ref.type;
+        j["name"] = ref.name;
+    }
+
+    static void from_json(const json& j, Mcp::PromptReference& ref)
+    {
+        ref.type = j.value("type", std::string("ref/prompt"));
+        j.at("name").get_to(ref.name);
+    }
+};
+
+// CompleteReference (variant)
+template <>
+struct adl_serializer<Mcp::CompleteReference> {
+    static void to_json(json& j, const Mcp::CompleteReference& v)
+    {
+        std::visit([&](auto&& arg) { j = json(arg); }, v);
+    }
+
+    static void from_json(const json& j, Mcp::CompleteReference& v)
+    {
+        const auto type = j.value("type", std::string());
+        if (type == "ref/resource") {
+            v = j.get<Mcp::ResourceTemplateReference>();
+        } else if (type == "ref/prompt") {
+            v = j.get<Mcp::PromptReference>();
+        }
+    }
+};
+
+// CompletionArgument
+template <>
+struct adl_serializer<Mcp::CompletionArgument> {
+    static void to_json(json& j, const Mcp::CompletionArgument& arg)
+    {
+        j["name"] = arg.name;
+        j["value"] = arg.value;
+    }
+
+    static void from_json(const json& j, Mcp::CompletionArgument& arg)
+    {
+        j.at("name").get_to(arg.name);
+        j.at("value").get_to(arg.value);
+    }
+};
+
+// CompletionContext
+template <>
+struct adl_serializer<Mcp::CompletionContext> {
+    static void to_json(json& j, const Mcp::CompletionContext& ctx)
+    {
+        if (ctx.arguments.has_value()) {
+            json args = json::object();
+            for (const auto& [key, value] : ctx.arguments.value()) {
+                args[key] = value;
+            }
+            j["arguments"] = args;
+        }
+    }
+
+    static void from_json(const json& j, Mcp::CompletionContext& ctx)
+    {
+        if (j.contains("arguments") && j.at("arguments").is_object()) {
+            std::unordered_map<std::string, std::string> args;
+            const auto& argsJson = j.at("arguments");
+            for (auto it = argsJson.begin(); it != argsJson.end(); ++it) {
+                if (it->is_string()) {
+                    args[it.key()] = it->get<std::string>();
+                }
+            }
+            ctx.arguments = std::move(args);
+        } else {
+            ctx.arguments = std::nullopt;
+        }
+    }
+};
+
+// Completion
+template <>
+struct adl_serializer<Mcp::Completion> {
+    static void to_json(json& j, const Mcp::Completion& c)
+    {
+        j["values"] = c.values;
+        if (c.total.has_value()) {
+            j["total"] = c.total.value();
+        }
+        if (c.hasMore.has_value()) {
+            j["hasMore"] = c.hasMore.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::Completion& c)
+    {
+        j.at("values").get_to(c.values);
+        if (j.contains("total")) {
+            c.total = j.at("total").get<int64_t>();
+        }
+        if (j.contains("hasMore")) {
+            c.hasMore = j.at("hasMore").get<bool>();
+        }
+    }
+};
+
+// CompleteResult
+template <>
+struct adl_serializer<Mcp::CompleteResult> {
+    static void to_json(json& j, const Mcp::CompleteResult& r)
+    {
+        j["completion"] = r.completion;
+        if (r.meta.has_value()) {
+            j["_meta"] = r.meta.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::CompleteResult& r)
+    {
+        j.at("completion").get_to(r.completion);
+        if (j.contains("_meta")) {
+            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        }
+    }
+};
+
+// CompleteRequest -> {"method":"completion/complete", "params":{ref, argument, context?}}
+template <>
+struct adl_serializer<Mcp::CompleteRequest> {
+    static void to_json(json& j, const Mcp::CompleteRequest& req)
+    {
+        if (req.params_) {
+            auto p = static_cast<const Mcp::CompleteRequestParams*>(req.params_.get());
+            j["ref"] = p->ref;
+            j["argument"] = p->argument;
+            if (p->context.has_value()) {
+                j["context"] = p->context.value();
+            }
+        }
+    }
+
+    static void from_json(const json& j, Mcp::CompleteRequest& req)
+    {
+        j.at("method").get_to(req.method_);
+        if (j.contains("params")) {
+            const auto& paramsJson = j.at("params");
+            auto ref = paramsJson.at("ref").get<Mcp::CompleteReference>();
+            auto argument = paramsJson.at("argument").get<Mcp::CompletionArgument>();
+            std::optional<Mcp::CompletionContext> context;
+            if (paramsJson.contains("context")) {
+                context = paramsJson.at("context").get<Mcp::CompletionContext>();
+            }
+            req.params_ = std::make_unique<Mcp::CompleteRequestParams>(std::move(ref), std::move(argument),
+                std::move(context));
+        }
+    }
+};
+
 } // namespace nlohmann
 
 namespace Mcp {
@@ -1563,6 +1739,11 @@ ListResourceTemplatesRequest::ListResourceTemplatesRequest()
     method_ = "resources/templates/list";
 }
 
+CompleteRequest::CompleteRequest()
+{
+    method_ = "completion/complete";
+}
+
 ListRootsRequest::ListRootsRequest()
 {
     method_ = "roots/list";
@@ -1573,7 +1754,8 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
     json j;
     j["jsonrpc"] = jsonrpc_;
     j["id"] = id_;
-    j["method"] = method_;
+    // Use provided method if non-empty, otherwise fallback to stored method_
+    j["method"] = method.empty() ? method_ : method;
     if (request_ != nullptr && method_ == "initialize") {
         const auto* params = static_cast<const InitializeRequestParams*>(request_->params_.get());
         if (params != nullptr) {
@@ -1628,6 +1810,11 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
         const auto* listReq = dynamic_cast<const ListResourceTemplatesRequest*>(request_.get());
         if (listReq != nullptr) {
             j["params"] = *listReq;
+        }
+    } else if (request_ != nullptr && request_->method_ == "completion/complete") {
+        const auto* completeReq = dynamic_cast<const CompleteRequest*>(request_.get());
+        if (completeReq != nullptr) {
+            j["params"] = *completeReq;
         }
     } else if (request_ != nullptr && request_->method_ == "roots/list") {
         const auto* listReq = dynamic_cast<const ListRootsRequest*>(request_.get());
@@ -1698,6 +1885,10 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& m
     } else if (method_ == "resources/templates/list") {
         ListResourceTemplatesRequest listReq = j.get<ListResourceTemplatesRequest>();
         auto reqPtr = std::make_unique<ListResourceTemplatesRequest>(std::move(listReq));
+        request_ = std::move(reqPtr);
+    } else if (method_ == "completion/complete") {
+        CompleteRequest completeReq = j.get<CompleteRequest>();
+        auto reqPtr = std::make_unique<CompleteRequest>(std::move(completeReq));
         request_ = std::move(reqPtr);
     } else if (method_ == "roots/list") {
         ListRootsRequest listReq = j.get<ListRootsRequest>();
@@ -1781,6 +1972,12 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
                 throw std::runtime_error("Failed to cast result to EmptyResult");
             }
             j["result"] = json::object();
+        } else if (method == "completion/complete") {
+            auto* completeResult = dynamic_cast<const CompleteResult*>(result_.get());
+            if (completeResult == nullptr) {
+                throw std::runtime_error("Failed to cast result to CompleteResult");
+            }
+            j["result"] = *completeResult;
         }
     }
 
@@ -1855,6 +2052,12 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
         result_ = std::make_shared<EmptyResult>();
     } else if (method == "logging/setLevel") {
         result_ = std::make_shared<EmptyResult>();
+    } else if (method == "completion/complete") {
+        auto p = std::make_shared<CompleteResult>();
+        if (j.contains("result")) {
+            j.at("result").get_to(*p);
+        }
+        result_ = std::move(p);
     }
 
     return 0;

@@ -295,6 +295,20 @@ std::future<std::shared_ptr<EmptyResult>> ClientSession::UnsubscribeResource(con
 
     return future;
 }
+std::future<std::shared_ptr<CompleteResult>> ClientSession::Complete(
+    const CompleteReference& ref, const CompletionArgument& argument,
+    const std::optional<CompletionContext>& context)
+{
+    auto promise = std::make_shared<std::promise<std::shared_ptr<CompleteResult>>>();
+    auto future = promise->get_future();
+    auto params = std::make_unique<CompleteRequestParams>(ref, argument, context);
+    auto req = std::make_unique<CompleteRequest>();
+    req->params_ = std::move(params);
+    SendRequest(std::move(req), MakeTypedCompletion<CompleteResult>(promise, "Complete"));
+
+    return future;
+}
+
 
 std::future<std::shared_ptr<EmptyResult>> ClientSession::SetLoggingLevel(LoggingLevel level)
 {

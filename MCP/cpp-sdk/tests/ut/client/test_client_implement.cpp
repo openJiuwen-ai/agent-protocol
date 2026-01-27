@@ -128,7 +128,15 @@ TEST_F(McpClientImplementTest, CallMethodBeforeInitialize) {
 
     // 这些方法可能还未完全实现，但应该会抛出未初始化异常
     EXPECT_THROW(client_->SendProgressNotification("", 0, 0, ""), std::runtime_error);
-    EXPECT_THROW(client_->Complete("", "", {}), std::runtime_error);
+    
+    // Complete method requires proper types
+    PromptReference promptRef;
+    promptRef.name = "";
+    CompleteReference ref = promptRef;
+    CompletionArgument arg;
+    arg.name = "";
+    arg.value = "";
+    EXPECT_THROW(client_->Complete(ref, arg, std::nullopt), std::runtime_error);
 
     // 资源相关方法
     EXPECT_THROW(client_->ListResources(), std::runtime_error);
@@ -421,6 +429,162 @@ TEST_F(McpClientImplementTest, SubprocessConfiguration) {
         auto initFuture = client_->Initialize();
         EXPECT_TRUE(initFuture.valid());
     });
+}
+
+// Complete method tests
+TEST_F(McpClientImplementTest, CompleteWithPromptReference)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    auto initFuture = client_->Initialize();
+    EXPECT_TRUE(initFuture.valid());
+
+    // Create PromptReference
+    PromptReference promptRef;
+    promptRef.name = "test_prompt";
+    CompleteReference ref = promptRef;
+
+    // Create CompletionArgument
+    CompletionArgument arg;
+    arg.name = "language";
+    arg.value = "py";
+
+    // Create CompletionContext
+    CompletionContext ctx;
+    std::unordered_map<std::string, std::string> argsMap;
+    argsMap["framework"] = "django";
+    ctx.arguments = argsMap;
+
+    // Call Complete
+    auto completeFuture = client_->Complete(ref, arg, ctx);
+    EXPECT_TRUE(completeFuture.valid());
+}
+
+TEST_F(McpClientImplementTest, CompleteWithResourceTemplateReference)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    auto initFuture = client_->Initialize();
+    EXPECT_TRUE(initFuture.valid());
+
+    // Create ResourceTemplateReference
+    ResourceTemplateReference resourceRef;
+    resourceRef.uri = "file:///path/to/template";
+    CompleteReference ref = resourceRef;
+
+    // Create CompletionArgument
+    CompletionArgument arg;
+    arg.name = "format";
+    arg.value = "j";
+
+    // Create CompletionContext with arguments
+    CompletionContext ctx;
+    std::unordered_map<std::string, std::string> argsMap;
+    argsMap["extension"] = "json";
+    ctx.arguments = argsMap;
+
+    // Call Complete
+    auto completeFuture = client_->Complete(ref, arg, ctx);
+    EXPECT_TRUE(completeFuture.valid());
+}
+
+TEST_F(McpClientImplementTest, CompleteWithoutContext)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    auto initFuture = client_->Initialize();
+    EXPECT_TRUE(initFuture.valid());
+
+    // Create PromptReference
+    PromptReference promptRef;
+    promptRef.name = "test_prompt";
+    CompleteReference ref = promptRef;
+
+    // Create CompletionArgument
+    CompletionArgument arg;
+    arg.name = "param";
+    arg.value = "value";
+
+    // Call Complete without context
+    auto completeFuture = client_->Complete(ref, arg, std::nullopt);
+    EXPECT_TRUE(completeFuture.valid());
+}
+
+TEST_F(McpClientImplementTest, CompleteNotInitialized)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    // Try to call Complete before initialization
+    PromptReference promptRef;
+    promptRef.name = "test_prompt";
+    CompleteReference ref = promptRef;
+
+    CompletionArgument arg;
+    arg.name = "language";
+    arg.value = "py";
+
+    // Should throw because client is not initialized
+    EXPECT_THROW({
+        auto completeFuture = client_->Complete(ref, arg, std::nullopt);
+    }, std::runtime_error);
+}
+
+TEST_F(McpClientImplementTest, CompleteWithEmptyArgument)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    auto initFuture = client_->Initialize();
+    EXPECT_TRUE(initFuture.valid());
+
+    // Create PromptReference
+    PromptReference promptRef;
+    promptRef.name = "test_prompt";
+    CompleteReference ref = promptRef;
+
+    // Create CompletionArgument with empty values
+    CompletionArgument arg;
+    arg.name = "";
+    arg.value = "";
+
+    // Call Complete
+    auto completeFuture = client_->Complete(ref, arg, std::nullopt);
+    EXPECT_TRUE(completeFuture.valid());
+}
+
+TEST_F(McpClientImplementTest, CompleteWithMultipleContextArguments)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    auto initFuture = client_->Initialize();
+    EXPECT_TRUE(initFuture.valid());
+
+    // Create ResourceTemplateReference
+    ResourceTemplateReference resourceRef;
+    resourceRef.uri = "file:///path/to/resource";
+    CompleteReference ref = resourceRef;
+
+    // Create CompletionArgument
+    CompletionArgument arg;
+    arg.name = "format";
+    arg.value = "json";
+
+    // Create CompletionContext with multiple arguments
+    CompletionContext ctx;
+    std::unordered_map<std::string, std::string> argsMap;
+    argsMap["version"] = "2.0";
+    argsMap["encoding"] = "utf-8";
+    argsMap["indent"] = "4";
+    ctx.arguments = argsMap;
+
+    // Call Complete
+    auto completeFuture = client_->Complete(ref, arg, ctx);
+    EXPECT_TRUE(completeFuture.valid());
 }
 
 } // namespace Mcp

@@ -67,6 +67,12 @@ public:
     std::future<std::shared_ptr<GetPromptResult>> GetPrompt(const std::string& name,
                                                             const std::optional<JsonValue>& arguments = std::nullopt);
 
+    // Request completion options
+    std::future<std::shared_ptr<CompleteResult>> Complete(const CompleteReference& ref,
+                                                          const CompletionArgument& argument,
+                                                          const std::optional<CompletionContext>& context
+                                                            = std::nullopt);
+
     // Override BaseSession notification sending
     void SendNotification(std::unique_ptr<Notification> notification,
                           std::optional<int64_t> relatedRequestId [[maybe_unused]] = std::nullopt) override;

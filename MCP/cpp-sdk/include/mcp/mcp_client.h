@@ -171,17 +171,19 @@ public:
                                                        std::string message) = 0;
 
     /**
-     * @brief Complete an operation of the specified type on a resource.
+     * @brief Request completion options for a prompt or resource template.
      *
-     * Requests the server to complete a specific operation on a given resource, with optional extra parameters.
+     * Sends a completion request to the server for the specified resource or prompt.
      *
-     * @param type The type of operation to complete.
-     * @param uri The URI of the resource.
-     * @param extras Additional parameters for the operation.
+     * @param ref Reference to the resource template or prompt.
+     * @param argument The completion argument containing name and value.
+     * @param context Optional completion context with additional arguments.
+     * @return A future to a shared pointer of CompleteResult containing completion options.
      * @throw std::runtime_error If the client is not initialized.
      */
-    virtual std::future<Result> Complete(std::string type, std::string uri,
-                                         std::unordered_map<std::string, std::string> extras) = 0;
+    virtual std::future<std::shared_ptr<CompleteResult>> Complete(
+        const CompleteReference& ref, const CompletionArgument& argument,
+        const std::optional<CompletionContext>& context = std::nullopt) = 0;
 
     // Register a callback that will be invoked when the server sends `roots/list`.
     // This must be called before Initialize() to ensure capabilities are advertised correctly.

@@ -5,12 +5,18 @@
 #ifndef MCP_SERVER_INCLUDE_H_
 #define MCP_SERVER_INCLUDE_H_
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "mcp_type.h"
 
 namespace Mcp {
+
+// Function type for completion handler
+using CompleteFunc = std::function<CompleteResult(const CompleteReference& ref,
+    const CompletionArgument& argument, const std::optional<CompletionContext>& ctx)>;
 
 /**
  * Abstract base class for MCP server implementations.
@@ -108,6 +114,13 @@ public:
     virtual void RemoveResourceTemplate(const std::string& uriTemplate) = 0;
 
     virtual void RegisterSetLoggingLevelHandler(std::function<void(const std::string& level)> h) = 0;
+
+    /**
+     * Add a completion handler to the server.
+     *
+     * @param handler Completion handler function that processes complete requests
+     */
+    virtual void AddCompletion(CompleteFunc handler) = 0;
 };
 
 /**

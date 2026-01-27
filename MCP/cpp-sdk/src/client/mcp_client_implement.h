@@ -49,8 +49,9 @@ public:
     std::future<void> SendProgressNotification(std::string progressToken, float progress, float total,
                                                std::string message) override;
 
-    std::future<Result> Complete(std::string type, std::string uri,
-                                 std::unordered_map<std::string, std::string> extras) override;
+    std::future<std::shared_ptr<CompleteResult>> Complete(
+        const CompleteReference& ref, const CompletionArgument& argument,
+        const std::optional<CompletionContext>& context = std::nullopt) override;
 
     void SetListRootsCallback(ListRootsCallback cb) override;
 private:

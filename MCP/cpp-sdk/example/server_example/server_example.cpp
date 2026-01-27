@@ -245,6 +245,36 @@ int main(int argc, char** argv)
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource template failed as expected");
         }
 
+        // Register completion handler to respond to completion/complete requests
+        server->AddCompletion([](const Mcp::CompleteReference &ref, const Mcp::CompletionArgument &arg,
+                                 const std::optional<Mcp::CompletionContext> &ctx) -> Mcp::CompleteResult {
+            (void)arg; // not used in this simple demo
+            Mcp::CompleteResult result;
+
+            // Suggest values based on reference type
+            std::visit([
+            &result](auto &&r) {
+                using T = std::decay_t<decltype(r)>;
+                if constexpr (std::is_same_v<T, Mcp::PromptReference>) {
+                    result.completion.values = {"python", "pytorch", "pydantic"};
+                } else {
+                    result.completion.values = {"json", "yaml", "txt"};
+                }
+                }, ref);
+
+            // Optionally echo back a framework hint if provided
+            if (ctx && ctx->arguments) {
+                auto it = ctx->arguments->find("framework");
+                if (it != ctx->arguments->end()) {
+                    result.completion.values.push_back(it->second);
+                }
+            }
+
+            result.completion.total = static_cast<int64_t>(result.completion.values.size());
+            result.completion.hasMore = false;
+            return result;
+        });
+
         if (!server->Run()) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to start MCP server");
             return -1;
@@ -295,6 +325,7 @@ int main(int argc, char** argv)
     MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP Server test completed");
     if (g_logFile) {
         fclose(g_logFile);
+        g_logFile = nullptr;
     }
 
     std::cout << "=== Test completed successfully ===" << std::endl;

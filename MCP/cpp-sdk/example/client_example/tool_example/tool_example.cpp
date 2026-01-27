@@ -104,6 +104,72 @@ int main(int argc, char** argv)
         return -1;
     }
 
+    // Example 4: Complete - Get completions for a prompt argument
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example Complete (Prompt Completions) ===");
+    try {
+        // Create a PromptReference variant
+        Mcp::PromptReference promptRef;
+        promptRef.name = "code_generator";
+        Mcp::CompleteReference ref = promptRef;
+
+        Mcp::CompletionArgument arg;
+        arg.name = "language";
+        arg.value = "py";  // User has typed "py"
+
+        Mcp::CompletionContext ctx;
+        std::unordered_map<std::string, std::string> argsMap;
+        argsMap["framework"] = "django";
+        ctx.arguments = argsMap;
+
+        auto completeFuture = mcpClient->Complete(ref, arg, ctx);
+        if (completeFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Complete timeout");
+            return -1;
+        }
+        auto completeResult = completeFuture.get();
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Complete success, completion count: %zu",
+                completeResult->completion.values.size());
+        for (const auto &completion : completeResult->completion.values) {
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Suggestion: %s", completion.c_str());
+        }
+    } catch (const std::exception &e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Complete failed: %s", e.what());
+        return -1;
+    }
+
+    // Example 5: Complete - Get completions for a resource template argument
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example Complete (Resource Template Completions) ===");
+    try {
+        // Create a ResourceTemplateReference variant
+        Mcp::ResourceTemplateReference resourceRef;
+        resourceRef.uri = "file:///path/to/template";
+        Mcp::CompleteReference ref = resourceRef;
+
+        Mcp::CompletionArgument arg;
+        arg.name = "format";
+        arg.value = "j";  // User has typed "j"
+
+        Mcp::CompletionContext ctx;
+        std::unordered_map<std::string, std::string> argsMap;
+        argsMap["extension"] = "json";
+        ctx.arguments = argsMap;
+
+        auto completeFuture = mcpClient->Complete(ref, arg, ctx);
+        if (completeFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Complete timeout");
+            return -1;
+        }
+        auto completeResult = completeFuture.get();
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Complete success, completion count: %zu",
+                completeResult->completion.values.size());
+        for (const auto &completion : completeResult->completion.values) {
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Suggestion: %s", completion.c_str());
+        }
+    } catch (const std::exception &e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Complete failed: %s", e.what());
+        return -1;
+    }
+
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example completed ===");
     return 0;
 }

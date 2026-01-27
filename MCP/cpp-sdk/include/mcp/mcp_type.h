@@ -346,6 +346,41 @@ enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Ale
 // If this is not set, the client must not advertise the `roots` capability in initialize.
 using ListRootsCallback = std::function<ListRootsResult()>;
 
+// completion/complete references
+struct ResourceTemplateReference {
+    std::string type = "ref/resource";
+    std::string uri;
+};
+
+struct PromptReference {
+    std::string type = "ref/prompt";
+    std::string name;
+};
+
+using CompleteReference = std::variant<ResourceTemplateReference, PromptReference>;
+
+// completion/complete argument and context
+struct CompletionArgument {
+    std::string name;
+    std::string value;
+};
+
+struct CompletionContext {
+    std::optional<std::unordered_map<std::string, std::string>> arguments;
+};
+
+// Completion information
+struct Completion {
+    std::vector<std::string> values;
+    std::optional<int64_t> total;
+    std::optional<bool> hasMore;
+};
+
+// completion/complete request/response
+struct CompleteResult : public Result {
+    Completion completion;
+};
+
 } // namespace Mcp
 
 #endif // MCP_TYPE_INCLUDE_H_

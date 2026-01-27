@@ -79,6 +79,10 @@ void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Reques
             HandleSetLoggingLevel(requestId, request, ctx);
             return;
         }
+        if (method == "completion/complete") {
+            HandleComplete(requestId, request, ctx);
+            return;
+        }
 
         SendErrorResponse(requestId, JsonRpcErrorCode::METHOD_NOT_FOUND, "Method not found: " + method, ctx);
     } catch (const std::exception& e) {
@@ -547,6 +551,42 @@ bool McpServerImplement::ValidateTlsConfig(const TlsConfig& config)
     }
 
     return true;
+}
+
+void McpServerImplement::AddCompletion(CompleteFunc handler)
+{
+    completeHandler_ = handler;
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Completion handler registered");
+}
+
+void McpServerImplement::HandleComplete(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    auto session = serverManager_ ? serverManager_->GetSession(ctx.sessionId) : nullptr;
+    if (session == nullptr) {
+        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, "Session not found", ctx);
+        return;
+    }
+
+    const auto* completeReq = dynamic_cast<const CompleteRequest*>(&request);
+    if (completeReq == nullptr || completeReq->params_ == nullptr) {
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_REQUEST, "Invalid complete request", ctx);
+        return;
+    }
+
+    const auto* params = static_cast<const CompleteRequestParams*>(completeReq->params_.get());
+    if (completeHandler_ == nullptr) {
+        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, "Completion handler not registered", ctx);
+        return;
+    }
+
+    try {
+        auto result = completeHandler_(params->ref, params->argument, params->context);
+        auto completeResult = std::make_unique<CompleteResult>(result);
+        session->SendResponse(requestId, std::move(completeResult), ctx);
+    } catch (const std::exception& e) {
+        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR,
+                          std::string("Complete handler error: ") + e.what(), ctx);
+    }
 }
 
 } // namespace Mcp

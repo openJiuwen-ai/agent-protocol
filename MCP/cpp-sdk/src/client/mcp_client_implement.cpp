@@ -137,13 +137,12 @@ std::future<void> McpClientImplement::SendProgressNotification(std::string progr
     return promise.get_future();
 }
 
-std::future<Result> McpClientImplement::Complete(std::string type, std::string uri,
-                                                 std::unordered_map<std::string, std::string> extras)
+std::future<std::shared_ptr<CompleteResult>> McpClientImplement::Complete(
+    const CompleteReference& ref, const CompletionArgument& argument,
+    const std::optional<CompletionContext>& context)
 {
     CheckInitialized();
-    std::promise<Result> promise;
-    promise.set_exception(std::make_exception_ptr(std::runtime_error("Complete is not implemented.")));
-    return promise.get_future();
+    return session_->Complete(ref, argument, context);
 }
 
 void McpClientImplement::SetListRootsCallback(ListRootsCallback cb)
