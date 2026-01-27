@@ -483,7 +483,6 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
 
     // Remove existing timer
     if (service->timerEventId_ != -1) {
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "remove event id: " + std::to_string(service->timerEventId_));
         if (service->eventSystem_ != nullptr) {
             service->eventSystem_->RemoveEvent(service->timerEventId_);
         }
@@ -505,9 +504,6 @@ int HttpClientService::TimerCallback(CURLM* multi, long timeoutMs, void* userp)
         service->timerEventId_ = service->eventSystem_->AddTimer(
             timeoutMs, [service](int fd, short events, void* arg) { service->OnTimeout(fd, events, arg); }, nullptr,
             false);
-
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "add Timer id: " + std::to_string(service->timerEventId_) +
-                ", timeout: " + std::to_string(timeoutMs) + " ms");
     }
 
     return 0;
