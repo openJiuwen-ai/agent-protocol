@@ -14,10 +14,6 @@
 
 namespace Mcp {
 
-// SSE field prefix lengths
-constexpr size_t SSE_EVENT_PREFIX_LEN = std::strlen("event:"); // "event:"
-constexpr size_t SSE_ID_PREFIX_LEN = std::strlen("id:"); // "id:"
-constexpr size_t SSE_DATA_PREFIX_LEN = std::strlen("data:"); // "data:"
 constexpr std::chrono::milliseconds MAX_TIMEOUT_MS{30 * 60 * 1000}; // 30 minutes in milliseconds
 
 StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
@@ -135,16 +131,20 @@ void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message, s
         },
         message);
 
-    // Bind response callback to HandleResponse
-    HttpCallback callback = [this](const HttpResponse& response) { HandleResponse(response); };
+    // Bind response callback to HandleResponseHeader
+    HttpCallback responseHeaderCallback = [this](const HttpResponse& response) { HandleResponseHeader(response); };
+    HttpCallback responseBodyCallback = [this](const HttpResponse& response) { HandleResponseBody(response); };
 
-    auto result = httpClientService_->Send(httpRequest, &userData, static_cast<int>(sseReadTimeout_.count()), callback);
-    if (!result.success) {
-        throw std::runtime_error("Failed to enqueue HTTP request: " + result.errorMessage);
+    try {
+        httpClientService_->Send(httpRequest, userData, static_cast<int>(sseReadTimeout_.count()),
+            responseHeaderCallback, responseBodyCallback);
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to enqueue HTTP request: %s", e.what());
+        throw std::runtime_error(std::string("Failed to enqueue HTTP request: ") + e.what());
     }
 }
 
-void StreamableHttpClientTransport::HandleResponse(const HttpResponse& response)
+void StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& response)
 {
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received HTTP status %d", response.statusCode);
 
@@ -189,17 +189,19 @@ void StreamableHttpClientTransport::HandleResponse(const HttpResponse& response)
             MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted session ID: %s", sessionId_.c_str());
         }
     }
+}
 
-    // Determine content type
-    auto contentTypeIter = response.headers.find(Http::CONTENT_TYPE_HEADER);
-    if (contentTypeIter == response.headers.end()) {
-        HandleUnexpectedContentType(response);
+void StreamableHttpClientTransport::HandleResponseBody(const HttpResponse& response)
+{
+    if (!response.success) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP request failed");
         return;
     }
 
-    const std::string& contentType = contentTypeIter->second;
+    // handle based on contentType
+    const std::string& contentType = getContentType(response);
 
-    // Handle based on content type
+    bool isInitialization = (response.userData.method == "initialize");
     if (contentType.find(Http::CONTENT_TYPE_JSON) != std::string::npos) {
         HandleJsonResponse(response, isInitialization);
     } else if (contentType.find(Http::CONTENT_TYPE_SSE) != std::string::npos) {
@@ -288,83 +290,41 @@ void StreamableHttpClientTransport::HandleSseResponse(const HttpResponse& respon
         return;
     }
 
-    // Parse SSE events from response body
-    std::istringstream stream(response.body);
-    std::string line;
-    EventData currentEvent;
-
-    while (std::getline(stream, line)) {
-        // Remove trailing \r if present
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-
-        // Empty line indicates end of event
-        if (line.empty()) {
-            if (!currentEvent.data.index() == 0 || !currentEvent.event.empty()) {
-                HandleSseEvent(currentEvent, isInitialization);
-            }
-            currentEvent = EventData();
-            continue;
-        }
-
-        // Parse SSE field
-        if (line.find("event:") == 0) {
-            currentEvent.event = line.substr(SSE_EVENT_PREFIX_LEN);
-            // Trim leading whitespace
-            size_t firstNonSpace = currentEvent.event.find_first_not_of(" \t");
-            if (firstNonSpace != std::string::npos) {
-                currentEvent.event = currentEvent.event.substr(firstNonSpace);
-            }
-        } else if (line.find("id:") == 0) {
-            currentEvent.id = line.substr(SSE_ID_PREFIX_LEN);
-            // Trim leading whitespace
-            size_t firstNonSpace = currentEvent.id.find_first_not_of(" \t");
-            if (firstNonSpace != std::string::npos) {
-                currentEvent.id = currentEvent.id.substr(firstNonSpace);
-            }
-        } else if (line.find("data:") == 0) {
-            std::string dataStr = line.substr(SSE_DATA_PREFIX_LEN);
-            // Trim leading whitespace
-            size_t firstNonSpace = dataStr.find_first_not_of(" \t");
-            if (firstNonSpace != std::string::npos) {
-                dataStr = dataStr.substr(firstNonSpace);
-            }
-
-            // Parse JSON data
-            currentEvent.data = DeserializeJSONRPCMessage(dataStr, response.userData.method);
-        }
-    }
-
-    // Handle last event if present
-    if (!currentEvent.event.empty()) {
-        HandleSseEvent(currentEvent, isInitialization);
-    }
+    bool iscomplete = HandleSseEvent(response.sseEvent, response.userData.method, isInitialization);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "response finish: %d", iscomplete);
 }
 
-void StreamableHttpClientTransport::HandleSseEvent(const EventData& eventData, bool isInitialization)
+bool StreamableHttpClientTransport::HandleSseEvent(const Http::ServerSentEvent& sse, const std::string& method,
+    bool isInitialization)
 {
     // Per MCP spec: Only process "message" events
-    if (eventData.event != "message" && !eventData.event.empty()) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "Ignoring unknown SSE event type: %s", eventData.event.c_str());
-        return;
+    if (sse.event != "message") {
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "Unknown SSE event: %s", sse.event.c_str());
+        return false;
     }
 
-    // Extract protocol version from initialization response if applicable
-    if (isInitialization) {
-        MayExtractProtocolVersionFromMessage(eventData.data);
-        if (!protocolVersion_.empty()) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted protocol version: %s", protocolVersion_.c_str());
+    JSONRPCMessage message = JSONRPCRequest();
+    try {
+        message = DeserializeJSONRPCMessage(sse.data, method);
+
+        // Extract protocol version from initialization response if applicable
+        if (isInitialization) {
+            MayExtractProtocolVersionFromMessage(message);
+            if (!protocolVersion_.empty()) {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted protocol version: %s", protocolVersion_.c_str());
+            }
         }
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error parsing SSE message: %s", e.what());
+        return false;
     }
 
     // Forward the message to the transport callback
     if (callback_ != nullptr) {
-        callback_->OnMessageReceived(eventData.data, ctx_);
+        callback_->OnMessageReceived(message, ctx_);
     }
 
-    // Note: In async implementations, this would return bool to indicate if response is complete
-    // (i.e., message is JsonRpcResponse or JsonRpcError), but in sync version we process all events
+    return std::holds_alternative<JSONRPCResponse>(message) || std::holds_alternative<JSONRPCError>(message);
 }
 
 void StreamableHttpClientTransport::HandleUnexpectedContentType(const HttpResponse& response)

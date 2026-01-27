@@ -24,20 +24,6 @@ using HttpRequest = Http::HttpRequest;
 using HttpResponse = Http::HttpResponse;
 using HttpCallback = Http::HttpCallback;
 
-// SSE event data structure
-struct EventData {
-    std::string event;
-    std::string id;
-    JSONRPCMessage data;
-
-    EventData() : event(""), id(""), data(JSONRPCRequest())
-    {
-    }
-    EventData(const std::string& evt, const std::string& evtId, JSONRPCMessage evtData)
-        : event(evt), id(evtId), data(std::move(evtData))
-    {
-    }
-};
 
 // HTTP Timeout constants (in milliseconds)
 constexpr int DEFAULT_HTTP_TIMEOUT_MS = 30000; // 30 seconds
@@ -67,14 +53,15 @@ private:
     bool IsInitializedNotification(const JSONRPCMessage& message) const;
     void HandleJsonResponse(const HttpResponse& response, bool isInitialization);
     void HandleSseResponse(const HttpResponse& response, bool isInitialization);
-    void HandleSseEvent(const EventData& eventData, bool isInitialization);
+    bool HandleSseEvent(const Http::ServerSentEvent& sse, const std::string& method, bool isInitialization);
     void HandleUnexpectedContentType(const HttpResponse& response);
     void MayExtractSessionIdFromResponse(const HttpResponse& response);
     void MayExtractProtocolVersionFromMessage(const JSONRPCMessage& message);
     void SendSessionTerminatedError(const HttpResponse& response);
 
     // Handle response from server (called internally when response received, triggers session callback)
-    void HandleResponse(const HttpResponse& response);
+    void HandleResponseHeader(const HttpResponse& response);
+    void HandleResponseBody(const HttpResponse& response);
 
     std::string url_;
     std::unordered_map<std::string, std::string> requestHeaders_;

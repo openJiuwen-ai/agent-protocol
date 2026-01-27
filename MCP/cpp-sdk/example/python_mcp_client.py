@@ -45,7 +45,7 @@ async def main():
             tools = await session.list_tools()
             print(f"================\n")
             print(f"Available tools: {[tool.name for tool in tools.tools]}\n")
-            result = await session.call_tool("echo", {"message": "my test"})
+            result = await session.call_tool("echo", {"user_query": "my test"})
             print(f"==============\n")
             print(result)
 
