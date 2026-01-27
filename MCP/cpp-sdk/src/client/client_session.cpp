@@ -81,9 +81,9 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
 
             // Persist server capabilities for users to query later.
             serverCapabilities_ = initPtr->capabilities;
+            SendInitializedNotification();
             initialized_ = true;
             promise->set_value(initPtr);
-            SendInitializedNotification();
         } catch (...) {
             promise->set_exception(std::current_exception());
         }

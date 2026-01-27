@@ -24,7 +24,7 @@ namespace Mcp {
 namespace Http {
 
 // Test constants
-constexpr int TEST_REQUEST_TIMEOUT_MS = 10;
+constexpr int TEST_REQUEST_TIMEOUT_MS = 10;  // Default timeout for test requests (milliseconds)
 
 // Test fixture for HttpClientService tests
 class HttpClientServiceTest : public ::testing::Test {
@@ -281,7 +281,6 @@ TEST_F(HttpClientServiceTest, SendMultipleRequests) {
     EXPECT_TRUE(service->Start());
 
     const int numRequests = 5;
-    std::vector<SendResult> results;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
@@ -458,8 +457,8 @@ TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls) {
             try {
                 service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback);
                 successfulSends++;
-            } catch (const std::exception&) {
-                // Ignore exceptions in concurrent test
+            } catch (...) {
+                // 发送失败，计数器不增加
             }
         }
     };
@@ -488,7 +487,7 @@ TEST_F(HttpClientServiceTest, SendAfterStop) {
     service->Stop();
     EXPECT_FALSE(service->IsRunning());
 
-    // 停止后发送请求应该失败
+    // 停止后发送请求应该抛出异常
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(1);
 
@@ -528,7 +527,6 @@ TEST_F(HttpClientServiceTest, ManyRequestsWithShortTimeout) {
     EXPECT_TRUE(service->Start());
 
     const int numRequests = 10;
-    std::vector<SendResult> results;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
@@ -633,12 +631,10 @@ TEST_F(HttpClientServiceTest, MultipleCallbacksOrder) {
     callbackResponses.clear();
 
     const int numRequests = 3;
-    std::vector<uint64_t> requestIds;
 
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 100);
-        requestIds.push_back(i + 100);
 
         HttpCallback headerCallback = [](const HttpResponse&) {};
         EXPECT_NO_THROW(service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, headerCallback, TestCallback));

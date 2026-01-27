@@ -21,257 +21,300 @@
 using namespace Mcp;
 using namespace Mcp::Http;
 
+// ============================================================
+// Test Configuration Constants
+// ============================================================
+
+// Server configuration
+constexpr int MOCK_SERVER_PORT = 9999;
+constexpr const char* LOCALHOST_IP = "127.0.0.1";
+constexpr const char* MOCK_SERVER_BASE_URL = "http://127.0.0.1:9999";
+
+// HTTP status codes - Note: HTTP_STATUS_OK is defined in http_common.h
+
+// Internal status codes for error tracking
+constexpr int STATUS_CODE_ERROR = -1;
+constexpr int STATUS_CODE_TIMEOUT = -2;
+
+// Request ID base values for different tests
+constexpr uint64_t REQUEST_ID_BASE_BASIC = 1000;
+constexpr uint64_t REQUEST_ID_OFFSET_BASIC_FIRST = 1;
+constexpr uint64_t REQUEST_ID_BASE_CONCURRENT = 2000;
+constexpr uint64_t REQUEST_ID_BASE_METHODS = 3000;
+constexpr uint64_t REQUEST_ID_BASE_HEADERS = 4000;
+constexpr uint64_t REQUEST_ID_BASE_ERROR = 5000;
+constexpr uint64_t REQUEST_ID_BASE_RAPID = 6000;
+constexpr uint64_t REQUEST_ID_BASE_GRACEFUL = 7000;
+constexpr uint64_t REQUEST_ID_BASE_QUEUE = 8000;
+
+// Time intervals (milliseconds)
+constexpr int DELAY_SERVER_STARTUP_MS = 500;
+constexpr int DELAY_SERVICE_STARTUP_MS = 1000;
+constexpr int DELAY_TEST_ITERATION_MS = 1000;
+constexpr int DELAY_POLL_MS = 100;
+constexpr int DELAY_RAPID_CYCLE_MS = 200;
+constexpr int DELAY_RAPID_SERVICE_MS = 500;
+constexpr int DELAY_WAIT_REQUESTS_SENT_MS = 500;
+constexpr int DELAY_GRACEFUL_WAIT_MS = 1000;
+
+// Request timeouts (milliseconds)
+constexpr int TIMEOUT_WAIT_COMPLETION_DEFAULT_MS = 30000;
+constexpr int TIMEOUT_REQUEST_DEFAULT_MS = 10000;
+constexpr int TIMEOUT_REQUEST_EXTENDED_MS = 15000;
+constexpr int TIMEOUT_REQUEST_SHORT_MS = 5000;
+constexpr int TIMEOUT_REQUEST_RAPID_MS = 3000;
+constexpr int TIMEOUT_WAIT_CONCURRENT_MS = 45000;
+constexpr int TIMEOUT_WAIT_ERROR_MS = 10000;
+constexpr int TIMEOUT_WAIT_RAPID_MS = 5000;
+constexpr int TIMEOUT_SHUTDOWN_MAX_MS = 8000;
+
+// Request counts for different tests
+constexpr int NUM_CONCURRENT_REQUESTS = 10;
+constexpr int NUM_GRACEFUL_REQUESTS = 5;
+constexpr int NUM_RAPID_ITERATIONS = 3;
+constexpr int NUM_QUEUE_FLOOD_REQUESTS = 2000;
+
+// Display formatting
+constexpr int BODY_PREVIEW_MAX_LENGTH = 50;
+constexpr int SEPARATOR_LINE_LENGTH = 50;
+constexpr int TEST_NAME_MAX_WIDTH = 50;
+
+// Helper function to build test URLs
+inline std::string buildTestUrl(const std::string& path = "/test")
+{
+    return std::string(MOCK_SERVER_BASE_URL) + path;
+}
+
+// ============================================================
+// Test Helper Functions
+// ============================================================
+
+struct TestEnvironment {
+    MockHttpServer mockServer;
+    std::unique_ptr<HttpClientService> service;
+
+    explicit TestEnvironment(int port) : mockServer(port) {}
+
+    bool Setup()
+    {
+        if (!mockServer.start()) {
+            std::cout << "FAIL: Could not start mock server" << std::endl;
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_SERVER_STARTUP_MS));
+
+        HttpClientServiceConfig config;
+        service = HttpClientServiceFactory::Create(config);
+        if (!service || !service->Start()) {
+            std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
+            mockServer.stop();
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_SERVICE_STARTUP_MS));
+        return true;
+    }
+
+    void Teardown()
+    {
+        if (service) {
+            service->Stop();
+        }
+        mockServer.stop();
+    }
+};
+
+// ============================================================
+// Test Results Class
+// ============================================================
+
 class TestResults {
 public:
-    std::atomic<int> successCount{0};
-    std::atomic<int> errorCount{0};
-    std::atomic<int> timeoutCount{0};
-    std::map<int, std::string> responses;
-    std::map<int, long> statusCodes;
-    std::mutex resultsMutex;
+    std::atomic<int> successCount_{0};
+    std::atomic<int> errorCount_{0};
+    std::atomic<int> timeoutCount_{0};
+    std::map<int, std::string> responses_;
+    std::map<int, long> statusCodes_;
+    std::mutex resultsMutex_;
 
-    void recordSuccess(uint64_t requestId, const HttpResponse& response)
+    void RecordSuccess(uint64_t requestId, const HttpResponse& response)
     {
-        successCount++;
-        std::lock_guard<std::mutex> lock(resultsMutex);
-        statusCodes[static_cast<int>(requestId)] = response.statusCode;
-        responses[static_cast<int>(requestId)] = response.body;
+        successCount_++;
+        std::lock_guard<std::mutex> lock(resultsMutex_);
+        statusCodes_[static_cast<int>(requestId)] = response.statusCode;
+        responses_[static_cast<int>(requestId)] = response.body;
     }
 
-    void recordError(uint64_t requestId)
+    void RecordError(uint64_t requestId)
     {
-        errorCount++;
-        std::lock_guard<std::mutex> lock(resultsMutex);
-        statusCodes[static_cast<int>(requestId)] = -1;
+        errorCount_++;
+        std::lock_guard<std::mutex> lock(resultsMutex_);
+        statusCodes_[static_cast<int>(requestId)] = STATUS_CODE_ERROR;
     }
 
-    void recordTimeout(uint64_t requestId)
+    void RecordTimeout(uint64_t requestId)
     {
-        timeoutCount++;
-        std::lock_guard<std::mutex> lock(resultsMutex);
-        statusCodes[static_cast<int>(requestId)] = -2;
+        timeoutCount_++;
+        std::lock_guard<std::mutex> lock(resultsMutex_);
+        statusCodes_[static_cast<int>(requestId)] = STATUS_CODE_TIMEOUT;
     }
 
-    void printSummary()
+    void PrintSummary()
     {
         std::cout << "\n=== Test Results Summary ===" << std::endl;
-        std::cout << "Success: " << successCount.load() << std::endl;
-        std::cout << "Errors: " << errorCount.load() << std::endl;
-        std::cout << "Timeouts: " << timeoutCount.load() << std::endl;
-        std::cout << "Total: " << (successCount.load() + errorCount.load() + timeoutCount.load()) << std::endl;
+        std::cout << "Success: " << successCount_.load() << std::endl;
+        std::cout << "Errors: " << errorCount_.load() << std::endl;
+        std::cout << "Timeouts: " << timeoutCount_.load() << std::endl;
+        std::cout << "Total: " << (successCount_.load() + errorCount_.load() + timeoutCount_.load()) << std::endl;
 
-        std::lock_guard<std::mutex> lock(resultsMutex);
+        std::lock_guard<std::mutex> lock(resultsMutex_);
         std::cout << "\nStatus Codes:" << std::endl;
-        for (const auto& pair : statusCodes) {
+        for (const auto& pair : statusCodes_) {
             std::cout << "  Request " << pair.first << ": " << pair.second << std::endl;
         }
     }
 
-    bool waitForCompletion(int expectedCount, int timeoutMs = 30000)
+    bool WaitForCompletion(int expectedCount, int timeoutMs = TIMEOUT_WAIT_COMPLETION_DEFAULT_MS)
     {
         auto start = std::chrono::steady_clock::now();
-        int total = successCount + errorCount + timeoutCount;
+        int total = successCount_ + errorCount_ + timeoutCount_;
 
         while (total < expectedCount) {
             auto elapsed =
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-
             if (elapsed > timeoutMs) {
-                std::cout << "Timeout waiting for completion. Got " << total << "/" << expectedCount << " responses."
-                          << std::endl;
+                std::cout << "Timeout waiting for completion. Got " << total << "/" << expectedCount <<
+                    " responses." << std::endl;
                 return false;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            total = successCount + errorCount + timeoutCount;
+            std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_POLL_MS));
+            total = successCount_ + errorCount_ + timeoutCount_;
         }
 
         return true;
     }
 };
 
-bool testBasicFunctionality()
+// Helper function to create standard callback
+HttpCallback CreateStandardCallback(std::shared_ptr<TestResults> results)
+{
+    return [results](const HttpResponse& response) {
+        if (response.success) {
+            results->RecordSuccess(response.userData.requestId, response);
+        } else {
+            results->RecordError(response.userData.requestId);
+        }
+    };
+}
+
+// ============================================================
+// Test Functions
+// ============================================================
+
+bool TestBasicFunctionality()
 {
     std::cout << "\n=== Test 1: Basic Functionality ===" << std::endl;
 
-    TestResults results;
+    auto results = std::make_shared<TestResults>();
+    TestEnvironment env(MOCK_SERVER_PORT);
 
-    // Start mock server
-    MockHttpServer mockServer(9999);
-    if (!mockServer.start()) {
-        std::cout << "FAIL: Could not start mock server" << std::endl;
+    if (!env.Setup()) {
         return false;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    // Create and start HttpClientService
-    HttpClientServiceConfig config;
-    auto service = HttpClientServiceFactory::Create(config);
-    if (!service || !service->Start()) {
-        std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
-        mockServer.stop();
-        return false;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    // Test GET request
     HttpRequest request;
     request.method = "GET";
-    request.url = "http://127.0.0.1:9999/test";
+    request.url = buildTestUrl();
     request.headers["User-Agent"] = "ComprehensiveTest/1.0";
 
     UserData userData;
-    userData.requestId = 1001;
+    userData.requestId = REQUEST_ID_BASE_BASIC + REQUEST_ID_OFFSET_BASIC_FIRST;
     userData.method = "CALL_TOOL";
 
-    SendResult sendResult = service->Send(request, &userData, 10000, [&results](const HttpResponse& response) {
-        results.recordSuccess(response.userData.requestId, response);
-    });
+    env.service->Send(request, &userData, TIMEOUT_REQUEST_DEFAULT_MS,
+        [results](const HttpResponse& response) { results->RecordSuccess(response.userData.requestId, response); });
 
-    if (!sendResult.success) {
-        std::cout << "FAIL: Could not send GET request" << std::endl;
-        service->Stop();
-        mockServer.stop();
-        return false;
-    }
+    std::cout << "Request sent successfully, requestId=" << userData.requestId << std::endl;
 
-    // Wait for response
-    if (!results.waitForCompletion(1)) {
+    if (!results->WaitForCompletion(1)) {
         std::cout << "FAIL: Timeout waiting for GET response" << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    if (results.successCount.load() != 1 || results.statusCodes[1001] != 200) {
+    if (results->successCount_.load() != 1 ||
+        results->statusCodes_[REQUEST_ID_BASE_BASIC + REQUEST_ID_OFFSET_BASIC_FIRST] != HTTP_STATUS_OK) {
         std::cout << "FAIL: GET request failed" << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    service->Stop();
-    mockServer.stop();
-
+    env.Teardown();
     std::cout << "PASS: Basic functionality test" << std::endl;
     return true;
 }
 
-bool testConcurrentRequests()
+bool TestConcurrentRequests()
 {
     std::cout << "\n=== Test 2: Concurrent Requests ===" << std::endl;
 
-    TestResults results;
+    auto results = std::make_shared<TestResults>();
+    TestEnvironment env(MOCK_SERVER_PORT);
 
-    // Start mock server
-    MockHttpServer mockServer(9999);
-    if (!mockServer.start()) {
-        std::cout << "FAIL: Could not start mock server" << std::endl;
+    if (!env.Setup()) {
         return false;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::vector<UserData> userDataArray(NUM_CONCURRENT_REQUESTS);
 
-    // Create and start HttpClientService
-    HttpClientServiceConfig config;
-    auto service = HttpClientServiceFactory::Create(config);
-    if (!service || !service->Start()) {
-        std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
-        mockServer.stop();
-        return false;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    const int NUM_REQUESTS = 10;
-
-    // Send multiple concurrent requests
-    std::vector<UserData> userDataArray(NUM_REQUESTS);
-    for (int i = 0; i < NUM_REQUESTS; i++) {
+    for (int i = 0; i < NUM_CONCURRENT_REQUESTS; i++) {
         HttpRequest request;
         request.method = "GET";
-        request.url = "http://127.0.0.1:9999/test";
+        request.url = buildTestUrl();
         request.headers["X-Request-ID"] = std::to_string(i);
 
-        userDataArray[i].requestId = 2000 + i;
+        userDataArray[i].requestId = REQUEST_ID_BASE_CONCURRENT + i;
         userDataArray[i].method = "CALL_TOOL";
 
-        SendResult sendResult =
-            service->Send(request, &userDataArray[i], 15000, [&results](const HttpResponse& response) {
-                if (response.success) {
-                    results.recordSuccess(response.userData.requestId, response);
-                } else {
-                    results.recordError(response.userData.requestId);
-                }
-            });
-
-        if (!sendResult.success) {
-            std::cout << "FAIL: Could not send concurrent request " << i << std::endl;
-            service->Stop();
-            mockServer.stop();
-            return false;
-        }
+        env.service->Send(request, &userDataArray[i], TIMEOUT_REQUEST_EXTENDED_MS, CreateStandardCallback(results));
     }
 
-    // Wait for all responses
-    if (!results.waitForCompletion(NUM_REQUESTS, 45000)) {
+    if (!results->WaitForCompletion(NUM_CONCURRENT_REQUESTS, TIMEOUT_WAIT_CONCURRENT_MS)) {
         std::cout << "FAIL: Timeout waiting for concurrent responses" << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    if (results.successCount.load() != NUM_REQUESTS) {
-        std::cout << "FAIL: Expected " << NUM_REQUESTS << " successes, got " << results.successCount.load()
-                  << std::endl;
-        service->Stop();
-        mockServer.stop();
+    if (results->successCount_.load() != NUM_CONCURRENT_REQUESTS) {
+        std::cout << "FAIL: Expected " << NUM_CONCURRENT_REQUESTS << " successes, got " <<
+            results->successCount_.load() << std::endl;
+        env.Teardown();
         return false;
     }
 
-    service->Stop();
-    mockServer.stop();
-
-    std::cout << "PASS: Concurrent requests test (" << NUM_REQUESTS << " requests)" << std::endl;
+    env.Teardown();
+    std::cout << "PASS: Concurrent requests test (" << NUM_CONCURRENT_REQUESTS << " requests)" << std::endl;
     return true;
 }
 
-bool testDifferentMethods()
+bool TestDifferentMethods()
 {
     std::cout << "\n=== Test 3: Different HTTP Methods ===" << std::endl;
 
-    TestResults results;
+    auto results = std::make_shared<TestResults>();
+    TestEnvironment env(MOCK_SERVER_PORT);
 
-    // Start mock server
-    MockHttpServer mockServer(9999);
-    if (!mockServer.start()) {
-        std::cout << "FAIL: Could not start mock server" << std::endl;
+    if (!env.Setup()) {
         return false;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    // Create and start HttpClientService
-    HttpClientServiceConfig config;
-    auto service = HttpClientServiceFactory::Create(config);
-    if (!service || !service->Start()) {
-        std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
-        mockServer.stop();
-        return false;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    // Test different HTTP methods
     std::vector<std::string> methods = {"GET", "POST", "PUT", "DELETE", "PATCH"};
     std::vector<UserData> userDataArray(methods.size());
 
     for (size_t i = 0; i < methods.size(); i++) {
         HttpRequest request;
         request.method = methods[i];
-        request.url = "http://127.0.0.1:9999/test";
+        request.url = buildTestUrl();
 
         if (methods[i] == "POST" || methods[i] == "PUT" || methods[i] == "PATCH") {
             request.body = "Test request body for " + methods[i];
@@ -279,80 +322,44 @@ bool testDifferentMethods()
         }
 
         request.headers["X-Method-Test"] = methods[i];
-
-        userDataArray[i].requestId = 3000 + static_cast<int>(i);
+        userDataArray[i].requestId = REQUEST_ID_BASE_METHODS + static_cast<int>(i);
         userDataArray[i].method = methods[i].c_str();
 
-        SendResult sendResult =
-            service->Send(request, &userDataArray[i], 10000, [&results](const HttpResponse& response) {
-                if (response.success) {
-                    results.recordSuccess(response.userData.requestId, response);
-                } else {
-                    results.recordError(response.userData.requestId);
-                }
-            });
-
-        if (!sendResult.success) {
-            std::cout << "FAIL: Could not send " << methods[i] << " request" << std::endl;
-            service->Stop();
-            mockServer.stop();
-            return false;
-        }
+        env.service->Send(request, &userDataArray[i], TIMEOUT_REQUEST_DEFAULT_MS, CreateStandardCallback(results));
     }
 
-    // Wait for all responses
-    if (!results.waitForCompletion(methods.size())) {
+    if (!results->WaitForCompletion(methods.size())) {
         std::cout << "FAIL: Timeout waiting for method test responses" << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    if (results.successCount.load() != static_cast<int>(methods.size())) {
-        std::cout << "FAIL: Expected " << methods.size() << " successes, got " << results.successCount.load()
+    if (results->successCount_.load() != static_cast<int>(methods.size())) {
+        std::cout << "FAIL: Expected " << methods.size() << " successes, got " << results->successCount_.load()
                   << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    service->Stop();
-    mockServer.stop();
-
+    env.Teardown();
     std::cout << "PASS: Different HTTP methods test" << std::endl;
     return true;
 }
 
-bool testHeadersAndBody()
+bool TestHeadersAndBody()
 {
     std::cout << "\n=== Test 4: Headers and Body Handling ===" << std::endl;
 
-    TestResults results;
+    auto results = std::make_shared<TestResults>();
+    TestEnvironment env(MOCK_SERVER_PORT);
 
-    // Start mock server
-    MockHttpServer mockServer(9999);
-    if (!mockServer.start()) {
-        std::cout << "FAIL: Could not start mock server" << std::endl;
+    if (!env.Setup()) {
         return false;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    // Create and start HttpClientService
-    HttpClientServiceConfig config;
-    auto service = HttpClientServiceFactory::Create(config);
-    if (!service || !service->Start()) {
-        std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
-        mockServer.stop();
-        return false;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    // Test request with custom headers and body
     HttpRequest request;
     request.method = "POST";
-    request.url = "http://127.0.0.1:9999/test";
+    request.url = buildTestUrl();
     request.body = R"({"name": "test", "value": 123})";
     request.headers[Mcp::Http::CONTENT_TYPE_HEADER] = "application/json";
     request.headers["Authorization"] = "Bearer test-token";
@@ -360,347 +367,372 @@ bool testHeadersAndBody()
     request.headers["User-Agent"] = "HeadersTest/1.0";
 
     UserData userData;
-    userData.requestId = 4000;
+    userData.requestId = REQUEST_ID_BASE_HEADERS;
     userData.method = "CALL_TOOL";
 
-    SendResult sendResult = service->Send(request, &userData, 10000, [&results](const HttpResponse& response) {
+    auto verboseCallback = [results](const HttpResponse& response) {
         if (response.success) {
-            results.recordSuccess(response.userData.requestId, response);
-
-            // Verify response headers and body
+            results->RecordSuccess(response.userData.requestId, response);
             std::cout << "Response Headers:" << std::endl;
             for (const auto& header : response.headers) {
                 std::cout << "  " << header.first << ": " << header.second << std::endl;
             }
             std::cout << "Response Body: " << response.body << std::endl;
         } else {
-            results.recordError(response.userData.requestId);
+            results->RecordError(response.userData.requestId);
         }
-    });
+    };
 
-    if (!sendResult.success) {
-        std::cout << "FAIL: Could not send headers/body test request" << std::endl;
-        service->Stop();
-        mockServer.stop();
-        return false;
-    }
+    env.service->Send(request, &userData, TIMEOUT_REQUEST_DEFAULT_MS, verboseCallback);
 
-    // Wait for response
-    if (!results.waitForCompletion(1)) {
+    if (!results->WaitForCompletion(1)) {
         std::cout << "FAIL: Timeout waiting for headers/body response" << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    if (results.successCount.load() != 1) {
+    if (results->successCount_.load() != 1) {
         std::cout << "FAIL: Headers/body test failed" << std::endl;
-        service->Stop();
-        mockServer.stop();
+        env.Teardown();
         return false;
     }
 
-    service->Stop();
-    mockServer.stop();
-
+    env.Teardown();
     std::cout << "PASS: Headers and body handling test" << std::endl;
     return true;
 }
 
-bool testErrorHandling()
+bool TestErrorHandling()
 {
     std::cout << "\n=== Test 5: Error Handling ===" << std::endl;
 
-    TestResults results;
+    auto results = std::make_shared<TestResults>();
+    TestEnvironment env(MOCK_SERVER_PORT);
 
-    // Create and start HttpClientService (no mock server)
-    HttpClientServiceConfig config;
-    auto service = HttpClientServiceFactory::Create(config);
-    if (!service || !service->Start()) {
-        std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
+    if (!env.Setup()) {
         return false;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    // Test request to non-existent server
     HttpRequest request;
     request.method = "GET";
-    request.url = "http://127.0.0.1:19999/nonexistent"; // Port that shouldn't be listening
+    request.url = "http://" + std::string(LOCALHOST_IP) + ":19999/nonexistent";
 
     UserData userData;
-    userData.requestId = 5000;
+    userData.requestId = REQUEST_ID_BASE_ERROR;
     userData.method = "ERROR_TEST";
 
-    SendResult sendResult = service->Send(request, &userData, 5000, [&results](const HttpResponse& response) {
+    auto errorCallback = [results](const HttpResponse& response) {
         if (response.success) {
-            results.recordSuccess(response.userData.requestId, response);
+            results->RecordSuccess(response.userData.requestId, response);
         } else {
-            results.recordError(response.userData.requestId);
+            results->RecordError(response.userData.requestId);
             std::cout << "Error response: " << response.errorMessage << std::endl;
         }
-    });
+    };
 
-    if (!sendResult.success) {
-        std::cout << "FAIL: Could not send error test request" << std::endl;
-        service->Stop();
-        return false;
-    }
+    env.service->Send(request, &userData, TIMEOUT_REQUEST_SHORT_MS, errorCallback);
 
-    // Wait for response (should be an error)
-    if (!results.waitForCompletion(1, 10000)) {
+    if (!results->WaitForCompletion(1, TIMEOUT_WAIT_ERROR_MS)) {
         std::cout << "FAIL: Timeout waiting for error response" << std::endl;
-        service->Stop();
+        env.Teardown();
         return false;
     }
 
-    service->Stop();
-
+    env.Teardown();
     std::cout << "PASS: Error handling test" << std::endl;
     return true;
 }
 
-bool testGracefulShutdown()
+// Graceful shutdown test helper structures
+struct GracefulShutdownContext {
+    std::shared_ptr<TestResults> results;
+    std::atomic<bool>& shutdownStarted;
+    std::atomic<int>& requestsInProgress;
+    std::atomic<int>& requestsSent;
+    HttpClientService* service;
+    std::vector<UserData>& userDataArray;
+
+    void ProcessResponse(const HttpResponse& response)
+    {
+        requestsInProgress--;
+        std::string shutdownStatus = shutdownStarted.load() ? "AFTER" : "BEFORE";
+        std::cout << "Request " << response.userData.requestId << " completed " << shutdownStatus << " shutdown - ";
+
+        if (response.success) {
+            results->RecordSuccess(response.userData.requestId, response);
+            std::cout << "SUCCESS (body: " << response.body.substr(0, BODY_PREVIEW_MAX_LENGTH) << "...)" << std::endl;
+        } else {
+            results->RecordError(response.userData.requestId);
+            std::cout << "ERROR: " << response.errorMessage << std::endl;
+        }
+    }
+
+    bool SendSlowRequest(int index)
+    {
+        HttpRequest request;
+        request.method = "GET";
+        request.url = buildTestUrl();
+        request.headers["X-Request-ID"] = std::to_string(index);
+        request.headers["X-Graceful-Test"] = "true";
+        request.headers["X-Slow-Response"] = "true";
+
+        userDataArray[index].requestId = REQUEST_ID_BASE_GRACEFUL + index;
+        userDataArray[index].method = "GRACEFUL_SHUTDOWN_TEST";
+
+        std::cout << "Sending slow request " << (REQUEST_ID_BASE_GRACEFUL + index) <<
+            " (will take ~3s to complete)..." << std::endl;
+
+        auto callback = [this](const HttpResponse& response) { ProcessResponse(response); };
+
+        service->Send(request, &userDataArray[index], TIMEOUT_REQUEST_DEFAULT_MS, callback);
+
+        requestsInProgress++;
+        requestsSent++;
+        std::cout << "Request " << (REQUEST_ID_BASE_GRACEFUL + index) << " sent successfully" << std::endl;
+        return true;
+    }
+};
+
+bool SendGracefulShutdownRequests(TestEnvironment& env, std::vector<UserData>& userDataArray,
+    std::atomic<bool>& shutdownStarted, std::atomic<int>& requestsInProgress, std::atomic<int>& requestsSent,
+    std::shared_ptr<TestResults> results)
+{
+    std::vector<std::future<void>> requestFutures;
+
+    for (int i = 0; i < NUM_GRACEFUL_REQUESTS; i++) {
+        requestFutures.emplace_back(std::async(std::launch::async, [&, i]() {
+            GracefulShutdownContext ctx{results, shutdownStarted, requestsInProgress, requestsSent, env.service.get(),
+                userDataArray};
+            ctx.SendSlowRequest(i);
+        }));
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_WAIT_REQUESTS_SENT_MS));
+
+    std::cout << "\nStep 2: Requests sent: " << requestsSent.load() <<
+        ", Requests in progress: " << requestsInProgress.load() << std::endl;
+    std::cout << "Step 3: Waiting 1 second for requests to start processing..." << std::endl;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_GRACEFUL_WAIT_MS));
+
+    return true;
+}
+
+bool VerifyGracefulShutdown(TestEnvironment& env, std::shared_ptr<TestResults> results, long long shutdownDuration)
+{
+    (void) env;
+    std::cout << "\n=== Graceful Shutdown Results ===" << std::endl;
+    std::cout << "Shutdown completed in " << shutdownDuration << "ms" << std::endl;
+    std::cout << "Results during shutdown: " << results->successCount_.load() << " success, " <<
+        results->errorCount_.load() << " errors" << std::endl;
+
+    int totalProcessed = results->successCount_.load() + results->errorCount_.load();
+    std::cout << "Total requests processed: " << totalProcessed << "/" << NUM_GRACEFUL_REQUESTS << std::endl;
+
+    if (shutdownDuration > TIMEOUT_SHUTDOWN_MAX_MS) {
+        std::cout << "FAIL: Shutdown took too long: " << shutdownDuration << "ms (> " <<
+            TIMEOUT_SHUTDOWN_MAX_MS << "ms)" << std::endl;
+        return false;
+    }
+
+    if (totalProcessed == 0) {
+        std::cout << "FAIL: No requests were processed during graceful shutdown" << std::endl;
+        return false;
+    }
+
+    if (results->errorCount_.load() > 0) {
+        std::cout << "✓ PASS: Some requests were properly cancelled during shutdown (" <<
+            results->errorCount_.load() << ")" << std::endl;
+    } else {
+        std::cout << "INFO: All requests completed successfully before shutdown finished" << std::endl;
+    }
+
+    if (results->successCount_.load() > 0) {
+        std::cout << "✓ PASS: Some requests completed successfully during shutdown (" <<
+            results->successCount_.load() << ")" << std::endl;
+    }
+
+    std::cout << "Shutdown behavior: " << results->successCount_.load() << " completed, " <<
+        results->errorCount_.load() << " cancelled" << std::endl;
+
+    std::cout << "PASS: Graceful shutdown test - service stopped without hanging" << std::endl;
+    return true;
+}
+
+bool TestGracefulShutdown()
 {
     std::cout << "\n=== Test 6: Graceful Shutdown ===" << std::endl;
 
-    TestResults results;
+    auto results = std::make_shared<TestResults>();
     std::atomic<bool> shutdownStarted{false};
     std::atomic<int> requestsInProgress{0};
     std::atomic<int> requestsSent{0};
 
-    // Start mock server with slow response capability
-    MockHttpServer mockServer(9999);
-    if (!mockServer.start()) {
-        std::cout << "FAIL: Could not start mock server" << std::endl;
+    TestEnvironment env(MOCK_SERVER_PORT);
+    if (!env.Setup()) {
         return false;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    // Create and start HttpClientService
-    HttpClientServiceConfig config;
-    auto service = HttpClientServiceFactory::Create(config);
-    if (!service || !service->Start()) {
-        std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
-        mockServer.stop();
-        return false;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    const int NUM_REQUESTS = 5; // Reduced for clearer testing
-    std::vector<UserData> userDataArray(NUM_REQUESTS);
+    std::vector<UserData> userDataArray(NUM_GRACEFUL_REQUESTS);
     std::vector<std::future<void>> requestFutures;
 
     std::cout << "=== CORRECTED GRACEFUL SHUTDOWN TEST ===" << std::endl;
-    std::cout << "Step 1: Sending " << NUM_REQUESTS << " slow requests (3s server delay)..." << std::endl;
+    std::cout << "Step 1: Sending " << NUM_GRACEFUL_REQUESTS << " slow requests (3s server delay)..." << std::endl;
 
-    // Send slow requests synchronously to ensure they start processing
-    for (int i = 0; i < NUM_REQUESTS; i++) {
+    // Send slow requests
+    for (int i = 0; i < NUM_GRACEFUL_REQUESTS; i++) {
         requestFutures.emplace_back(std::async(std::launch::async, [&, i]() {
-            HttpRequest request;
-            request.method = "GET";
-            request.url = "http://127.0.0.1:9999/test";
-            request.headers["X-Request-ID"] = std::to_string(i);
-            request.headers["X-Graceful-Test"] = "true";
-            request.headers["X-Slow-Response"] = "true"; // Ask server to respond slowly (3s)
-
-            userDataArray[i].requestId = 7000 + i;
-            userDataArray[i].method = "GRACEFUL_SHUTDOWN_TEST";
-
-            std::cout << "Sending slow request " << (7000 + i) << " (will take ~3s to complete)..." << std::endl;
-
-            SendResult sendResult = service->Send(
-                request, &userDataArray[i], 10000, // 10s timeout
-                [&](const HttpResponse& response) {
-                    requestsInProgress--;
-
-                    std::string shutdownStatus = shutdownStarted.load() ? "AFTER" : "BEFORE";
-                    std::cout << "Request " << response.userData.requestId << " completed " << shutdownStatus
-                              << " shutdown - ";
-
-                    if (response.success) {
-                        results.recordSuccess(response.userData.requestId, response);
-                        std::cout << "SUCCESS (body: " << response.body.substr(0, 50) << "...)" << std::endl;
-                    } else {
-                        results.recordError(response.userData.requestId);
-                        std::cout << "ERROR: " << response.errorMessage << std::endl;
-                    }
-                });
-
-            if (sendResult.success) {
-                requestsInProgress++;
-                requestsSent++;
-                std::cout << "Request " << (7000 + i) << " sent successfully" << std::endl;
-            } else {
-                std::cout << "FAIL: Could not send request " << (7000 + i) << std::endl;
-            }
+            GracefulShutdownContext ctx{results, shutdownStarted, requestsInProgress, requestsSent, env.service.get(),
+                userDataArray};
+            ctx.SendSlowRequest(i);
         }));
     }
 
-    // Wait for all requests to be sent
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_WAIT_REQUESTS_SENT_MS));
 
-    std::cout << "\nStep 2: Requests sent: " << requestsSent.load()
-              << ", Requests in progress: " << requestsInProgress.load() << std::endl;
+    std::cout << "\nStep 2: Requests sent: " << requestsSent.load() <<
+        ", Requests in progress: " << requestsInProgress.load() << std::endl;
     std::cout << "Step 3: Waiting 1 second for requests to start processing..." << std::endl;
 
-    // Give requests time to reach the server but NOT complete
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_GRACEFUL_WAIT_MS));
 
-    std::cout
-        << "Step 4: Initiating graceful shutdown while requests are actively processing (server is sleeping for 3s)..."
-        << std::endl;
+    std::cout << "Step 4: Initiating graceful shutdown while requests are actively processing..." << std::endl;
 
-    // Mark shutdown as started
     shutdownStarted = true;
 
-    // Record the start time of shutdown
     auto shutdownStart = std::chrono::steady_clock::now();
-
-    // Call Stop() while requests are actively being processed by the server
-    service->Stop();
-
-    // Record the end time of shutdown
+    env.service->Stop();
     auto shutdownEnd = std::chrono::steady_clock::now();
     auto shutdownDuration = std::chrono::duration_cast<std::chrono::milliseconds>(shutdownEnd - shutdownStart).count();
 
-    // Wait for all async tasks to complete
     for (auto& future : requestFutures) {
         if (future.valid()) {
             future.wait();
         }
     }
 
-    std::cout << "\n=== Graceful Shutdown Results ===" << std::endl;
-    std::cout << "Shutdown completed in " << shutdownDuration << "ms" << std::endl;
-    std::cout << "Results during shutdown: " << results.successCount.load() << " success, " << results.errorCount.load()
-              << " errors" << std::endl;
-    std::cout << "Requests still in progress after Stop(): " << requestsInProgress.load() << std::endl;
+    env.mockServer.stop();
 
-    // Stop the mock server
-    mockServer.stop();
-
-    // Verify graceful shutdown behavior
-    int totalProcessed = results.successCount.load() + results.errorCount.load();
-
-    std::cout << "Total requests processed: " << totalProcessed << "/" << NUM_REQUESTS << std::endl;
-
-    // Key validation: Shutdown should complete within graceful timeout (5 seconds for default config)
-    if (shutdownDuration > 8000) { // Allow some buffer
-        std::cout << "FAIL: Shutdown took too long: " << shutdownDuration << "ms (> 8s)" << std::endl;
-        return false;
-    }
-
-    // Should have processed some requests (either completed or cancelled)
-    if (totalProcessed == 0) {
-        std::cout << "FAIL: No requests were processed during graceful shutdown" << std::endl;
-        return false;
-    }
-
-    // The key test: Some requests might be cancelled due to shutdown, which is expected behavior
-    if (results.errorCount.load() > 0) {
-        std::cout << "✓ PASS: Some requests were properly cancelled during shutdown (" << results.errorCount.load()
-                  << ")" << std::endl;
-    } else {
-        std::cout << "INFO: All requests completed successfully before shutdown finished" << std::endl;
-    }
-
-    if (results.successCount.load() > 0) {
-        std::cout << "✓ PASS: Some requests completed successfully during shutdown (" << results.successCount.load()
-                  << ")" << std::endl;
-    }
-
-    std::cout << "Shutdown behavior: " << results.successCount.load() << " completed, " << results.errorCount.load()
-              << " cancelled" << std::endl;
-
-    std::cout << "PASS: Graceful shutdown test - service stopped without hanging" << std::endl;
-    return true;
+    return VerifyGracefulShutdown(env, results, shutdownDuration);
 }
 
-bool testRapidStartStop()
+bool TestRapidStartStop()
 {
     std::cout << "\n=== Test 7: Rapid Start/Stop ===" << std::endl;
 
-    for (int i = 0; i < 3; i++) {
-        std::cout << "Iteration " << (i + 1) << "/3..." << std::endl;
+    for (int i = 0; i < NUM_RAPID_ITERATIONS; i++) {
+        std::cout << "Iteration " << (i + 1) << "/" << NUM_RAPID_ITERATIONS << "..." << std::endl;
 
-        // Start mock server
-        MockHttpServer mockServer(9999);
-        if (!mockServer.start()) {
-            std::cout << "FAIL: Could not start mock server" << std::endl;
+        TestEnvironment env(MOCK_SERVER_PORT);
+        if (!env.Setup()) {
             return false;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-        // Create and start HttpClientService
-        HttpClientServiceConfig config;
-        auto service = HttpClientServiceFactory::Create(config);
-        if (!service || !service->Start()) {
-            std::cout << "FAIL: Could not create/start HttpClientService" << std::endl;
-            mockServer.stop();
-            return false;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-        // Quick request
         HttpRequest request;
         request.method = "GET";
-        request.url = "http://127.0.0.1:9999/test";
+        request.url = buildTestUrl();
 
-        TestResults results;
+        auto results = std::make_shared<TestResults>();
         UserData userData;
-        userData.requestId = 6000 + i;
+        userData.requestId = REQUEST_ID_BASE_RAPID + i;
         userData.method = "RAPID_TEST";
 
-        SendResult sendResult = service->Send(request, &userData, 3000, [&results](const HttpResponse& response) {
-            if (response.success) {
-                results.recordSuccess(response.userData.requestId, response);
-            } else {
-                results.recordError(response.userData.requestId);
-            }
-        });
+        env.service->Send(request, &userData, TIMEOUT_REQUEST_RAPID_MS, CreateStandardCallback(results));
 
-        if (sendResult.success) {
-            results.waitForCompletion(1, 5000);
-        }
+        results->WaitForCompletion(1, TIMEOUT_WAIT_RAPID_MS);
 
-        // Stop services
-        service->Stop();
-        mockServer.stop();
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        env.Teardown();
+        std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_RAPID_CYCLE_MS));
     }
 
     std::cout << "PASS: Rapid start/stop test" << std::endl;
     return true;
 }
 
+bool TestQueueFullScenario()
+{
+    std::cout << "\n=== Test 8: Queue Full Scenario ===" << std::endl;
+
+    TestEnvironment env(MOCK_SERVER_PORT);
+    if (!env.Setup()) {
+        return false;
+    }
+
+    std::cout << "Attempting to flood the request queue..." << std::endl;
+
+    std::atomic<int> requestsSent{0};
+    std::atomic<int> queueFullCount{0};
+    std::vector<UserData> userDataArray(NUM_QUEUE_FLOOD_REQUESTS);
+
+    // Try to send a large number of requests to fill the queue
+    for (int i = 0; i < NUM_QUEUE_FLOOD_REQUESTS; i++) {
+        try {
+            HttpRequest request;
+            request.method = "GET";
+            request.url = buildTestUrl();
+
+            userDataArray[i].requestId = REQUEST_ID_BASE_QUEUE + i;
+            userDataArray[i].method = "QUEUE_TEST";
+
+            auto emptyCallback = [](const HttpResponse& response) { (void)response; };
+
+            env.service->Send(request, &userDataArray[i], TIMEOUT_REQUEST_DEFAULT_MS, emptyCallback);
+            requestsSent++;
+        } catch (const std::runtime_error& e) {
+            // Expected: queue will eventually be full
+            if (std::string(e.what()) == "Request queue is full") {
+                queueFullCount++;
+                std::cout << "Queue full at request " << i << " (expected behavior)" << std::endl;
+                break; // Stop trying once queue is full
+            } else {
+                std::cout << "Unexpected error: " << e.what() << std::endl;
+                env.Teardown();
+                return false;
+            }
+        }
+    }
+
+    std::cout << "Queue flood test: sent " << requestsSent.load() << " requests before queue was full" << std::endl;
+    std::cout << "Queue full occurred " << queueFullCount.load() << " time(s)" << std::endl;
+
+    env.Teardown();
+
+    // The test passes if we successfully filled the queue
+    if (requestsSent.load() > 0 && queueFullCount.load() > 0) {
+        std::cout << "PASS: Queue correctly handles overflow scenario" << std::endl;
+        return true;
+    } else {
+        std::cout << "FAIL: Queue did not behave as expected" << std::endl;
+        return false;
+    }
+}
+
+// ============================================================
+// Main Test Runner
+// ============================================================
+
 int main()
 {
     std::cout << "HttpClientService Test Suite" << std::endl;
     std::cout << "=========================================" << std::endl;
 
-    // Set log level to see important information
-    SetLogLevel(MCP_LOG_LEVEL_INFO); // Reduce log verbosity for comprehensive test
+    SetLogLevel(MCP_LOG_LEVEL_INFO);
 
     std::vector<std::pair<std::string, std::function<bool()>>> tests = {
-        {"Basic Functionality", testBasicFunctionality},
-        {"Concurrent Requests", testConcurrentRequests},
-        {"Different HTTP Methods", testDifferentMethods},
-        {"Headers and Body", testHeadersAndBody},
-        {"Error Handling", testErrorHandling},
-        {"Graceful Shutdown", testGracefulShutdown},
-        {"Rapid Start/Stop", testRapidStartStop}};
+        {"Basic Functionality", TestBasicFunctionality},
+        {"Concurrent Requests", TestConcurrentRequests},
+        {"Different HTTP Methods", TestDifferentMethods},
+        {"Headers and Body", TestHeadersAndBody},
+        {"Error Handling", TestErrorHandling},
+        {"Graceful Shutdown", TestGracefulShutdown},
+        {"Rapid Start/Stop", TestRapidStartStop},
+        {"Queue Full Scenario", TestQueueFullScenario}};
 
     int passed = 0;
     int total = tests.size();
 
     for (const auto& test : tests) {
-        std::cout << "\n" << std::string(50, '=') << std::endl;
+        std::cout << "\n" << std::string(SEPARATOR_LINE_LENGTH, '=') << std::endl;
         std::cout << "Running: " << test.first << std::endl;
 
         try {
@@ -716,11 +748,10 @@ int main()
             std::cout << "✗ " << test.first << " UNKNOWN EXCEPTION" << std::endl;
         }
 
-        // Small delay between tests
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_TEST_ITERATION_MS));
     }
 
-    std::cout << "\n" << std::string(50, '=') << std::endl;
+    std::cout << "\n" << std::string(SEPARATOR_LINE_LENGTH, '=') << std::endl;
     std::cout << "Test Suite Results:" << std::endl;
     std::cout << "Passed: " << passed << "/" << total << " tests" << std::endl;
 
