@@ -56,6 +56,9 @@ constexpr int HTTP_PARSE_ERROR = -1;
 
 // HTTP Client timeout constants (milliseconds)
 constexpr int HTTP_CLIENT_DEFAULT_TIMEOUT_MS = 5000;
+constexpr long HTTP_TCP_KEEP_ALIVE_S = 1L;
+constexpr long HTTP_TCP_KEEP_IDLE_S = 120L;
+constexpr long HTTP_TCP_KEEP_INTVL_S = 60L;
 
 // Common helpers shared by HTTP client/server for parsing headers and body.
 
