@@ -8,7 +8,6 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
-#include "mcp_auth.h"
 #include "mcp_log.h"
 #include "shared/common_type.h"
 #include "mcp_type.h"
@@ -59,20 +58,6 @@ protected:
 TEST_F(McpClientImplementTest, ConstructorWithConfig)
 {
     EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport));
-    ASSERT_NE(client_, nullptr);
-}
-
-TEST_F(McpClientImplementTest, ConstructorWithAuthProvider)
-{
-    auto authProvider = std::make_shared<BearerTokenProvider>("test_token");
-    EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport, authProvider));
-    ASSERT_NE(client_, nullptr);
-}
-
-TEST_F(McpClientImplementTest, ConstructorWithNullAuthProvider)
-{
-    // nullptr authProvider应该被接受（内部会创建默认的BearerTokenProvider）
-    EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport, nullptr));
     ASSERT_NE(client_, nullptr);
 }
 

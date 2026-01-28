@@ -8,14 +8,17 @@
 #include <cstdarg>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
-
+#include "mcp_auth.h"
 #include "mcp_log.h"
 #include "mcp_server.h"
 #include "mcp_type.h"
+#include "simple_token_verifier.h"
 
 static FILE *g_logFile = nullptr;
 volatile sig_atomic_t stopFlag = 0;
@@ -24,7 +27,8 @@ const char* const SERVER_NAME = "TestMCPServer";
 const char* const SERVER_VERSION = "1.0.0";
 const int IO_THREADS = 2;
 const int WORKER_THREADS = 2;
-const char* const ENDPOINT = "http://127.0.0.1:8000/mcp";
+const char* const ENDPOINT = "http://localhost:8000/mcp";
+const char* const AUTH_ENDPOINT = "http://localhost:8001/mcp";
 const char* const LOG_FILE_NAME = "server_example.log";
 const char* const ECHO_TOOL_NAME = "echo";
 const char* const ECHO_TOOL_TITLE = "Echo Tool";
@@ -43,6 +47,9 @@ const int HEARTBEAT_INTERVAL_SECONDS = 5;
 const int LOG_INTERVAL_COUNT = 6;
 const int SECONDS_PER_LOG = 30;
 const int EXAMPLE_BULK_COUNT = 120;
+
+const char* const VALID_TOKEN = "valid-token-12345"; // This token has 'read write' scopes
+const char* const REQUIRED_SCOPES = "read write"; // Required scopes for accessing tools
 
 void signalHandler(int signal)
 {
@@ -69,15 +76,25 @@ void FileLogCallback(MCP_LOG_LEVEL logLevel, std::string message)
 
 int main(int argc, char** argv)
 {
-    std::cout << "=== MCP Server Test Example ===" << std::endl;
+    bool enableAuth = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--auth") {
+            enableAuth = true;
+        }
+    }
+
+    std::cout << "=== MCP Server Example ===" << std::endl;
+    if (enableAuth) {
+        std::cout << "Mode: Authentication and Authorization (Bearer token + Scopes)\n";
+    }
 
     bool isJsonResponseEnabled = true;
-    std::string endpoint = ENDPOINT;
+    std::string endpoint = enableAuth ? AUTH_ENDPOINT : ENDPOINT;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << (argv[0] ? argv[0] : "ServerExample")
-                      << " [--port=<1-65535>] [--isJsonResponseDisable]" << std::endl;
+                      << " [--auth] [--port=<1-65535>] [--isJsonResponseDisable]" << std::endl;
             return 0;
         }
         if (arg == "--isJsonResponseDisable") {
@@ -113,6 +130,23 @@ int main(int argc, char** argv)
         streamableHttpConfig.tlsConfig.enabled = false;
         streamableHttpConfig.endpoint = endpoint;
         streamableHttpConfig.isJsonResponseEnabled = isJsonResponseEnabled;
+
+        if (enableAuth) {
+            // Setup authentication and authorization
+            std::unordered_map<std::string, std::string> tokenScopes;
+            tokenScopes[VALID_TOKEN] = "read write";      // Full access
+
+            auto tokenVerifier = std::make_shared<Mcp::SimpleTokenVerifier>(tokenScopes);
+            auto authenticator = std::make_shared<Mcp::BearerTokenAuthenticator>(tokenVerifier);
+            auto authorizer = std::make_shared<Mcp::ScopeBasedAuthorizer>(REQUIRED_SCOPES);
+
+            streamableHttpConfig.authenticator = authenticator;
+            streamableHttpConfig.authorizer = authorizer;
+
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Authentication and authorization configured:");
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("  - Required scopes: ") + REQUIRED_SCOPES);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("  - Valid token: ") + VALID_TOKEN + " (scopes: read write)");
+        }
 
         auto server = Mcp::McpServerFactory::CreateStreamableHttpServer(config, streamableHttpConfig);
         if (server == nullptr) {
@@ -310,8 +344,15 @@ int main(int argc, char** argv)
         std::cout << "  - Worker Threads: " << config.workerThreads
                   << std::endl;
         std::cout << "  - Endpoint: " << streamableHttpConfig.endpoint << std::endl;
+        if (enableAuth) {
+            std::cout << "  - Required Scopes: " << REQUIRED_SCOPES << std::endl;
+        }
         std::cout << "Test endpoints:" << std::endl;
         std::cout << "  - MCP endpoint: " << streamableHttpConfig.endpoint << std::endl;
+        if (enableAuth) {
+            std::cout << "Valid tokens for testing:" << std::endl;
+            std::cout << "  - " << VALID_TOKEN << " (scopes: read write) - will succeed" << std::endl;
+        }
 
         int counter = 0;
         while (!stopFlag && server->IsRunning()) {

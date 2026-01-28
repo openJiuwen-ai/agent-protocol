@@ -22,8 +22,8 @@ std::shared_ptr<McpClient> McpClientFactory::CreateStreamableHttpClient([[maybe_
 #if MCP_WITH_HTTP
     std::shared_ptr<ClientTransport> transport = std::make_shared<StreamableHttpClientTransport>(
         transportConfig.endpoint, transportConfig.headers, transportConfig.timeout,
-        transportConfig.sseTimeout, transportConfig.tlsConfig);
-    return std::make_shared<McpClientImplement>(config, std::move(transport), std::move(authProvider));
+        transportConfig.sseTimeout, transportConfig.tlsConfig, authProvider);
+    return std::make_shared<McpClientImplement>(config, std::move(transport));
 #else
     throw std::runtime_error("HTTP client is not enabled in this build");
 #endif

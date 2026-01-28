@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 
-#include "mcp_auth.h"
 #include "client_session.h"
 #include "mcp_client.h"
 #include "mcp_type.h"
@@ -19,8 +18,7 @@ namespace Mcp {
 
 class McpClientImplement : public McpClient {
 public:
-    explicit McpClientImplement(const ClientConfig config, std::shared_ptr<ClientTransport> transport,
-        std::shared_ptr<AuthProvider> authProvider = nullptr);
+    explicit McpClientImplement(const ClientConfig config, std::shared_ptr<ClientTransport> transport);
     ~McpClientImplement() = default;
 
     std::future<std::shared_ptr<InitializeResult>> Initialize() override;
@@ -60,7 +58,6 @@ private:
 
     std::shared_ptr<ClientSession> session_;
     std::shared_ptr<ClientTransport> transport_;
-    std::shared_ptr<AuthProvider> authProvider_;
 
     // Configuration
     ClientConfig config_;

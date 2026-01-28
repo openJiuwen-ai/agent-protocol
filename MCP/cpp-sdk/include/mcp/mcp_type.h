@@ -8,11 +8,14 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 #include <unordered_map>
+
+#include "mcp_auth.h"
 
 namespace Mcp {
 
@@ -54,6 +57,8 @@ struct StreamableHttpServerConfig {
     bool isJsonResponseEnabled{false};
     uint32_t ioThreads{1};
     TlsConfig tlsConfig;
+    std::shared_ptr<Authenticator> authenticator{nullptr};
+    std::shared_ptr<Authorizer> authorizer{nullptr};
 };
 
 struct ClientConfig {

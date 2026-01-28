@@ -16,23 +16,12 @@
 
 constexpr int REQUEST_TIMEOUT = 300;
 constexpr char EXAMPLE_ENDPOINT[] = "http://localhost:8000/mcp";
-constexpr char EXAMPLE_TOKEN[] = "your-token";
+constexpr char AUTH_EXAMPLE_ENDPOINT[] = "http://localhost:8001/mcp";
+constexpr char VALID_TOKEN[] = "valid-token-12345";
 constexpr char EXAMPLE_TOOL_NAME[] = "echo";
 
-int main(int argc, char** argv)
+static int RunToolDemo(const std::string& endpoint)
 {
-    SetLogLevel(MCP_LOG_LEVEL_INFO);
-
-    std::string endpoint = EXAMPLE_ENDPOINT;
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
-        if (arg.rfind("--port=", 0) == 0) {
-            const std::string value = arg.substr(std::string("--port=").size());
-            int port = std::stoi(value);
-            endpoint = std::string("http://localhost:") + std::to_string(port) + "/mcp";
-        }
-    }
-
     // Setup client configuration
     Mcp::ClientConfig config;
     config.name = "ToolExampleClient";
@@ -41,8 +30,7 @@ int main(int argc, char** argv)
     httpConfig.endpoint = endpoint;
     httpConfig.tlsConfig.enabled = false;
 
-    auto authProvider = std::make_shared<Mcp::BearerTokenProvider>(EXAMPLE_TOKEN);
-    auto mcpClient = Mcp::McpClientFactory::CreateStreamableHttpClient(config, httpConfig, std::move(authProvider));
+    auto mcpClient = Mcp::McpClientFactory::CreateStreamableHttpClient(config, httpConfig, nullptr);
 
     // Example 1: Initialize client
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example Initialize ===");
@@ -53,6 +41,10 @@ int main(int argc, char** argv)
             return -1;
         }
         auto initResult = initFuture.get();
+        if (initResult == nullptr) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize returned null result");
+            return -1;
+        }
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Initialize success");
     } catch (const std::exception &e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Initialize failed: ") + e.what());
@@ -136,4 +128,89 @@ int main(int argc, char** argv)
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example completed ===");
     return 0;
+}
+
+static int RunToolDemoWithAuth(const std::string& endpoint)
+{
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example with Authentication and Authorization ===");
+
+    // Common client configuration
+    Mcp::ClientConfig config;
+    config.name = "TestAuthClient";
+    config.version = "1.0.0";
+    Mcp::StreamableHttpClientConfig httpConfig;
+    httpConfig.endpoint = endpoint;
+    httpConfig.tlsConfig.enabled = false;
+
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "\n=== Example: Initialize and call tool with 'read write' token ===");
+    {
+        // Auth provider with valid token (read-write permissions)
+        auto authProvider = std::make_shared<Mcp::BearerTokenProvider>(VALID_TOKEN);
+        auto mcpClient = Mcp::McpClientFactory::CreateStreamableHttpClient(config, httpConfig, authProvider);
+
+        try {
+            auto initFuture = mcpClient->Initialize();
+            if (initFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize timeout");
+                return -1;
+            }
+            auto initResult = initFuture.get();
+            if (initResult == nullptr) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize returned null result");
+                return -1;
+            }
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Initialize succeeded");
+
+            nlohmann::json args;
+            args["user_query"] = "Hello from echo tool!";
+            std::string argsStr = args.dump();
+            auto callFuture = mcpClient->CallTool(EXAMPLE_TOOL_NAME, argsStr, 30);
+            if (callFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) == std::future_status::ready) {
+                auto callResult = callFuture.get();
+                MCP_LOG(MCP_LOG_LEVEL_INFO,
+                        std::string("echo success, isError: ") +
+                            std::to_string(static_cast<int>(callResult->isError)));
+                for (const auto &content : callResult->content) {
+                    if (std::holds_alternative<Mcp::TextContent>(content)) {
+                        const auto &text = std::get<Mcp::TextContent>(content);
+                        MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("  Result: ") + text.text);
+                    }
+                }
+            } else {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "echo failed unexpectedly (timeout)");
+            }
+        } catch (const std::exception& e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Unexpected error: ") + e.what());
+        }
+    }
+
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "\n=== Example completed ===");
+    return 0;
+}
+
+int main(int argc, char** argv)
+{
+    SetLogLevel(MCP_LOG_LEVEL_INFO);
+
+    bool enableAuth = false;
+    std::string endpoint = EXAMPLE_ENDPOINT;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
+        if (arg == "--auth") {
+            enableAuth = true;
+            endpoint = AUTH_EXAMPLE_ENDPOINT;
+            continue;
+        }
+        if (arg.rfind("--port=", 0) == 0) {
+            const std::string value = arg.substr(std::string("--port=").size());
+            int port = std::stoi(value);
+            endpoint = std::string("http://localhost:") + std::to_string(port) + "/mcp";
+        }
+    }
+
+    if (enableAuth) {
+        return RunToolDemoWithAuth(endpoint);
+    }
+
+    return RunToolDemo(endpoint);
 }

@@ -10,6 +10,7 @@
 #include <stdexcept>
 
 #include "http_client_service.h"
+#include "mcp_auth.h"
 #include "mcp_log.h"
 
 namespace Mcp {
@@ -20,7 +21,8 @@ StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
                                                              std::unordered_map<std::string, std::string> headers,
                                                              std::chrono::milliseconds timeout,
                                                              std::chrono::milliseconds sseReadTimeout,
-                                                             const Mcp::TlsConfig& tlsConfig)
+                                                             const Mcp::TlsConfig& tlsConfig,
+                                                             std::shared_ptr<AuthProvider> authProvider)
     : url_(std::move(url)),
       timeout_(timeout),
       sseReadTimeout_(sseReadTimeout),
@@ -28,7 +30,8 @@ StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
       protocolVersion_(""),
       sseConnectionId_(0),
       httpClientService_(nullptr),
-      callback_(nullptr)
+      callback_(nullptr),
+      authProvider_(std::move(authProvider))
 {
     if (timeout_.count() <= 0 || timeout_.count() > MAX_TIMEOUT_MS.count()) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR,
@@ -84,6 +87,7 @@ void StreamableHttpClientTransport::SendSessionTerminatedError(const HttpRespons
     // Send error message via callback
     callback_->OnMessageReceived(error, ctx_);
 }
+
 
 StreamableHttpClientTransport::~StreamableHttpClientTransport()
 {
@@ -172,8 +176,15 @@ void StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& res
     if (response.statusCode == Http::HTTP_STATUS_NOT_FOUND) {
         MCP_LOG(MCP_LOG_LEVEL_WARN, "Session not found or expired (" +
                 std::to_string(Http::HTTP_STATUS_NOT_FOUND) + ")");
-        // 404 Not Found - Session not found or expired
         SendSessionTerminatedError(response);
+        return;
+    }
+
+    // Handle 401 Unauthorized and 403 Forbidden responses
+    if (response.statusCode == Http::HTTP_STATUS_UNAUTHORIZED ||
+        response.statusCode == Http::HTTP_STATUS_FORBIDDEN) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status " + std::to_string(response.statusCode));
+        
         return;
     }
 
@@ -233,6 +244,11 @@ void StreamableHttpClientTransport::Terminate()
 void StreamableHttpClientTransport::PrepareRequestHeaders(HttpRequest& httpRequest)
 {
     httpRequest.headers = requestHeaders_;
+
+    // Apply authentication provider (e.g., bearer token) if available
+    if (authProvider_ != nullptr) {
+        authProvider_->Apply(httpRequest.headers);
+    }
 
     // Add MCP session ID if available
     if (!sessionId_.empty()) {

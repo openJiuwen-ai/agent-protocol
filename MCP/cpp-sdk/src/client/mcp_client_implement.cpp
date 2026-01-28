@@ -7,9 +7,8 @@
 
 namespace Mcp {
 
-McpClientImplement::McpClientImplement(const ClientConfig config, std::shared_ptr<ClientTransport> transport,
-    std::shared_ptr<AuthProvider> authProvider)
-    : transport_(std::move(transport)), authProvider_(std::move(authProvider)), config_(config)
+McpClientImplement::McpClientImplement(const ClientConfig config, std::shared_ptr<ClientTransport> transport)
+    : transport_(std::move(transport)), config_(config)
 {
 }
 

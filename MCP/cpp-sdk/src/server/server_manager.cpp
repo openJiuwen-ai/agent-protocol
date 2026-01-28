@@ -6,6 +6,7 @@
 
 #include <iomanip>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <random>
 #include <regex>
 #include <sstream>
@@ -13,6 +14,7 @@
 #include <unordered_map>
 
 #include "event/event_system.h"
+#include "mcp_auth.h"
 #include "mcp_log.h"
 #include "shared/thread_utils.h"
 #include "server/transport/streamable_http_server_transport.h"
@@ -30,7 +32,8 @@ constexpr int MAX_PORT_NUMBER = 65535;
 constexpr int QUEUE_CAPACITY = 4096;
 
 ServerManager::ServerManager(const ServerConfig& config, const StreamableHttpServerConfig& transportConfig)
-    : config_(config), streamableConfig_(transportConfig), isStdio_{false} {}
+    : config_(config), streamableConfig_(transportConfig), isStdio_{false},
+      authenticator_(transportConfig.authenticator), authorizer_(transportConfig.authorizer) {}
 
 ServerManager::ServerManager(const ServerConfig& config) : config_(config) {}
 
@@ -314,6 +317,45 @@ int ServerManager::GetThreadIdForSession(const std::string& sessionId) const
 
 void ServerManager::HandleRequest(const HttpRequest& request, RequestContext& context)
 {
+    // Perform authentication if authenticator is configured
+    if (authenticator_ != nullptr) {
+        AuthenticationResult authResult = authenticator_->Authenticate(request.headers);
+        if (!authResult.authenticated) {
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("Authentication failed: ") +
+                        authResult.errorDescription.value_or("Unknown error"));
+            HttpResponse response;
+            response.statusCode = Http::HTTP_STATUS_UNAUTHORIZED;
+            response.statusText = "Unauthorized";
+            response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+            nlohmann::json errorJson;
+            errorJson["error"] = authResult.errorDescription.value_or("Authentication failed");
+            response.body = errorJson.dump();
+            if (context.httpSendFunc) {
+                context.httpSendFunc(response, context);
+            }
+            return;
+        }
+
+        // Perform authorization if authorizer is configured
+        if (authorizer_ != nullptr && !authorizer_->Authorize(authResult)) {
+            MCP_LOG(MCP_LOG_LEVEL_WARN, "Authorization failed: insufficient scopes");
+            HttpResponse response;
+            response.statusCode = Http::HTTP_STATUS_FORBIDDEN;
+            response.statusText = "Forbidden";
+            response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+            nlohmann::json errorJson;
+            errorJson["error"] = "Insufficient permissions";
+            response.body = errorJson.dump();
+            if (context.httpSendFunc) {
+                context.httpSendFunc(response, context);
+            }
+            return;
+        }
+
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Authentication and authorization successful");
+    }
+
     // Dispatch the request to the appropriate thread
     int threadId = GetThreadIdForSession(context.sessionId);
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Handling request for session " + context.sessionId +

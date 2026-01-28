@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "event/event_system.h"
+#include "mcp_auth.h"
 #include "mcp_type.h"
 #include "shared/message_queue/lock_free_queue.h"
 #include "server/http_server_manager.h"
@@ -60,6 +61,8 @@ private:
     std::vector<std::unique_ptr<EventSystem>> eventSystems_;
     std::vector<std::thread> workerThreads_;
     IncomingRequestCallback requestCallback_{nullptr};
+    std::shared_ptr<Authenticator> authenticator_{nullptr};
+    std::shared_ptr<Authorizer> authorizer_{nullptr};
 
     // Each thread has its own session map to avoid contention
     // Index: thread_id -> (session_id -> session)

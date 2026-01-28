@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include "http_client_service.h"
+#include "mcp_auth.h"
 #include "mcp_type.h"
 #include "shared/http_common.h"
 #include "shared/jsonrpc.h"
@@ -35,7 +36,8 @@ public:
         std::string url, std::unordered_map<std::string, std::string> headers = {},
         std::chrono::milliseconds timeout = std::chrono::milliseconds{DEFAULT_HTTP_TIMEOUT_MS},
         std::chrono::milliseconds sseReadTimeout = std::chrono::milliseconds{DEFAULT_SSE_READ_TIMEOUT_MS},
-        const Mcp::TlsConfig& tlsConfig = Mcp::TlsConfig{});
+        const Mcp::TlsConfig& tlsConfig = Mcp::TlsConfig{},
+        std::shared_ptr<AuthProvider> authProvider = nullptr);
     virtual ~StreamableHttpClientTransport();
 
     // Send message to server
@@ -74,6 +76,7 @@ private:
 
     std::unique_ptr<Http::HttpClientService> httpClientService_;
     std::shared_ptr<TransportCallback> callback_;
+    std::shared_ptr<AuthProvider> authProvider_;
     RequestContext ctx_;
 };
 
