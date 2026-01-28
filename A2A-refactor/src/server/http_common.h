@@ -94,6 +94,16 @@ struct HttpResponse {
     }
 };
 
+struct HttpRequestContext;
+using HttpSendFunc = std::function<void(const Server::HttpResponse& response, const HttpRequestContext& ctx)>;
+
+struct HttpRequestContext {
+    ConnectionId connectionId;
+    std::string method;
+
+    HttpSendFunc httpSendFunc;  // This function will be constructed in HttpServer::HandleRequest
+};
+
 // Unified callback type definition
 using HttpCallback = std::function<void(const HttpResponse& response)>;
 

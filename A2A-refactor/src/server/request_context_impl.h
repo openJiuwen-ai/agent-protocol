@@ -10,44 +10,44 @@
 #include <unordered_set>
 #include <vector>
 
-#include "server/server_call_context.h"
-#include "utils/id_generator.h"
-#include "utils/types.h"
+#include "server_call_context.h"
+#include "id_generator.h"
+#include "types.h"
 
 namespace A2A::Server {
 
 // Request Context equivalent to Python's RequestContext
 class RequestContextImpl {
 public:
-    RequestContextImpl(const std::optional<A2A::MessageSendParams>& request = std::nullopt,
-                       const std::optional<std::string>& taskId = std::nullopt,
-                       const std::optional<std::string>& contextId = std::nullopt,
-                       const std::optional<A2A::Task>& task = std::nullopt,
-                       const std::vector<A2A::Task>& relatedTasks = {},
-                       const A2A::Server::ServerCallContext* callContext = nullptr,
-                       std::shared_ptr<IDGenerator> taskIdGenerator = nullptr,
-                       std::shared_ptr<IDGenerator> contextIdGenerator = nullptr);
+    explicit RequestContextImpl(const std::optional<MessageSendParams>& request = std::nullopt,
+                                const std::optional<std::string>& taskId = std::nullopt,
+                                const std::optional<std::string>& contextId = std::nullopt,
+                                const std::optional<Task>& task = std::nullopt,
+                                const std::vector<Task>& relatedTasks = {},
+                                const std::shared_ptr<ServerCallContext>& callContext = nullptr,
+                                std::shared_ptr<IDGenerator> taskIdGenerator = nullptr,
+                                std::shared_ptr<IDGenerator> contextIdGenerator = nullptr);
 
     ~RequestContextImpl() = default;
 
     // Helpers
     std::string GetUserInput(const std::string& delimiter = "\n") const;
-    void AttachRelatedTask(const A2A::Task& task);
+    void AttachRelatedTask(const Task& task);
 
     // Accessors
-    const A2A::Message* Message() const;
+    const Message* Message() const;
 
-    const std::vector<A2A::Task>& RelatedTasks() const
+    const std::vector<Task>& RelatedTasks() const
     {
         return relatedTasks_;
     }
 
-    const std::optional<A2A::Task>& CurrentTask() const
+    const std::optional<Task>& CurrentTask() const
     {
         return currentTask_;
     }
 
-    void SetCurrentTask(const A2A::Task& t)
+    void SetCurrentTask(const Task& t)
     {
         currentTask_ = t;
     }
@@ -64,7 +64,7 @@ public:
 
     const std::optional<nlohmann::json> Configuration() const;
 
-    const A2A::Server::ServerCallContext* CallContext() const
+    std::shared_ptr<ServerCallContext> CallContext() const
     {
         return callContext_;
     }
@@ -79,12 +79,12 @@ private:
     void CheckOrGenerateTaskId();
     void CheckOrGenerateContextId();
 
-    std::optional<A2A::MessageSendParams> params_;
+    std::optional<MessageSendParams> params_;
     std::optional<std::string> taskId_;
     std::optional<std::string> contextId_;
-    std::optional<A2A::Task> currentTask_;
-    std::vector<A2A::Task> relatedTasks_;
-    const A2A::Server::ServerCallContext* callContext_{};
+    std::optional<Task> currentTask_;
+    std::vector<Task> relatedTasks_;
+    const std::shared_ptr<ServerCallContext> callContext_{};
     std::shared_ptr<IDGenerator> taskIdGenerator_;
     std::shared_ptr<IDGenerator> contextIdGenerator_;
 };

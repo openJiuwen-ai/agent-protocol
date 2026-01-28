@@ -8,8 +8,8 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "server/event_queue.h"
-#include "server/queue_manager.h"
+#include "event_queue.h"
+#include "queue_manager.h"
 
 namespace A2A::Server {
 
@@ -28,7 +28,7 @@ public:
     std::shared_ptr<EventQueue> CreateOrTap(const std::string& taskId) override;
 
 private:
-    std::mutex m_;
+    std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<EventQueue>> queues_;
 };
 

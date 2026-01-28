@@ -11,20 +11,20 @@
 #include <string>
 #include <unordered_map>
 
+#include "server_call_context.h"
 #include "server/task_store.h"
 
 namespace A2A::Server {
 
 class InMemoryTaskStore : public TaskStore {
 public:
-    void Save(const A2A::Task& task, const A2A::Server::ServerCallContext* context = nullptr) override;
+    void Save(const A2A::Task& task, std::shared_ptr<ServerCallContext> context) override;
 
     ~InMemoryTaskStore() override = default;
 
-    std::optional<A2A::Task> Get(const std::string& taskId,
-                                 const A2A::Server::ServerCallContext* context = nullptr) override;
+    std::optional<A2A::Task> Get(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
 
-    void Delete(const std::string& taskId, const A2A::Server::ServerCallContext* context = nullptr) override;
+    void Delete(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
 
 private:
     std::mutex mutex_;

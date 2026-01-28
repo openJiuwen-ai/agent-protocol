@@ -11,15 +11,17 @@
 #include <queue>
 #include <vector>
 
-#include "server/event_queue.h"
+#include "request_handler.h"
 
 namespace A2A::Server {
 
-class EventQueueImpl {
-public:
-    explicit EventQueueImpl(std::size_t maxSize = 1024);
+using Event = RequestHandler::StreamEvent;
 
-    ~EventQueueImpl() = default;
+class EventQueue {
+public:
+    explicit EventQueue(std::size_t maxSize = 1024);
+
+    ~EventQueue() = default;
 
     // Enqueue event to this queue and all children (blocking if full)
     void Enqueue(const Event& ev);
@@ -43,15 +45,17 @@ public:
     // Clear pending events (optionally children)
     void Clear(bool clearChildren = true);
 
+    bool IsEmpty() const;
+
 private:
     std::size_t maxSize_;
-    mutable std::mutex m_;
+    mutable std::mutex mutex_;
     std::condition_variable notEmpty_;
     std::condition_variable notFull_;
-    std::queue<Event> q_;
+    std::queue<Event> queue_;
     bool closed_ = false;
 
-    mutable std::mutex cm_;
+    mutable std::mutex cmutex_;
     std::vector<std::shared_ptr<EventQueue>> children_;
 };
 

@@ -9,9 +9,9 @@
 #include <optional>
 
 #include "server/request_context.h"
-#include "server/server_call_context.h"
+#include "server_call_context.h"
 #include "server/task_store.h"
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Server {
 class RequestContextBuilder {

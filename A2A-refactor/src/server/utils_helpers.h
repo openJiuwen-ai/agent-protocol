@@ -5,8 +5,8 @@
 #ifndef A2A_UTILS_HELPER
 #define A2A_UTILS_HELPER
 
-#include "utils/errors.h"
-#include "utils/types.h"
+#include "errors.h"
+#include "types.h"
 
 namespace A2A::Server {
 
@@ -21,7 +21,12 @@ bool AreModalitiesCompatible(const std::optional<std::vector<std::string>>& serv
 Artifact BuildTextArtifact(const std::string& text, const std::string& artifactId);
 
 // Validate helper: throws A2AServerError with message if expr is false
-inline void ValidateOrThrow(bool expr, const std::string& errorMessage);
+inline void ValidateOrThrow(const bool expr, const std::string& errorMessage)
+{
+    if (!expr) {
+        throw A2AServerError(errorMessage);
+    }
+}
 
 } // namespace A2A::Server
 

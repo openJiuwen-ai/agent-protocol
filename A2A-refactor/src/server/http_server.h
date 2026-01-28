@@ -23,7 +23,7 @@
 namespace A2A::Server {
 
 using RouteMap = std::unordered_map<std::string,
-    std::function<void(const server::HttpRequest&, const server::HttpRequestContext&)>>;
+    std::function<void(const HttpRequest&, const HttpRequestContext&)>>;
 
 struct TlsConfig {
     bool enabled{false};
@@ -47,13 +47,13 @@ public:
 
     void Stop();
 
-    void SendResponseAsync(const server::HttpResponse& response, const server::HttpRequestContext& ctx);
+    void SendResponseAsync(const HttpResponse& response, const HttpRequestContext& ctx);
 
 private:
-    bool SendResponse(int connectionFd, const server::HttpResponse& response);
+    bool SendResponse(int connectionFd, const HttpResponse& response);
     struct ConnectionContext {
         std::string requestBuffer;
-        server::HttpRequest currentRequest;
+        HttpRequest currentRequest;
         std::chrono::steady_clock::time_point lastActivity;
         TcpSocketPtr connection;
 
@@ -70,11 +70,11 @@ private:
     void HandleError(const SocketPtr& socket, int errorCode, const std::string& message);
 
     void HandleRequest(int fileDescriptor, ConnectionContext& context);
-    std::string BuildHttpResponse(const server::HttpResponse& response) const;
+    std::string BuildHttpResponse(const HttpResponse& response) const;
     bool SendRawResponse(int fileDescriptor, const std::string& response);
     void CleanupConnection(int fileDescriptor);
 
-    int ParseRequest(const std::string& buffer, server::HttpRequest& outRequest, std::size_t& consumedBytes);
+    int ParseRequest(const std::string& buffer, HttpRequest& outRequest, std::size_t& consumedBytes);
 
     void OnRead(int connectionFd, const std::string& data);
 
@@ -85,9 +85,9 @@ private:
     std::unique_ptr<TcpListener> listener_;
     std::thread eventThread_;
 
-    std::unordered_map<std::string, std::function<void(const server::HttpRequest&,
-        const server::HttpRequestContext&)>> routes_;
-    std::function<void(const server::HttpRequest&, const server::HttpRequestContext&)> onRecv_{nullptr};
+    std::unordered_map<std::string, std::function<void(const HttpRequest&,
+        const HttpRequestContext&)>> routes_;
+    std::function<void(const HttpRequest&, const HttpRequestContext&)> onRecv_{nullptr};
     std::unordered_map<int, ConnectionContext> connections_;
     std::atomic<bool> running_{false};
 

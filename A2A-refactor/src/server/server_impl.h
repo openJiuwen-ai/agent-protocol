@@ -10,11 +10,15 @@
 #include "http_server_transport.h"
 #include "jsonrpc_handler.h"
 #include "server/agent_executor.h"
+#include "server/ipc_server_builder.h"
 #include "server/server.h"
 #include "server/task_store.h"
 
-namespace a2a::server {
-class ServerImpl {
+namespace A2A::Server {
+
+using ServerConfig = std::variant<HttpConfig, IpcConfig>;
+
+class ServerImpl : public Server {
 public:
     ServerImpl(std::shared_ptr<AgentCard> agentCard,
         std::shared_ptr<AgentCard> extendedAgentCard,
@@ -22,11 +26,11 @@ public:
         ServerConfig config,
         const std::shared_ptr<TaskStore>& taskStore);
 
-    ~ServerImpl();
+    ~ServerImpl() override;
 
-    int Start(const std::string& ip, int port);
+    int Start() override;
 
-    void Stop();
+    void Stop() override;
 
     AgentCard OnGetAuthenticatedExtendedCard(const ServerCallContext* context = nullptr);
 
@@ -37,10 +41,10 @@ private:
     std::shared_ptr<AgentCard> extendedAgentCard_;
     ServerConfig config_;
     std::shared_ptr<RequestHandler> handler_;
-    std::unique_ptr<A2A::Server::JSONRPCHandler> jsonRpcHandler_;
-    std::unique_ptr<A2A::Transport::HttpServerTransport> transport_;
+    std::unique_ptr<JSONRPCHandler> jsonRpcHandler_;
+    std::unique_ptr<Transport::ServerTransport> transport_;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

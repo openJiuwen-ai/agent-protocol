@@ -8,7 +8,7 @@
 #include <functional>
 #include <memory>
 
-#include "server/event_queue.h"
+#include "event_queue.h"
 
 namespace A2A::Server {
 
@@ -23,8 +23,10 @@ public:
     // Consume all until final event; call on_event for each
     void ConsumeAll(const std::function<void(const Event&)>& onEvent);
 
+    bool IsEmpty() const;
+
 private:
-    std::shared_ptr<EventQueue> q_;
+    std::shared_ptr<EventQueue> queue_;
 };
 
 } // namespace A2A::Server

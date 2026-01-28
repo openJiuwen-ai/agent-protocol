@@ -11,15 +11,14 @@
 #include "base_push_notification_sender.h"
 #include "inmemory_push_notification_config_store.h"
 #include "inmemory_task_store.h"
+#include "queue_manager.h"
 #include "request_context_builder.h"
 #include "result_aggregator.h"
 #include "server/agent_executor.h"
-#include "server/queue_manager.h"
-#include "server/request_handler.h"
 #include "tasks/push_notification_config_store.h"
 #include "tasks/push_notification_sender.h"
 #include "server/task_store.h"
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Server {
 

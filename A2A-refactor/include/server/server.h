@@ -5,10 +5,6 @@
 #ifndef A2A_SERVER
 #define A2A_SERVER
 
-#include <memory>
-
-#include "types.h"
-
 namespace A2A::Server {
 
 class Server {
