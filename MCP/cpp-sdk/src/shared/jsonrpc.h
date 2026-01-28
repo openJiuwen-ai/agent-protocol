@@ -240,6 +240,24 @@ struct ListRootsRequest : public Request {
     ListRootsRequest();
 };
 
+// sampling/createMessage
+struct CreateMessageRequestParams : public RequestParams {
+    std::vector<SamplingMessage> messages;
+    std::optional<ModelPreferences> modelPreferences;
+    std::optional<std::string> systemPrompt;
+    std::optional<std::string> includeContext; // "none" | "thisServer" | "allServers"
+    std::optional<double> temperature;
+    int64_t maxTokens = 0;
+    std::optional<std::vector<std::string>> stopSequences;
+    std::optional<MetaMap> metadata;
+    std::optional<std::vector<Tool>> tools;
+    std::optional<ToolChoice> toolChoice;
+};
+
+struct CreateMessageRequest : public Request {
+    CreateMessageRequest();
+};
+
 struct ResourceUpdatedNotificationParams : public NotificationParams {
     std::string uri;
 

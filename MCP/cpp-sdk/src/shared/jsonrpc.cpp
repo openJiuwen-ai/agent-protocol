@@ -13,6 +13,96 @@
 
 namespace nlohmann {
 
+static inline std::optional<Mcp::MetaMap> ParseMetaStringMap(const json& j)
+{
+    if (!j.is_object()) {
+        return std::nullopt;
+    }
+
+    Mcp::MetaMap out;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (it.value().is_string()) {
+            out.emplace(it.key(), it.value().get<std::string>());
+        } else {
+            // Keep deserialization tolerant: stringify any non-string values.
+            out.emplace(it.key(), it.value().dump());
+        }
+    }
+    return out;
+}
+
+// ---- Client capability details ----
+template <>
+struct adl_serializer<Mcp::SamplingCapability> {
+    static void to_json(json& j, const Mcp::SamplingCapability& c)
+    {
+        j = json::object();
+        if (c.context) {
+            j["context"] = json::object();
+        }
+        if (c.tools) {
+            j["tools"] = json::object();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::SamplingCapability& c)
+    {
+        c.context = j.contains("context") && j.at("context").is_object();
+        c.tools = j.contains("tools") && j.at("tools").is_object();
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ClientTasksCapability> {
+    static void to_json(json& j, const Mcp::ClientTasksCapability& c)
+    {
+        j = json::object();
+
+        if (c.list) {
+            j["list"] = json::object();
+        }
+        if (c.cancel) {
+            j["cancel"] = json::object();
+        }
+
+        if (c.samplingCreateMessage || c.elicitationCreate) {
+            j["requests"] = json::object();
+        }
+        if (c.samplingCreateMessage) {
+            j["requests"]["sampling"] = json::object();
+            j["requests"]["sampling"]["createMessage"] = json::object();
+        }
+        if (c.elicitationCreate) {
+            j["requests"]["elicitation"] = json::object();
+            j["requests"]["elicitation"]["create"] = json::object();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ClientTasksCapability& c)
+    {
+        c = Mcp::ClientTasksCapability{};
+        if (!j.is_object()) {
+            return;
+        }
+
+        c.list = j.contains("list") && j.at("list").is_object();
+        c.cancel = j.contains("cancel") && j.at("cancel").is_object();
+
+        if (j.contains("requests") && j.at("requests").is_object()) {
+            const auto& req = j.at("requests");
+            if (req.contains("sampling") && req.at("sampling").is_object()) {
+                const auto& samplingReq = req.at("sampling");
+                c.samplingCreateMessage = samplingReq.contains("createMessage") &&
+                    samplingReq.at("createMessage").is_object();
+            }
+            if (req.contains("elicitation") && req.at("elicitation").is_object()) {
+                const auto& elicReq = req.at("elicitation");
+                c.elicitationCreate = elicReq.contains("create") && elicReq.at("create").is_object();
+            }
+        }
+    }
+};
+
 template <>
 struct adl_serializer<Mcp::ClientCapabilities> {
     static void to_json(json& j, const Mcp::ClientCapabilities& caps)
@@ -20,13 +110,13 @@ struct adl_serializer<Mcp::ClientCapabilities> {
         j = json::object();
 
         if (caps.sampling.has_value()) {
-            j["sampling"] = json::object();
+            j["sampling"] = caps.sampling.value();
         }
         if (caps.elicitation.has_value()) {
             j["elicitation"] = json::object();
         }
         if (caps.tasks.has_value()) {
-            j["tasks"] = json::object();
+            j["tasks"] = caps.tasks.value();
         }
         if (caps.roots.has_value()) {
             j["roots"] = json::object();
@@ -45,7 +135,7 @@ struct adl_serializer<Mcp::ClientCapabilities> {
         }
 
         if (j.contains("sampling") && j.at("sampling").is_object()) {
-            caps.sampling = Mcp::SamplingCapability{};
+            caps.sampling = j.at("sampling").get<Mcp::SamplingCapability>();
         } else {
             caps.sampling.reset();
         }
@@ -57,7 +147,7 @@ struct adl_serializer<Mcp::ClientCapabilities> {
         }
 
         if (j.contains("tasks") && j.at("tasks").is_object()) {
-            caps.tasks = Mcp::ClientTasksCapability{};
+            caps.tasks = j.at("tasks").get<Mcp::ClientTasksCapability>();
         } else {
             caps.tasks.reset();
         }
@@ -306,8 +396,10 @@ struct adl_serializer<Mcp::InitializeResult> {
         if (j.contains("instructions")) {
             r.instructions = j.at("instructions").get<std::string>();
         }
-        if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            r.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            r.meta = std::nullopt;
         }
     }
 };
@@ -517,7 +609,7 @@ struct adl_serializer<Mcp::ListRootsResult> {
             res.roots = j.at("roots").get<std::vector<Mcp::Root>>();
         }
         if (j.contains("_meta") && j.at("_meta").is_object()) {
-            res.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+            res.meta = ParseMetaStringMap(j.at("_meta"));
         } else {
             res.meta = std::nullopt;
         }
@@ -792,6 +884,300 @@ struct adl_serializer<Mcp::ContentType> {
     }
 };
 
+// ---- Sampling message content ----
+template <>
+struct adl_serializer<Mcp::ToolUseContent> {
+    static void to_json(json& j, const Mcp::ToolUseContent& c)
+    {
+        j = json::object();
+        j["type"] = c.type;
+        j["id"] = c.id;
+        j["name"] = c.name;
+        j["input"] = c.input;
+        if (c.meta.has_value()) {
+            j["_meta"] = c.meta.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ToolUseContent& c)
+    {
+        c.type = j.value("type", std::string("tool_use"));
+        c.id = j.value("id", std::string());
+        c.name = j.value("name", std::string());
+        c.input.clear();
+        if (j.contains("input") && j.at("input").is_object()) {
+            const auto parsed = ParseMetaStringMap(j.at("input"));
+            if (parsed.has_value()) {
+                c.input = parsed.value();
+            }
+        }
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            c.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            c.meta = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ToolResultContent> {
+    static void to_json(json& j, const Mcp::ToolResultContent& c)
+    {
+        j = json::object();
+        j["type"] = c.type;
+        j["toolUseId"] = c.toolUseId;
+        j["content"] = c.content;
+        if (c.structuredContent.has_value()) {
+            j["structuredContent"] = c.structuredContent.value();
+        }
+        if (c.isError.has_value()) {
+            j["isError"] = c.isError.value();
+        }
+        if (c.meta.has_value()) {
+            j["_meta"] = c.meta.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ToolResultContent& c)
+    {
+        c.type = j.value("type", std::string("tool_result"));
+        c.toolUseId = j.value("toolUseId", std::string());
+        if (j.contains("content")) {
+            j.at("content").get_to(c.content);
+        } else {
+            c.content.clear();
+        }
+        if (j.contains("structuredContent") && j.at("structuredContent").is_object()) {
+            c.structuredContent = ParseMetaStringMap(j.at("structuredContent"));
+        } else {
+            c.structuredContent = std::nullopt;
+        }
+        if (j.contains("isError")) {
+            c.isError = j.at("isError").get<bool>();
+        } else {
+            c.isError = std::nullopt;
+        }
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            c.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            c.meta = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::SamplingMessageContentBlock> {
+    static void to_json(json& j, const Mcp::SamplingMessageContentBlock& v)
+    {
+        std::visit([&](auto&& arg) { j = json(arg); }, v);
+    }
+
+    static void from_json(const json& j, Mcp::SamplingMessageContentBlock& v)
+    {
+        const auto type = j.value("type", std::string());
+        if (type == "text") {
+            v = j.get<Mcp::TextContent>();
+        } else if (type == "image") {
+            v = j.get<Mcp::ImageContent>();
+        } else if (type == "audio") {
+            v = j.get<Mcp::AudioContent>();
+        } else if (type == "tool_use") {
+            v = j.get<Mcp::ToolUseContent>();
+        } else if (type == "tool_result") {
+            v = j.get<Mcp::ToolResultContent>();
+        } else {
+            Mcp::TextContent c;
+            c.text = j.dump();
+            v = c;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::SamplingMessage> {
+    static void to_json(json& j, const Mcp::SamplingMessage& m)
+    {
+        j = json::object();
+        j["role"] = McpRoleTypeToString(m.role);
+
+        if (std::holds_alternative<Mcp::SamplingMessageContentBlock>(m.content)) {
+            j["content"] = std::get<Mcp::SamplingMessageContentBlock>(m.content);
+        } else {
+            j["content"] = std::get<std::vector<Mcp::SamplingMessageContentBlock>>(m.content);
+        }
+
+        if (m.meta.has_value()) {
+            j["_meta"] = m.meta.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::SamplingMessage& m)
+    {
+        const auto roleStr = j.value("role", std::string("user"));
+        m.role = McpRoleTypeFromString(roleStr);
+
+        if (j.contains("content")) {
+            const auto& c = j.at("content");
+            if (c.is_array()) {
+                m.content = c.get<std::vector<Mcp::SamplingMessageContentBlock>>();
+            } else if (c.is_object()) {
+                m.content = c.get<Mcp::SamplingMessageContentBlock>();
+            } else {
+                m.content = std::vector<Mcp::SamplingMessageContentBlock>{};
+            }
+        } else {
+            m.content = std::vector<Mcp::SamplingMessageContentBlock>{};
+        }
+
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            m.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            m.meta = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ModelHint> {
+    static void to_json(json& j, const Mcp::ModelHint& h)
+    {
+        j = json::object();
+        if (h.name.has_value()) {
+            j["name"] = h.name.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ModelHint& h)
+    {
+        if (j.contains("name")) {
+            h.name = j.at("name").get<std::string>();
+        } else {
+            h.name = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ModelPreferences> {
+    static void to_json(json& j, const Mcp::ModelPreferences& p)
+    {
+        j = json::object();
+        if (p.hints.has_value()) {
+            j["hints"] = p.hints.value();
+        }
+        if (p.costPriority.has_value()) {
+            j["costPriority"] = p.costPriority.value();
+        }
+        if (p.speedPriority.has_value()) {
+            j["speedPriority"] = p.speedPriority.value();
+        }
+        if (p.intelligencePriority.has_value()) {
+            j["intelligencePriority"] = p.intelligencePriority.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ModelPreferences& p)
+    {
+        if (j.contains("hints") && j.at("hints").is_array()) {
+            p.hints = j.at("hints").get<std::vector<Mcp::ModelHint>>();
+        } else {
+            p.hints = std::nullopt;
+        }
+
+        if (j.contains("costPriority")) {
+            p.costPriority = j.at("costPriority").get<double>();
+        } else {
+            p.costPriority = std::nullopt;
+        }
+
+        if (j.contains("speedPriority")) {
+            p.speedPriority = j.at("speedPriority").get<double>();
+        } else {
+            p.speedPriority = std::nullopt;
+        }
+
+        if (j.contains("intelligencePriority")) {
+            p.intelligencePriority = j.at("intelligencePriority").get<double>();
+        } else {
+            p.intelligencePriority = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ToolChoice> {
+    static void to_json(json& j, const Mcp::ToolChoice& c)
+    {
+        j = json::object();
+        if (c.mode.has_value()) {
+            j["mode"] = c.mode.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ToolChoice& c)
+    {
+        if (j.contains("mode")) {
+            c.mode = j.at("mode").get<std::string>();
+        } else {
+            c.mode = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::CreateMessageResult> {
+    static void to_json(json& j, const Mcp::CreateMessageResult& r)
+    {
+        j = json::object();
+        j["model"] = r.model;
+        j["role"] = McpRoleTypeToString(r.role);
+
+        if (std::holds_alternative<Mcp::SamplingMessageContentBlock>(r.content)) {
+            j["content"] = std::get<Mcp::SamplingMessageContentBlock>(r.content);
+        } else {
+            j["content"] = std::get<std::vector<Mcp::SamplingMessageContentBlock>>(r.content);
+        }
+
+        if (r.stopReason.has_value()) {
+            j["stopReason"] = r.stopReason.value();
+        }
+        if (r.meta.has_value()) {
+            j["_meta"] = r.meta.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::CreateMessageResult& r)
+    {
+        r.model = j.value("model", std::string());
+        r.role = McpRoleTypeFromString(j.value("role", std::string("assistant")));
+
+        if (j.contains("content")) {
+            const auto& c = j.at("content");
+            if (c.is_array()) {
+                r.content = c.get<std::vector<Mcp::SamplingMessageContentBlock>>();
+            } else if (c.is_object()) {
+                r.content = c.get<Mcp::SamplingMessageContentBlock>();
+            } else {
+                r.content = std::vector<Mcp::SamplingMessageContentBlock>{};
+            }
+        } else {
+            r.content = std::vector<Mcp::SamplingMessageContentBlock>{};
+        }
+
+        if (j.contains("stopReason")) {
+            r.stopReason = j.at("stopReason").get<std::string>();
+        } else {
+            r.stopReason = std::nullopt;
+        }
+
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            r.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            r.meta = std::nullopt;
+        }
+    }
+};
+
 // ReadResourceResult
 template <>
 struct adl_serializer<Mcp::ReadResourceResult> {
@@ -858,6 +1244,113 @@ struct adl_serializer<Mcp::CallToolRequest> {
     }
 };
 
+// Tool
+template <>
+struct adl_serializer<Mcp::Tool> {
+    static void to_json(json& j, const Mcp::Tool& t)
+    {
+        j["name"] = t.name;
+        j["description"] = t.description;
+        j["inputSchema"] = t.inputSchema;
+    }
+
+    static void from_json(const json& j, Mcp::Tool& t)
+    {
+        j.at("name").get_to(t.name);
+        t.description = j.value("description", std::string());
+        if (j.contains("inputSchema")) {
+            t.inputSchema = j.at("inputSchema");
+        } else {
+            t.inputSchema = json::object();
+        }
+    }
+};
+
+// sampling/createMessage request
+template <>
+struct adl_serializer<Mcp::CreateMessageRequest> {
+    static void to_json(json& j, const Mcp::CreateMessageRequest& req)
+    {
+        if (!req.params_) {
+            return;
+        }
+
+        const auto* p = static_cast<const Mcp::CreateMessageRequestParams*>(req.params_.get());
+        j["messages"] = p->messages;
+        j["maxTokens"] = p->maxTokens;
+
+        if (p->modelPreferences.has_value()) {
+            j["modelPreferences"] = p->modelPreferences.value();
+        }
+        if (p->systemPrompt.has_value()) {
+            j["systemPrompt"] = p->systemPrompt.value();
+        }
+        if (p->includeContext.has_value()) {
+            j["includeContext"] = p->includeContext.value();
+        }
+        if (p->temperature.has_value()) {
+            j["temperature"] = p->temperature.value();
+        }
+        if (p->stopSequences.has_value()) {
+            j["stopSequences"] = p->stopSequences.value();
+        }
+        if (p->metadata.has_value()) {
+            j["metadata"] = p->metadata.value();
+        }
+        if (p->tools.has_value()) {
+            j["tools"] = p->tools.value();
+        }
+        if (p->toolChoice.has_value()) {
+            j["toolChoice"] = p->toolChoice.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::CreateMessageRequest& req)
+    {
+        j.at("method").get_to(req.method_);
+
+        if (!j.contains("params") || !j.at("params").is_object()) {
+            return;
+        }
+
+        const auto& paramsJson = j.at("params");
+        auto p = std::make_unique<Mcp::CreateMessageRequestParams>();
+        if (paramsJson.contains("messages")) {
+            p->messages = paramsJson.at("messages").get<std::vector<Mcp::SamplingMessage>>();
+        }
+        p->maxTokens = paramsJson.value("maxTokens", 0);
+
+        if (paramsJson.contains("modelPreferences") && paramsJson.at("modelPreferences").is_object()) {
+            p->modelPreferences = paramsJson.at("modelPreferences").get<Mcp::ModelPreferences>();
+        }
+        if (paramsJson.contains("systemPrompt")) {
+            p->systemPrompt = paramsJson.at("systemPrompt").get<std::string>();
+        }
+        if (paramsJson.contains("includeContext")) {
+            p->includeContext = paramsJson.at("includeContext").get<std::string>();
+        }
+        if (paramsJson.contains("temperature")) {
+            p->temperature = paramsJson.at("temperature").get<double>();
+        }
+        if (paramsJson.contains("stopSequences") && paramsJson.at("stopSequences").is_array()) {
+            p->stopSequences = paramsJson.at("stopSequences").get<std::vector<std::string>>();
+        }
+        if (paramsJson.contains("metadata") && paramsJson.at("metadata").is_object()) {
+            p->metadata = ParseMetaStringMap(paramsJson.at("metadata"));
+        } else {
+            p->metadata = std::nullopt;
+        }
+        if (paramsJson.contains("tools") && paramsJson.at("tools").is_array()) {
+            p->tools = paramsJson.at("tools").get<std::vector<Mcp::Tool>>();
+        }
+        if (paramsJson.contains("toolChoice") && paramsJson.at("toolChoice").is_object()) {
+            p->toolChoice = paramsJson.at("toolChoice").get<Mcp::ToolChoice>();
+        }
+
+        req.params_ = std::move(p);
+    }
+};
+
 // SetLoggingLevelRequest -> {"method":"logging/Set:Level", "params":{level}}
 template <>
 struct adl_serializer<Mcp::SetLoggingLevelRequest> {
@@ -902,28 +1395,6 @@ struct adl_serializer<Mcp::CallToolResult> {
     }
 };
 
-// Tool
-template <>
-struct adl_serializer<Mcp::Tool> {
-    static void to_json(json& j, const Mcp::Tool& t)
-    {
-        j["name"] = t.name;
-        j["description"] = t.description;
-        j["inputSchema"] = t.inputSchema;
-    }
-
-    static void from_json(const json& j, Mcp::Tool& t)
-    {
-        j.at("name").get_to(t.name);
-        t.description = j.value("description", std::string());
-        if (j.contains("inputSchema")) {
-            t.inputSchema = j.at("inputSchema");
-        } else {
-            t.inputSchema = json::object();
-        }
-    }
-};
-
 // ListToolsResult mapping
 template <>
 struct adl_serializer<Mcp::ListToolsResult> {
@@ -942,8 +1413,10 @@ struct adl_serializer<Mcp::ListToolsResult> {
         } else {
             r.tools.clear();
         }
-        if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            r.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            r.meta = std::nullopt;
         }
     }
 };
@@ -1107,8 +1580,10 @@ struct adl_serializer<Mcp::ListPromptsResult> {
         } else {
             r.prompts.clear();
         }
-        if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            r.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            r.meta = std::nullopt;
         }
     }
 };
@@ -1340,8 +1815,8 @@ struct adl_serializer<Mcp::ListResourceTemplatesResult> {
         } else {
             r.resourceTemplates.clear();
         }
-        if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            r.meta = ParseMetaStringMap(j.at("_meta"));
         } else {
             r.meta = std::nullopt;
         }
@@ -1555,8 +2030,10 @@ struct adl_serializer<Mcp::CompleteResult> {
     static void from_json(const json& j, Mcp::CompleteResult& r)
     {
         j.at("completion").get_to(r.completion);
-        if (j.contains("_meta")) {
-            r.meta = j.at("_meta").get<std::unordered_map<std::string, json>>();
+        if (j.contains("_meta") && j.at("_meta").is_object()) {
+            r.meta = ParseMetaStringMap(j.at("_meta"));
+        } else {
+            r.meta = std::nullopt;
         }
     }
 };
@@ -1749,6 +2226,11 @@ ListRootsRequest::ListRootsRequest()
     method_ = "roots/list";
 }
 
+CreateMessageRequest::CreateMessageRequest()
+{
+    method_ = "sampling/createMessage";
+}
+
 std::string JSONRPCRequest::Serialize(const std::string& method) const
 {
     json j;
@@ -1821,6 +2303,11 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
         if (listReq != nullptr) {
             j["params"] = *listReq;
         }
+    } else if (request_ != nullptr && request_->method_ == "sampling/createMessage") {
+        const auto* sampleReq = dynamic_cast<const CreateMessageRequest*>(request_.get());
+        if (sampleReq != nullptr) {
+            j["params"] = *sampleReq;
+        }
     }
 
     return j.dump();
@@ -1834,13 +2321,12 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& m
         id_ = j.at("id").get<int64_t>();
     }
     method_ = method;
-    request_.reset();
 
     if (method_ == "initialize") {
         auto initReq = std::make_unique<InitializeRequest>();
         initReq->method_ = method_;
-        auto p = std::make_unique<InitializeRequestParams>(Mcp::DEFAULT_PROTOCOL_VERSION, Mcp::ClientCapabilities{},
-                                                           Mcp::Implementation{});
+        auto p = std::make_unique<InitializeRequestParams>(
+            Mcp::DEFAULT_PROTOCOL_VERSION, Mcp::ClientCapabilities{}, Mcp::Implementation{});
         if (j.contains("params")) {
             j.at("params").get_to(*p);
         }
@@ -1893,6 +2379,10 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& m
     } else if (method_ == "roots/list") {
         ListRootsRequest listReq = j.get<ListRootsRequest>();
         auto reqPtr = std::make_unique<ListRootsRequest>(std::move(listReq));
+        request_ = std::move(reqPtr);
+    } else if (method_ == "sampling/createMessage") {
+        CreateMessageRequest sampleReq = j.get<CreateMessageRequest>();
+        auto reqPtr = std::make_unique<CreateMessageRequest>(std::move(sampleReq));
         request_ = std::move(reqPtr);
     }
 
@@ -1960,6 +2450,12 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
                 throw std::runtime_error("Failed to cast result to ListRootsResult");
             }
             j["result"] = *listRootsResult;
+        } else if (method == "sampling/createMessage") {
+            auto* sampleResult = dynamic_cast<const CreateMessageResult*>(result_.get());
+            if (sampleResult == nullptr) {
+                throw std::runtime_error("Failed to cast result to CreateMessageResult");
+            }
+            j["result"] = *sampleResult;
         } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
             auto* emptyResult = dynamic_cast<const EmptyResult*>(result_.get());
             if (emptyResult == nullptr) {
@@ -2048,6 +2544,12 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
             j.at("result").get_to(*p);
         }
         result_ = std::move(p);
+    } else if (method == "sampling/createMessage") {
+        auto p = std::make_shared<CreateMessageResult>();
+        if (j.contains("result")) {
+            j.at("result").get_to(*p);
+        }
+        result_ = std::move(p);
     } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
         result_ = std::make_shared<EmptyResult>();
     } else if (method == "logging/setLevel") {
@@ -2091,7 +2593,6 @@ int JSONRPCNotification::Deserialize(const std::string& jsonStr, const std::stri
     auto j = json::parse(jsonStr);
     jsonrpc_ = j.value("jsonrpc", "");
     method_ = method;
-    notification_.reset();
 
     if (method_ == "notifications/initialized") {
         auto notif = std::make_unique<InitializedNotification>();

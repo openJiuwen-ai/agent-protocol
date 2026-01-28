@@ -71,6 +71,12 @@ using Mcp::PromptsCapabilities;
 using Mcp::ResourcesCapabilities;
 using Mcp::ToolsCapabilities;
 using Mcp::ServerCapabilities;
+using Mcp::CreateMessageRequest;
+using Mcp::CreateMessageRequestParams;
+using Mcp::CreateMessageResult;
+using Mcp::SamplingMessage;
+using Mcp::SamplingMessageContentBlock;
+using Mcp::ToolChoice;
 using nlohmann::json;
 
 constexpr const char* PROTOCOL_VERSION = "2025-03-26";
@@ -88,6 +94,7 @@ constexpr const char* RESOURCE_MIME = "text/plain";
 constexpr const char* RESOURCE_NAME = "example";
 constexpr const char* RESOURCE_TITLE = "Example Title";
 constexpr std::size_t EXPECTED_ROOTS_COUNT = 2;
+constexpr int SAMPLING_CREATE_MESSAGE_MAX_TOKENS = 64;
 
 class JSONRPCSerializationTest : public ::testing::Test {
 protected:
@@ -181,9 +188,14 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestRootsListSerializationAndDeserial
 TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationInitializeIncludesClientCapabilities)
 {
     ClientCapabilities caps;
-    caps.sampling = SamplingCapability{};
+    SamplingCapability sampling;
+    sampling.context = true;
+    sampling.tools = true;
+    caps.sampling = sampling;
     caps.elicitation = ElicitationCapability{};
-    caps.tasks = ClientTasksCapability{};
+    ClientTasksCapability tasks;
+    tasks.samplingCreateMessage = true;
+    caps.tasks = tasks;
     RootsCapability roots;
     roots.listChanged = true;
     caps.roots = roots;
@@ -210,10 +222,19 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestSerializationInitializeIncludesCl
 
     ASSERT_TRUE(capJson.contains("sampling"));
     EXPECT_TRUE(capJson.at("sampling").is_object());
+    EXPECT_TRUE(capJson.at("sampling").contains("context"));
+    EXPECT_TRUE(capJson.at("sampling").at("context").is_object());
+    EXPECT_TRUE(capJson.at("sampling").contains("tools"));
+    EXPECT_TRUE(capJson.at("sampling").at("tools").is_object());
     ASSERT_TRUE(capJson.contains("elicitation"));
     EXPECT_TRUE(capJson.at("elicitation").is_object());
     ASSERT_TRUE(capJson.contains("tasks"));
     EXPECT_TRUE(capJson.at("tasks").is_object());
+
+    ASSERT_TRUE(capJson.at("tasks").contains("requests"));
+    ASSERT_TRUE(capJson.at("tasks").at("requests").contains("sampling"));
+    ASSERT_TRUE(capJson.at("tasks").at("requests").at("sampling").contains("createMessage"));
+    EXPECT_TRUE(capJson.at("tasks").at("requests").at("sampling").at("createMessage").is_object());
 
     ASSERT_TRUE(capJson.contains("roots"));
     EXPECT_TRUE(capJson.at("roots").is_object());
@@ -229,9 +250,9 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestDeserializationInitializeParsesCl
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {
-                "sampling": {},
+                "sampling": {"context": {}, "tools": {}},
                 "elicitation": {},
-                "tasks": {},
+                "tasks": {"requests": {"sampling": {"createMessage": {}}}},
                 "roots": {"listChanged": true}
             },
             "clientInfo": {"name": "TestClient", "version": "1.0.0"}
@@ -256,10 +277,153 @@ TEST_F(JSONRPCSerializationTest, JSONRPCRequestDeserializationInitializeParsesCl
     EXPECT_EQ(std::string{PROTOCOL_VERSION}, params->protocolVersion_);
 
     EXPECT_TRUE(params->capabilities_.sampling.has_value());
+    EXPECT_TRUE(params->capabilities_.sampling->context);
+    EXPECT_TRUE(params->capabilities_.sampling->tools);
     EXPECT_TRUE(params->capabilities_.elicitation.has_value());
     EXPECT_TRUE(params->capabilities_.tasks.has_value());
+    EXPECT_TRUE(params->capabilities_.tasks->samplingCreateMessage);
     ASSERT_TRUE(params->capabilities_.roots.has_value());
     EXPECT_TRUE(params->capabilities_.roots->listChanged);
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCRequestSamplingCreateMessageSerializationAndDeserializationSuccess)
+{
+    JSONRPCRequest req;
+    req.id_ = REQUEST_ID;
+    req.method_ = "sampling/createMessage";
+    req.request_ = std::make_unique<CreateMessageRequest>();
+
+    auto* sampleReq = dynamic_cast<CreateMessageRequest*>(req.request_.get());
+    ASSERT_NE(nullptr, sampleReq);
+    auto params = std::make_unique<CreateMessageRequestParams>();
+
+    SamplingMessage msg;
+    msg.role = RoleType::USER;
+    TextContent tc;
+    tc.text = "hello";
+    msg.content = SamplingMessageContentBlock{tc};
+    params->messages.push_back(msg);
+    params->maxTokens = SAMPLING_CREATE_MESSAGE_MAX_TOKENS;
+    ToolChoice choice;
+    choice.mode = std::string{"auto"};
+    params->toolChoice = choice;
+
+    sampleReq->params_ = std::move(params);
+
+    std::string serialized = req.Serialize(req.method_);
+    auto j = json::parse(serialized);
+    EXPECT_EQ(JSONRPC_VERSION, j.value("jsonrpc", ""));
+    EXPECT_EQ(REQUEST_ID, j.value("id", 0));
+    EXPECT_EQ("sampling/createMessage", j.value("method", ""));
+    ASSERT_TRUE(j.contains("params"));
+    ASSERT_TRUE(j.at("params").is_object());
+    EXPECT_EQ(SAMPLING_CREATE_MESSAGE_MAX_TOKENS, j.at("params").value("maxTokens", 0));
+    ASSERT_TRUE(j.at("params").contains("messages"));
+    ASSERT_TRUE(j.at("params").at("messages").is_array());
+
+    JSONRPCRequest req2;
+    int rc = req2.Deserialize(serialized, "sampling/createMessage");
+    EXPECT_EQ(0, rc);
+    ASSERT_NE(nullptr, req2.request_);
+    auto* sampleReq2 = dynamic_cast<CreateMessageRequest*>(req2.request_.get());
+    ASSERT_NE(nullptr, sampleReq2);
+    ASSERT_NE(nullptr, sampleReq2->params_);
+    auto* params2 = dynamic_cast<CreateMessageRequestParams*>(sampleReq2->params_.get());
+    ASSERT_NE(nullptr, params2);
+    EXPECT_EQ(SAMPLING_CREATE_MESSAGE_MAX_TOKENS, params2->maxTokens);
+    EXPECT_EQ(1u, params2->messages.size());
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCRequestSamplingCreateMessageFallbackWhenContentMissingOrWrongType)
+{
+    // content missing -> tolerated as empty content array (no default TextContent)
+    {
+        json j;
+        j["jsonrpc"] = JSONRPC_VERSION;
+        j["id"] = REQUEST_ID;
+        j["method"] = "sampling/createMessage";
+        j["params"] = json::object();
+        j["params"]["maxTokens"] = 1;
+        j["params"]["messages"] = json::array();
+        j["params"]["messages"].push_back({{"role", "user"}});
+
+        JSONRPCRequest req;
+        int rc = req.Deserialize(j.dump(), "sampling/createMessage");
+        EXPECT_EQ(0, rc);
+
+        ASSERT_NE(nullptr, req.request_);
+        auto* sampleReq = dynamic_cast<CreateMessageRequest*>(req.request_.get());
+        ASSERT_NE(nullptr, sampleReq);
+        ASSERT_NE(nullptr, sampleReq->params_);
+        auto* params = dynamic_cast<CreateMessageRequestParams*>(sampleReq->params_.get());
+        ASSERT_NE(nullptr, params);
+        ASSERT_EQ(1u, params->messages.size());
+
+        const auto& msg = params->messages.at(0);
+        ASSERT_TRUE(std::holds_alternative<std::vector<SamplingMessageContentBlock>>(msg.content));
+        const auto& blocks = std::get<std::vector<SamplingMessageContentBlock>>(msg.content);
+        EXPECT_TRUE(blocks.empty());
+    }
+
+    // content wrong type -> tolerated as empty content array (no default TextContent)
+    {
+        json j;
+        j["jsonrpc"] = JSONRPC_VERSION;
+        j["id"] = REQUEST_ID;
+        j["method"] = "sampling/createMessage";
+        j["params"] = json::object();
+        j["params"]["maxTokens"] = 1;
+        j["params"]["messages"] = json::array();
+        j["params"]["messages"].push_back({{"role", "user"}, {"content", "oops"}});
+
+        JSONRPCRequest req;
+        int rc = req.Deserialize(j.dump(), "sampling/createMessage");
+        EXPECT_EQ(0, rc);
+
+        ASSERT_NE(nullptr, req.request_);
+        auto* sampleReq = dynamic_cast<CreateMessageRequest*>(req.request_.get());
+        ASSERT_NE(nullptr, sampleReq);
+        ASSERT_NE(nullptr, sampleReq->params_);
+        auto* params = dynamic_cast<CreateMessageRequestParams*>(sampleReq->params_.get());
+        ASSERT_NE(nullptr, params);
+        ASSERT_EQ(1u, params->messages.size());
+
+        const auto& msg = params->messages.at(0);
+        ASSERT_TRUE(std::holds_alternative<std::vector<SamplingMessageContentBlock>>(msg.content));
+        const auto& blocks = std::get<std::vector<SamplingMessageContentBlock>>(msg.content);
+        EXPECT_TRUE(blocks.empty());
+    }
+}
+
+TEST_F(JSONRPCSerializationTest, JSONRPCResponseSamplingCreateMessageSerializationAndDeserializationSuccess)
+{
+    JSONRPCResponse resp;
+    resp.id_ = REQUEST_ID;
+
+    auto result = std::make_shared<CreateMessageResult>();
+    result->model = "test-model";
+    result->role = RoleType::ASSISTANT;
+    TextContent tc;
+    tc.text = "world";
+    result->content = SamplingMessageContentBlock{tc};
+    resp.result_ = result;
+
+    std::string serialized = resp.Serialize("sampling/createMessage");
+    auto j = json::parse(serialized);
+    EXPECT_EQ(JSONRPC_VERSION, j.value("jsonrpc", ""));
+    EXPECT_EQ(REQUEST_ID, j.value("id", 0));
+    ASSERT_TRUE(j.contains("result"));
+    EXPECT_EQ("test-model", j.at("result").value("model", ""));
+    EXPECT_EQ("assistant", j.at("result").value("role", ""));
+
+    JSONRPCResponse resp2;
+    int rc = resp2.Deserialize(serialized, "sampling/createMessage");
+    EXPECT_EQ(0, rc);
+    ASSERT_NE(nullptr, resp2.result_);
+    auto* r2 = dynamic_cast<CreateMessageResult*>(resp2.result_.get());
+    ASSERT_NE(nullptr, r2);
+    EXPECT_EQ("test-model", r2->model);
+    EXPECT_EQ(RoleType::ASSISTANT, r2->role);
 }
 
 // ---------------------------------------------------------------------
@@ -847,7 +1011,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializationListRoots)
     r2.uri = "file:///home";
     result.roots.push_back(r2);
 
-    result.meta = std::unordered_map<std::string, Mcp::JsonValue>{{"traceId", "abc"}};
+    result.meta = std::unordered_map<std::string, std::string>{{"traceId", "abc"}};
 
     resp.result_ = std::make_shared<ListRootsResult>(std::move(result));
 
@@ -901,7 +1065,7 @@ TEST_F(JSONRPCSerializationTest, JSONRPCResponseDeserializationListRoots)
     EXPECT_EQ(std::string{"file:///home"}, rootsResult->roots[1].uri);
     EXPECT_FALSE(rootsResult->roots[1].name.has_value());
     ASSERT_TRUE(rootsResult->meta.has_value());
-    EXPECT_EQ(std::string{"abc"}, rootsResult->meta->at("traceId").get<std::string>());
+    EXPECT_EQ(std::string{"abc"}, rootsResult->meta->at("traceId"));
 }
 
 TEST_F(JSONRPCSerializationTest, JSONRPCResponseSerializeResourceTemplatesList)

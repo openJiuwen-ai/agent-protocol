@@ -17,6 +17,7 @@
 namespace Mcp {
 
 using JsonValue = nlohmann::json;
+using MetaMap = std::unordered_map<std::string, std::string>;
 
 // Constants
 constexpr char DEFAULT_SERVER_NAME[] = "MCP Server";
@@ -96,7 +97,7 @@ struct MCPBaseType {
 };
 
 struct Result : public MCPBaseType {
-    std::optional<std::unordered_map<std::string, JsonValue>> meta;
+    std::optional<MetaMap> meta;
 
     virtual ~Result() = default;
 };
@@ -187,6 +188,58 @@ struct CallToolResult : public Result {
     bool isError = false;
 };
 
+// Content block representing a model-initiated tool call.
+struct ToolUseContent {
+    std::string type = "tool_use";
+    std::string id;
+    std::string name;
+    MetaMap input;
+    std::optional<MetaMap> meta;
+};
+
+// Content block representing the result of a tool call.
+struct ToolResultContent {
+    std::string type = "tool_result";
+    std::string toolUseId;
+    std::vector<ContentType> content;
+    std::optional<MetaMap> structuredContent;
+    std::optional<bool> isError;
+    std::optional<MetaMap> meta;
+};
+
+using SamplingMessageContentBlock =
+    std::variant<TextContent, ImageContent, AudioContent, ToolUseContent, ToolResultContent>;
+
+// A message sent to, or received from, an LLM provider.
+// Note: schema allows "content" as a single block or an array; we preserve that.
+struct SamplingMessage {
+    RoleType role;
+    std::variant<SamplingMessageContentBlock, std::vector<SamplingMessageContentBlock>> content;
+    std::optional<MetaMap> meta;
+};
+
+struct ModelHint {
+    std::optional<std::string> name;
+};
+
+struct ModelPreferences {
+    std::optional<std::vector<ModelHint>> hints;
+    std::optional<double> costPriority;
+    std::optional<double> speedPriority;
+    std::optional<double> intelligencePriority;
+};
+
+struct ToolChoice {
+    std::optional<std::string> mode; // "none" | "required" | "auto"
+};
+
+struct CreateMessageResult : public Result {
+    std::string model;
+    std::optional<std::string> stopReason;
+    RoleType role;
+    std::variant<SamplingMessageContentBlock, std::vector<SamplingMessageContentBlock>> content;
+};
+
 using ToolFunc = std::function<CallToolResult(const std::string& name, const JsonValue& arguments,
                                               const std::optional<JsonValue>& ctx)>;
 
@@ -246,7 +299,13 @@ struct PromptInfo {
     std::optional<std::vector<PromptArgument>> arguments;
 };
 
-struct SamplingCapability {};
+// Client sampling capability flags.
+// In the MCP schema, sampling capability is represented as:
+//   "sampling": { "context"?: {}, "tools"?: {} }
+struct SamplingCapability {
+    bool context = false;
+    bool tools = false;
+};
 
 struct ElicitationCapability {};
 
@@ -254,7 +313,15 @@ struct RootsCapability {
     bool listChanged = false;
 };
 
-struct ClientTasksCapability {};
+// Client tasks capability flags.
+// The MCP schema has a nested shape, but we keep a flattened representation and
+// serialize/deserialize to the nested schema form.
+struct ClientTasksCapability {
+    bool list = false;
+    bool cancel = false;
+    bool samplingCreateMessage = false;
+    bool elicitationCreate = false;
+};
 
 struct ClientCapabilities {
     std::optional<std::unordered_map<std::string, std::unordered_map<std::string, nlohmann::json>>> experimental;
