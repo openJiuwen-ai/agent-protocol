@@ -5,7 +5,7 @@
 #ifndef A2A_PUSH_NOTIFICATION_SENDER
 #define A2A_PUSH_NOTIFICATION_SENDER
 
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Server {
 

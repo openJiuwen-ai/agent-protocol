@@ -9,42 +9,44 @@
 #include <optional>
 #include <string>
 
-#include "server/server_call_context.h"
+#include "server_call_context.h"
 #include "server/task_store.h"
-#include "utils/types.h"
+#include "types.h"
 
 namespace A2A::Server {
+using EventType = std::variant<Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent>;
 
 class TaskManager {
 public:
     TaskManager(std::optional<std::string> taskId, std::optional<std::string> contextId,
-                std::shared_ptr<TaskStore> taskStore, std::optional<A2A::Message> initialMessage,
-                const A2A::Server::ServerCallContext* context = nullptr);
+                std::shared_ptr<TaskStore> taskStore, std::optional<Message> initialMessage,
+                std::shared_ptr<ServerCallContext> context = nullptr);
 
     ~TaskManager() = default;
 
-    std::optional<A2A::Task> GetTask();
+    std::optional<Task> GetTask();
 
-    A2A::Task SaveTaskEvent(
-        const std::variant<A2A::Task, A2A::TaskStatusUpdateEvent, A2A::TaskArtifactUpdateEvent>& event);
+    void SaveTaskEvent(const EventType& event);
 
-    A2A::Task EnsureTask(const std::variant<A2A::TaskStatusUpdateEvent, A2A::TaskArtifactUpdateEvent>& event);
+    Task EnsureTask(const std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& event);
 
-    std::variant<A2A::Task, A2A::Message, A2A::TaskArtifactUpdateEvent, A2A::TaskStatusUpdateEvent> Process(
-        const std::variant<A2A::Task, A2A::Message, A2A::TaskArtifactUpdateEvent, A2A::TaskStatusUpdateEvent>& event);
+    std::variant<Task, Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent> Process(
+        const std::variant<Task, Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent>& event);
 
-    A2A::Task UpdateWithMessage(const A2A::Message& message, A2A::Task task);
+    Task UpdateWithMessage(const Message& message, Task task);
 
 private:
-    A2A::Task InitTaskObj(const std::string& taskId, const std::string& contextId);
-    void SaveTask(const A2A::Task& task);
+    std::shared_ptr<Task> InitTaskObj(const std::string& taskId, const std::string& contextId);
+    void SaveTaskContextId(const EventType &event);
+    void SaveTask(const Task& task);
+    Task EnsureTaskForEvent(const EventType& event);
 
     std::optional<std::string> taskId_;
     std::optional<std::string> contextId_;
     std::shared_ptr<TaskStore> taskStore_;
-    std::optional<A2A::Message> initialMessage_;
-    std::optional<A2A::Task> currentTask_;
-    const A2A::Server::ServerCallContext* callContext_;
+    std::optional<Message> initialMessage_;
+    std::shared_ptr<Task> currentTask_;
+    const std::shared_ptr<ServerCallContext> callContext_;
 };
 
 } // namespace A2A::Server

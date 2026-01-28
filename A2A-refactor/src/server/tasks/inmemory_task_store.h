@@ -5,6 +5,7 @@
 #ifndef A2A_INMEMORY_TASK_STORE
 #define A2A_INMEMORY_TASK_STORE
 
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -26,8 +27,8 @@ public:
     void Delete(const std::string& taskId, const A2A::Server::ServerCallContext* context = nullptr) override;
 
 private:
-    std::mutex m_;
-    std::unordered_map<std::string, A2A::Task> tasks_;
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_ptr<A2A::Task>> tasks_;
 };
 
 } // namespace A2A::Server

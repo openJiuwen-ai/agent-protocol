@@ -40,6 +40,7 @@ constexpr const char* TRANSFER_ENCODING_CHUNKED = "chunked";
 // HTTP Status Code constants
 constexpr int HTTP_STATUS_OK = 200;
 constexpr int HTTP_STATUS_ACCEPTED = 202;
+constexpr int HTTP_STATUS_MOVED_PERMANENTLY = 301;
 constexpr int HTTP_STATUS_BAD_REQUEST = 400;
 constexpr int HTTP_STATUS_NOT_FOUND = 404;
 constexpr int HTTP_STATUS_METHOD_NOT_ALLOWED = 405;
