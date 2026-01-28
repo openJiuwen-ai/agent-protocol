@@ -39,7 +39,7 @@ public:
     // Connection interface
     bool Listen();
     bool Connect();
-    void Disconnect();
+    void Disconnect(bool runInCallback);
     bool IsConnected() const;
     void SendMessage(const std::string& data);
 

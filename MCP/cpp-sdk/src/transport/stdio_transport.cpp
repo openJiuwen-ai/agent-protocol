@@ -38,7 +38,7 @@ StdioConnection::StdioConnection() : eventSystem_(std::make_unique<EventSystem>(
 
 StdioConnection::~StdioConnection()
 {
-    Disconnect();
+    Disconnect(false);
 }
 
 bool StdioConnection::Listen()
@@ -119,7 +119,7 @@ bool StdioConnection::Connect()
     return true;
 }
 
-void StdioConnection::Disconnect()
+void StdioConnection::Disconnect(bool runInCallback)
 {
     if (!connected_) {
         return;
@@ -139,7 +139,7 @@ void StdioConnection::Disconnect()
     }
 
     // Stop event system
-    eventSystem_->Stop();
+    eventSystem_->Stop(runInCallback);
 
     // Stop subprocess if running
     if (subprocessPid_ > 0) {
@@ -228,10 +228,10 @@ void StdioConnection::HandleStdinReadable(int fd, short events, void* arg)
         } else if (bytesRead == 0) {
             // EOF - connection closed
             NotifyError("Connection closed by peer");
-            Disconnect();
+            Disconnect(true);
         } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
             NotifyError("Read error: " + std::string(strerror(errno)));
-            Disconnect();
+            Disconnect(true);
         }
     }
 }
@@ -618,7 +618,7 @@ void StdioClientTransport::SetupConnectionCallbacks()
 void StdioClientTransport::CleanupConnection()
 {
     if (connection_) {
-        connection_->Disconnect();
+        connection_->Disconnect(false);
         connection_ = nullptr;
     }
 }
@@ -720,7 +720,7 @@ void StdioServerTransport::SetupConnectionCallbacks()
 void StdioServerTransport::CleanupConnection()
 {
     if (connection_) {
-        connection_->Disconnect();
+        connection_->Disconnect(false);
         connection_ = nullptr;
     }
 }

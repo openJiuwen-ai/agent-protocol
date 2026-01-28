@@ -367,7 +367,7 @@ bool EventSystem::RemoveEvent(int eventId)
     return true;
 }
 
-void EventSystem::Start(bool run_in_background)
+void EventSystem::Start(bool runInBackground)
 {
     if (event_base_ == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "The event system is not initialized.");
@@ -379,7 +379,7 @@ void EventSystem::Start(bool run_in_background)
         return; // already running
     }
 
-    if (run_in_background) {
+    if (runInBackground) {
         if (impl_->eventThread.joinable()) {
             impl_->eventThread.join();
         }
@@ -395,7 +395,7 @@ void EventSystem::Start(bool run_in_background)
     }
 }
 
-void EventSystem::Stop()
+void EventSystem::Stop(bool runInCallback)
 {
     if (event_base_ == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "The event system is not initialized.");
@@ -409,7 +409,7 @@ void EventSystem::Stop()
 
     event_base_loopbreak(event_base_);
 
-    if (impl_->eventThread.joinable()) {
+    if (!runInCallback && impl_->eventThread.joinable()) {
         impl_->eventThread.join();
     }
 }

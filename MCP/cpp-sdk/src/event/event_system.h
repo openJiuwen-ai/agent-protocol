@@ -142,14 +142,14 @@ public:
 
     /**
          * @brief Start the event loop.
-         * @param run_in_background If true, runs the loop in a background thread.
+         * @param runInBackground If true, runs the loop in a background thread.
          */
-    void Start(bool run_in_background = false);
+    void Start(bool runInBackground = false);
 
     /**
          * @brief Stop the event loop.
          */
-    void Stop();
+    void Stop(bool runInCallback = false);
 
     /**
          * @brief Get the underlying event base.
