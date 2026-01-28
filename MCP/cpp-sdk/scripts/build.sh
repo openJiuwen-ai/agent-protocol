@@ -161,7 +161,7 @@ fi
 
 mkdir -p "${BUILD_DIR_ABS}"
 
-CMAKE_ARGS=("-S" "${SOURCE_DIR}" "-B" "${BUILD_DIR_ABS}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+CMAKE_ARGS+=("-S" "${SOURCE_DIR}" "-B" "${BUILD_DIR_ABS}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
 
 CMAKE_ARGS+=("-DMCP_BUILD_CLIENT=$([[ ${MCP_BUILD_CLIENT} -eq 1 ]] && echo ON || echo OFF)")
 CMAKE_ARGS+=("-DMCP_BUILD_SERVER=$([[ ${MCP_BUILD_SERVER} -eq 1 ]] && echo ON || echo OFF)")
