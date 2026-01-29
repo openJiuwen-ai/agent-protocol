@@ -54,16 +54,22 @@ private:
     bool IsInitializationRequest(const JSONRPCMessage& message) const;
     bool IsInitializedNotification(const JSONRPCMessage& message) const;
     void HandleJsonResponse(const HttpResponse& response, bool isInitialization);
-    void HandleSseResponse(const HttpResponse& response, bool isInitialization);
-    bool HandleSseEvent(const Http::ServerSentEvent& sse, const std::string& method, bool isInitialization);
+    bool HandleSseResponse(const HttpResponse& response, bool isInitialization);
+    bool HandleSseEvent(const Http::ServerSentEvent& sse, const std::string& method = "",
+        bool isInitialization = false);
     void HandleUnexpectedContentType(const HttpResponse& response);
     void MayExtractSessionIdFromResponse(const HttpResponse& response);
     void MayExtractProtocolVersionFromMessage(const JSONRPCMessage& message);
     void SendSessionTerminatedError(const HttpResponse& response);
 
     // Handle response from server (called internally when response received, triggers session callback)
-    void HandleResponseHeader(const HttpResponse& response);
-    void HandleResponseBody(const HttpResponse& response);
+    bool HandleResponseHeader(const HttpResponse& response);
+    bool HandleResponseBody(const HttpResponse& response);
+
+    // SSE stream handling methods
+    void StartGetStream();
+    bool HandleGetStreamHeader(const HttpResponse& response);
+    bool HandleGetStreamBody(const HttpResponse& response);
 
     std::string url_;
     std::unordered_map<std::string, std::string> requestHeaders_;
@@ -72,7 +78,6 @@ private:
 
     std::string sessionId_;
     std::string protocolVersion_;
-    uint64_t sseConnectionId_;
 
     std::unique_ptr<Http::HttpClientService> httpClientService_;
     std::shared_ptr<TransportCallback> callback_;

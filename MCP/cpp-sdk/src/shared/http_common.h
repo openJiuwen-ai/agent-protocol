@@ -126,7 +126,7 @@ struct HttpResponse {
 };
 
 // Unified callback type definition
-using HttpCallback = std::function<void(const HttpResponse& response)>;
+using HttpCallback = std::function<bool(const HttpResponse& response)>;
 
 // Common internal HTTP status codes used by both HTTP server and client
 // for representing operation results (not wire-level HTTP status line).

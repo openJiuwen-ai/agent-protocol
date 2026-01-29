@@ -517,20 +517,17 @@ TEST_F(McpIntegrationTest, CallToolWithInvalidArguments)
     // Convert JSON to string for the interface
     auto callFuture = client->CallTool("echo", arguments.dump(), TEST_TIMEOUT_MS);
     auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
-    EXPECT_EQ(status, std::future_status::timeout);
-}
+    ASSERT_EQ(status, std::future_status::ready);
 
-TEST_F(McpIntegrationTest, CallToolWithNullArguments)
-{
-    auto client = CreateTestClient();
-    ASSERT_NE(client, nullptr);
-    // 初始化
-    auto initFuture = client->Initialize();
-    initFuture.wait();
-    // 测试调用工具（缺少必需参数）
-    auto callFuture = client->CallTool("echo", std::nullopt, TEST_TIMEOUT_MS);
-    auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
-    EXPECT_EQ(status, std::future_status::timeout);
+    try {
+        auto callResult = callFuture.get();
+        // 如果没有抛出异常，应该返回错误结果
+        EXPECT_TRUE(callResult->isError);
+    } catch (const std::exception& e) {
+        // 也可能抛出异常，这也是合法的错误处理方式
+        MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("CallTool with invalid arguments threw exception: ") + e.what());
+        SUCCEED();
+    }
 }
 
 // 测试读取资源

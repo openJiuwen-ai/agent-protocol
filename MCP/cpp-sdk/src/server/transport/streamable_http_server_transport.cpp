@@ -427,10 +427,6 @@ void StreamableHttpServerTransport::HandleUnsupportedRequest(RequestContext& ctx
 
 void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, RequestContext& ctx)
 {
-    if (ctx.httpSendFunc == nullptr) {
-        throw std::runtime_error("HTTP callback not set");
-    }
-
     bool isGetStream = ctx.isGetStream || ctx.connectionId == 0;
     if (isGetStream) {
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ctx is get stream");
@@ -440,13 +436,18 @@ void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, R
         ctx = getStreamRequestContext_.value();
     }
 
+    if (ctx.httpSendFunc == nullptr) {
+        throw std::runtime_error("HTTP callback not set");
+    }
+
     if (isJsonResponseEnabled_) {
         // JSON response mode: send message as JSON response
         // Only send response messages (not notifications/requests)
-        bool isResponse = std::holds_alternative<JSONRPCResponse>(message);
+        bool isResponseOrError = std::holds_alternative<JSONRPCResponse>(message) ||
+                                 std::holds_alternative<JSONRPCError>(message);
 
         // for getstream or response, send message
-        if (isResponse || isGetStream) {
+        if (isResponseOrError || isGetStream) {
             HttpResponse response{};
             response.statusCode = Http::HTTP_STATUS_OK;
             response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
@@ -455,6 +456,8 @@ void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, R
             }
             response.body = SerializeJSONRPCMessage(message, ctx.method);
             ctx.httpSendFunc(response, ctx);
+        } else {
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "not getstream and not response or error, not send message");
         }
         // For notifications and requests in JSON mode, don't send HTTP response
     } else {

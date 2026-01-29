@@ -273,6 +273,9 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
         return;
     }
 
+    // Store in activeRequests_ using uintptr_t as key
+    activeRequests_[reinterpret_cast<uintptr_t>(request->easyHandle)] = request;
+
     // Setup CURL handle options
     SetupCurlHandle(request->easyHandle, request);
 
@@ -280,6 +283,7 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
     CURLMcode code = curl_multi_add_handle(multiHandle_, request->easyHandle);
     if (code != CURLM_OK) {
         // Cleanup resources
+        activeRequests_.erase(reinterpret_cast<uintptr_t>(request->easyHandle));  // Remove from activeRequests_
         if (request->easyHandle) {
             curl_easy_cleanup(request->easyHandle);
             request->easyHandle = nullptr;
@@ -290,9 +294,8 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
         return;
     }
 
-    activeRequests_[requestId] = request;
-
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request " + std::to_string(requestId) + " added to libcurl multi handle");
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "HandleRequestInIOThread: Created CURL handle for requestId " +
+            std::to_string(requestId) + ", activeRequests size: " + std::to_string(activeRequests_.size()));
 }
 
 void HttpClientService::HandleStopRequestInIOThread()
@@ -373,17 +376,15 @@ void HttpClientService::CheckMultiInfo()
             CURL* easyHandle = msg->easy_handle;
             std::shared_ptr<RequestContext> request;
 
-            // Find request context using CURLOPT_PRIVATE
-            RequestContext* requestPtr = nullptr;
-            curl_easy_getinfo(easyHandle, CURLINFO_PRIVATE, &requestPtr);
-            if (requestPtr != nullptr) {
-                // Find shared_ptr from active requests
-                auto it = std::find_if(activeRequests_.begin(), activeRequests_.end(),
-                                       [requestPtr](const auto& pair) { return pair.second.get() == requestPtr; });
-                if (it != activeRequests_.end()) {
-                    request = it->second;
-                    activeRequests_.erase(it);
-                }
+            // Find request context using uintptr_t as key
+            auto it = activeRequests_.find(reinterpret_cast<uintptr_t>(easyHandle));
+            if (it != activeRequests_.end()) {
+                request = it->second;
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, std::string("CheckMultiInfo: Found and processing completed request, ") +
+                        "activeRequests size: " + std::to_string(activeRequests_.size()));
+                activeRequests_.erase(it);
+            } else {
+                MCP_LOG(MCP_LOG_LEVEL_WARN, "CheckMultiInfo: CURL handle not found in activeRequests_");
             }
 
             if (request == nullptr) {
@@ -616,6 +617,11 @@ void HttpClientService::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<
     curl_easy_setopt(easyHandle, CURLOPT_HEADERFUNCTION, HeaderCallback);
     curl_easy_setopt(easyHandle, CURLOPT_HEADERDATA, request.get());
 
+    // Set progress callback for connection close detection
+    curl_easy_setopt(easyHandle, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
+    curl_easy_setopt(easyHandle, CURLOPT_XFERINFODATA, request.get());
+    curl_easy_setopt(easyHandle, CURLOPT_NOPROGRESS, 0L);
+
     // Set timeouts
     curl_easy_setopt(easyHandle, CURLOPT_TIMEOUT_MS, request->timeoutMs);
     curl_easy_setopt(easyHandle, CURLOPT_CONNECTTIMEOUT_MS, config_.connectionTimeoutMs);
@@ -663,8 +669,8 @@ void HttpClientService::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<
         request->headers = headers;
     }
 
-    // Store request context for retrieval in callbacks
-    curl_easy_setopt(easyHandle, CURLOPT_PRIVATE, request.get());
+    // using uintptr_t as key in activeRequests_
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "SetupCurlHandle: Configured CURL handle successfully");
 }
 
 void HttpClientService::ExecuteCallback(const std::shared_ptr<RequestContext>& request, const HttpResponse& response)
@@ -680,6 +686,17 @@ void HttpClientService::ExecuteCallback(const std::shared_ptr<RequestContext>& r
 }
 
 // Static libcurl callback functions
+int HttpClientService::ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal,
+    curl_off_t ulnow)
+{
+    auto* request = static_cast<RequestContext*>(clientp);
+    if (request->shouldClose) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Progress callback aborting transfer due to close request");
+        return 1; // Non-zero return aborts the transfer
+    }
+    return 0; // Continue transfer
+}
+
 size_t HttpClientService::WriteCallback(char* contents, size_t size, size_t nmemb, void* userp)
 {
     size_t totalSize = size * nmemb;
@@ -710,17 +727,23 @@ size_t HttpClientService::WriteCallback(char* contents, size_t size, size_t nmem
         bool isSseEnd = parseSseLine(request->responseData, request->response.sseEvent);
         request->responseData.clear();
 
-        // end of event, callback
-        if (isSseEnd) {
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "SSE event end,event data:" + request->response.sseEvent.data);
-            try {
-                request->responseBodyCallback(request->response);
-            } catch (const std::exception& e) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "responseBodyCallback failed: " + std::string(e.what()));
-            }
-            request->response.sseEvent = ServerSentEvent();
+        if (!isSseEnd) {
             continue;
         }
+
+        // end of event, callback
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "SSE event end,event data:" + request->response.sseEvent.data);
+        try {
+            bool shouldClose = request->responseBodyCallback(request->response);
+            if (shouldClose) {
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Body callback requested connection close");
+                // Mark request for closure - will be handled by progress callback
+                request->shouldClose = true;
+            }
+        } catch (const std::exception& e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "responseBodyCallback failed: " + std::string(e.what()));
+        }
+        request->response.sseEvent = ServerSentEvent();
     }
 
     return totalSize;
@@ -751,7 +774,12 @@ size_t HttpClientService::HeaderCallback(char* contents, size_t size, size_t nme
         request->response.statusCode = statusCode;
 
         try {
-            request->responseHeaderCallback(request->response);
+            bool shouldClose = request->responseHeaderCallback(request->response);
+            if (shouldClose) {
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Header callback requested connection close");
+                // Mark request for closure - will be handled by progress callback
+                request->shouldClose = true;
+            }
         } catch (const std::exception& e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "responseHeaderCallback failed: " + std::string(e.what()));
         }
