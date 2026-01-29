@@ -5,7 +5,6 @@ target_link_libraries(a2a_shared PRIVATE third_party_headers)
 
 target_include_directories(a2a_shared
     PUBLIC
-        ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/include
 )
 
