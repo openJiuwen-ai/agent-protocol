@@ -22,14 +22,17 @@ A2A::Server::Event A2A::Server::EventConsumer::ConsumeOne()
     }
 }
 
-void A2A::Server::EventConsumer::ConsumeAll(const std::function<void(const Event&)>& onEvent)
+void A2A::Server::EventConsumer::ConsumeAll(const std::function<void(const Event&)>& onEvent, const bool skipOnEmpty)
 {
+    if (skipOnEmpty && queue_->IsEmpty()) {
+        return;
+    }
     bool isFinal = false;
-    while (!isFinal) {
+    while (!isFinal & !queue_->IsClosed()) {
         try {
             auto ev = queue_->Dequeue(false);
             queue_->TaskDone();
-            is_final = std::visit(
+            isFinal = std::visit(
                 [](auto&& x) -> bool {
                     using T = std::decay_t<decltype(x)>;
                     if constexpr (std::is_same_v<T, A2A::Task>) {
@@ -47,7 +50,7 @@ void A2A::Server::EventConsumer::ConsumeAll(const std::function<void(const Event
                 },
                 ev);
             onEvent(ev);
-            if (is_final) {
+            if (isFinal) {
                 queue_->Close(true);
                 break;
             }

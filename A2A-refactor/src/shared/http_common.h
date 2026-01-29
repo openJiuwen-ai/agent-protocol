@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include "common_types.h"
+#include "http_common.h"
 
 namespace A2A::Http {
 
@@ -118,6 +119,17 @@ struct HttpResponse {
     {
         headers[CONNECTION_HEADER] = CONNECTION_KEEP_ALIVE;
     }
+};
+
+struct HttpRequestContext;
+using HttpSendFunc = std::function<void(const HttpResponse& response, const HttpRequestContext& ctx)>;
+using HttpHandler = std::function<void(const HttpRequest& reqeust, HttpRequestContext& ctx)>;
+
+struct HttpRequestContext {
+    int connectionId;
+    std::string method;
+
+    HttpSendFunc httpSendFunc;  // This function will be constructed in HttpServer::HandleRequest
 };
 
 // Unified callback type definition

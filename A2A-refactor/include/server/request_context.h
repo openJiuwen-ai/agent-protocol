@@ -11,7 +11,7 @@
 #include <vector>
 #include <memory>
 
-#include "server/server_call_context.h"
+#include "server_call_context.h"
 #include "types.h"
 
 namespace A2A::Server {
@@ -19,11 +19,11 @@ namespace A2A::Server {
 class RequestContextImpl;
 
 struct RequestContextParam {
-    std::optional<A2A::MessageSendParams>& request = std::nullopt;
-    std::optional<std::string>& taskId = std::nullopt;
-    std::optional<std::string>& contextId = std::nullopt;
-    std::optional<A2A::Task>& task = std::nullopt;
-    std::vector<A2A::Task>& relatedTasks;
+    std::optional<A2A::MessageSendParams> request = std::nullopt;
+    std::optional<std::string> taskId = std::nullopt;
+    std::optional<std::string> contextId = std::nullopt;
+    std::optional<A2A::Task> task = std::nullopt;
+    std::vector<A2A::Task> relatedTasks;
     std::shared_ptr<A2A::Server::ServerCallContext> callContext;
 };
 
@@ -56,7 +56,7 @@ public:
      *
      * @return the 'Message' object from the request, if available
      */
-    std::shared_ptr<A2A::Message> GetMessage() const;
+    const A2A::Message* GetMessage() const;
 
     /**
      * @brief get a list of other tasks related to the current request
@@ -105,14 +105,14 @@ public:
      *
      * @return server call context from the request
      */
-    std::shared_ptr<A2A::Server::ServerCallContext> GetCallContext() const;
+    std::shared_ptr<ServerCallContext> GetCallContext() const;
 
     /**
      * @brief get metadate associated whit the request, if available
      *
      * @return metadate associated whit the request
      */
-    std::map<std::string, std::any> GetMetadata() const;
+    nlohmann::json GetMetadata() const;
 
     /**
      * @brief add an extension to the set of activated extensions for this request

@@ -78,7 +78,7 @@ protected:
     // Apply common socket options
     void ApplyOptions(const SocketOptions& opts);
 
-    A2A::Server::EventSystem& es_;
+    EventSystem& es_;
     int fd_{-1};
 
     int evReadId_{0};

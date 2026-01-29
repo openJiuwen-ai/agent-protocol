@@ -17,6 +17,8 @@
 namespace A2A::Server {
 
 using ServerConfig = std::variant<HttpConfig, IpcConfig>;
+using json = nlohmann::json;
+using StreamEvent = RequestHandler::StreamEvent;
 
 class ServerImpl : public Server {
 public:
@@ -43,6 +45,17 @@ private:
     std::shared_ptr<RequestHandler> handler_;
     std::unique_ptr<JSONRPCHandler> jsonRpcHandler_;
     std::unique_ptr<Transport::ServerTransport> transport_;
+
+    void HandleStreamingRequest(
+        const nlohmann::json& req, const std::string& method, Transport::TransportEmitter& emitter);
+
+    void HandleNonStreamingRequest(
+        const nlohmann::json& req, const std::string& reqBody, std::string& respBody, const std::string& method);
+
+    void CreateStreamEmitter(const nlohmann::json& req, std::function<void(const StreamEvent&)>& streamEmit,
+        Transport::TransportEmitter& emitter);
+
+    void ProcessStandardJsonRpc(const nlohmann::json& req, std::string& respBody, const std::string& method);
 };
 
 } // namespace A2A::Server

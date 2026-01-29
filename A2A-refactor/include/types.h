@@ -12,6 +12,10 @@
 #include <vector>
 
 namespace A2A {
+constexpr const char* JSONRPC_TRANSPORT = "JSONRPC";
+
+constexpr const char* JSONRPC_VERSION = "2.0";
+
 enum class Role { AGENT, USER };
 
 struct ClientCallContext {
@@ -181,6 +185,12 @@ struct DeleteTaskPushNotificationConfigParams {
     std::string id;
     std::optional<nlohmann::json> metadata;
     std::string pushNotificationConfigId;
+};
+
+struct SendMessageSuccessResponse {
+    std::optional<std::string> id;
+    std::string jsonrpc = JSONRPC_VERSION;
+    std::variant<Task, Message> result;
 };
 
 // Error models (A2A + JSON-RPC)

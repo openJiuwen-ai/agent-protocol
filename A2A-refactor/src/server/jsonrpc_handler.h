@@ -85,14 +85,6 @@ public:
     nlohmann::json OnGetAgentCard(const nlohmann::json& req);
 
     /**
-     * @brief handle get extened agent card request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
-    nlohmann::json OnGetAuthenticatedExtendedCard(const nlohmann::json& req);
-
-    /**
      * @brief handle streaming request reveiced
      *
      * @param[in] req requset data in json format

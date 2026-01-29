@@ -1029,6 +1029,42 @@ namespace nlohmann {
         }
     };
 
+    // SendMessageSuccessResponse serializers
+    template<>
+    struct adl_serializer<A2A::SendMessageSuccessResponse> {
+        static void to_json(nlohmann::json& j, const A2A::SendMessageSuccessResponse& r)
+        {
+            j = {{"jsonrpc", r.jsonrpc},
+                 {"result", std::holds_alternative<A2A::Message>(r.result)
+                     ? nlohmann::json(std::get<A2A::Message>(r.result))
+                     : nlohmann::json(std::get<A2A::Task>(r.result))}};
+
+            if (r.id) {
+                j["id"] = *r.id;
+            }
+        }
+
+        static void from_json(const nlohmann::json& j, A2A::SendMessageSuccessResponse& r)
+        {
+            if (j.contains("id")) {
+                r.id = j.at("id");
+            }
+
+            if (j.contains("jsonrpc")) {
+                r.jsonrpc = j.at("jsonrpc").get<std::string>();
+            } else {
+                r.jsonrpc = "2.0";
+            }
+
+            const auto& res = j.at("result");
+            if (res.contains("kind") && res.at("kind") == "message") {
+                r.result = res.get<A2A::Message>();
+            } else {
+                r.result = res.get<A2A::Task>();
+            }
+        }
+    };
+
     // InvalidRequestError serializers
     template<>
     struct adl_serializer<A2A::InvalidRequestError> {

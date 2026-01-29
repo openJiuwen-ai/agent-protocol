@@ -10,9 +10,9 @@ namespace A2A::Transport {
 void StreamServerEmitter::BuildAndSend(const std::string& body) const
 {
     if (ctx_.httpSendFunc) {
-        Server::HttpResponse response;
-        HttpServerTransport::SetCommonHeaders(response);
-        response.body = body + "\n\n";
+        Http::HttpResponse response;
+        response.body = body + "\r\n\r\n";
+        response.type = Http::HttpSendType::HTTPRESPONSEBODY;
         // Send the SSE event data
         ctx_.httpSendFunc(response, ctx_);
     }

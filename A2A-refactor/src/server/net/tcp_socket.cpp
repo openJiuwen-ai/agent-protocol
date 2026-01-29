@@ -123,7 +123,7 @@ ssize_t Buffer::ReadFd(int fd)
     return n;
 }
 
-TcpSocket::TcpSocket(A2A::Server::EventSystem& es, int fd, const TcpSocketOptions& opts)
+TcpSocket::TcpSocket(EventSystem& es, int fd, const TcpSocketOptions& opts)
     : Socket(es, fd, opts), inBuf_(DEFAULT_INPUT_BUFF_SIZE), tcpOpts_(opts)
 {
     if (fd_ >= 0) {
@@ -153,7 +153,7 @@ int TcpSocket::CreateNonblockingTcpSocket(int family)
     return fd;
 }
 
-TcpSocketPtr TcpSocket::Adopt(A2A::Server::EventSystem& es, int fd, const TcpSocketOptions& opts)
+TcpSocketPtr TcpSocket::Adopt(EventSystem& es, int fd, const TcpSocketOptions& opts)
 {
     auto sp = std::make_shared<TcpSocket>(es, fd, opts);
     sp->SetTcpOptions(opts);
@@ -166,7 +166,7 @@ TcpSocketPtr TcpSocket::Adopt(A2A::Server::EventSystem& es, int fd, const TcpSoc
     return sp;
 }
 
-TcpSocketPtr TcpSocket::Connect(A2A::Server::EventSystem& es, const std::string& host, uint16_t port,
+TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16_t port,
     int connectTimeoutMs, const TcpSocketOptions& opts)
 {
     addrinfo hints{};

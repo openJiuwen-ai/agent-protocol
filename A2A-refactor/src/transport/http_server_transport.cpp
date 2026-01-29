@@ -87,15 +87,15 @@ int HttpServerTransport::Start()
 
 void HttpServerTransport::SetupJsonRpcEndpoint(Server::RouteMap& routeMap)
 {
-    routeMap[JSONRPC_ENDPOINT] = [this](const Server::HttpRequest& req, const Server::HttpRequestContext& ctx) {
+    routeMap[JSONRPC_ENDPOINT] = [this](const Http::HttpRequest& req, const Http::HttpRequestContext& ctx) {
         HandleJsonRpcRequest(req, ctx);
     };
 }
 
 void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
 {
-    routeMap[AGENT_CARD_ENDPOINT] = [this](const Server::HttpRequest& req, const Server::HttpRequestContext& ctx) {
-        Server::HttpResponse response;
+    routeMap[AGENT_CARD_ENDPOINT] = [this](const Http::HttpRequest& req, const Http::HttpRequestContext& ctx) {
+        Http::HttpResponse response;
 
         // Add global headers
         for (const auto& [key, value] : headers_) {
@@ -105,21 +105,21 @@ void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
         std::string resp;
         handlerCard_("", resp);
         response.body = resp;
-        response.headers[Server::CONTENT_TYPE_HEADER] = Server::CONTENT_TYPE_JSON;
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
         ctx.httpSendFunc(response, ctx);
     };
 }
 
-void HttpServerTransport::HandleJsonRpcRequest(const Server::HttpRequest& req, const Server::HttpRequestContext& ctx)
+void HttpServerTransport::HandleJsonRpcRequest(const Http::HttpRequest& req, const Http::HttpRequestContext& ctx)
 {
     // Parse the request to check if it's a streaming method
-    std::string contentType = req.headers.count(Server::CONTENT_TYPE_HEADER) ?
-                              req.headers.at(Server::CONTENT_TYPE_HEADER) : "";
+    std::string contentType = req.headers.count(Http::CONTENT_TYPE_HEADER) ?
+                              req.headers.at(Http::CONTENT_TYPE_HEADER) : "";
 
     if (!handler_) {
-        Server::HttpResponse response;
+        Http::HttpResponse response;
         response.success = false;
-        response.statusCode = Server::HTTP_STATUS_INTERNAL_SERVER_ERROR;
+        response.statusCode = Http::HTTP_STATUS_INTERNAL_SERVER_ERROR;
         A2A::MethodNotFoundError err;
         response.body = "{\n"
             "    \"jsonrpc\":\"2.0\",\n"
@@ -130,7 +130,7 @@ void HttpServerTransport::HandleJsonRpcRequest(const Server::HttpRequest& req, c
             "        \"" + err.message.value() + "\"\n"
             "    }\n"
             "}\n";
-        response.headers[Server::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
         ctx.httpSendFunc(response, ctx);
         return;
     }
@@ -157,29 +157,35 @@ bool HttpServerTransport::IsStreamingMethod(const std::string& reqBody)
     return false;
 }
 
-void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, const Server::HttpRequestContext& ctx,
+void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
     const std::map<std::string, std::string>& headers_copy)
 {
     // Create a background thread to handle streaming request
     std::thread workerThread([this, reqBody, ctx, headers_copy]() mutable {
         // Prepare initial response for streaming
-        Server::HttpResponse response;
+        Http::HttpResponse response;
         SetCommonHeaders(response);
 
         // Add global headers
         for (const auto& [key, value] : headers_copy) {
             response.headers[key] = value;
         }
+        response.type = Http::HttpSendType::HTTPRESPONSESTART;
 
         try {
+            ctx.httpSendFunc(response, ctx);
+
             StreamServerEmitter emitter(ctx);
             std::string unusedResp; // For streaming, response body is not used
             handler_(reqBody, unusedResp, emitter);
+
+            response.type = Http::HttpSendType::HTTPRESPONSEBODY;
+            ctx.httpSendFunc(response, ctx);
         } catch (const std::exception& e) {
             A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed: " + std::string(e.what()));
 
             // Send error as SSE event
-            Server::HttpResponse error_response;
+            Http::HttpResponse error_response;
             SetCommonHeaders(error_response);
             error_response.body = "event: error\ndata: {\"error\":\"" + std::string(e.what()) + "\"}\n\n";
 
@@ -203,7 +209,7 @@ void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, con
     }
 }
 
-void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, const Server::HttpRequestContext& ctx,
+void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
     const std::map<std::string, std::string>& headers_copy)
 {
     // Handle non-streaming request with a dedicated background thread
@@ -225,8 +231,8 @@ void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, 
         }
 
         // Prepare response
-        Server::HttpResponse response;
-        response.headers[Server::CONTENT_TYPE_HEADER] = Server::CONTENT_TYPE_JSON;
+        Http::HttpResponse response;
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
 
         // Add global headers
         for (const auto& [key, value] : headers_copy) {
@@ -253,13 +259,14 @@ void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, 
     }
 }
 
-void HttpServerTransport::SetCommonHeaders(Server::HttpResponse& response) {
+void HttpServerTransport::SetCommonHeaders(Http::HttpResponse& response) {
     response.success = true;
-    response.statusCode = Server::HTTP_STATUS_OK;
-    response.headers[Server::CONTENT_TYPE_HEADER] = Server::CONTENT_TYPE_SSE;
-    response.headers[Server::CACHE_CONTROL_HEADER] = Server::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;
-    response.headers[Server::CONNECTION_HEADER] = Server::CONNECTION_KEEP_ALIVE;
-    response.headers[Server::X_ACCEL_BUFFERING_HEADER] = "no";
+    response.statusCode = Http::HTTP_STATUS_OK;
+    response.headers[Http::CACHE_CONTROL_HEADER] = Http::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;
+    response.headers[Http::CONNECTION_HEADER] = Http::CONNECTION_KEEP_ALIVE;
+    response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_SSE;
+    response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
+    response.headers[Http::X_ACCEL_BUFFERING_HEADER] = "no";
 }
 
 void HttpServerTransport::Stop()

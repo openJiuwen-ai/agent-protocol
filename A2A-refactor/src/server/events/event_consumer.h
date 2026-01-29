@@ -21,7 +21,7 @@ public:
     Event ConsumeOne();
 
     // Consume all until final event; call on_event for each
-    void ConsumeAll(const std::function<void(const Event&)>& onEvent);
+    void ConsumeAll(const std::function<void(const Event&)>& onEvent, bool skipOnEmpty = false);
 
     bool IsEmpty() const;
 

@@ -72,7 +72,7 @@ function(fetch_or_find_package)
               )
             endif()
 
-            if ("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "Libevent")
+            if ("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "libevent")
               if(NOT TARGET event)
                 add_library(event INTERFACE IMPORTED)
                 set_target_properties(event PROPERTIES
@@ -155,7 +155,7 @@ endfunction()
 
 # Fetch libevent
 fetch_or_find_package(
-  NAME Libevent
+  NAME libevent
   GIT_REPO https://github.com/libevent/libevent.git
   GIT_TAG release-2.1.12-stable
   OPTIONS
@@ -174,3 +174,37 @@ fetch_or_find_package(
     JSON_BuildTests OFF
     JSON_Install OFF
 )
+
+if (NOT EXISTS "${FETCHCONTENT_BASE_DIR}/http_parser-src/http_parser.c")
+  message(STATUS "download http_parser")
+  FetchContent_Declare(
+          http_parser
+          GIT_REPOSITORY https://github.com/nodejs/http-parser.git
+          GIT_TAG        v2.9.4
+  )
+  # Fetch http_parser
+  FetchContent_MakeAvailable(http_parser)
+  message(STATUS "finish download http_parser")
+endif()
+
+if(NOT TARGET http_parser)
+  add_library(http_parser
+          STATIC
+          ${FETCHCONTENT_BASE_DIR}/http_parser-src/http_parser.c
+  )
+
+  set_target_properties(http_parser PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+  target_include_directories(http_parser
+          PUBLIC
+          ${FETCHCONTENT_BASE_DIR}/http_parser-src/
+  )
+endif()
+
+if(NOT TARGET http_parser_headers)
+  add_library(http_parser_headers INTERFACE)
+  target_include_directories(http_parser_headers
+          INTERFACE
+          ${FETCHCONTENT_BASE_DIR}/http_parser-src/
+  )
+endif()

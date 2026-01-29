@@ -5,8 +5,8 @@
 #ifndef A2A_UTILS_HELPER
 #define A2A_UTILS_HELPER
 
-#include "errors.h"
 #include "types.h"
+#include "error.h"
 
 namespace A2A::Server {
 

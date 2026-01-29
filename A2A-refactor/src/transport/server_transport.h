@@ -5,7 +5,6 @@
 #ifndef A2A_ABSTRACT_SERVER_TRANSPORT
 #define A2A_ABSTRACT_SERVER_TRANSPORT
 
-#include <httplib.h>
 #include <string>
 
 #include "transport_emitter.h"
