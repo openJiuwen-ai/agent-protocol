@@ -7,8 +7,10 @@
 #include <stdexcept>
 #include <utility>
 #include <variant>
+#include <nlohmann/json-schema.hpp>
 
 #include "common_type.h"
+#include "mcp_log.h"
 #include "mcp_type.h"
 
 namespace nlohmann {
@@ -1228,6 +1230,71 @@ namespace Mcp {
 
 using nlohmann::json;
 
+// ==== JSON Schema definitions for MCP JSON-RPC 2.0 envelope ====
+// Request: must have jsonrpc="2.0", id (integer), method (string)
+static const nlohmann::json REQUEST_SCHEMA = {
+    {"$schema", "http://json-schema.org/draft-07/schema#"},
+    {"type", "object"},
+    {"required", {"jsonrpc", "id", "method"}},
+    {"properties", {
+        {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
+        {"id", {{"type", "integer"}}},
+        {"method", {{"type", "string"}}},
+        {"params", json::object()}
+    }},
+    {"additionalProperties", true}
+};
+
+// Notification: must have jsonrpc="2.0", method (string), MUST NOT have id
+static const nlohmann::json NOTIFICATION_SCHEMA = {
+    {"$schema", "http://json-schema.org/draft-07/schema#"},
+    {"type", "object"},
+    {"required", {"jsonrpc", "method"}},
+    {"properties", {
+        {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
+        {"method", {{"type", "string"}}},
+        {"params", json::object()}
+    }},
+    {"not", {{"required", {"id"}}}},
+    {"additionalProperties", true}
+};
+
+// Response: must have jsonrpc="2.0", id (integer)
+static const nlohmann::json RESPONSE_SCHEMA = {
+    {"$schema", "http://json-schema.org/draft-07/schema#"},
+    {"type", "object"},
+    {"required", {"jsonrpc", "id"}},
+    {"properties", {
+        {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
+        {"id", {{"type", "integer"}}},
+        {"result", json::object()},
+        {"error", json::object()}
+    }},
+    {"additionalProperties", true}
+};
+
+// Error Response: must have jsonrpc="2.0", id (integer), error {code(int), message(string)}
+static const nlohmann::json ERROR_SCHEMA = {
+    {"$schema", "http://json-schema.org/draft-07/schema#"},
+    {"type", "object"},
+    {"required", {"jsonrpc", "id", "error"}},
+    {"properties", {
+        {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
+        {"id", {{"type", "integer"}}},
+        {"error", {
+            {"type", "object"},
+            {"required", {"code", "message"}},
+            {"properties", {
+                {"code", {{"type", "integer"}}},
+                {"message", {{"type", "string"}}},
+                {"data", json::object()}
+            }},
+            {"additionalProperties", true}
+        }}
+    }},
+    {"additionalProperties", true}
+};
+
 JSONRPCNotification::JSONRPCNotification()
 {
     jsonrpc_ = JSONRPC_VERSION;
@@ -1673,39 +1740,60 @@ int JSONRPCError::Deserialize(const std::string& jsonStr)
     return 0;
 }
 
+static JSONRPCError CreateInvalidRequestError(const nlohmann::json& j, const std::string& detail = "")
+{
+    JSONRPCError error;
+    error.jsonrpc_ = JSONRPC_VERSION;
+    error.code_ = static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST);
+    error.message_ = detail.empty() ? "Deserialization Failed" : "Deserialization Failed: " + detail;
+    return error;
+}
+
 JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::string& method)
 {
     auto j = json::parse(jsonStr);
 
     bool hasId = j.contains("id");
     bool hasMethod = j.contains("method");
-    bool hasCode = j.contains("code");
+    bool hasCode = j.contains("error") && j.at("error").is_object() && j.at("error").contains("code");
 
-    if (hasId && hasMethod) {
-        JSONRPCRequest request;
-        request.Deserialize(jsonStr);
-        return std::move(request);
+    try {
+        if (hasId && hasMethod) {
+            static const nlohmann::json_schema::json_validator req_validator(REQUEST_SCHEMA);
+            req_validator.validate(j);
+            JSONRPCRequest request;
+            request.Deserialize(jsonStr);
+            return std::move(request);
+        }
+
+        if (hasId && !hasMethod && !hasCode) {
+            static const nlohmann::json_schema::json_validator resp_validator(RESPONSE_SCHEMA);
+            resp_validator.validate(j);
+            JSONRPCResponse response;
+            response.Deserialize(jsonStr, method);
+            return std::move(response);
+        }
+
+        if (!hasId && hasMethod) {
+            static const nlohmann::json_schema::json_validator notif_validator(NOTIFICATION_SCHEMA);
+            notif_validator.validate(j);
+            JSONRPCNotification notification;
+            notification.Deserialize(jsonStr);
+            return std::move(notification);
+        }
+
+        if (hasId && hasCode) {
+            static const nlohmann::json_schema::json_validator error_validator(ERROR_SCHEMA);
+            error_validator.validate(j);
+            JSONRPCError error;
+            error.Deserialize(jsonStr);
+            return std::move(error);
+        }
+    } catch (const std::exception& e) {
+        return CreateInvalidRequestError(j, e.what());
     }
 
-    if (hasId && !hasMethod) {
-        JSONRPCResponse response;
-        response.Deserialize(jsonStr, method);
-        return std::move(response);
-    }
-
-    if (!hasId && hasMethod) {
-        JSONRPCNotification notification;
-        notification.Deserialize(jsonStr);
-        return std::move(notification);
-    }
-
-    if (hasId && hasCode) {
-        JSONRPCError error;
-        error.Deserialize(jsonStr);
-        return std::move(error);
-    }
-
-    throw std::runtime_error("Invalid JSON-RPC message: cannot determine type");
+    return CreateInvalidRequestError(j, "No matching message type");
 }
 
 std::string SerializeJSONRPCMessage(const JSONRPCMessage& message, std::optional<std::string> method)

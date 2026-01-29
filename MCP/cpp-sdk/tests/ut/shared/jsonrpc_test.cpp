@@ -61,10 +61,12 @@ using Mcp::CallToolParams;
 using Mcp::Tool;
 using Mcp::InitializedNotification;
 using Mcp::RequestParams;
+using Mcp::JsonRpcErrorCode;
 using nlohmann::json;
 
 constexpr const char* PROTOCOL_VERSION = "2025-03-26";
 constexpr const char* JSONRPC_VERSION = "2.0";
+constexpr const char* JSONRPC_VERSION_BAD = "1.0";
 constexpr int REQUEST_ID = 1;
 constexpr const char* METHOD_NAME = "initialize";
 constexpr const char* TEST_METHOD = "test/method";
@@ -182,6 +184,45 @@ TEST_F(JSONRPCTest, JSONRPCResponseSerializationSuccess)
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, resp2.jsonrpc_);
     EXPECT_EQ(REQUEST_ID, resp2.id_);
+}
+
+TEST_F(JSONRPCTest, JsonrpcFieldValid)
+{
+    json j = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", REQUEST_ID},
+        {"method", METHOD_NAME},
+        {"params", {
+            {"protocolVersion", PROTOCOL_VERSION},
+            {"capabilities", json::object({{"batch", nullptr}, {"sampling", nullptr}})},
+            {"clientInfo", json::object({{"name", CLIENT_NAME}, {"version", CLIENT_VERSION}})}
+        }}
+    };
+
+    auto msg = DeserializeJSONRPCMessage(j.dump(), METHOD_NAME);
+    auto* req = std::get_if<JSONRPCRequest>(&msg);
+    ASSERT_NE(req, nullptr);
+    EXPECT_EQ(req->jsonrpc_, JSONRPC_VERSION);
+    EXPECT_EQ(req->id_, REQUEST_ID);
+    EXPECT_EQ(req->method_, METHOD_NAME);
+}
+
+TEST_F(JSONRPCTest, JsonrpcFieldInvalid)
+{
+    json j = {
+        {"jsonrpc", JSONRPC_VERSION_BAD},
+        {"id", REQUEST_ID},
+        {"method", METHOD_NAME},
+        {"params", {
+            {"protocolVersion", PROTOCOL_VERSION},
+            {"capabilities", json::object()}
+        }}
+    };
+
+    auto msg = DeserializeJSONRPCMessage(j.dump(), METHOD_NAME);
+    auto* err = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(err, nullptr);
+    EXPECT_EQ(err->code_, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
 }
 
 TEST_F(JSONRPCTest, ListPromptsRequestSerialization)
@@ -985,6 +1026,11 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesResponse)
 {
     JSONRPCResponse resp;
     resp.id_ = REQUEST_ID;
+    resp.result_ = std::make_shared<InitializeResult>(
+        PROTOCOL_VERSION,
+        Mcp::ServerCapabilities{},
+        Implementation{SERVER_NAME, SERVER_VERSION},
+        std::nullopt);
 
     std::string serialized = resp.Serialize(METHOD_NAME);
 
@@ -994,6 +1040,7 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesResponse)
     const auto &parsedResp = std::get<JSONRPCResponse>(message);
     EXPECT_EQ(JSONRPC_VERSION, parsedResp.jsonrpc_);
     EXPECT_EQ(REQUEST_ID, parsedResp.id_);
+    EXPECT_NE(nullptr, parsedResp.result_);
 }
 
 TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesNotification)
@@ -1285,6 +1332,270 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_InvalidJSON)
     EXPECT_THROW({
         DeserializeJSONRPCMessage("invalid json", "initialize");
     }, json::parse_error);
+}
+
+// ==== JSON Schema Validation Tests ====
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidRequest)
+{
+    json validRequest = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"method", "initialize"},
+        {"params", json::object()}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(validRequest.dump(), "initialize");
+    auto* request = std::get_if<JSONRPCRequest>(&msg);
+    ASSERT_NE(nullptr, request);
+    EXPECT_EQ(JSONRPC_VERSION, request->jsonrpc_);
+    EXPECT_EQ(1, request->id_);
+    EXPECT_EQ("initialize", request->method_);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_RequestWithStringIdReturnsError)
+{
+    json validRequest = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", "request-123"},
+        {"method", "tools/list"},
+        {"params", json::object()}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(validRequest.dump(), "tools/list");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidNotification)
+{
+    json validNotification = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"method", "notifications/initialized"},
+        {"params", json::object()}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(validNotification.dump(), "");
+    auto* notification = std::get_if<JSONRPCNotification>(&msg);
+    ASSERT_NE(nullptr, notification);
+    EXPECT_EQ(JSONRPC_VERSION, notification->jsonrpc_);
+    EXPECT_EQ("notifications/initialized", notification->method_);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidSuccessResponse)
+{
+    json validResponse = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"result", {
+            {"protocolVersion", PROTOCOL_VERSION},
+            {"capabilities", json::object()},
+            {"serverInfo", {
+                {"name", "TestServer"},
+                {"version", CLIENT_VERSION}
+            }}
+        }}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(validResponse.dump(), "initialize");
+    auto* response = std::get_if<JSONRPCResponse>(&msg);
+    ASSERT_NE(nullptr, response);
+    EXPECT_EQ(JSONRPC_VERSION, response->jsonrpc_);
+    EXPECT_EQ(1, response->id_);
+    EXPECT_NE(nullptr, response->result_);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidErrorResponse)
+{
+    json validError = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"error", {
+            {"code", static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST)},
+            {"message", "Invalid Request"}
+        }}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(validError.dump(), "");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+    EXPECT_EQ(JSONRPC_VERSION, error->jsonrpc_);
+    EXPECT_EQ(1, error->id_);
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+    EXPECT_EQ("Invalid Request", error->message_);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_InvalidRequest_MissingJsonrpc)
+{
+    std::string invalidRequest = R"({
+        "id": 1,
+        "method": "initialize",
+        "params": {}
+    })";
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidRequest, "initialize");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+    std::cout << "Error message: " << error->message_ << std::endl;
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+    EXPECT_TRUE(error->message_.find("Deserialization Failed") != std::string::npos);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_InvalidRequest_WrongJsonrpcVersion)
+{
+    json invalidRequest = {
+        {"jsonrpc", JSONRPC_VERSION_BAD},
+        {"id", 1},
+        {"method", "initialize"},
+        {"params", json::object()}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidRequest.dump(), "initialize");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    std::cout << "Error message: " << error->message_ << std::endl;
+    ASSERT_NE(nullptr, error);
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_InvalidRequest_MissingId)
+{
+    json invalidRequest = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"method", "initialize"},
+        {"params", json::object()}
+    };
+
+    // This should be parsed as notification, not request
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidRequest.dump(), "initialize");
+    auto* notification = std::get_if<JSONRPCNotification>(&msg);
+    ASSERT_NE(nullptr, notification);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ResponseWhenMissingMethod)
+{
+    json invalidRequest = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"params", json::object()}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidRequest.dump(), "initialize");
+    auto* response = std::get_if<JSONRPCResponse>(&msg);
+    ASSERT_NE(nullptr, response);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_InvalidNotification_HasId)
+{
+    json invalidNotification = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"method", "notifications/initialized"},
+        {"params", json::object()}
+    };
+
+    // This has both id and method, so it's a request, not notification
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidNotification.dump(), "");
+    auto* request = std::get_if<JSONRPCRequest>(&msg);
+    ASSERT_NE(nullptr, request);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ResponseAllowsResultAndError)
+{
+    json invalidResponse = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"result", json::object()},
+        {"error", {
+            {"code", static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST)},
+            {"message", "Invalid Request"}
+        }}
+    };
+
+    // Has error.code, should be classified as error
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidResponse.dump(), "initialize");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ResponseWithErrorMissingCode)
+{
+    json invalidError = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"error", {
+            {"message", "Invalid Request"}
+        }}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidError.dump(), "");
+    auto* response = std::get_if<JSONRPCResponse>(&msg);
+    ASSERT_NE(nullptr, response);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ResponseWithErrorMissingMessage)
+{
+    json invalidError = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"error", {
+            {"code", static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST)}
+        }}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidError.dump(), "");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidErrorWithData)
+{
+    json validError = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", 1},
+        {"error", {
+            {"code", static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST)},
+            {"message", "Invalid Request"},
+            {"data", {{"detail", "Missing required field"}}}
+        }}
+    };
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(validError.dump(), "");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+    EXPECT_EQ("Invalid Request", error->message_);
+    EXPECT_TRUE(error->data_.has_value());
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_CompletelyInvalidMessage)
+{
+    std::string invalidMessage = R"({
+        "foo": "bar"
+    })";
+
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(invalidMessage, "");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+    std::cout << "Error message: " << error->message_ << std::endl;
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+    EXPECT_TRUE(error->message_.find("Deserialization Failed") != std::string::npos);
+}
+
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_NullId)
+{
+    json jsonWithNullId = {
+        {"jsonrpc", JSONRPC_VERSION},
+        {"id", nullptr},
+        {"method", "initialize"},
+        {"params", json::object()}
+    };
+
+    // JSON-RPC spec: id can be string/number/null, but our schema rejects null
+    JSONRPCMessage msg = DeserializeJSONRPCMessage(jsonWithNullId.dump(), "initialize");
+    auto* error = std::get_if<JSONRPCError>(&msg);
+    ASSERT_NE(nullptr, error);
+    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
 }
 
 } // namespace
