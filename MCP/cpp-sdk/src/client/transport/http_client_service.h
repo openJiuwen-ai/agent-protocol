@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -73,6 +74,7 @@ struct RequestContext {
     int timeoutMs;
     std::chrono::steady_clock::time_point startTime;
     struct curl_slist* headers = nullptr; // Store headers for cleanup
+    bool shouldClose = false; // Flag to indicate if connection should be closed
 
     RequestContext(const HttpRequest& req, HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback,
         int timeout, UserData& userData)
@@ -171,7 +173,7 @@ private:
     MPSCNotifyQueue<std::shared_ptr<RequestContext>> requestQueue_;
 
     // activeRequests_ is only accessed in I/O thread, no lock needed
-    std::unordered_map<uint64_t, std::shared_ptr<RequestContext>> activeRequests_;
+    std::unordered_map<uintptr_t, std::shared_ptr<RequestContext>> activeRequests_;
     std::unordered_map<curl_socket_t, std::shared_ptr<CurlSocketContext>> socketContexts_;
 
     int timerEventId_{-1}; // Timer event ID
@@ -313,6 +315,18 @@ private:
      * @return Number of bytes processed (size * nmemb)
      */
     static size_t HeaderCallback(char* contents, size_t size, size_t nmemb, void* userp);
+
+    /**
+     * @brief libcurl callback for progress
+     * @param clientp User data pointer (RequestContext)
+     * @param dltotal Total download size
+     * @param dlnow Downloaded size
+     * @param ultotal Total upload size
+     * @param ulnow Uploaded size
+     * @return 0 to continue, non-zero to abort
+     */
+    static int ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal,
+                                curl_off_t ulnow);
 
     /**
      * @brief Parse raw HTTP header data into key-value pairs

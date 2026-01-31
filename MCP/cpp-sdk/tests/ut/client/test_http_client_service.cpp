@@ -69,7 +69,8 @@ protected:
     static std::vector<HttpResponse> callbackResponses;
     static std::mutex callbackMutex;
 
-    static void TestCallback(const HttpResponse& response) {
+    static bool TestCallback(const HttpResponse& response)
+    {
         callbackExecutedCount++;
         lastResponseSuccess = response.success;
         lastResponseStatusCode = response.statusCode;
@@ -79,6 +80,7 @@ protected:
 
         std::lock_guard<std::mutex> lock(callbackMutex);
         callbackResponses.push_back(response);
+        return false; // Continue processing, don't close connection
     }
 
     // 创建一个简单的测试请求
@@ -268,7 +270,8 @@ TEST_F(HttpClientServiceTest, SendWithNullCallback) {
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(1);
 
-    EXPECT_NO_THROW(service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, nullptr, [](const HttpResponse&) {}));
+    HttpCallback bodyCallback = [](const HttpResponse&) { return false; };
+    EXPECT_NO_THROW(service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, nullptr, bodyCallback));
 
     // 不应崩溃
     std::this_thread::sleep_for(10ms);
@@ -606,7 +609,7 @@ TEST_F(HttpClientServiceTest, CallbackVerification) {
     HttpRequest request = CreateTestRequest();
     UserData userData = CreateUserData(123);
 
-    HttpCallback headerCallback = [](const HttpResponse&) {};
+    HttpCallback headerCallback = [](const HttpResponse&) { return false; };
     EXPECT_NO_THROW(service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, headerCallback, TestCallback));
 
     // 等待回调
@@ -636,7 +639,7 @@ TEST_F(HttpClientServiceTest, MultipleCallbacksOrder) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 100);
 
-        HttpCallback headerCallback = [](const HttpResponse&) {};
+        HttpCallback headerCallback = [](const HttpResponse&) { return false; };
         EXPECT_NO_THROW(service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, headerCallback, TestCallback));
     }
 
@@ -664,7 +667,7 @@ TEST_F(HttpClientServiceTest, PerformanceMultipleRequests) {
     for (int i = 0; i < numRequests; i++) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(i + 1);
-        EXPECT_NO_THROW(service->Send(request, userData, 1, nullptr, [](const HttpResponse&) {}));
+        EXPECT_NO_THROW(service->Send(request, userData, 1, nullptr, [](const HttpResponse&) { return false; }));
     }
 
     auto sendDuration = std::chrono::steady_clock::now() - startTime;

@@ -26,7 +26,6 @@ StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
       sseReadTimeout_(sseReadTimeout),
       sessionId_(""),
       protocolVersion_(""),
-      sseConnectionId_(0),
       httpClientService_(nullptr),
       callback_(nullptr)
 {
@@ -100,8 +99,56 @@ void StreamableHttpClientTransport::Connect()
     // The connection is established on each request
 }
 
+void StreamableHttpClientTransport::StartGetStream()
+{
+    HttpRequest httpRequest{};
+    httpRequest.method = "GET";
+    httpRequest.url = url_;
+    PrepareRequestHeaders(httpRequest);
+    httpRequest.body = "";
+
+    if (sessionId_.empty()) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Session ID is empty while starting get stream");
+        return;
+    }
+
+    // Bind response callback to HandleResponseHeader
+    HttpCallback getStreamHeaderCallback = [this](const HttpResponse& response) {
+        return HandleGetStreamHeader(response); // Return bool from HandleGetStreamHeader
+    };
+    HttpCallback getStreamBodyCallback = [this](const HttpResponse& response) {
+        return HandleGetStreamBody(response); // Return bool from HandleGetStreamBody
+    };
+
+    UserData userData;
+    try {
+        httpClientService_->Send(httpRequest, userData, static_cast<int>(sseReadTimeout_.count()),
+            getStreamHeaderCallback, getStreamBodyCallback);
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to enqueue HTTP request: %s", e.what());
+        throw std::runtime_error(std::string("Failed to enqueue HTTP request: ") + e.what());
+    }
+}
+
+bool StreamableHttpClientTransport::HandleGetStreamHeader(const HttpResponse& response)
+{
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received HTTP status %d", response.statusCode);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "GET SSE connection established");
+    return false; // Continue processing
+}
+
+bool StreamableHttpClientTransport::HandleGetStreamBody(const HttpResponse& response)
+{
+    HandleSseEvent(response.sseEvent);
+    return false; // Continue processing
+}
+
 void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message, std::optional<std::string> method)
 {
+    if (IsInitializedNotification(message)) {
+        StartGetStream();
+    }
+
     // Serialize the JSON-RPC message
     std::string messageBody = SerializeJSONRPCMessage(message, method);
 
@@ -132,8 +179,12 @@ void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message, s
         message);
 
     // Bind response callback to HandleResponseHeader
-    HttpCallback responseHeaderCallback = [this](const HttpResponse& response) { HandleResponseHeader(response); };
-    HttpCallback responseBodyCallback = [this](const HttpResponse& response) { HandleResponseBody(response); };
+    HttpCallback responseHeaderCallback = [this](const HttpResponse& response) {
+        return HandleResponseHeader(response); // Return bool from HandleResponseHeader
+    };
+    HttpCallback responseBodyCallback = [this](const HttpResponse& response) {
+        return HandleResponseBody(response); // Return bool from HandleResponseBody
+    };
 
     try {
         httpClientService_->Send(httpRequest, userData, static_cast<int>(sseReadTimeout_.count()),
@@ -144,7 +195,7 @@ void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message, s
     }
 }
 
-void StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& response)
+bool StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& response)
 {
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received HTTP status %d", response.statusCode);
 
@@ -158,26 +209,26 @@ void StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& res
             }
             callback_->OnDisconnected(reason);
         }
-        return;
+        return true; // Request failed, close connection
     }
 
     // Check status code
     if (response.statusCode == Http::HTTP_STATUS_ACCEPTED) {
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Received %d Accepted", Http::HTTP_STATUS_ACCEPTED);
-        return;
+        return false; // Continue processing
     }
 
     if (response.statusCode == Http::HTTP_STATUS_NOT_FOUND) {
         MCP_LOG(MCP_LOG_LEVEL_WARN, "Session not found or expired (%d)", Http::HTTP_STATUS_NOT_FOUND);
         // 404 Not Found - Session not found or expired
         SendSessionTerminatedError(response);
-        return;
+        return true; // Session terminated, close connection
     }
 
     if (response.statusCode != Http::HTTP_STATUS_OK) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status %d", response.statusCode);
         // Handle other error responses
-        return;
+        return true; // Error occurred, close connection
     }
 
     // Determine if this response corresponds to an initialization request
@@ -189,13 +240,15 @@ void StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& res
             MCP_LOG(MCP_LOG_LEVEL_INFO, "Extracted session ID: %s", sessionId_.c_str());
         }
     }
+
+    return false; // Success, continue processing
 }
 
-void StreamableHttpClientTransport::HandleResponseBody(const HttpResponse& response)
+bool StreamableHttpClientTransport::HandleResponseBody(const HttpResponse& response)
 {
     if (!response.success) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP request failed");
-        return;
+        return true; // Request failed, close connection
     }
 
     // handle based on contentType
@@ -205,10 +258,12 @@ void StreamableHttpClientTransport::HandleResponseBody(const HttpResponse& respo
     if (contentType.find(Http::CONTENT_TYPE_JSON) != std::string::npos) {
         HandleJsonResponse(response, isInitialization);
     } else if (contentType.find(Http::CONTENT_TYPE_SSE) != std::string::npos) {
-        HandleSseResponse(response, isInitialization);
+        return HandleSseResponse(response, isInitialization);
     } else {
         HandleUnexpectedContentType(response);
     }
+
+    return false; // Continue processing
 }
 
 void StreamableHttpClientTransport::Terminate()
@@ -223,7 +278,6 @@ void StreamableHttpClientTransport::Terminate()
     // Clear session state
     sessionId_.clear();
     protocolVersion_.clear();
-    sseConnectionId_ = 0;
     callback_ = nullptr;
 }
 
@@ -282,16 +336,17 @@ void StreamableHttpClientTransport::HandleJsonResponse(const HttpResponse& respo
     }
 }
 
-void StreamableHttpClientTransport::HandleSseResponse(const HttpResponse& response, bool isInitialization)
+bool StreamableHttpClientTransport::HandleSseResponse(const HttpResponse& response, bool isInitialization)
 {
     if (response.statusCode != Http::HTTP_STATUS_OK) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSE response error status %d", response.statusCode);
         // Handle error response
-        return;
+        return true;
     }
 
     bool iscomplete = HandleSseEvent(response.sseEvent, response.userData.method, isInitialization);
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "response finish: %d", iscomplete);
+    return iscomplete;
 }
 
 bool StreamableHttpClientTransport::HandleSseEvent(const Http::ServerSentEvent& sse, const std::string& method,
