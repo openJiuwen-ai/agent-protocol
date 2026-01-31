@@ -70,4 +70,4 @@ cd resource_example
 
 - 确保已编译 libmcp.so 并放在 `../../output/` 目录下
 - 确保头文件在 `../../output/mcp/` 目录下
-- MCP服务器运行在 `http://localhost:8000/mcp`
+- MCP服务器运行在 `http://127.0.0.1:8000/mcp`

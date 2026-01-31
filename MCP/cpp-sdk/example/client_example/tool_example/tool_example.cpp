@@ -15,8 +15,8 @@
 #include "mcp_type.h"
 
 constexpr int REQUEST_TIMEOUT = 300;
-constexpr char EXAMPLE_ENDPOINT[] = "http://localhost:8000/mcp";
-constexpr char AUTH_EXAMPLE_ENDPOINT[] = "http://localhost:8001/mcp";
+constexpr char EXAMPLE_ENDPOINT[] = "http://127.0.0.1:8000/mcp";
+constexpr char AUTH_EXAMPLE_ENDPOINT[] = "http://127.0.0.1:8001/mcp";
 constexpr char VALID_TOKEN[] = "valid-token-12345";
 constexpr char EXAMPLE_TOOL_NAME[] = "echo";
 
@@ -204,7 +204,7 @@ int main(int argc, char** argv)
         if (arg.rfind("--port=", 0) == 0) {
             const std::string value = arg.substr(std::string("--port=").size());
             int port = std::stoi(value);
-            endpoint = std::string("http://localhost:") + std::to_string(port) + "/mcp";
+            endpoint = std::string("http://127.0.0.1:") + std::to_string(port) + "/mcp";
         }
     }
 
