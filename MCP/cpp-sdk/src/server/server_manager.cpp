@@ -240,19 +240,17 @@ void ServerManager::Stop()
     }
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Stopping ServerManager...");
-    httpServerManager_->Stop();
-
-    // Stop EventSystems first
-    for (auto& eventSystem : eventSystems_) {
-        if (eventSystem) {
-            eventSystem->Stop();
-        }
-    }
-
     // Close queue event notifications
     for (size_t i = 0; i < threadQueueEventIds_.size(); ++i) {
         if (threadQueueEventIds_[i] != -1 && eventSystems_[i]) {
             eventSystems_[i]->CloseNotifyEventId(threadQueueEventIds_[i]);
+        }
+    }
+
+    // Stop EventSystems
+    for (auto& eventSystem : eventSystems_) {
+        if (eventSystem) {
+            eventSystem->Stop();
         }
     }
 
@@ -262,6 +260,8 @@ void ServerManager::Stop()
             thread.join();
         }
     }
+
+    httpServerManager_->Stop();
     MCP_LOG(MCP_LOG_LEVEL_INFO, "ServerManager stopped successfully.");
 }
 

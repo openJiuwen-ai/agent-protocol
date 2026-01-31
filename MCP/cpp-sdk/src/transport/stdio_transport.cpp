@@ -630,6 +630,7 @@ StdioServerTransport::StdioServerTransport() : ctx_{ .connectionId = 0 }
 
 StdioServerTransport::~StdioServerTransport()
 {
+    Terminate();
 }
 
 void StdioServerTransport::SetCallback(std::shared_ptr<TransportCallback> callback)
