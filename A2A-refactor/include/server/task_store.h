@@ -29,7 +29,7 @@ struct TaskStore {
     virtual void Save(const A2A::Task& task, std::shared_ptr<ServerCallContext> context) = 0;
 
     /**
-     * @brief retrives a task from the store by ID
+     * @brief retrieves a task from the store by ID
      *
      * @param[in] taskId task id
      * @param[in] context server call context

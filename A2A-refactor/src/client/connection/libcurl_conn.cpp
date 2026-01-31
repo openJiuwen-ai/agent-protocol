@@ -10,7 +10,7 @@
 #include <sstream>
 
 #include "event_system.h"
-#include "shared/thread_utils.h"
+#include "thread_utils.h"
 #include "a2a_log.h"
 #include "libcurl_conn.h"
 
@@ -24,6 +24,35 @@ constexpr int DEFAULT_QUEUE_MAX_BATCH_SIZE = 16;
 
 // SSE field prefix lengths
 constexpr int MAX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes in milliseconds
+
+struct CurlGlobal {
+public:
+    bool Init()
+    {
+        if (ok) {
+            return true;
+        }
+
+        ok = (curl_global_init(CURL_GLOBAL_DEFAULT) == 0);
+        return ok;
+    }
+
+    ~CurlGlobal()
+    {
+        if (ok) {
+            curl_global_cleanup();
+        }
+    }
+
+private:
+    bool ok = false;
+};
+
+inline bool EnsureCurlGlobal()
+{
+    static CurlGlobal instance;
+    return instance.Init();
+}
 
 LibcurlConn::LibcurlConn(std::string url, std::unordered_map<std::string, std::string> headers,
     int timeout, int sseReadTimeout)
@@ -144,7 +173,7 @@ void LibcurlConn::HandleResponse(const HttpResponse& response)
     }
 
     // Determine content type
-    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    auto contentTypeIter = response.headers.find(Http::CONTENT_TYPE_HEADER);
     if (contentTypeIter == response.headers.end()) {
         HandleUnexpectedContentType(response);
         return;
@@ -212,8 +241,9 @@ void LibcurlConn::HandleSseResponse(const HttpResponse& response)
 
 void LibcurlConn::HandleUnexpectedContentType(const HttpResponse& response)
 {
-    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    auto contentTypeIter = response.headers.find(Http::CONTENT_TYPE_HEADER);
     std::string contentType = contentTypeIter != response.headers.end() ? contentTypeIter->second : "<missing>";
+    A2A_LOG(A2A_LOG_LEVEL_ERROR, "receive unexpected content type: " + contentType);
 }
 
 // Lifecycle management
@@ -244,7 +274,6 @@ bool LibcurlConn::Start()
         eventSystem_.reset();
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
-        curl_global_cleanup();
         return false;
     }
 
@@ -263,7 +292,6 @@ bool LibcurlConn::Start()
         eventSystem_.reset();
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
-        curl_global_cleanup();
         return false;
     }
 
@@ -318,7 +346,6 @@ void LibcurlConn::Stop()
         multiHandle_ = nullptr;
     }
     A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Cleaning up libcurl global resources");
-    curl_global_cleanup();
 
     if (eventSystem_ != nullptr) {
         A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Cleaning up EventSystem");
@@ -365,7 +392,6 @@ void LibcurlConn::IoThreadMain()
 void LibcurlConn::HandleErrorResponse(const std::shared_ptr<RequestContext>& request,
                                       const std::string& errorMessage)
 {
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Request " + request->userData.requestId + " error: "+ errorMessage);
     HttpResponse errorResponse;
     errorResponse.success = false;
     errorResponse.userData = request->userData;
@@ -837,7 +863,7 @@ size_t LibcurlConn::WriteCallback(char* contents, size_t size, size_t nmemb, voi
         return totalSize;
     }
 
-    const bool isSse = (getContentType(request->response).find(CONTENT_TYPE_SSE) != std::string::npos);
+    const bool isSse = (GetContentType(request->response).find(CONTENT_TYPE_SSE) != std::string::npos);
     if (!isSse) {
         request->responseData.append(contents, totalSize);
         return totalSize;
@@ -856,7 +882,7 @@ size_t LibcurlConn::WriteCallback(char* contents, size_t size, size_t nmemb, voi
         }
 
         // parse sse line, and check end of event
-        bool isSseEnd = parseSseLine(request->responseData, request->response.sseEvent);
+        bool isSseEnd = ParseSseLine(request->responseData, request->response.sseEvent);
         request->responseData.clear();
 
         // end of event, callback
@@ -945,10 +971,8 @@ std::unordered_map<std::string, std::string> LibcurlConn::ParseHeaderData(const 
 bool LibcurlConn::CurlInit()
 {
     // Initialize libcurl
-    CURLcode code = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (code != CURLE_OK) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR,
-                std::string("Failed to initialize CURL: ") + std::string(curl_easy_strerror(code)));
+    if (!EnsureCurlGlobal()) {
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize CURL");
         return false;
     }
 
@@ -956,7 +980,6 @@ bool LibcurlConn::CurlInit()
     multiHandle_ = curl_multi_init();
     if (multiHandle_ == nullptr) {
         A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize CURL multi handle");
-        curl_global_cleanup();
         return false;
     }
 
@@ -973,14 +996,12 @@ bool LibcurlConn::CurlInit()
             A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize EventSystem");
             curl_multi_cleanup(multiHandle_);
             multiHandle_ = nullptr;
-            curl_global_cleanup();
             return false;
         }
     } catch (const std::exception& e) {
         A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Failed to create EventSystem: ") + e.what());
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
-        curl_global_cleanup();
         return false;
     }
 

@@ -55,7 +55,7 @@ public:
     std::variant<Task, Message> OnSendMessage(const MessageSendParams& params, const ServerCallContext* ctx) override;
 
     /**
-     * @brief retrive a task by query params
+     * @brief retrieve a task by query params
      *
      * @param[in] params param containing the query information
      * @param[in] ctx server call context
@@ -83,7 +83,7 @@ public:
                                                                const ServerCallContext* ctx);
 
     /**
-     * @brief retrive a task push notification configuration of a task
+     * @brief retrieve a task push notification configuration of a task
      *
      * @param[in] params param containing the request information
      * @param[in] ctx server call context
@@ -93,7 +93,7 @@ public:
                                                                const ServerCallContext* ctx);
 
     /**
-     * @brief retrive all task push notification configurations of a task
+     * @brief retrieve all task push notification configurations of a task
      *
      * @param[in] params param containing the id information
      * @param[in] ctx server call context
@@ -112,7 +112,7 @@ public:
                                             const ServerCallContext* ctx);
 
     /**
-     * @brief retrive agent card
+     * @brief retrieve agent card
      *
      * @param[in] ctx server call context
      * @return AgentCard

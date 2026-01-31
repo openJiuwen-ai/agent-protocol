@@ -16,8 +16,6 @@ class ClientTaskManager {
 public:
     ~ClientTaskManager() = default;
 
-    Task* GetTask();
-
     Task& GetTaskOrRaise();
 
     void SaveTaskEvent(const std::variant<Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& ev);

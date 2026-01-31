@@ -27,7 +27,7 @@ Usage: $0 [options]
 
 Options:
   -t, --type <Debug|Release>   CMake build type (default: Release)
-  -e, --with-example           Build examples target(s)
+  -e, --with-examples          Build examples target(s)
   -u, --with-tests             Build unit tests target(s) if available
   -c, --coverage               Enable code coverage (implies --with-tests)
   -b, --build-dir <dir>        Build directory (default: build)
@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
       BUILD_TYPE="$2";
       shift 2;
       ;;
-    -e|--with-example)
+    -e|--with-examples)
       WITH_EXAMPLES=1;
       shift;
       ;;
@@ -114,7 +114,7 @@ cd "${BUILD_DIR_ABS}"
 
 CMAKE_ARGS=("${SOURCE_DIR}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
 
-if [[ ${WITH_TESTS} -eq 1 ]]; then
+if [[ ${WITH_EXAMPLES} -eq 1 ]]; then
   CMAKE_ARGS+=("-DA2A_ENABLE_EXAMPLES=ON")
 else
   CMAKE_ARGS+=("-DA2A_ENABLE_EXAMPLES=OFF")

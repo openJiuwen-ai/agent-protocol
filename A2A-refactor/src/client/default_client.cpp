@@ -4,8 +4,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "shared/common_types.h"
-#include "shared/uuid.h"
+#include "common_types.h"
+#include "uuid.h"
 #include "a2a_log.h"
 #include "default_client.h"
 
@@ -45,7 +45,10 @@ void DefaultClient::SendMessage(const Message& msg, const ClientCallContext* con
     std::shared_ptr<CallbackInfo> info = std::make_shared<CallbackInfo>();
     info->handler = handler;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     const bool canStream = config_.streaming && card_.capabilities.streaming.value_or(false);
     if (!canStream) {
         info->method = METHOD_MESSAGE_SEND;
@@ -65,7 +68,10 @@ std::future<Task> DefaultClient::GetTask(const TaskQueryParams& params, const Cl
     info->promise = promise;
     info->method = METHOD_TASK_GET;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->GetTask(info->requestId, params, context);
     return promise->get_future();
 }
@@ -77,7 +83,10 @@ std::future<Task> DefaultClient::CancelTask(const TaskIdParams& params, const Cl
     info->promise = promise;
     info->method = METHOD_TASK_CANCEL;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->CancelTask(info->requestId, params, context);
     return promise->get_future();
 }
@@ -90,7 +99,10 @@ std::future<TaskPushNotificationConfig> DefaultClient::SetTaskPushNotificationCo
     info->promise = promise;
     info->method = METHOD_TASK_PUSH_NOTIFICATION_CONFIG_SET;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->SetTaskPushNotificationConfig(info->requestId, config, context);
     return promise->get_future();
 }
@@ -103,7 +115,10 @@ std::future<TaskPushNotificationConfig> DefaultClient::GetTaskPushNotificationCo
     info->promise = promise;
     info->method = METHOD_TASK_PUSH_NOTIFICATION_CONFIG_GET;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->GetTaskPushNotificationConfig(info->requestId, params, context);
     return promise->get_future();
 }
@@ -116,7 +131,10 @@ std::future<std::vector<TaskPushNotificationConfig>> DefaultClient::ListTaskPush
     info->promise = promise;
     info->method = METHOD_TASK_PUSH_NOTIFICATION_CONFIG_LIST;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->ListTaskPushNotificationConfigs(info->requestId, params, context);
     return promise->get_future();
 }
@@ -129,7 +147,10 @@ std::future<void> DefaultClient::DeleteTaskPushNotificationConfig(const DeleteTa
     info->promise = promise;
     info->method = METHOD_TASK_PUSH_NOTIFICATION_CONFIG_DELETE;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->DeleteTaskPushNotificationConfig(info->requestId, params, context);
     return promise->get_future();
 }
@@ -148,7 +169,10 @@ void DefaultClient::Resubscribe(const TaskIdParams& params, const ClientCallCont
     info->method = METHOD_TASK_RESUBSCRIBE;
     info->requestId = GenerateUuid();
     info->mgr = std::make_shared<ClientTaskManager>();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->Resubscribe(info->requestId, params, context);
 }
 
@@ -159,7 +183,10 @@ std::future<AgentCard> DefaultClient::GetCard(const ClientCallContext* context)
     info->promise = promise;
     info->method = METHOD_AGENT_CARD_GET;
     info->requestId = GenerateUuid();
-    callbackInfo_[info->requestId] = info;
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        callbackInfo_[info->requestId] = info;
+    }
     transport_->GetCard(info->requestId, context);
     return promise->get_future();
 }
@@ -189,25 +216,29 @@ void DefaultClient::Consume(const ClientEvent& ev)
 void DefaultClient::TransportEventCb(const std::string& requestId, const TransportEvent& event)
 {
     std::shared_ptr<CallbackInfo> cb;
-    auto it = callbackInfo_.find(requestId);
-    if (it == callbackInfo_.end()) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "The eventId not found.");
-        return;
-    }
-    cb = it->second;
-    if (cb->method != METHOD_MESSAGE_STREAM && cb->method != METHOD_TASK_RESUBSCRIBE) {
-        callbackInfo_.erase(it);
-    }
-
-    if (std::holds_alternative<TransportError>(event)) {
-        auto e = std::get<TransportError>(event);
-        HandlerErrorResp(cb, e);
-        if (cb->method == METHOD_MESSAGE_STREAM || cb->method == METHOD_TASK_RESUBSCRIBE) {
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        auto it = callbackInfo_.find(requestId);
+        if (it == callbackInfo_.end()) {
+            A2A_LOG(A2A_LOG_LEVEL_WARN, "The eventId not found.");
+            return;
+        }
+        cb = it->second;
+        if (cb->method != METHOD_MESSAGE_STREAM && cb->method != METHOD_TASK_RESUBSCRIBE) {
             callbackInfo_.erase(it);
         }
-    } else {
-        HandlerSuccessResp(cb, event);
+
+        if (std::holds_alternative<TransportError>(event)) {
+            auto e = std::get<TransportError>(event);
+            HandlerErrorResp(cb, e);
+            if (cb->method == METHOD_MESSAGE_STREAM || cb->method == METHOD_TASK_RESUBSCRIBE) {
+                callbackInfo_.erase(it);
+            }
+            return;
+        }
     }
+
+    HandlerSuccessResp(cb, event);
 }
 
 void DefaultClient::HandlerErrorResp(std::shared_ptr<CallbackInfo> cb, const TransportError& e)

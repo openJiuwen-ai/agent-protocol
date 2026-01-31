@@ -11,14 +11,14 @@
 #include <string>
 #include <map>
 
-#include "shared/common_types.h"
+#include "common_types.h"
 
 namespace A2A {
 
 struct ConnEventData {
-    int errCode;
     bool isStream;
     bool isStreamFin;
+    int errCode;
     std::string data;
 };
 

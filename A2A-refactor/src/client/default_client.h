@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 #include <future>
+#include <mutex>
 
 #include "client/client.h"
 #include "client_transport.h"
@@ -47,7 +48,7 @@ public:
     void SendMessage(const Message& msg, const ClientCallContext* context, ResponseHandler handler) override;
 
     /**
-     * @brief retrive a task by query params
+     * @brief retrieve a task by query params
      *
      * @param[in] params params of the task to fetch
      * @param[in] context client call context, defaults to nullptr
@@ -75,7 +76,7 @@ public:
         const ClientCallContext* context = nullptr) override;
 
     /**
-     * @brief retrive the push notification callback configuration for a specific task
+     * @brief retrieve the push notification callback configuration for a specific task
      *
      * @param[in] params task param
      * @param[in] context client call context, defaults to nullptr
@@ -85,7 +86,7 @@ public:
         const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context = nullptr) override;
 
     /**
-     * @brief retrive the list of push notification callback configuration for a specific task
+     * @brief retrieve the list of push notification callback configuration for a specific task
      * tasks/pushNotificationConfig/list
      *
      * @param[in] params task param specifying task information
@@ -116,7 +117,7 @@ public:
         ResponseHandler handler) override;
 
     /**
-     * @brief retrive card information of agent
+     * @brief retrieve card information of agent
      *
      * @param[in] context client call context, defaults to nullptr
      * @return AgentCard information
@@ -172,6 +173,7 @@ private:
     std::vector<Consumer> consumers_;
     std::vector<std::shared_ptr<ClientCallInterceptor>> middleware_;
     std::unordered_map<std::string, std::shared_ptr<CallbackInfo>> callbackInfo_;
+    std::mutex mutex_;
 };
 
 } // namespace A2A::Client

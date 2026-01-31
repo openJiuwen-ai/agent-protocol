@@ -10,11 +10,6 @@
 
 namespace A2A::Client {
 
-Task* ClientTaskManager::GetTask()
-{
-    return currentTask_.has_value() ? &*currentTask_ : nullptr;
-}
-
 Task& ClientTaskManager::GetTaskOrRaise()
 {
     if (!currentTask_) {

@@ -4,9 +4,6 @@ add_subdirectory(client)
 add_subdirectory(event)
 add_subdirectory(shared)
 add_subdirectory(log)
-add_subdirectory(server)
-add_subdirectory(utils)
-add_subdirectory(transport)
 
 add_library(a2a SHARED)
 
@@ -16,9 +13,6 @@ target_sources(a2a
         $<TARGET_OBJECTS:a2a_client>
         $<TARGET_OBJECTS:a2a_shared>
         $<TARGET_OBJECTS:a2a_log>
-        $<TARGET_OBJECTS:a2a_server>
-        $<TARGET_OBJECTS:a2a_utils>
-        $<TARGET_OBJECTS:a2a_transport>
 )
 
 # Public include paths: src/ (for internal headers) and top-level include/

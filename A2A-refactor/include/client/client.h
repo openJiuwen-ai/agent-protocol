@@ -52,7 +52,7 @@ public:
         ResponseHandler handler) = 0;
 
     /**
-     * @brief retrive a task by query params
+     * @brief retrieve a task by query params
      * tasks/get
      *
      * @param[in] params params of the task to fetch
@@ -83,7 +83,7 @@ public:
         const ClientCallContext* context = nullptr) = 0;
 
     /**
-     * @brief retrive the push notification callback configuration for a specific task
+     * @brief retrieve the push notification callback configuration for a specific task
      * tasks/pushNotificationConfig/get
      *
      * @param[in] params task param
@@ -94,7 +94,7 @@ public:
         const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context = nullptr) = 0;
 
     /**
-     * @brief retrive the list of push notification callback configuration for a specific task
+     * @brief retrieve the list of push notification callback configuration for a specific task
      * tasks/pushNotificationConfig/list
      *
      * @param[in] params task param specifying task information
@@ -126,7 +126,7 @@ public:
         ResponseHandler handler) = 0;
 
     /**
-     * @brief retrive card information of agent
+     * @brief retrieve card information of agent
      *
      * @param[in] context client call context, defaults to nullptr
      * @return future to AgentCard information

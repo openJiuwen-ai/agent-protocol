@@ -149,9 +149,9 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
                          std::size_t& consumedBytes);
 
 
-std::string getContentType(const HttpResponse& response);
+std::string GetContentType(const HttpResponse& response);
 
-bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent);
+bool ParseSseLine(const std::string& line, ServerSentEvent& sseEvent);
 
 } // namespace A2A::Http
 

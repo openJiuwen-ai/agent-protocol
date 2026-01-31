@@ -2,7 +2,7 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "shared/http_common.h"
+#include "http_common.h"
 
 #include <sstream>
 #include <stdexcept>
@@ -74,6 +74,7 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
             contentLength = static_cast<std::size_t>(std::stoul(contentLengthIterator->second));
         } catch (...) {
             contentLength = 0;
+            return false;
         }
     }
 
@@ -86,7 +87,7 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     return true;
 }
 
-std::string getContentType(const HttpResponse& response)
+std::string GetContentType(const HttpResponse& response)
 {
     auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
     if (contentTypeIter == response.headers.end()) {
@@ -95,7 +96,7 @@ std::string getContentType(const HttpResponse& response)
     return contentTypeIter->second;
 }
 
-bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent)
+bool ParseSseLine(const std::string& line, ServerSentEvent& sseEvent)
 {
     // check if end of event
     if (line.empty()) {

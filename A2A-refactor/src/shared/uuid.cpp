@@ -9,7 +9,7 @@
 #include <sstream>
 #include <cstdint>
 
-#include "shared/uuid.h"
+#include "uuid.h"
 
 namespace A2A {
 

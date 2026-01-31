@@ -11,8 +11,8 @@
 
 #include "client/client.h"
 #include "types.h"
-#include "shared/common_types.h"
-#include "connection/client_conn.h"
+#include "common_types.h"
+#include "client_conn.h"
 
 namespace A2A::Client {
 
@@ -50,7 +50,7 @@ public:
         const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive task information from server
+     * @brief retrieve task information from server
      *
      * @param[in] requestId requestId
      * @param[in] params query params
@@ -80,7 +80,7 @@ public:
         const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive push notification config for a specific task
+     * @brief retrieve push notification config for a specific task
      *
      * @param[in] requestId requestId
      * @param[in] params task id and metadata information
@@ -90,7 +90,7 @@ public:
         const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive the list of push notification config for a specific task
+     * @brief retrieve the list of push notification config for a specific task
      *
      * @param[in] requestId requestId
      * @param[in] params task id and metadata information
@@ -120,7 +120,7 @@ public:
         const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive agent card from server
+     * @brief retrieve agent card from server
      *
      * @param[in] requestId requestId
      * @param[in] context client call context

@@ -39,7 +39,7 @@ private:
 
 class JsonRpcTransport : public ClientTransport {
 public:
-    JsonRpcTransport(const std::string& url, const AgentCard* agentCard,
+    JsonRpcTransport(const std::string& url, const AgentCard& agentCard,
         const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors);
 
     ~JsonRpcTransport();

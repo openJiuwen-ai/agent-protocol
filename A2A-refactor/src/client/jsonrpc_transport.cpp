@@ -4,8 +4,9 @@
 
 #include <nlohmann/json.hpp>
 #include "jsonrpc.h"
-#include "shared/common_types.h"
-#include "connection/libcurl_conn.h"
+#include "common_types.h"
+#include "libcurl_conn.h"
+#include "a2a_errno.h"
 #include "jsonrpc_transport.h"
 
 namespace A2A::Client {
@@ -17,14 +18,11 @@ void SessionTransportCallback::OnMessageReceived(const ConnEventData& message, c
     }
 }
 
-JsonRpcTransport::JsonRpcTransport(const std::string& url, const AgentCard* agentCard,
+JsonRpcTransport::JsonRpcTransport(const std::string& url, const AgentCard& agentCard,
     const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
     : url_(url), interceptors_(interceptors)
 {
-    if (agentCard != nullptr) {
-        agentCard_ = std::make_shared<AgentCard>(*agentCard);
-    }
-
+    agentCard_ = std::make_shared<AgentCard>(agentCard);
     conn_ = std::make_shared<Http::LibcurlConn>(url);
     conn_->SetCallback(std::make_shared<SessionTransportCallback>(this));
 }
@@ -105,6 +103,10 @@ void JsonRpcTransport::SetTransportCallback(TransportEventCallback callback)
 
 void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const UserData* userData)
 {
+    if (!transportEventCb_) {
+        return;
+    }
+
     if (message.errCode != 0) {
         TransportError err;
         err.errorCode = message.errCode;
@@ -120,22 +122,31 @@ void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const Us
 
     TransportEvent ev;
     nlohmann::json j = nlohmann::json::parse(message.data);
-    if (userData->method == METHOD_MESSAGE_SEND) {
-        ev = j.at(JSON_FIELD_RESULT).get<Message>();
-    } else if (userData->method == METHOD_TASK_GET) {
-        ev = j.at(JSON_FIELD_RESULT).get<Task>();
-    } else if (userData->method == METHOD_TASK_CANCEL) {
-        ev = j.at(JSON_FIELD_RESULT).get<Task>();
-    } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_SET) {
-        ev = j.at(JSON_FIELD_RESULT).get<TaskPushNotificationConfig>();
-    } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_GET) {
-        ev = j.at(JSON_FIELD_RESULT).get<TaskPushNotificationConfig>();
-    } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_LIST) {
-        ev = j.at(JSON_FIELD_RESULT).get<std::vector<TaskPushNotificationConfig>>();
-    } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_DELETE) {
-        ev = std::monostate{};
-    } else if (userData->method == METHOD_AGENT_CARD_GET) {
-        ev = j.get<AgentCard>();
+    try {
+        if (userData->method == METHOD_MESSAGE_SEND) {
+            ev = j.at(JSON_FIELD_RESULT).get<Message>();
+        } else if (userData->method == METHOD_TASK_GET) {
+            ev = j.at(JSON_FIELD_RESULT).get<Task>();
+        } else if (userData->method == METHOD_TASK_CANCEL) {
+            ev = j.at(JSON_FIELD_RESULT).get<Task>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_SET) {
+            ev = j.at(JSON_FIELD_RESULT).get<TaskPushNotificationConfig>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_GET) {
+            ev = j.at(JSON_FIELD_RESULT).get<TaskPushNotificationConfig>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_LIST) {
+            ev = j.at(JSON_FIELD_RESULT).get<std::vector<TaskPushNotificationConfig>>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_DELETE) {
+            ev = std::monostate{};
+        } else if (userData->method == METHOD_AGENT_CARD_GET) {
+            ev = j.get<AgentCard>();
+        } else {
+            return;
+        }
+    } catch (const nlohmann::json::exception& e) {
+        TransportError err;
+        err.errorCode = static_cast<int>(JSONRPCErrorCode::PARSE_ERROR);
+        err.errInfo = e.what();
+        transportEventCb_(userData->requestId, err);
     }
 
     transportEventCb_(userData->requestId, ev);

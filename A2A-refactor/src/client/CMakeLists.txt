@@ -12,7 +12,6 @@ target_include_directories(a2a_client
         ${CMAKE_SOURCE_DIR}/src/event
         ${CMAKE_CURRENT_SOURCE_DIR}/connection
         ${CMAKE_SOURCE_DIR}/src/client
-        ${CMAKE_SOURCE_DIR}/src
 )
 
 set_target_properties(a2a_client PROPERTIES

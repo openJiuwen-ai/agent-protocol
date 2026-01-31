@@ -16,9 +16,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "event/event_system.h"
-#include "shared/http_common.h"
-#include "shared/message_queue/mpsc_notify_queue.h"
+#include "event_system.h"
+#include "http_common.h"
+#include "message_queue/mpsc_notify_queue.h"
 #include "client_conn.h"
 
 namespace A2A::Http {

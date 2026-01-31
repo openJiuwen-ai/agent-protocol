@@ -51,7 +51,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
 
     std::shared_ptr<ClientTransport> transport = nullptr;
     if (chosenProtocol == "JSONRPC") {
-        transport = std::make_shared<JsonRpcTransport>(chosenUrl, &card, interceptors);
+        transport = std::make_shared<JsonRpcTransport>(chosenUrl, card, interceptors);
     }
 
     if (transport == nullptr) {

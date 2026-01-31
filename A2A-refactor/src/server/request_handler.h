@@ -38,7 +38,7 @@ public:
                                                       const ServerCallContext* context = nullptr) = 0;
 
     /**
-     * @brief retrive a task by query params
+     * @brief retrieve a task by query params
      *
      * @param[in] params param containing the query information
      * @param[in] ctx server call context
@@ -66,7 +66,7 @@ public:
                                                                        const ServerCallContext* context = nullptr) = 0;
 
     /**
-     * @brief retrive a task push notification configuration of a task
+     * @brief retrieve a task push notification configuration of a task
      *
      * @param[in] params param containing the request information
      * @param[in] ctx server call context
@@ -76,7 +76,7 @@ public:
         const GetTaskPushNotificationConfigParams& params, const ServerCallContext* context = nullptr) = 0;
 
     /**
-     * @brief retrive all task push notification configurations of a task
+     * @brief retrieve all task push notification configurations of a task
      *
      * @param[in] params param containing the id information
      * @param[in] ctx server call context
@@ -115,7 +115,7 @@ public:
                                      const ServerCallContext* context = nullptr) = 0;
 
     /**
-     * @brief retrive agent card
+     * @brief retrieve agent card
      *
      * @param[in] context server call context
      * @return AgentCard
