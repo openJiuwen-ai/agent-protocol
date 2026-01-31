@@ -12,6 +12,9 @@ static constexpr int HEADER_SIZE = 2;
 static constexpr int ARGS_NUM = 4;
 static constexpr int REQ_ID = 12345;
 
+// Additional HTTP header field names not defined in http_common.h
+static constexpr const char* USER_AGENT_HEADER = "user-agent";
+
 namespace Mcp::Http {
 
 TEST(HttpCommonTest, TrimInPlace_EmptyString)
@@ -78,8 +81,8 @@ TEST(HttpCommonTest, ParseHeadersAndBody_CompleteMessageWithContentLength)
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
 
     EXPECT_EQ(headers.size(), HEADER_SIZE);
-    EXPECT_EQ(headers["Content-Length"], "11");
-    EXPECT_EQ(headers["Content-Type"], "text/plain");
+    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "11");
+    EXPECT_EQ(headers[CONTENT_TYPE_HEADER], "text/plain");
     EXPECT_EQ(body, "Hello World");
     EXPECT_EQ(consumedBytes, buffer.size());
 }
@@ -113,7 +116,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_IncompleteBody)
 
     EXPECT_FALSE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers["Content-Length"], "20");
+    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "20");
     EXPECT_TRUE(body.empty());
     EXPECT_EQ(consumedBytes, 0);
 }
@@ -131,7 +134,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_NoContentLength)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers["Content-Type"], "text/plain");
+    EXPECT_EQ(headers[CONTENT_TYPE_HEADER], "text/plain");
     EXPECT_EQ(body, "");
     EXPECT_EQ(consumedBytes, headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH);
 }
@@ -148,7 +151,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_EmptyBody)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers["Content-Length"], "0");
+    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "0");
     EXPECT_EQ(body, "");
     EXPECT_EQ(consumedBytes, buffer.size());
 }
@@ -166,7 +169,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_InvalidContentLength)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers["Content-Length"], "abc");
+    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "abc");
     EXPECT_EQ(body, "");
     EXPECT_EQ(consumedBytes, headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH);
 }
@@ -187,10 +190,10 @@ TEST(HttpCommonTest, ParseHeadersAndBody_MultipleHeaders)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), ARGS_NUM);
-    EXPECT_EQ(headers["Host"], "localhost:8080");
-    EXPECT_EQ(headers["User-Agent"], "TestClient");
-    EXPECT_EQ(headers["Accept"], "*/*");
-    EXPECT_EQ(headers["Content-Length"], "5");
+    EXPECT_EQ(headers[HOST_HEADER], "localhost:8080");
+    EXPECT_EQ(headers[USER_AGENT_HEADER], "TestClient");
+    EXPECT_EQ(headers[ACCEPT_HEADER], "*/*");
+    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "5");
     EXPECT_EQ(body, "12345");
     EXPECT_EQ(consumedBytes, buffer.size());
 }
@@ -209,7 +212,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_MalformedHeaderNoColon)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers["Content-Type"], "text/plain");
+    EXPECT_EQ(headers[CONTENT_TYPE_HEADER], "text/plain");
     EXPECT_EQ(body, "");
     EXPECT_EQ(consumedBytes, headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH);
 }
@@ -227,7 +230,7 @@ TEST(HttpCommonTest, ParseHeadersAndBody_BodyExactlyContentLength)
 
     EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers["Content-Length"], "3");
+    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "3");
     EXPECT_EQ(body, "xyz");
     EXPECT_EQ(consumedBytes, buffer.size());
 }
@@ -242,7 +245,7 @@ TEST(HttpCommonTest, HttpResponse_DefaultConstructor)
     EXPECT_TRUE(response.errorMessage.empty());
     EXPECT_TRUE(response.body.empty());
     EXPECT_EQ(response.headers.size(), 1);
-    EXPECT_EQ(response.headers["Connection"], "keep-alive");
+    EXPECT_EQ(response.headers[CONNECTION_HEADER], "keep-alive");
     EXPECT_EQ(response.userData.requestId, 0);
     EXPECT_TRUE(response.userData.method.empty());
 }

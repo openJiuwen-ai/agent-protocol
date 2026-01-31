@@ -56,6 +56,8 @@ int HandleHeaderFieldCallback(http_parser* parser, const char* at, size_t length
         TrimInPlace(ctx->currentField);
         TrimInPlace(ctx->currentValue);
         if (!ctx->currentField.empty()) {
+            // Convert header name to lowercase for consistent processing
+            std::transform(ctx->currentField.begin(), ctx->currentField.end(), ctx->currentField.begin(), ::tolower);
             ctx->request->headers[ctx->currentField] = ctx->currentValue;
         }
         ctx->currentField.clear();
@@ -88,6 +90,8 @@ int HandleHeadersCompleteCallback(http_parser* parser)
         TrimInPlace(ctx->currentField);
         TrimInPlace(ctx->currentValue);
         if (!ctx->currentField.empty()) {
+            // Convert header name to lowercase for consistent processing
+            std::transform(ctx->currentField.begin(), ctx->currentField.end(), ctx->currentField.begin(), ::tolower);
             ctx->request->headers[ctx->currentField] = ctx->currentValue;
         }
         ctx->currentField.clear();

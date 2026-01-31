@@ -19,13 +19,13 @@ constexpr const char* MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version";
 constexpr const char* CONTENT_TYPE_HEADER = "content-type";
 constexpr const char* ACCEPT_HEADER = "accept";
 
-// Common HTTP Header names (wire-level; preserve conventional casing)
-constexpr const char* CACHE_CONTROL_HEADER = "Cache-Control";
-constexpr const char* CONNECTION_HEADER = "Connection";
-constexpr const char* HOST_HEADER = "Host";
-constexpr const char* CONTENT_LENGTH_HEADER = "Content-Length";
-constexpr const char* TRANSFER_ENCODING_HEADER = "Transfer-Encoding";
-constexpr const char* X_ACCEL_BUFFERING_HEADER = "X-Accel-Buffering";
+// Common HTTP Header names (lowercase for consistent processing)
+constexpr const char* CACHE_CONTROL_HEADER = "cache-control";
+constexpr const char* CONNECTION_HEADER = "connection";
+constexpr const char* HOST_HEADER = "host";
+constexpr const char* CONTENT_LENGTH_HEADER = "content-length";
+constexpr const char* TRANSFER_ENCODING_HEADER = "transfer-encoding";
+constexpr const char* X_ACCEL_BUFFERING_HEADER = "x-accel-buffering";
 
 // Content-Type constants
 constexpr const char* CONTENT_TYPE_JSON = "application/json";

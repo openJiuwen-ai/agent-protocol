@@ -812,6 +812,9 @@ std::unordered_map<std::string, std::string> HttpClientService::ParseHeaderData(
             header_value.erase(0, header_value.find_first_not_of(" \t"));
             header_value.erase(header_value.find_last_not_of(" \t") + 1);
 
+            // Convert header name to lowercase for consistent processing
+            std::transform(header_name.begin(), header_name.end(), header_name.begin(), ::tolower);
+
             headers[header_name] = header_value;
         }
     }

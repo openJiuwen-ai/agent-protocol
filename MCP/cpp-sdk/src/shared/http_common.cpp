@@ -64,6 +64,9 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
         TrimInPlace(key);
         TrimInPlace(value);
 
+        // Convert header name to lowercase for consistent processing
+        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+
         headers[key] = value;
     }
 
