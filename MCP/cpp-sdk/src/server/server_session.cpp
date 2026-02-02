@@ -4,6 +4,7 @@
 
 #include "server/server_session.h"
 
+#include <algorithm>
 #include "mcp_log.h"
 
 namespace Mcp {
@@ -68,19 +69,21 @@ void ServerSession::ReceivedNotification(const Notification& notification)
 void ServerSession::HandleInitializeRequest(int64_t requestId, const InitializeRequestParams& requestParams,
                                             RequestContext& ctx)
 {
-    (void)requestParams;
     // Reply to the client with server capabilities and implementation info.
-    SendInitializeResponse(requestId, capabilities_, ctx);
+    SendInitializeResponse(requestId, capabilities_, requestParams.protocolVersion_, ctx);
 }
 
 void ServerSession::SendInitializeResponse(int64_t requestId, const ServerCapabilities& capabilities,
-                                           RequestContext& ctx)
+                                           const std::string& requestedProtocolVersion, RequestContext& ctx)
 {
     // Build MCP InitializeResult payload.
     Implementation serverInfo;
     serverInfo.name = serverConfig_.name;
     serverInfo.version = serverConfig_.version;
-    auto initResult = std::make_unique<InitializeResult>(DEFAULT_PROTOCOL_VERSION, capabilities, serverInfo);
+    auto protocolVersion_ = (std::find(SUPPORTED_PROTOCOL_VERSIONS.begin(), SUPPORTED_PROTOCOL_VERSIONS.end(),
+                                       requestedProtocolVersion) != SUPPORTED_PROTOCOL_VERSIONS.end()) ?
+                             requestedProtocolVersion : LATEST_PROTOCOL_VERSION;
+    auto initResult = std::make_unique<InitializeResult>(protocolVersion_, capabilities, serverInfo);
     SendResponse(requestId, std::move(initResult), ctx);
     isInitialized_ = true;
 }

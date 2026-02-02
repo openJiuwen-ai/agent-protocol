@@ -4,6 +4,7 @@
 
 #include "client_session.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -58,6 +59,10 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
             auto initPtr = std::dynamic_pointer_cast<InitializeResult>(resultPtr);
             if (initPtr == nullptr) {
                 throw std::runtime_error("Result type mismatch: cannot cast to InitializeResult");
+            }
+            if (std::find(SUPPORTED_PROTOCOL_VERSIONS.begin(), SUPPORTED_PROTOCOL_VERSIONS.end(),
+                          initPtr->protocolVersion) == SUPPORTED_PROTOCOL_VERSIONS.end()) {
+                throw std::runtime_error("Unsupported protocol version from the server: " + initPtr->protocolVersion);
             }
             SendInitializedNotification();
             initialized_ = true;

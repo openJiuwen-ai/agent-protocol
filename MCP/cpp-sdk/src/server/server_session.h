@@ -93,7 +93,8 @@ private:
     /**
      * @brief Send an InitializeResult response to the client.
      */
-    void SendInitializeResponse(int64_t requestId, const ServerCapabilities& capabilities, RequestContext& ctx);
+    void SendInitializeResponse(int64_t requestId, const ServerCapabilities& capabilities,
+                                const std::string& requestedProtocolVersion, RequestContext& ctx);
 
     /**
      * @brief Handle the "initialized" notification from the client.

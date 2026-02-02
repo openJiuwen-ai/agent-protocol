@@ -1315,14 +1315,14 @@ JSONRPCResponse::JSONRPCResponse()
 InitializeRequest::InitializeRequest()
 {
     method_ = "initialize";
-    params_ = std::make_unique<InitializeRequestParams>(Mcp::DEFAULT_PROTOCOL_VERSION, ClientCapabilities(),
+    params_ = std::make_unique<InitializeRequestParams>(Mcp::LATEST_PROTOCOL_VERSION, ClientCapabilities(),
                                                         Implementation());
 }
 
 InitializeRequest::InitializeRequest(const std::string& clientName, const std::string& clientVersion)
 {
     method_ = "initialize";
-    auto params = std::make_unique<InitializeRequestParams>(Mcp::DEFAULT_PROTOCOL_VERSION, ClientCapabilities(),
+    auto params = std::make_unique<InitializeRequestParams>(Mcp::LATEST_PROTOCOL_VERSION, ClientCapabilities(),
                                                             Implementation());
     params->clientInfo_.name = clientName.empty() ? Mcp::DEFAULT_CLIENT_NAME : clientName;
     params->clientInfo_.version = clientVersion.empty() ? Mcp::DEFAULT_VERSION : clientVersion;

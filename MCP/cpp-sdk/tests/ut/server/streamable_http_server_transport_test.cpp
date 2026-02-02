@@ -12,6 +12,7 @@
 
 #include "mcp_log.h"
 #include "shared/http_common.h"
+#include "shared/common_type.h"
 #include "server/transport/streamable_http_server_transport.h"
 
 namespace Mcp {
@@ -107,7 +108,7 @@ protected:
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": ")" + std::string(DEFAULT_PROTOCOL_VERSION) + R"(",
                 "capabilities": {},
                 "clientInfo": {
                     "name": "TestClient",
@@ -455,7 +456,7 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestSupportedProtocolVers
         {"accept", "application/json, text/event-stream"},
         {"content-type", "application/json"},
         {"mcp-session-id", validSessionId},
-        {"mcp-protocol-version", "2024-11-05"}
+        {"mcp-protocol-version", DEFAULT_PROTOCOL_VERSION}
     };
     Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateNonInitializeRequestJson());
 
@@ -565,7 +566,7 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestValid)
     std::unordered_map<std::string, std::string> headers = {
         {"accept", "text/event-stream"},
         {"mcp-session-id", validSessionId},
-        {"mcp-protocol-version", "2024-11-05"}
+        {"mcp-protocol-version", DEFAULT_PROTOCOL_VERSION}
     };
     Http::HttpRequest request = CreateHttpRequest("GET", headers);
 
@@ -586,7 +587,7 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestDuplicateStream)
     std::unordered_map<std::string, std::string> headers = {
         {"accept", "text/event-stream"},
         {"mcp-session-id", validSessionId},
-        {"mcp-protocol-version", "2024-11-05"}
+        {"mcp-protocol-version", DEFAULT_PROTOCOL_VERSION}
     };
     Http::HttpRequest request = CreateHttpRequest("GET", headers);
 
@@ -611,7 +612,7 @@ TEST_F(StreamableHttpServerTransportTest, HandleGetRequestEmptySessionIdTranspor
     RequestContext ctx = CreateRequestContext();
     std::unordered_map<std::string, std::string> headers = {
         {"accept", "text/event-stream"},
-        {"mcp-protocol-version", "2024-11-05"}
+        {"mcp-protocol-version", DEFAULT_PROTOCOL_VERSION}
     };
     Http::HttpRequest request = CreateHttpRequest("GET", headers);
 
@@ -793,7 +794,7 @@ TEST_F(StreamableHttpServerTransportTest, CompleteWorkflow)
     std::unordered_map<std::string, std::string> getHeaders = {
         {"accept", "text/event-stream"},
         {"mcp-session-id", validSessionId},
-        {"mcp-protocol-version", "2024-11-05"}
+        {"mcp-protocol-version", DEFAULT_PROTOCOL_VERSION}
     };
     Http::HttpRequest getRequest = CreateHttpRequest("GET", getHeaders);
 

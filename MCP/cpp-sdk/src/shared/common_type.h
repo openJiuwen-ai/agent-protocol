@@ -26,12 +26,15 @@ using RequestId = std::variant<int64_t, std::string>;
 
 using ConnectionId = int;
 
+// LATEST_PROTOCOL_VERSION is the latest protocol version supported by the SDK
+const char* const LATEST_PROTOCOL_VERSION = "2025-06-18";
+
 // Default protocol version for Initialize request/response
 const char* const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 
 // Protocol version constants
-static const std::vector<std::string> SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"};
-static const std::string SUPPORTED_PROTOCOL_VERSIONS_STRING = "2024-11-05, 2025-03-26, 2025-06-18";
+const std::vector<std::string> SUPPORTED_PROTOCOL_VERSIONS = {"2025-03-26", LATEST_PROTOCOL_VERSION};
+const std::string SUPPORTED_PROTOCOL_VERSIONS_STRING = std::string("2025-03-26, ") + LATEST_PROTOCOL_VERSION;
 
 constexpr unsigned int MAX_THREAD_NUM = 64;
 
