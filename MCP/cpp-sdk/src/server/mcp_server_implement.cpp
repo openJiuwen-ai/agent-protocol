@@ -181,7 +181,7 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
         auto result = std::make_unique<GetPromptResult>(promptManager_.GetPrompt(params->name, params->arguments));
         session->SendResponse(requestId, std::move(result), ctx);
     } catch (const std::exception& e) {
-        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx);
     }
 }
 
@@ -229,7 +229,7 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
         auto result = std::make_unique<ReadResourceResult>(resourceManager_.ReadResource(params->uri_));
         session->SendResponse(requestId, std::move(result), ctx);
     } catch (const std::exception& e) {
-        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx);
     }
 }
 

@@ -362,7 +362,14 @@ TEST_F(ToolManagerTest, CallToolThrowsException)
     ServerTool tool = CreateErrorThrowingTool("error_tool");
     toolManager->AddTool(tool);
 
-    EXPECT_THROW(toolManager->CallTool("error_tool", R"({})"), std::runtime_error);
+    CallToolResult result = toolManager->CallTool("error_tool", R"({})");
+    EXPECT_TRUE(result.isError);
+    ASSERT_FALSE(result.content.empty());
+    ASSERT_TRUE(std::holds_alternative<TextContent>(result.content[0]));
+
+    const auto& textContent = std::get<TextContent>(result.content[0]);
+    EXPECT_EQ(textContent.type, "text");
+    EXPECT_EQ(textContent.text, "Simulated tool error");
 }
 
 TEST_F(ToolManagerTest, CallToolAfterRemove)
@@ -455,12 +462,11 @@ TEST_F(ToolManagerTest, CallToolExceptionMessages)
     ServerTool tool = CreateErrorThrowingTool("error_tool");
     toolManager->AddTool(tool);
 
-    try {
-        toolManager->CallTool("error_tool", R"({})");
-        FAIL() << "Expected std::runtime_error";
-    } catch (const std::runtime_error& e) {
-        EXPECT_TRUE(std::string(e.what()).find("Tool execution failed") != std::string::npos);
-    }
+    CallToolResult result = toolManager->CallTool("error_tool", R"({})");
+    EXPECT_TRUE(result.isError);
+    ASSERT_FALSE(result.content.empty());
+    ASSERT_TRUE(std::holds_alternative<TextContent>(result.content[0]));
+    EXPECT_EQ(std::get<TextContent>(result.content[0]).text, "Simulated tool error");
 }
 
 // ================ Output Schema Validation Tests ================

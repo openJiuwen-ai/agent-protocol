@@ -4,6 +4,7 @@
 
 #include "base_session.h"
 #include "mcp_log.h"
+#include "mcp_type.h"
 
 namespace Mcp {
 
@@ -91,9 +92,17 @@ void BaseSession::HandleResponse(const JSONRPCError& error)
         }
     }
 
-    if (completion) {
-        completion(nullptr);
+    if (completion == nullptr) {
+        return;
     }
+
+    auto err = std::make_shared<ErrorResult>();
+    err->code = error.code_;
+    err->message = error.message_;
+    if (error.data_.has_value()) {
+        err->data = error.data_.value().dump();
+    }
+    completion(err);
 }
 
 void BaseSession::ProcessIncomingRequest(const JSONRPCRequest& rpcRequest, RequestContext& ctx)

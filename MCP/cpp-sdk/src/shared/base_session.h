@@ -82,11 +82,13 @@ public:
      * Send a request with an optional completion callback for handling responses.
      *
      * - The caller supplies an optional completion callback invoked when the response arrives.
-     * - On success, the callback receives the result; on error or missing result, it receives nullptr.
+     * - On success, the callback receives the typed result.
+     * - On JSON-RPC error, the callback receives an ErrorResult carrying code/message/data.
+     * - On transport-level failures or missing result, it may receive nullptr.
      * - Progress updates (if provided) invoke `progressCallback`.
      *
      * @param request Request payload to send.
-     * @param completion Optional callback invoked with the response result (or nullptr on error).
+     * @param completion Optional callback invoked with the response result.
      * @param requestTimeout Optional timeout for this request (defaults to nullopt).
      * @param progressCallback Optional callback for progress notifications (defaults to nullopt).
      */

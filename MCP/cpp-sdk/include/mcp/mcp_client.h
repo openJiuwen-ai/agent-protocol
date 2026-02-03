@@ -25,6 +25,7 @@ public:
      *
      * @throw std::runtime_error If the client is already initialized.
      * @throw std::runtime_error If the underlying transport or session cannot be created.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<InitializeResult>> Initialize() = 0;
 
@@ -37,6 +38,7 @@ public:
      *
      * @param cursor Optional cursor indicating the starting position. Defaults to std::nullopt.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ListToolsResult>> ListTools(
         const std::optional<std::string>& cursor = std::nullopt) = 0;
@@ -53,6 +55,7 @@ public:
      * @return A future to a shared pointer of CallToolResult containing the tool's response.
      *
      * @throw std::runtime_error If the client is not initialized or the call fails to start.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<CallToolResult>> CallTool(
         const std::string& name, const std::optional<std::string>& arguments = std::nullopt, int timeout = 0) = 0;
@@ -66,6 +69,7 @@ public:
      *
      * @param cursor Optional cursor indicating the starting position. Defaults to std::nullopt.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ListResourcesResult>> ListResources(
         const std::optional<std::string>& cursor = std::nullopt) = 0;
@@ -77,6 +81,7 @@ public:
      *
      * @param uri The URI of the resource to read.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri) = 0;
     
@@ -87,6 +92,7 @@ public:
      *
      * @param uri The URI of the resource to subscribe to.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri) = 0;
     
@@ -97,6 +103,7 @@ public:
      *
      * @param uri The URI of the resource to unsubscribe from.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<EmptyResult>> UnsubscribeResource(const std::string& uri) = 0;
     
@@ -106,6 +113,7 @@ public:
      * Retrieves a list of resource templates that can be used to create or access resources.
      *
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ListResourceTemplatesResult>> ListResourcesTemplates() = 0;
 
@@ -115,6 +123,7 @@ public:
      * Retrieves a list of prompt templates that are available for use on the server.
      *
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ListPromptsResult>> ListPrompts() = 0;
 
@@ -126,6 +135,7 @@ public:
      * @param name The name of the prompt to retrieve.
      * @param arguments Optional arguments for rendering the prompt (as a JSON string).
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<GetPromptResult>> GetPrompt(
         const std::string& name, const std::optional<std::string>& arguments = std::nullopt) = 0;

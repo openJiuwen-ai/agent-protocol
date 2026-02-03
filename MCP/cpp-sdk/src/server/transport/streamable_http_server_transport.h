@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <variant>
 
+#include "mcp_error.h"
 #include "shared/common_type.h"
 #include "shared/http_common.h"
 #include "shared/jsonrpc.h"

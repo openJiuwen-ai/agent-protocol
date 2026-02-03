@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include "mcp_client.h"
+#include "mcp_error.h"
 #include "mcp_server.h"
 #include "mcp_type.h"
 #include "mcp_log.h"
@@ -527,6 +528,77 @@ TEST_F(McpIntegrationTest, CallToolWithInvalidArguments)
         // 也可能抛出异常，这也是合法的错误处理方式
         MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("CallTool with invalid arguments threw exception: ") + e.what());
         SUCCEED();
+    }
+}
+
+// tools/call: non-existent tool should return JSON-RPC error with code
+TEST_F(McpIntegrationTest, CallToolNonExistent_ShouldReturnErrorCode)
+{
+    auto client = CreateTestClient();
+    ASSERT_NE(client, nullptr);
+
+    auto initFuture = client->Initialize();
+    initFuture.wait();
+
+    nlohmann::json arguments;
+    arguments["user_query"] = "test";
+
+    auto callFuture = client->CallTool("__not_exist_tool__", arguments.dump(), TEST_TIMEOUT_MS);
+    auto status = callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
+    ASSERT_EQ(status, std::future_status::ready);
+
+    try {
+        (void)callFuture.get();
+        FAIL() << "Expected MCPError";
+    } catch (const Mcp::MCPError& e) {
+        EXPECT_EQ(e.code(), static_cast<int>(Mcp::JsonRpcErrorCode::INVALID_PARAMS));
+        EXPECT_FALSE(e.message().empty());
+    }
+}
+
+// prompts/get: non-existent prompt should return JSON-RPC error with code
+TEST_F(McpIntegrationTest, GetPromptNonExistent_ShouldReturnErrorCode)
+{
+    auto client = CreateTestClient();
+    ASSERT_NE(client, nullptr);
+
+    auto initFuture = client->Initialize();
+    initFuture.wait();
+
+    auto getFuture = client->GetPrompt("__not_exist_prompt__", std::nullopt);
+    auto status = getFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
+    ASSERT_EQ(status, std::future_status::ready);
+
+    try {
+        (void)getFuture.get();
+        FAIL() << "Expected MCPError";
+    } catch (const Mcp::MCPError& e) {
+        // current server implementation maps prompt exceptions to INVALID_PARAMS
+        EXPECT_EQ(e.code(), static_cast<int>(Mcp::JsonRpcErrorCode::INVALID_PARAMS));
+        EXPECT_FALSE(e.message().empty());
+    }
+}
+
+// resources/read: non-existent resource should return JSON-RPC error with code
+TEST_F(McpIntegrationTest, ReadResourceNonExistent_ShouldReturnErrorCode)
+{
+    auto client = CreateTestClient();
+    ASSERT_NE(client, nullptr);
+
+    auto initFuture = client->Initialize();
+    initFuture.wait();
+
+    auto readFuture = client->ReadResource("http://example.com/__not_exist_resource__");
+    auto status = readFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS));
+    ASSERT_EQ(status, std::future_status::ready);
+
+    try {
+        (void)readFuture.get();
+        FAIL() << "Expected MCPError";
+    } catch (const Mcp::MCPError& e) {
+        // current server implementation maps resource exceptions to INVALID_PARAMS
+        EXPECT_EQ(e.code(), static_cast<int>(Mcp::JsonRpcErrorCode::INVALID_PARAMS));
+        EXPECT_FALSE(e.message().empty());
     }
 }
 

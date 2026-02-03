@@ -11,6 +11,7 @@
 
 #include "http_client_service.h"
 #include "mcp_auth.h"
+#include "mcp_error.h"
 #include "mcp_log.h"
 
 namespace Mcp {

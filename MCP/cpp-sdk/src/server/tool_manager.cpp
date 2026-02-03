@@ -147,7 +147,15 @@ CallToolResult ToolManager::CallTool(const std::string& name, const std::string&
         // Convert JsonValue to string for the ToolFunc interface
         rawResult = tool.func(name, args.dump(), std::nullopt);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Tool execution failed: " + std::string(e.what()));
+        CallToolResult errorResult;
+        errorResult.isError = true;
+
+        TextContent textContent;
+        textContent.type = "text";
+        textContent.text = e.what();
+        errorResult.content.push_back(std::move(textContent));
+
+        rawResult = std::move(errorResult);
     }
 
     CallToolResult result = NormalizeToolReturn(rawResult);

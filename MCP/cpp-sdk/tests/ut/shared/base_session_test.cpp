@@ -13,6 +13,7 @@
 
 #define private public
 #define protected public
+#include "mcp_error.h"
 #include "shared/base_session.h"
 #include "transport/transport.h"
 #include "shared/jsonrpc.h"
@@ -264,7 +265,11 @@ TEST(BaseSessionTest, OnTransportMessage_RoutesAllKinds)
         std::atomic<int> called{0};
         s.SendRequest(std::move(req),
                       [&](std::shared_ptr<Result> r) {
-                          EXPECT_EQ(r, nullptr);
+                          auto err = std::dynamic_pointer_cast<ErrorResult>(r);
+                          ASSERT_NE(err, nullptr);
+                          EXPECT_EQ(err->code, static_cast<int>(Mcp::JsonRpcErrorCode::INTERNAL_ERROR));
+                          EXPECT_EQ(err->message, "err");
+                          EXPECT_FALSE(err->data.has_value());
                           called++;
                       },
                       std::nullopt,

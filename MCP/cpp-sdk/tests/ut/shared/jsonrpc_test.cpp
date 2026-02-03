@@ -2,6 +2,7 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 */
 
+#include "mcp_error.h"
 #include "shared/jsonrpc.h"
 
 #include <gtest/gtest.h>

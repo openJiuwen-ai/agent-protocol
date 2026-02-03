@@ -84,6 +84,15 @@ struct Result : public MCPBaseType {
     virtual ~Result() = default;
 };
 
+// Error result used to represent JSON-RPC/MCP errors in a Result-shaped form.
+// This is primarily useful for surfacing server-side JSON-RPC errors through
+// APIs that otherwise return `Result`.
+struct ErrorResult : public Result {
+    int code = 0;
+    std::string message;
+    std::optional<std::string> data;
+};
+
 // Base class for paginated results. List-style methods that support pagination
 // (e.g., tools/list, resources/list) should derive from this instead of Result.
 struct PaginatedResult : public Result {

@@ -10,6 +10,7 @@
 #include <nlohmann/json-schema.hpp>
 
 #include "common_type.h"
+#include "mcp_error.h"
 #include "mcp_log.h"
 #include "mcp_type.h"
 

@@ -12,7 +12,9 @@
 #include <thread>
 
 #include "mcp_log.h"
+#include "mcp_error.h"
 #include "shared/jsonrpc.h"
+#include "mcp_type.h"
 
 namespace {
 
@@ -24,6 +26,11 @@ std::function<void(std::shared_ptr<Mcp::Result>)> MakeTypedCompletion(
         try {
             if (resultPtr == nullptr) {
                 throw std::runtime_error(std::string(opName) + " failed: null result");
+            }
+
+            auto err = std::dynamic_pointer_cast<Mcp::ErrorResult>(resultPtr);
+            if (err != nullptr) {
+                throw Mcp::MCPError(*err);
             }
 
             auto typed = std::dynamic_pointer_cast<T>(resultPtr);
@@ -56,6 +63,10 @@ std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
 
     auto completion = [this, promise](std::shared_ptr<Result> resultPtr) {
         try {
+            auto err = std::dynamic_pointer_cast<ErrorResult>(resultPtr);
+            if (err != nullptr) {
+                throw MCPError(*err);
+            }
             auto initPtr = std::dynamic_pointer_cast<InitializeResult>(resultPtr);
             if (initPtr == nullptr) {
                 throw std::runtime_error("Result type mismatch: cannot cast to InitializeResult");
@@ -89,6 +100,10 @@ std::future<std::shared_ptr<CallToolResult>> ClientSession::CallTool(const std::
 
     auto completion = [this, promise, name](std::shared_ptr<Result> resultPtr) {
         try {
+            auto err = std::dynamic_pointer_cast<ErrorResult>(resultPtr);
+            if (err != nullptr) {
+                throw MCPError(*err);
+            }
             auto callToolPtr = std::dynamic_pointer_cast<CallToolResult>(resultPtr);
             if (callToolPtr == nullptr) {
                 throw std::runtime_error("Result type mismatch: cannot cast to CallToolResult");

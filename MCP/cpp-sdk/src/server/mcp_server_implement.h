@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "mcp_error.h"
 #include "mcp_server.h"
 #include "mcp_type.h"
 #include "server/prompt_manager.h"
