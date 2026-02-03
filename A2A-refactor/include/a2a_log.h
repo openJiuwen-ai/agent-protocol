@@ -75,9 +75,9 @@ inline void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func,
 
     std::string prefix = "[" + timestamp + "] [" + std::to_string(syscall(SYS_gettid)) + "] " +
                          std::string(filename) + "::" + std::string(func) + ":[" + std::to_string(line) + "] ";
-
-    static_assert(sizeof...(Args) == 0, "A2A_LOG expects C++-style string composition");
-    g_logCallback(level, prefix + format);
+    std::ostringstream oss;
+    oss << prefix << format;
+    g_logCallback(level, oss.str());
 }
 
 } // namespace A2A::Log

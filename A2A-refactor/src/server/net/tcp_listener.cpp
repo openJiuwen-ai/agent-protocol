@@ -4,6 +4,7 @@
 
 #include "net/tcp_listener.h"
 
+#include <cerrno>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -11,7 +12,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <cerrno>
 #include <cstring>
 
 #include "a2a_log.h"
@@ -29,7 +29,7 @@ static bool SetReusePort(int fd, bool on)
     return true;
 }
 
-TcpListener::TcpListener(A2A::Server::EventSystem& es) : es_(es)
+TcpListener::TcpListener(EventSystem& es) : es_(es)
 {
 }
 

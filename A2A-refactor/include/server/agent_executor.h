@@ -5,8 +5,10 @@
 #ifndef A2A_AGENT_EXECUTOR
 #define A2A_AGENT_EXECUTOR
 
-#include "server/task_updater.h"
-#include "server/request_context.h"
+#include <memory>
+
+#include "task_updater.h"
+#include "request_context.h"
 
 namespace A2A::Server {
 

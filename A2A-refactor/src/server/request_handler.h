@@ -8,7 +8,7 @@
 #include <functional>
 #include <variant>
 
-#include "server_call_context.h"
+#include "server/server_call_context.h"
 #include "types.h"
 
 namespace A2A::Server {
@@ -35,7 +35,7 @@ public:
      * @return task or message
      */
     virtual std::variant<Task, Message> OnSendMessage(const MessageSendParams& params,
-                                                      const ServerCallContext* context = nullptr) = 0;
+                                                      const std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief retrieve a task by query params
@@ -44,7 +44,7 @@ public:
      * @param[in] ctx server call context
      * @return task
      */
-    virtual Task OnGetTask(const TaskQueryParams& params, const ServerCallContext* context = nullptr) = 0;
+    virtual Task OnGetTask(const TaskQueryParams& params, std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief cancel a task by task id params
@@ -53,7 +53,7 @@ public:
      * @param[in] ctx server call context
      * @return task canceled
      */
-    virtual Task OnCancelTask(const TaskIdParams& params, const ServerCallContext* context = nullptr) = 0;
+    virtual Task OnCancelTask(const TaskIdParams& params, std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief set a task push notification configuration
@@ -62,8 +62,8 @@ public:
      * @param[in] ctx server call context
      * @return TaskPushNotificationConfig
      */
-    virtual TaskPushNotificationConfig OnSetTaskPushNotificationConfig(const TaskPushNotificationConfig& cfg,
-                                                                       const ServerCallContext* context = nullptr) = 0;
+    virtual TaskPushNotificationConfig OnSetTaskPushNotificationConfig(
+        const TaskPushNotificationConfig& cfg, std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief retrieve a task push notification configuration of a task
@@ -73,7 +73,7 @@ public:
      * @return TaskPushNotificationConfig
      */
     virtual TaskPushNotificationConfig OnGetTaskPushNotificationConfig(
-        const GetTaskPushNotificationConfigParams& params, const ServerCallContext* context = nullptr) = 0;
+        const GetTaskPushNotificationConfigParams& params, std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief retrieve all task push notification configurations of a task
@@ -83,7 +83,7 @@ public:
      * @return vector of TaskPushNotificationConfig
      */
     virtual std::vector<TaskPushNotificationConfig> OnListTaskPushNotificationConfigs(
-        const ListTaskPushNotificationConfigParams& params, const ServerCallContext* context = nullptr) = 0;
+        const ListTaskPushNotificationConfigParams& params, std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief delete a task push notification configuration of a task
@@ -92,7 +92,7 @@ public:
      * @param[in] ctx server call context
      */
     virtual void OnDeleteTaskPushNotificationConfig(const DeleteTaskPushNotificationConfigParams& params,
-                                                    const ServerCallContext* context = nullptr) = 0;
+                                                    std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief handle the stream request reveiced
@@ -102,7 +102,7 @@ public:
      * @param[in] ctx server call context
      */
     virtual void OnSendMessageStreaming(const MessageSendParams& params, const StreamEmitter& emit,
-                                        const ServerCallContext* context = nullptr) = 0;
+                                        std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief handle resubscribe to task request
@@ -112,7 +112,7 @@ public:
      * @param[in] ctx server call context
      */
     virtual void OnResubscribeToTask(const TaskIdParams& params, const StreamEmitter& emit,
-                                     const ServerCallContext* context = nullptr) = 0;
+                                     std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 
     /**
      * @brief retrieve agent card
@@ -120,7 +120,7 @@ public:
      * @param[in] context server call context
      * @return AgentCard
      */
-    virtual AgentCard OnGetCard(const ServerCallContext* context = nullptr) = 0;
+    virtual AgentCard OnGetCard(std::shared_ptr<ServerCallContext> context = nullptr) = 0;
 };
 
 } // namespace A2A::Server

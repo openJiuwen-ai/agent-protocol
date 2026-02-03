@@ -63,12 +63,12 @@ using TcpSocketPtr = std::shared_ptr<TcpSocket>;
 
 class TcpSocket : public Socket {
 public:
-    TcpSocket(A2A::Server::EventSystem& es, int fd, const TcpSocketOptions& opts);
+    TcpSocket(EventSystem& es, int fd, const TcpSocketOptions& opts);
     // Adopt an existing file descriptor (typically from accept).
-    static TcpSocketPtr Adopt(A2A::Server::EventSystem& es, int fd, const TcpSocketOptions& opts = {});
+    static TcpSocketPtr Adopt(EventSystem& es, int fd, const TcpSocketOptions& opts = {});
 
     // Actively connect to a remote host (client-side).
-    static TcpSocketPtr Connect(A2A::Server::EventSystem& es, const std::string& host, uint16_t port,
+    static TcpSocketPtr Connect(EventSystem& es, const std::string& host, uint16_t port,
         int connectTimeoutMs = 0, const TcpSocketOptions& opts = {});
 
     ~TcpSocket() override;

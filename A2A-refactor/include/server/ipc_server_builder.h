@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "server/server.h"
+#include "server.h"
 
 namespace A2A::Server {
 

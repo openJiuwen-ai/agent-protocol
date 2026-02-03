@@ -14,7 +14,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
     const std::vector<Consumer>& consumers,
     const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
 {
-    std::string serverPreferred = card.preferredTransport.value_or("JSONRPC");
+    std::string serverPreferred = card.preferredTransport.value_or(JSONRPC_TRANSPORT);
     std::map<std::string, std::string> serverSet{{serverPreferred, card.url}};
     if (card.additionalInterfaces) {
         for (const auto& itf : *card.additionalInterfaces) {
@@ -23,7 +23,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
     }
 
     std::vector<std::string> clientSet = config.supportedTransports.empty() ?
-        std::vector<std::string>{"JSONRPC"} : config.supportedTransports;
+        std::vector<std::string>{JSONRPC_TRANSPORT} : config.supportedTransports;
     std::string chosenProtocol;
     std::string chosenUrl;
 
@@ -50,7 +50,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
     }
 
     std::shared_ptr<ClientTransport> transport = nullptr;
-    if (chosenProtocol == "JSONRPC") {
+    if (chosenProtocol == JSONRPC_TRANSPORT) {
         transport = std::make_shared<JsonRpcTransport>(chosenUrl, card, interceptors);
     }
 

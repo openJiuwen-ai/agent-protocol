@@ -65,7 +65,7 @@ public:
 
     void SetCardHandler(ServerTransportCardHandler handler) override;
 
-    static void SetCommonHeaders(Server::HttpResponse& response);
+    static void SetCommonHeaders(Http::HttpResponse& response);
 
 private:
     std::map<std::string, std::string> headers_;
@@ -85,10 +85,10 @@ private:
     // Private helper methods for route handlers
     void SetupJsonRpcEndpoint(Server::RouteMap& routeMap);
     void SetupCardEndpoint(Server::RouteMap& routeMap);
-    void HandleJsonRpcRequest(const Server::HttpRequest& req, const Server::HttpRequestContext& ctx);
-    void HandleStreamingRequest(const std::string& reqBody, const Server::HttpRequestContext& ctx,
+    void HandleJsonRpcRequest(const Http::HttpRequest& req, const Http::HttpRequestContext& ctx);
+    void HandleStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
         const std::map<std::string, std::string>& headersCopy);
-    void HandleNonStreamingRequest(const std::string& reqBody, const Server::HttpRequestContext& ctx,
+    void HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
         const std::map<std::string, std::string>& headersCopy);
     bool IsStreamingMethod(const std::string& reqBody);
 };

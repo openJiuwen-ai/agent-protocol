@@ -10,21 +10,17 @@
 #include <unordered_set>
 #include <vector>
 
-#include "server_call_context.h"
-#include "id_generator.h"
+#include "server/server_call_context.h"
 #include "types.h"
+#include "utils/id_generator.h"
+#include "server/request_context.h"
 
 namespace A2A::Server {
 
 // Request Context equivalent to Python's RequestContext
 class RequestContextImpl {
 public:
-    explicit RequestContextImpl(const std::optional<MessageSendParams>& request = std::nullopt,
-                                const std::optional<std::string>& taskId = std::nullopt,
-                                const std::optional<std::string>& contextId = std::nullopt,
-                                const std::optional<Task>& task = std::nullopt,
-                                const std::vector<Task>& relatedTasks = {},
-                                const std::shared_ptr<ServerCallContext>& callContext = nullptr,
+    explicit RequestContextImpl(const RequestContextParam& param,
                                 std::shared_ptr<IDGenerator> taskIdGenerator = nullptr,
                                 std::shared_ptr<IDGenerator> contextIdGenerator = nullptr);
 
@@ -35,7 +31,7 @@ public:
     void AttachRelatedTask(const Task& task);
 
     // Accessors
-    const Message* Message() const;
+    const Message* GetMessage() const;
 
     const std::vector<Task>& RelatedTasks() const
     {
@@ -62,7 +58,7 @@ public:
         return contextId_;
     }
 
-    const std::optional<nlohmann::json> Configuration() const;
+    std::shared_ptr<MessageSendConfiguration> Configuration() const;
 
     std::shared_ptr<ServerCallContext> CallContext() const
     {

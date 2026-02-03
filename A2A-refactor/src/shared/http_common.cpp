@@ -2,10 +2,10 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "http_common.h"
-
 #include <sstream>
 #include <stdexcept>
+
+#include "http_common.h"
 
 namespace A2A::Http {
 

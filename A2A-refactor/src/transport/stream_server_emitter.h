@@ -12,13 +12,13 @@ namespace A2A::Transport {
 
 class StreamServerEmitter : public TransportEmitter {
 public:
-    explicit StreamServerEmitter(const Server::HttpRequestContext& ctx) : ctx_(ctx) {}
+    explicit StreamServerEmitter(const Http::HttpRequestContext& ctx) : ctx_(ctx) {}
     ~StreamServerEmitter() override = default;
     void WriteData(const std::string& data) override;
     void WriteDone() override;
 
 private:
-    Server::HttpRequestContext ctx_;
+    Http::HttpRequestContext ctx_;
 
     void BuildAndSend(const std::string &body) const;
 };

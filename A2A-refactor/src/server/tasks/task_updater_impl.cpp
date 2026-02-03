@@ -7,8 +7,10 @@
 #include <vector>
 #include <chrono>
 #include <ctime>
+#include <id_generator.h>
 #include <sstream>
 #include <set>
+#include <server/task_updater.h>
 
 #include "event_queue.h"
 
@@ -152,11 +154,8 @@ private:
 };
 
 // Public interface implementation
-TaskUpdater::TaskUpdater(std::shared_ptr<EventQueue> eventQueue, std::string taskId, std::string contextId,
-                         std::shared_ptr<IDGenerator> artifactIdGenerator,
-                         std::shared_ptr<IDGenerator> messageIdGenerator)
-    : impl_(std::make_unique<TaskUpdaterImpl>(std::move(eventQueue), std::move(taskId), std::move(contextId),
-                                               std::move(artifactIdGenerator), std::move(messageIdGenerator)))
+TaskUpdater::TaskUpdater(std::shared_ptr<EventQueue> eventQueue, std::string taskId, std::string contextId)
+    : impl_(std::make_unique<TaskUpdaterImpl>(std::move(eventQueue), std::move(taskId), std::move(contextId)))
 {
 }
 
@@ -168,12 +167,9 @@ void TaskUpdater::UpdateStatus(TaskState state, std::optional<Message> message, 
     impl_->UpdateStatus(state, message, final, timestamp, metadata);
 }
 
-void TaskUpdater::AddArtifact(const std::vector<Part>& parts, std::optional<std::string> artifactId,
-                              std::optional<std::string> name, std::optional<nlohmann::json> metadata,
-                              std::optional<bool> append, std::optional<bool> lastChunk,
-                              std::optional<std::vector<std::string>> extensions)
+void TaskUpdater::AddArtifact(const TaskArtifactParam& artifactParam)
 {
-    impl_->AddArtifact(parts, artifactId, name, metadata, append, lastChunk, extensions);
+    impl_->AddArtifact(artifactParam);
 }
 
 void TaskUpdater::Complete(std::optional<Message> message)

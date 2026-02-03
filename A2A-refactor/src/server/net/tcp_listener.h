@@ -9,6 +9,7 @@
 #include <string>
 
 #include "net/tcp_socket.h"
+#include "event/event_system.h"
 
 namespace A2A::Server {
 
@@ -17,7 +18,7 @@ using NewConnectionCallback = std::function<void(const TcpSocketPtr& conn)>;
 // TCP listener: responsible for bind/listen/accept
 class TcpListener {
 public:
-    explicit TcpListener(A2A::Server::EventSystem& es);
+    explicit TcpListener(EventSystem& es);
     ~TcpListener();
 
     // Bind and listen. `host` may be empty or use "0.0.0.0"/"::"
@@ -32,7 +33,7 @@ public:
 private:
     void HandleAccept();
 
-    A2A::Server::EventSystem& es_;
+    EventSystem& es_;
     int listenFd_{-1};
     int evAcceptId_{0};
 

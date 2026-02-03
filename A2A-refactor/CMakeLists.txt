@@ -76,7 +76,7 @@ else()
 	set(_a2a_libevent_target event)
 endif()
 
-target_link_libraries(a2a PUBLIC ${_a2a_libevent_target} nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(a2a PUBLIC ${_a2a_libevent_target} nlohmann_json::nlohmann_json http_parser CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
 
 # Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
 if(TARGET event_pthreads)
@@ -97,6 +97,18 @@ endif()
 set_target_properties(a2a PROPERTIES
     OUTPUT_NAME "a2a"
 )
+
+if(TARGET http_parser)
+    target_link_libraries(a2a PRIVATE http_parser)
+endif()
+
+if (TARGET OpenSSL::SSL AND OpenSSL::Crypto)
+    target_link_libraries(a2a PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
+if(TARGET CURL::libcurl)
+    target_link_libraries(a2a PUBLIC CURL::libcurl)
+endif()
 
 if(A2A_ENABLE_TESTS)
     enable_testing()

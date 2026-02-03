@@ -129,7 +129,7 @@ public:
      * @param[in] parts a list of 'Part' object for the message content
      * @param[in] metadata metadata for the message
      */
-    A2A::Message NewAgentMessage(const std::vector<A2A::Part>& parts, const Metadata& metadata = std::nullopt);
+    A2A::Message NewAgentMessage(const std::vector<A2A::Part>& parts, const Metadata& metadata);
 
 private:
     std::unique_ptr<TaskUpdaterImpl> impl_;
