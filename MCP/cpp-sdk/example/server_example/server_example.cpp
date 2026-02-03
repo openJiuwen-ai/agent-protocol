@@ -103,6 +103,33 @@ int main(int argc, char** argv)
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Starting MCP Server test...");
 
+    auto promptHandler = [](const Mcp::ServerContext& ctx [[maybe_unused]], const std::string &promptName,
+        const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
+        Mcp::GetPromptResult result;
+        result.description = PROMPT_NAME;
+
+        std::string who = "friend";
+        std::string lang = "English";
+
+        if (arguments.has_value()) {
+            const auto &j = arguments.value();
+            if (j.contains("name") && j["name"].is_string()) {
+                who = j["name"].get<std::string>();
+            }
+            if (j.contains("language") && j["language"].is_string()) {
+                lang = j["language"].get<std::string>();
+            }
+        }
+        Mcp::TextContent tc;
+        tc.type = "text";
+        tc.text = "Hello, " + who + "! (language=" + lang + ")";
+        Mcp::PromptMessage msg;
+        msg.role = Mcp::RoleType::ASSISTANT;
+        msg.content = tc;
+        result.messages.push_back(msg);
+        return result;
+    };
+
     try {
         Mcp::ServerConfig config;
         config.name = SERVER_NAME;
@@ -133,8 +160,8 @@ int main(int argc, char** argv)
         echoTool.outputSchema = {
             {"type", "object"},
             {"properties", {{"result", {{"type", "string"}, {"description", "The echoed message"}}}}}};
-        echoTool.func = [](const std::string &name, const Mcp::JsonValue &arguments,
-                           const std::optional<Mcp::JsonValue> &ctx) -> Mcp::CallToolResult {
+        echoTool.func = [](const Mcp::ServerContext& ctx [[maybe_unused]], const std::string &name,
+                           const Mcp::JsonValue &arguments) -> Mcp::CallToolResult {
             Mcp::CallToolResult result;
             result.isError = false;
             try {
@@ -171,33 +198,7 @@ int main(int argc, char** argv)
             Mcp::PromptArgument{"language", "Language for the greeting (default: English)", false}};
 
         try {
-            server->AddPrompt(greetingPrompt,
-                              [](const std::string &promptName,
-                                 const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
-                                  Mcp::GetPromptResult result;
-                                  result.description = PROMPT_NAME;
-
-                                  std::string who = "friend";
-                                  std::string lang = "English";
-
-                                  if (arguments.has_value()) {
-                                      const auto &j = arguments.value();
-                                      if (j.contains("name") && j["name"].is_string()) {
-                                          who = j["name"].get<std::string>();
-                                      }
-                                      if (j.contains("language") && j["language"].is_string()) {
-                                          lang = j["language"].get<std::string>();
-                                      }
-                                  }
-                                  Mcp::TextContent tc;
-                                  tc.type = "text";
-                                  tc.text = "Hello, " + who + "! (language=" + lang + ")";
-                                  Mcp::PromptMessage msg;
-                                  msg.role = Mcp::RoleType::ASSISTANT;
-                                  msg.content = tc;
-                                  result.messages.push_back(msg);
-                                  return result;
-                              });
+            server->AddPrompt(greetingPrompt, promptHandler);
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt success: %s", greetingPrompt.name.c_str());
         } catch (const std::exception &e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "add prompt failed: %s", e.what());
@@ -212,7 +213,8 @@ int main(int argc, char** argv)
         resource.description = RESOURCE_DESCRIPTION;
         resource.mimeType = RESOURCE_MIME_TYPE;
 
-        Mcp::ReadResourceFunc readResourceFunc = [](const std::string &uri) -> Mcp::ReadResourceResult {
+        Mcp::ReadResourceFunc readResourceFunc = [](const Mcp::ServerContext& ctx [[maybe_unused]],
+            const std::string &uri) -> Mcp::ReadResourceResult {
             Mcp::ReadResourceResult result;
             Mcp::TextResourceContents textContents;
             textContents.uri = uri;

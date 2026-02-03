@@ -174,8 +174,8 @@ void ServerSession::SendNotification(std::unique_ptr<Notification> notification,
     serverTransport_->SendMessage(message, dummy);
 }
 
-void ServerSession::SendProgressNotification(int64_t progressToken, double progress, std::optional<double> total,
-                                             const std::optional<std::string>& message)
+void ServerSession::SendProgressNotification(const std::string& progressToken, double progress,
+    std::optional<double> total, const std::optional<std::string>& message)
 {
 }
 

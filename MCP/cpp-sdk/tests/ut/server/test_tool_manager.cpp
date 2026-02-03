@@ -15,10 +15,9 @@
 
 namespace Mcp {
 
-static CallToolResult TestToolFunc(const std::string& name, const JsonValue& arguments,
-                                  std::optional<JsonValue> context) {
-    (void)context;
-
+static CallToolResult TestToolFunc(const Mcp::ServerContext &ctx [[maybe_unused]], const std::string& name,
+    const JsonValue& arguments)
+{
     CallToolResult result;
     result.isError = false;
 
@@ -30,11 +29,9 @@ static CallToolResult TestToolFunc(const std::string& name, const JsonValue& arg
     return result;
 }
 
-static CallToolResult TestCallbackToolFunc(const std::string& name, const JsonValue& arguments,
-                                          std::optional<JsonValue> context) {
-    (void)arguments;
-    (void)context;
-
+static CallToolResult TestCallbackToolFunc(const Mcp::ServerContext &ctx [[maybe_unused]], const std::string& name,
+    const JsonValue& arguments [[maybe_unused]])
+{
     CallToolResult result;
     result.isError = false;
 
@@ -83,11 +80,8 @@ protected:
     }
 
     ToolInfo CreateErrorThrowingTool(const std::string& name = "error_tool") {
-        auto errorFunc = [](const std::string& name, const JsonValue& arguments,
-                           std::optional<JsonValue> context) -> CallToolResult {
-            (void)arguments;
-            (void)context;
-
+        auto errorFunc = [](const Mcp::ServerContext &ctx [[maybe_unused]], const std::string& name,
+            const JsonValue& arguments [[maybe_unused]]) -> CallToolResult {
             if (name == "error_tool") {
                 throw std::runtime_error("Simulated tool error");
             }
@@ -293,7 +287,8 @@ TEST_F(ToolManagerTest, CallToolSuccess) {
     toolManager->AddTool(tool);
 
     JsonValue arguments = R"({"param": "value"})"_json;
-    CallToolResult result = toolManager->CallTool("test_tool", arguments.dump());
+    const Mcp::ServerContext context = {};
+    CallToolResult result = toolManager->CallTool(context, "test_tool", arguments.dump());
 
     EXPECT_FALSE(result.isError);
     EXPECT_FALSE(result.content.empty());
@@ -309,36 +304,41 @@ TEST_F(ToolManagerTest, CallToolWithJsonArguments) {
     toolManager->AddTool(tool);
 
     std::string arguments = R"({"key1": "value1", "key2": 123, "key3": true})";
-    CallToolResult result = toolManager->CallTool("json_tool", arguments);
+    const Mcp::ServerContext context = {};
+    CallToolResult result = toolManager->CallTool(context, "json_tool", arguments);
 
     EXPECT_FALSE(result.isError);
     EXPECT_FALSE(result.content.empty());
 }
 
 TEST_F(ToolManagerTest, CallNonExistentTool) {
-    EXPECT_THROW(toolManager->CallTool("non_existent_tool", R"({})"), std::runtime_error);
+    const Mcp::ServerContext context = {};
+    EXPECT_THROW(toolManager->CallTool(context, "non_existent_tool", R"({})"), std::runtime_error);
 }
 
 TEST_F(ToolManagerTest, CallToolEmptyName) {
-    EXPECT_THROW(toolManager->CallTool("", R"({})"), std::runtime_error);
+    const Mcp::ServerContext context = {};
+    EXPECT_THROW(toolManager->CallTool(context, "", R"({})"), std::runtime_error);
 }
 
 TEST_F(ToolManagerTest, CallToolThrowsException) {
     ToolInfo tool = CreateErrorThrowingTool("error_tool");
     toolManager->AddTool(tool);
 
-    EXPECT_THROW(toolManager->CallTool("error_tool", R"({})"), std::runtime_error);
+    const Mcp::ServerContext context = {};
+    EXPECT_THROW(toolManager->CallTool(context, "error_tool", R"({})"), std::runtime_error);
 }
 
 TEST_F(ToolManagerTest, CallToolAfterRemove) {
     ToolInfo tool = CreateTestTool("temp_tool");
     toolManager->AddTool(tool);
 
-    EXPECT_NO_THROW(toolManager->CallTool("temp_tool", R"({})"));
+    const Mcp::ServerContext context = {};
+    EXPECT_NO_THROW(toolManager->CallTool(context, "temp_tool", R"({})"));
 
     toolManager->RemoveTool("temp_tool");
 
-    EXPECT_THROW(toolManager->CallTool("temp_tool", R"({})"), std::runtime_error);
+    EXPECT_THROW(toolManager->CallTool(context, "temp_tool", R"({})"), std::runtime_error);
 }
 
 TEST_F(ToolManagerTest, CallToolAfterOverwrite) {
@@ -349,7 +349,8 @@ TEST_F(ToolManagerTest, CallToolAfterOverwrite) {
     toolManager->AddTool(tool1);
     toolManager->AddTool(tool2);
 
-    CallToolResult result = toolManager->CallTool("tool", R"({})");
+    const Mcp::ServerContext context = {};
+    CallToolResult result = toolManager->CallTool(context, "tool", R"({})");
 
     EXPECT_FALSE(result.isError);
     EXPECT_FALSE(result.content.empty());
@@ -365,7 +366,8 @@ TEST_F(ToolManagerTest, AddToolWithVeryLongName) {
     ASSERT_EQ(result.tools.size(), 1);
     EXPECT_EQ(result.tools[0].name, longName);
 
-    EXPECT_NO_THROW(toolManager->CallTool(longName, R"({})"));
+    const Mcp::ServerContext context = {};
+    EXPECT_NO_THROW(toolManager->CallTool(context, longName, R"({})"));
 }
 
 TEST_F(ToolManagerTest, AddManyTools) {
@@ -432,9 +434,11 @@ TEST_F(ToolManagerTest, RemoveToolExceptionMessages) {
     }
 }
 
-TEST_F(ToolManagerTest, CallToolExceptionMessages) {
+TEST_F(ToolManagerTest, CallToolExceptionMessages)
+{
+    const Mcp::ServerContext context = {};
     try {
-        toolManager->CallTool("non_existent", R"({})");
+        toolManager->CallTool(context, "non_existent", R"({})");
         FAIL() << "Expected std::runtime_error";
     } catch (const std::runtime_error& e) {
         EXPECT_STREQ(e.what(), "Tool not found: non_existent");
@@ -444,7 +448,7 @@ TEST_F(ToolManagerTest, CallToolExceptionMessages) {
     toolManager->AddTool(tool);
 
     try {
-        toolManager->CallTool("error_tool", R"({})");
+        toolManager->CallTool(context, "error_tool", R"({})");
         FAIL() << "Expected std::runtime_error";
     } catch (const std::runtime_error& e) {
         EXPECT_TRUE(std::string(e.what()).find("Tool execution failed") != std::string::npos);

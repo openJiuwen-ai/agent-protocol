@@ -95,7 +95,7 @@ ListResourcesResult ResourceManager::ListResources()
     return result;
 }
 
-ReadResourceResult ResourceManager::ReadResource(const std::string& uri)
+ReadResourceResult ResourceManager::ReadResource(const ServerContext& ctx, const std::string& uri)
 {
     ReadResourceFunc readFunc;
     {
@@ -107,7 +107,7 @@ ReadResourceResult ResourceManager::ReadResource(const std::string& uri)
         readFunc = it->second.readFunc;
     }
 
-    return readFunc(uri);
+    return readFunc(ctx, uri);
 }
 
 ListResourceTemplatesResult ResourceManager::ListResourceTemplates()

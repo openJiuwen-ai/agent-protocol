@@ -304,7 +304,7 @@ TEST(BaseSessionTest, SendProgressNotification_NoCrash)
     auto t = std::make_shared<FakeClientTransport>();
     TestClientSession s(t);
 
-    EXPECT_NO_THROW(s.SendProgressNotification(1, 0.1, 1.0, std::optional<std::string>("hi")));
+    EXPECT_NO_THROW(s.SendProgressNotification("", 0.1, 1.0, std::optional<std::string>("hi")));
 }
 
 // ================= header coverage =================

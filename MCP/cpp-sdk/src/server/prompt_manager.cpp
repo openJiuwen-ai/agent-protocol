@@ -39,7 +39,8 @@ ListPromptsResult PromptManager::ListPrompts()
     return result;
 }
 
-GetPromptResult PromptManager::GetPrompt(const std::string& name, const std::optional<JsonValue>& argument)
+GetPromptResult PromptManager::GetPrompt(const ServerContext& ctx, const std::string& name,
+    const std::optional<JsonValue>& argument)
 {
     RenderPromptFunc handler;
     {
@@ -51,7 +52,7 @@ GetPromptResult PromptManager::GetPrompt(const std::string& name, const std::opt
         handler = it->second.handler;
     }
 
-    return handler(name, argument);
+    return handler(ctx, name, argument);
 }
 
 } // namespace Mcp

@@ -240,18 +240,6 @@ struct CreateMessageResult : public Result {
     std::variant<SamplingMessageContentBlock, std::vector<SamplingMessageContentBlock>> content;
 };
 
-using ToolFunc = std::function<CallToolResult(const std::string& name, const JsonValue& arguments,
-                                              const std::optional<JsonValue>& ctx)>;
-
-struct ToolInfo {
-    std::string name;
-    std::string title;
-    std::string description;
-    JsonValue inputSchema;
-    JsonValue outputSchema;
-    ToolFunc func;
-};
-
 //Struct for list_tool result
 struct Tool {
     std::string name;
@@ -283,12 +271,6 @@ struct GetPromptResult : public Result {
     std::optional<std::string> description;
     std::vector<PromptMessage> messages;
 };
-
-// Render function for a prompt definition.
-// The function should take the prompt name and optional arguments, then return a GetPromptResult
-// whose `messages_` are ready to be used as model context.
-using RenderPromptFunc =
-    std::function<GetPromptResult(const std::string& name, const std::optional<JsonValue>& argument)>;
 
 // Describes a reusable prompt.
 struct PromptInfo {
@@ -398,9 +380,6 @@ struct ListResourcesResult : public Result {
 struct ReadResourceResult : public Result {
     std::vector<ResourceContents> contents;
 };
-
-// Function type for reading a resource
-using ReadResourceFunc = std::function<ReadResourceResult(const std::string& uri)>;
 
 // resources/templates/list
 struct ListResourceTemplatesResult : public Result {

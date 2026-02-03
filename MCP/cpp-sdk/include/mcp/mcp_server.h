@@ -18,6 +18,40 @@ namespace Mcp {
 using CompleteFunc = std::function<CompleteResult(const CompleteReference& ref,
     const CompletionArgument& argument, const std::optional<CompletionContext>& ctx)>;
 
+class McpServerSession {
+public:
+    virtual ~McpServerSession() = default;
+    virtual void SendProgressNotification(const std::string& progressToken, double progress,
+                                          std::optional<double> total = std::nullopt,
+                                          const std::optional<std::string>& message = std::nullopt) = 0;
+};
+
+struct ServerContext {
+    std::shared_ptr<McpServerSession> session;
+};
+
+using ToolFunc = std::function<CallToolResult(const ServerContext& ctx, const std::string& name,
+    const JsonValue& arguments)>;
+
+struct ToolInfo {
+    std::string name;
+    std::string title;
+    std::string description;
+    JsonValue inputSchema;
+    JsonValue outputSchema;
+    ToolFunc func;
+};
+
+// Render function for a prompt definition.
+// The function should take the prompt name and optional arguments, then return a GetPromptResult
+// whose `messages_` are ready to be used as model context.
+using RenderPromptFunc =
+    std::function<GetPromptResult(const ServerContext& ctx, const std::string& name,
+        const std::optional<JsonValue>& argument)>;
+
+// Function type for reading a resource
+using ReadResourceFunc = std::function<ReadResourceResult(const ServerContext& ctx, const std::string& uri)>;
+
 /**
  * Abstract base class for MCP server implementations.
  *

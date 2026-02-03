@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "mcp_server.h"
 #include "mcp_type.h"
 #include "shared/jsonrpc.h"
 
@@ -35,7 +36,7 @@ public:
 
     // Get operations
     ListResourcesResult ListResources();
-    ReadResourceResult ReadResource(const std::string& uri);
+    ReadResourceResult ReadResource(const ServerContext& ctx, const std::string& uri);
     ListResourceTemplatesResult ListResourceTemplates();
 
     // Subscription operations

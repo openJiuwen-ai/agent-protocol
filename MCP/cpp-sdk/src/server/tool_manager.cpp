@@ -63,7 +63,8 @@ ListToolsResult ToolManager::ListTools() const
     return result;
 }
 
-CallToolResult ToolManager::CallTool(const std::string& name, const std::string& arguments) const
+CallToolResult ToolManager::CallTool(const ServerContext& ctx, const std::string& name,
+    const std::string& arguments) const
 {
     ToolFunc func;
     {
@@ -77,7 +78,7 @@ CallToolResult ToolManager::CallTool(const std::string& name, const std::string&
 
     try {
         JsonValue args = JsonValue::parse(arguments);
-        return func(name, args, std::nullopt);
+        return func(ctx, name, args);
     } catch (const std::exception& e) {
         throw std::runtime_error("Tool execution failed: " + std::string(e.what()));
     }

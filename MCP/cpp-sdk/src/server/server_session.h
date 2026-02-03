@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "mcp_server.h"
 #include "mcp_type.h"
 #include "shared/base_session.h"
 #include "shared/jsonrpc.h"
@@ -26,7 +27,8 @@ using IncomingNotificationCallback = std::function<void(const Notification& noti
  * It receives requests/notifications from the client via the underlying `Transport`,
  * handles MCP initialization, and then forwards requests and notifications to the callback.
  */
-class ServerSession final : public BaseSession, public std::enable_shared_from_this<ServerSession> {
+class ServerSession final : public BaseSession, public McpServerSession,
+    public std::enable_shared_from_this<ServerSession> {
 public:
     explicit ServerSession(std::shared_ptr<ServerTransport> transport,
                            const ServerConfig& serverConfig = ServerConfig(), std::string sessionId = "")
@@ -125,7 +127,7 @@ protected:
     /**
      * @brief Send a progress notification to the client.
      */
-    void SendProgressNotification(int64_t progressToken, double progress, std::optional<double> total,
+    void SendProgressNotification(const std::string& progressToken, double progress, std::optional<double> total,
                                   const std::optional<std::string>& message) override;
 
 private:

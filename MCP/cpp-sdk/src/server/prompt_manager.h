@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "mcp_server.h"
 #include "mcp_type.h"
 #include "shared/jsonrpc.h"
 
@@ -26,7 +27,8 @@ public:
     void AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler);
     void RemovePrompt(const std::string& name);
     ListPromptsResult ListPrompts();
-    GetPromptResult GetPrompt(const std::string& name, const std::optional<JsonValue>& argument = std::nullopt);
+    GetPromptResult GetPrompt(const ServerContext& ctx, const std::string& name,
+        const std::optional<JsonValue>& argument = std::nullopt);
 
 private:
     struct PromptEntry {

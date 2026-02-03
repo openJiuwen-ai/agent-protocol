@@ -130,8 +130,9 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
         return;
     }
 
+    ServerContext serverCtx = {session};
     std::string args = params->arguments.has_value() ? params->arguments->dump() : "{}";
-    auto result = std::make_unique<CallToolResult>(toolManager_.CallTool(params->name, args));
+    auto result = std::make_unique<CallToolResult>(toolManager_.CallTool(serverCtx, params->name, args));
     session->SendResponse(requestId, std::move(result), ctx);
 }
 
@@ -163,7 +164,9 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
     }
 
     try {
-        auto result = std::make_unique<GetPromptResult>(promptManager_.GetPrompt(params->name, params->arguments));
+        ServerContext serverCtx = {session};
+        auto result = std::make_unique<GetPromptResult>(promptManager_.GetPrompt(serverCtx, params->name,
+            params->arguments));
         session->SendResponse(requestId, std::move(result), ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
@@ -207,7 +210,8 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
     }
 
     try {
-        auto result = std::make_unique<ReadResourceResult>(resourceManager_.ReadResource(params->uri_));
+        ServerContext serverCtx = {session};
+        auto result = std::make_unique<ReadResourceResult>(resourceManager_.ReadResource(serverCtx, params->uri_));
         session->SendResponse(requestId, std::move(result), ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);

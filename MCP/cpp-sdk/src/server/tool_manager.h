@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "mcp_server.h"
 #include "mcp_type.h"
 #include "shared/jsonrpc.h"
 
@@ -24,7 +25,7 @@ public:
     void RemoveTool(const std::string& name);
 
     ListToolsResult ListTools() const;
-    CallToolResult CallTool(const std::string& name, const std::string& arguments) const;
+    CallToolResult CallTool(const ServerContext& ctx, const std::string& name, const std::string& arguments) const;
 
     void SetOverwrite(bool overwrite)
     {
