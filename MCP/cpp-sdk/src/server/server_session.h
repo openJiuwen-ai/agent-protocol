@@ -5,6 +5,7 @@
 #ifndef MCP_SERVER_SESSION_INCLUDE_H_
 #define MCP_SERVER_SESSION_INCLUDE_H_
 
+#include <future>
 #include <optional>
 
 #include "mcp_server.h"
@@ -102,6 +103,14 @@ public:
      * the corresponding response arrives.
      */
     std::future<std::shared_ptr<ListRootsResult>> ListRoots();
+
+    /**
+     * @brief Request the client to sample a model message via `sampling/createMessage`.
+     *
+     * This is a server->client MCP request. The client must have advertised
+     * support for this request via its initialize capabilities.
+     */
+    std::future<std::shared_ptr<CreateMessageResult>> SamplingCreateMessage(const CreateMessageRequestParams& params);
 
 protected:
     /**
