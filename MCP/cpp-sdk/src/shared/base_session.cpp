@@ -16,7 +16,7 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
         throw std::invalid_argument("Request cannot be null");
     }
 
-    int64_t requestId = requestId_.fetch_add(1);
+    RequestId requestId = RequestId(requestId_.fetch_add(1));
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -37,7 +37,7 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
     clientTransport_->SendMessage(msg);
 }
 
-void BaseSession::SendResponse(int64_t requestId, std::unique_ptr<Result> result, RequestContext& ctx)
+void BaseSession::SendResponse(const RequestId& requestId, std::unique_ptr<Result> result, RequestContext& ctx)
 {
     JSONRPCResponse response;
     response.jsonrpc_ = JSONRPC_VERSION;
@@ -47,7 +47,7 @@ void BaseSession::SendResponse(int64_t requestId, std::unique_ptr<Result> result
     serverTransport_->SendMessage(msg, ctx);
 }
 
-void BaseSession::SendResponse(int64_t requestId, JSONRPCError error, RequestContext& ctx)
+void BaseSession::SendResponse(const RequestId& requestId, JSONRPCError error, RequestContext& ctx)
 {
     JSONRPCMessage msg = std::move(error);
     serverTransport_->SendMessage(msg, ctx);
@@ -55,7 +55,7 @@ void BaseSession::SendResponse(int64_t requestId, JSONRPCError error, RequestCon
 
 void BaseSession::HandleResponse(const JSONRPCResponse& response)
 {
-    int64_t responseId = response.id_;
+    const RequestId& responseId = response.id_;
     std::function<void(std::shared_ptr<Result>)> completion;
 
     {
@@ -78,7 +78,7 @@ void BaseSession::HandleResponse(const JSONRPCResponse& response)
 
 void BaseSession::HandleResponse(const JSONRPCError& error)
 {
-    int64_t responseId = error.id_;
+    const RequestId& responseId = error.id_;
     std::function<void(std::shared_ptr<Result>)> completion;
 
     {

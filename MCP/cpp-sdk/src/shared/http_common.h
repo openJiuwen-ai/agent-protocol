@@ -10,8 +10,17 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <variant>
+
+// Forward declaration for RequestId type
+namespace Mcp {
+using RequestId = std::variant<int64_t, std::string>;
+}
 
 namespace Mcp::Http {
+
+// Use RequestId from parent Mcp namespace
+using Mcp::RequestId;
 
 // MCP Header constants
 constexpr const char* MCP_SESSION_ID_HEADER = "mcp-session-id";
@@ -86,7 +95,7 @@ struct ServerSentEvent {
 };
 
 struct UserData {
-    uint64_t requestId = 0;
+    RequestId requestId = int64_t(0);
     std::string method;
 };
 

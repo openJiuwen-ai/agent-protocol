@@ -80,7 +80,7 @@ void StreamableHttpClientTransport::SendSessionTerminatedError(const HttpRespons
     // Construct JSON-RPC error per MCP spec: code -32600, message "Session terminated"
     JSONRPCError error;
     error.jsonrpc_ = JSONRPC_VERSION;
-    error.id_ = static_cast<int>(response.userData.requestId);
+    error.id_ = response.userData.requestId;
     error.code_ = static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST); // -32600
     error.message_ = "Session terminated";
     error.data_ = std::nullopt;
@@ -172,14 +172,13 @@ void StreamableHttpClientTransport::SendMessage(const JSONRPCMessage& message)
 
     // Build user data from JSON-RPC message (only requests have id/method)
     UserData userData{};
-    userData.requestId = 0;
+    userData.requestId = int64_t(0);
     std::visit(
         [&userData](const auto& msg) {
             using T = std::decay_t<decltype(msg)>;
             if constexpr (std::is_same_v<T, JSONRPCRequest>) {
-                if (msg.id_ > 0) {
-                    userData.requestId = static_cast<uint64_t>(msg.id_);
-                }
+                // Directly use the RequestId from JSON-RPC message
+                userData.requestId = msg.id_;
                 userData.method = msg.method_;
             }
         },

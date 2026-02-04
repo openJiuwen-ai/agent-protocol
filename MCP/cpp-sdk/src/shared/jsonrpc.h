@@ -21,6 +21,9 @@ namespace Mcp {
 // Internal type alias for JSON processing
 using JsonValue = nlohmann::json;
 
+// JSON-RPC request ID type (can be int64_t or string)
+using RequestId = std::variant<int64_t, std::string>;
+
 // Base class for pure parameter data
 // All request-specific parameter structs can optionally use `cursor` for pagination.
 struct RequestParams {
@@ -47,7 +50,7 @@ struct Request : public MCPBaseType {
 class JSONRPCRequest {
 public:
     std::string jsonrpc_;
-    int64_t id_;
+    RequestId id_;
     std::string method_;
     std::unique_ptr<Request> request_;
 
@@ -60,7 +63,7 @@ public:
 class JSONRPCResponse {
 public:
     std::string jsonrpc_;
-    int64_t id_;
+    RequestId id_;
     std::shared_ptr<Result> result_;
 
     JSONRPCResponse();
@@ -103,12 +106,13 @@ public:
 // JSON-RPC error response structure
 struct JSONRPCError {
     std::string jsonrpc_;
-    int64_t id_;
+    RequestId id_;
     int code_;
     std::string message_;
     std::optional<nlohmann::json> data_;
 
-    JSONRPCError() : jsonrpc_(JSONRPC_VERSION), id_(0), code_(-1), message_("Internal error"), data_(std::nullopt)
+    JSONRPCError() : jsonrpc_(JSONRPC_VERSION), id_(int64_t(0)), code_(-1),
+                     message_("Internal error"), data_(std::nullopt)
     {
     }
 
@@ -221,5 +225,18 @@ struct PingRequest : public Request {
 };
 
 } // namespace Mcp
+
+// Hash specialization for RequestId to enable use in std::unordered_map
+namespace std {
+template <>
+struct hash<Mcp::RequestId> {
+    std::size_t operator()(const Mcp::RequestId& id) const noexcept
+    {
+        return std::visit([](const auto& value) -> std::size_t {
+            return std::hash<std::decay_t<decltype(value)>>{}(value);
+        }, id);
+    }
+};
+} // namespace std
 
 #endif // MCP_JSONRPC_INCLUDE_H_

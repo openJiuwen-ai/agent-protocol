@@ -12,7 +12,9 @@
 namespace Mcp {
 
 // Callback type invoked when the session receives a request from the client.
-using IncomingRequestCallback = std::function<void(int64_t requestId, const Request& request, RequestContext& ctx)>;
+using IncomingRequestCallback = std::function<void(const RequestId& requestId,
+                                                   const Request& request,
+                                                   RequestContext& ctx)>;
 
 // Callback type invoked when the session receives a notification from the client.
 using IncomingNotificationCallback = std::function<void(const Notification& notification)>;
@@ -62,7 +64,7 @@ protected:
     *
     * This is called by `BaseSession` when a request message is parsed.
      */
-    void ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx) override;
+    void ReceivedRequest(const RequestId& requestId, const Request& request, RequestContext& ctx) override;
 
     /**
     * @brief Handle an incoming JSON-RPC notification from the client.
@@ -74,7 +76,7 @@ protected:
     /**
      * @brief Send a notification to the client.
      */
-    void SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId) override;
+    void SendNotification(const Notification& notification, std::optional<RequestId> relatedRequestId) override;
 
     /**
      * @brief Send a progress notification to the client.
@@ -88,12 +90,14 @@ private:
      *
      * Validates initialization parameters and replies with an InitializeResult.
      */
-    void HandleInitializeRequest(int64_t requestId, const InitializeRequestParams& requestParams, RequestContext& ctx);
+    void HandleInitializeRequest(const RequestId& requestId,
+                                 const InitializeRequestParams& requestParams,
+                                 RequestContext& ctx);
 
     /**
      * @brief Send an InitializeResult response to the client.
      */
-    void SendInitializeResponse(int64_t requestId, const ServerCapabilities& capabilities,
+    void SendInitializeResponse(const RequestId& requestId, const ServerCapabilities& capabilities,
                                 const std::string& requestedProtocolVersion, RequestContext& ctx);
 
     /**

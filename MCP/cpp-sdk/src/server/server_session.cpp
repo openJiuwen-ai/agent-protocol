@@ -34,7 +34,7 @@ void ServerSession::HandleRequest(const HttpRequest& request, RequestContext& co
     serverTransport_->HandleRequest(request, context);
 }
 
-void ServerSession::ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+void ServerSession::ReceivedRequest(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     // The Initialize request is handled internally because it wires up session
     // state and negotiates capabilities.
@@ -66,14 +66,14 @@ void ServerSession::ReceivedNotification(const Notification& notification)
     }
 }
 
-void ServerSession::HandleInitializeRequest(int64_t requestId, const InitializeRequestParams& requestParams,
+void ServerSession::HandleInitializeRequest(const RequestId& requestId, const InitializeRequestParams& requestParams,
                                             RequestContext& ctx)
 {
     // Reply to the client with server capabilities and implementation info.
     SendInitializeResponse(requestId, capabilities_, requestParams.protocolVersion_, ctx);
 }
 
-void ServerSession::SendInitializeResponse(int64_t requestId, const ServerCapabilities& capabilities,
+void ServerSession::SendInitializeResponse(const RequestId& requestId, const ServerCapabilities& capabilities,
                                            const std::string& requestedProtocolVersion, RequestContext& ctx)
 {
     // Build MCP InitializeResult payload.
@@ -95,7 +95,7 @@ void ServerSession::HandleInitializeNotification(const Notification& notificatio
     isInitialized_ = true;
 }
 
-void ServerSession::SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId)
+void ServerSession::SendNotification(const Notification& notification, std::optional<RequestId> relatedRequestId)
 {
 }
 

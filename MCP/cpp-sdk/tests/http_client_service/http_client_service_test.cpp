@@ -37,15 +37,15 @@ constexpr int STATUS_CODE_ERROR = -1;
 constexpr int STATUS_CODE_TIMEOUT = -2;
 
 // Request ID base values for different tests
-constexpr uint64_t REQUEST_ID_BASE_BASIC = 1000;
-constexpr uint64_t REQUEST_ID_OFFSET_BASIC_FIRST = 1;
-constexpr uint64_t REQUEST_ID_BASE_CONCURRENT = 2000;
-constexpr uint64_t REQUEST_ID_BASE_METHODS = 3000;
-constexpr uint64_t REQUEST_ID_BASE_HEADERS = 4000;
-constexpr uint64_t REQUEST_ID_BASE_ERROR = 5000;
-constexpr uint64_t REQUEST_ID_BASE_RAPID = 6000;
-constexpr uint64_t REQUEST_ID_BASE_GRACEFUL = 7000;
-constexpr uint64_t REQUEST_ID_BASE_QUEUE = 8000;
+constexpr int64_t REQUEST_ID_BASE_BASIC = 1000;
+constexpr int64_t REQUEST_ID_OFFSET_BASIC_FIRST = 1;
+constexpr int64_t REQUEST_ID_BASE_CONCURRENT = 2000;
+constexpr int64_t REQUEST_ID_BASE_METHODS = 3000;
+constexpr int64_t REQUEST_ID_BASE_HEADERS = 4000;
+constexpr int64_t REQUEST_ID_BASE_ERROR = 5000;
+constexpr int64_t REQUEST_ID_BASE_RAPID = 6000;
+constexpr int64_t REQUEST_ID_BASE_GRACEFUL = 7000;
+constexpr int64_t REQUEST_ID_BASE_QUEUE = 8000;
 
 // Time intervals (milliseconds)
 constexpr int DELAY_SERVER_STARTUP_MS = 500;
@@ -228,7 +228,7 @@ bool TestBasicFunctionality()
     request.headers["User-Agent"] = "ComprehensiveTest/1.0";
 
     UserData userData;
-    userData.requestId = REQUEST_ID_BASE_BASIC + REQUEST_ID_OFFSET_BASIC_FIRST;
+    userData.requestId = RequestId(REQUEST_ID_BASE_BASIC + REQUEST_ID_OFFSET_BASIC_FIRST);
     userData.method = "CALL_TOOL";
 
     env.service->Send(request, &userData, TIMEOUT_REQUEST_DEFAULT_MS,

@@ -109,7 +109,7 @@ public:
      * @param relatedRequestId Optional ID of the request this notification relates to
      */
     virtual void SendNotification(const Notification& notification,
-                                  std::optional<int64_t> relatedRequestId = std::nullopt) = 0;
+                                  std::optional<RequestId> relatedRequestId = std::nullopt) = 0;
 
     /**
      * Send a progress notification for a request being processed.
@@ -126,8 +126,8 @@ public:
     /**
      * Send a response to a request.
      */
-    void SendResponse(int64_t requestId, std::unique_ptr<Result> result, RequestContext& ctx);
-    void SendResponse(int64_t requestId, JSONRPCError error, RequestContext& ctx);
+    void SendResponse(const RequestId& requestId, std::unique_ptr<Result> result, RequestContext& ctx);
+    void SendResponse(const RequestId& requestId, JSONRPCError error, RequestContext& ctx);
 
     void OnTransportMessage(const JSONRPCMessage& message, RequestContext& ctx);
 
@@ -140,7 +140,7 @@ protected:
     /**
      * Called when a request is received.
      */
-    virtual void ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+    virtual void ReceivedRequest(const RequestId& requestId, const Request& request, RequestContext& ctx)
     {
     }
 
@@ -182,10 +182,10 @@ protected:
     std::mutex mutex_;
 
     // Progress callbacks for requests
-    std::unordered_map<int64_t, ProgressCallback> progressCallbacks_;
+    std::unordered_map<RequestId, ProgressCallback> progressCallbacks_;
 
     // Completion callbacks for requests
-    std::unordered_map<int64_t, std::function<void(std::shared_ptr<Result>)>> completionCallbacks_;
+    std::unordered_map<RequestId, std::function<void(std::shared_ptr<Result>)>> completionCallbacks_;
 };
 
 inline void SessionTransportCallback::OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx)

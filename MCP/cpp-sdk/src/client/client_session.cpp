@@ -168,7 +168,7 @@ void ClientSession::SendInitializedNotification()
 }
 
 // send_notification implementation
-void ClientSession::SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId)
+void ClientSession::SendNotification(const Notification& notification, std::optional<RequestId> relatedRequestId)
 {
     // Build a JSONRPCMessage variant holding a JSONRPCNotification instance
     // and populate only lightweight fields (strings). Do not copy any

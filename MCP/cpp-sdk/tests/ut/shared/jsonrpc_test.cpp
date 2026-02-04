@@ -29,6 +29,7 @@ using Mcp::ListResourceTemplatesRequest;
 using Mcp::ListResourceTemplatesResult;
 using Mcp::ResourceTemplate;
 using Mcp::GetPromptParams;
+using Mcp::RequestId;
 using Mcp::GetPromptRequest;
 using Mcp::GetPromptResult;
 using Mcp::PromptArgument;
@@ -119,7 +120,7 @@ TEST_F(JSONRPCTest, JSONRPCRequestSerializationSuccess)
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, req2.jsonrpc_);
-    EXPECT_EQ(REQUEST_ID, req2.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), req2.id_);
     EXPECT_EQ(METHOD_NAME, req2.method_);
     EXPECT_NE(nullptr, req2.request_);
 
@@ -146,7 +147,7 @@ TEST_F(JSONRPCTest, JSONRPCRequestWithStringIdSuccess)
     int result = req2.Deserialize(serialized);
 
     EXPECT_EQ(0, result);
-    EXPECT_EQ(REQUEST_ID, req2.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), req2.id_);
 }
 
 TEST_F(JSONRPCTest, InitializeRequestDefaultConstruction)
@@ -184,7 +185,7 @@ TEST_F(JSONRPCTest, JSONRPCResponseSerializationSuccess)
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, resp2.jsonrpc_);
-    EXPECT_EQ(REQUEST_ID, resp2.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), resp2.id_);
 }
 
 TEST_F(JSONRPCTest, JsonrpcFieldValid)
@@ -204,7 +205,7 @@ TEST_F(JSONRPCTest, JsonrpcFieldValid)
     auto* req = std::get_if<JSONRPCRequest>(&msg);
     ASSERT_NE(req, nullptr);
     EXPECT_EQ(req->jsonrpc_, JSONRPC_VERSION);
-    EXPECT_EQ(req->id_, REQUEST_ID);
+    EXPECT_EQ(req->id_, RequestId(REQUEST_ID));
     EXPECT_EQ(req->method_, METHOD_NAME);
 }
 
@@ -351,7 +352,7 @@ TEST_F(JSONRPCTest, ListPromptResultDeserialization_MultiplePrompts)
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, resp.jsonrpc_);
-    EXPECT_EQ(1, resp.id_);
+    EXPECT_EQ(RequestId(1), resp.id_);
     EXPECT_NE(nullptr, resp.result_);
 
     auto* listResult = dynamic_cast<ListPromptsResult*>(resp.result_.get());
@@ -457,7 +458,7 @@ TEST_F(JSONRPCTest, GetPromptResultDeserialization)
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, resp.jsonrpc_);
-    EXPECT_EQ(1, resp.id_);
+    EXPECT_EQ(RequestId(1), resp.id_);
     EXPECT_NE(nullptr, resp.result_);
 
     auto* getResult = dynamic_cast<GetPromptResult*>(resp.result_.get());
@@ -531,7 +532,7 @@ TEST_F(JSONRPCTest, GetPromptRequestDeserializationComplexArguments)
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, rpcReq.jsonrpc_);
-    EXPECT_EQ(1, rpcReq.id_);
+    EXPECT_EQ(RequestId(1), rpcReq.id_);
     EXPECT_EQ(std::string{"prompts/get"}, rpcReq.method_);
     ASSERT_NE(nullptr, rpcReq.request_);
 
@@ -793,7 +794,7 @@ TEST_F(JSONRPCTest, ReadResourceResultDeserializationParsesTextAndBlob)
 
     EXPECT_EQ(0, result);
     EXPECT_EQ(JSONRPC_VERSION, resp.jsonrpc_);
-    EXPECT_EQ(REQUEST_ID, resp.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), resp.id_);
     ASSERT_NE(nullptr, resp.result_);
 
     auto* readResult = dynamic_cast<ReadResourceResult*>(resp.result_.get());
@@ -1019,7 +1020,7 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesRequest)
 
     const auto &parsedReq = std::get<JSONRPCRequest>(message);
     EXPECT_EQ(JSONRPC_VERSION, parsedReq.jsonrpc_);
-    EXPECT_EQ(REQUEST_ID, parsedReq.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), parsedReq.id_);
     EXPECT_EQ(METHOD_NAME, parsedReq.method_);
 }
 
@@ -1040,7 +1041,7 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessageParsesResponse)
 
     const auto &parsedResp = std::get<JSONRPCResponse>(message);
     EXPECT_EQ(JSONRPC_VERSION, parsedResp.jsonrpc_);
-    EXPECT_EQ(REQUEST_ID, parsedResp.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), parsedResp.id_);
     EXPECT_NE(nullptr, parsedResp.result_);
 }
 
@@ -1073,7 +1074,7 @@ TEST_F(JSONRPCTest, SerializeJSONRPCMessageRoundTripRequest)
 
     const auto &parsedReq = std::get<JSONRPCRequest>(parsed);
     EXPECT_EQ(JSONRPC_VERSION, parsedReq.jsonrpc_);
-    EXPECT_EQ(REQUEST_ID, parsedReq.id_);
+    EXPECT_EQ(RequestId(REQUEST_ID), parsedReq.id_);
     EXPECT_EQ(METHOD_NAME, parsedReq.method_);
 }
 
@@ -1350,11 +1351,11 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidRequest)
     auto* request = std::get_if<JSONRPCRequest>(&msg);
     ASSERT_NE(nullptr, request);
     EXPECT_EQ(JSONRPC_VERSION, request->jsonrpc_);
-    EXPECT_EQ(1, request->id_);
+    EXPECT_EQ(RequestId(1), request->id_);
     EXPECT_EQ("initialize", request->method_);
 }
 
-TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_RequestWithStringIdReturnsError)
+TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_RequestWithStringIdSucceeds)
 {
     json validRequest = {
         {"jsonrpc", JSONRPC_VERSION},
@@ -1364,9 +1365,11 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_RequestWithStringIdReturnsError)
     };
 
     JSONRPCMessage msg = DeserializeJSONRPCMessage(validRequest.dump(), "tools/list");
-    auto* error = std::get_if<JSONRPCError>(&msg);
-    ASSERT_NE(nullptr, error);
-    EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
+    auto* request = std::get_if<JSONRPCRequest>(&msg);
+    ASSERT_NE(nullptr, request);
+    EXPECT_EQ("tools/list", request->method_);
+    EXPECT_TRUE(std::holds_alternative<std::string>(request->id_));
+    EXPECT_EQ("request-123", std::get<std::string>(request->id_));
 }
 
 TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidNotification)
@@ -1403,7 +1406,7 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidSuccessResponse)
     auto* response = std::get_if<JSONRPCResponse>(&msg);
     ASSERT_NE(nullptr, response);
     EXPECT_EQ(JSONRPC_VERSION, response->jsonrpc_);
-    EXPECT_EQ(1, response->id_);
+    EXPECT_EQ(RequestId(1), response->id_);
     EXPECT_NE(nullptr, response->result_);
 }
 
@@ -1422,7 +1425,7 @@ TEST_F(JSONRPCTest, DeserializeJSONRPCMessage_ValidErrorResponse)
     auto* error = std::get_if<JSONRPCError>(&msg);
     ASSERT_NE(nullptr, error);
     EXPECT_EQ(JSONRPC_VERSION, error->jsonrpc_);
-    EXPECT_EQ(1, error->id_);
+    EXPECT_EQ(RequestId(1), error->id_);
     EXPECT_EQ(static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), error->code_);
     EXPECT_EQ("Invalid Request", error->message_);
 }

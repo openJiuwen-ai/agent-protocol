@@ -112,7 +112,7 @@ protected:
         return request;
     }
 
-    UserData CreateUserData(uint64_t requestId = 1)
+    UserData CreateUserData(RequestId requestId = int64_t(1))
     {
         UserData userData;
         userData.requestId = requestId;
@@ -317,7 +317,7 @@ TEST_F(HttpClientServiceTest, SendWithDifferentMethods)
     EXPECT_TRUE(service->Start());
 
     std::vector<std::string> methods = {"GET", "POST", "PUT", "DELETE", "HEAD"};
-    int requestId = 1;
+    int64_t requestId = 1;
 
     for (const auto& method : methods) {
         HttpRequest request;
@@ -423,7 +423,7 @@ TEST_F(HttpClientServiceTest, SendWithDifferentTimeouts)
     // 测试各种超时值
     std::vector<int> timeouts = {1, 10, 100, 1000};
 
-    int requestId = 1;
+    int64_t requestId = 1;
     for (int timeout : timeouts) {
         HttpRequest request = CreateTestRequest();
         UserData userData = CreateUserData(requestId++);
@@ -471,10 +471,10 @@ TEST_F(HttpClientServiceTest, ConcurrentSendWithDifferentUrls)
 
     auto threadFunc = [this, &urls, &successfulSends](int threadId) {
         for (int i = 0; i < requestsPerThread; i++) {
-            uint64_t requestId = static_cast<uint64_t>(threadId * requestsPerThread + i + 1);
+            int64_t requestId = static_cast<int64_t>(threadId * requestsPerThread + i + 1);
             std::string url = urls[(threadId + i) % urls.size()];
             HttpRequest request = CreateTestRequest(url);
-            UserData userData = CreateUserData(requestId);
+            UserData userData = CreateUserData(RequestId(requestId));
 
             try {
                 service->Send(request, userData, TEST_REQUEST_TIMEOUT_MS, nullptr, TestCallback);

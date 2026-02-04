@@ -70,7 +70,7 @@ public:
 
     // Override BaseSession notification sending
     void SendNotification(const Notification& notification,
-                          std::optional<int64_t> relatedRequestId = std::nullopt) override;
+                          std::optional<RequestId> relatedRequestId = std::nullopt) override;
 
     // Check if initialize has completed successfully
     bool IsInitialized() const

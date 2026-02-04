@@ -21,8 +21,6 @@ namespace Mcp {
 // JSON-RPC version constant
 const char* const JSONRPC_VERSION = "2.0";
 
-// JSON-RPC request ID type (can be int64_t or string)
-using RequestId = std::variant<int64_t, std::string>;
 
 using ConnectionId = int;
 

@@ -4,6 +4,7 @@
 
 #include "jsonrpc.h"
 
+#include <cstdio>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -15,6 +16,26 @@
 #include "mcp_type.h"
 
 namespace nlohmann {
+
+// JSON serialization specialization for RequestId
+template <>
+struct adl_serializer<Mcp::RequestId> {
+    static void to_json(json& j, const Mcp::RequestId& id)
+    {
+        std::visit([&j](const auto& value) { j = value; }, id);
+    }
+
+    static void from_json(const json& j, Mcp::RequestId& id)
+    {
+        if (j.is_string()) {
+            id = j.get<std::string>();
+        } else if (j.is_number_integer()) {
+            id = j.get<int64_t>();
+        } else {
+            id = int64_t(0);
+        }
+    }
+};
 
 // Convert a JSON value map into a stringified map to match public string meta.
 static inline std::unordered_map<std::string, std::string> JsonMapToStringMap
@@ -1232,14 +1253,14 @@ namespace Mcp {
 using nlohmann::json;
 
 // ==== JSON Schema definitions for MCP JSON-RPC 2.0 envelope ====
-// Request: must have jsonrpc="2.0", id (integer), method (string)
+// Request: must have jsonrpc="2.0", id (string or integer), method (string)
 static const nlohmann::json REQUEST_SCHEMA = {
     {"$schema", "http://json-schema.org/draft-07/schema#"},
     {"type", "object"},
     {"required", {"jsonrpc", "id", "method"}},
     {"properties", {
         {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
-        {"id", {{"type", "integer"}}},
+        {"id", {{"oneOf", {{{"type", "string"}}, {{"type", "integer"}}}}}},
         {"method", {{"type", "string"}}},
         {"params", json::object()}
     }},
@@ -1260,28 +1281,28 @@ static const nlohmann::json NOTIFICATION_SCHEMA = {
     {"additionalProperties", true}
 };
 
-// Response: must have jsonrpc="2.0", id (integer)
+// Response: must have jsonrpc="2.0", id (string or integer)
 static const nlohmann::json RESPONSE_SCHEMA = {
     {"$schema", "http://json-schema.org/draft-07/schema#"},
     {"type", "object"},
     {"required", {"jsonrpc", "id"}},
     {"properties", {
         {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
-        {"id", {{"type", "integer"}}},
+        {"id", {{"oneOf", {{{"type", "string"}}, {{"type", "integer"}}}}}},
         {"result", json::object()},
         {"error", json::object()}
     }},
     {"additionalProperties", true}
 };
 
-// Error Response: must have jsonrpc="2.0", id (integer), error {code(int), message(string)}
+// Error Response: must have jsonrpc="2.0", id (string or integer), error {code(int), message(string)}
 static const nlohmann::json ERROR_SCHEMA = {
     {"$schema", "http://json-schema.org/draft-07/schema#"},
     {"type", "object"},
     {"required", {"jsonrpc", "id", "error"}},
     {"properties", {
         {"jsonrpc", {{"type", "string"}, {"const", JSONRPC_VERSION}}},
-        {"id", {{"type", "integer"}}},
+        {"id", {{"oneOf", {{{"type", "string"}}, {{"type", "integer"}}}}}},
         {"error", {
             {"type", "object"},
             {"required", {"code", "message"}},
@@ -1304,13 +1325,13 @@ JSONRPCNotification::JSONRPCNotification()
 JSONRPCRequest::JSONRPCRequest()
 {
     jsonrpc_ = JSONRPC_VERSION;
-    id_ = 0;
+    id_ = int64_t(0);
 }
 
 JSONRPCResponse::JSONRPCResponse()
 {
     jsonrpc_ = JSONRPC_VERSION;
-    id_ = 0;
+    id_ = int64_t(0);
 }
 
 InitializeRequest::InitializeRequest()
@@ -1419,7 +1440,7 @@ std::string JSONRPCRequest::Serialize() const
 {
     json j;
     j["jsonrpc"] = jsonrpc_;
-    j["id"] = id_;
+    std::visit([&j](const auto& id) { j["id"] = id; }, id_);
     j["method"] = method_;
     if (request_ != nullptr && method_ == "initialize") {
         const auto* params = static_cast<const InitializeRequestParams*>(request_->params_.get());
@@ -1483,7 +1504,14 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr)
     auto j = json::parse(jsonStr);
     jsonrpc_ = j.value("jsonrpc", "");
     if (j.contains("id")) {
-        id_ = j.at("id").get<int64_t>();
+        const auto& idValue = j.at("id");
+        if (idValue.is_string()) {
+            id_ = idValue.get<std::string>();
+        } else if (idValue.is_number_integer()) {
+            id_ = idValue.get<int64_t>();
+        } else {
+            id_ = int64_t(0);
+        }
     }
     method_ = j.value("method", "");
     request_.reset();
@@ -1547,7 +1575,7 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
 {
     json j;
     j["jsonrpc"] = jsonrpc_;
-    j["id"] = id_;
+    std::visit([&j](const auto& id) { j["id"] = id; }, id_);
 
     if (result_ != nullptr) {
         if (method == "initialize") {
@@ -1621,7 +1649,14 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
     auto j = json::parse(jsonStr);
     jsonrpc_ = j.value("jsonrpc", "");
     if (j.contains("id")) {
-        id_ = j.at("id").get<int64_t>();
+        const auto& idValue = j.at("id");
+        if (idValue.is_string()) {
+            id_ = idValue.get<std::string>();
+        } else if (idValue.is_number_integer()) {
+            id_ = idValue.get<int64_t>();
+        } else {
+            id_ = int64_t(0);
+        }
     }
 
     // Leave problem of multiple Result types for later
@@ -1715,7 +1750,7 @@ std::string JSONRPCError::Serialize() const
 {
     json j;
     j["jsonrpc"] = jsonrpc_;
-    j["id"] = id_;
+    std::visit([&j](const auto& id) { j["id"] = id; }, id_);
     j["error"] = {{"code", code_}, {"message", message_}};
     if (data_.has_value()) {
         j["error"]["data"] = data_.value();
@@ -1728,7 +1763,14 @@ int JSONRPCError::Deserialize(const std::string& jsonStr)
     auto j = json::parse(jsonStr);
     jsonrpc_ = j.value("jsonrpc", "");
     if (j.contains("id")) {
-        id_ = j.at("id").get<int64_t>();
+        const auto& idValue = j.at("id");
+        if (idValue.is_string()) {
+            id_ = idValue.get<std::string>();
+        } else if (idValue.is_number_integer()) {
+            id_ = idValue.get<int64_t>();
+        } else {
+            id_ = int64_t(0);
+        }
     }
 
     const auto& errorObj = j.at("error");
@@ -1747,6 +1789,21 @@ static JSONRPCError CreateInvalidRequestError(const nlohmann::json& j, const std
     error.jsonrpc_ = JSONRPC_VERSION;
     error.code_ = static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST);
     error.message_ = detail.empty() ? "Deserialization Failed" : "Deserialization Failed: " + detail;
+
+    // Try to extract ID from original JSON
+    if (j.contains("id")) {
+        const auto& idValue = j.at("id");
+        if (idValue.is_string()) {
+            error.id_ = idValue.get<std::string>();
+        } else if (idValue.is_number_integer()) {
+            error.id_ = idValue.get<int64_t>();
+        } else {
+            error.id_ = int64_t(0);
+        }
+    } else {
+        error.id_ = int64_t(0);
+    }
+
     return error;
 }
 

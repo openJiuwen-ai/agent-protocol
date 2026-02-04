@@ -29,7 +29,8 @@ namespace Mcp {
 
 constexpr size_t MAX_HOSTNAME_LENGTH = 253;
 
-void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::ReceiveIncomingMessages(const RequestId& requestId, const Request& request,
+                                                 RequestContext& ctx)
 {
     const std::string& method = request.method_;
 
@@ -82,7 +83,9 @@ void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Reques
     }
 }
 
-void McpServerImplement::SendErrorResponse(int64_t requestId, JsonRpcErrorCode code, const std::string& message,
+void McpServerImplement::SendErrorResponse(const RequestId& requestId,
+                                           JsonRpcErrorCode code,
+                                           const std::string& message,
                                            RequestContext& ctx)
 {
     auto session = serverManager_ ? serverManager_->GetSession(ctx.sessionId) : nullptr;
@@ -98,7 +101,7 @@ void McpServerImplement::SendErrorResponse(int64_t requestId, JsonRpcErrorCode c
     session->SendResponse(requestId, error, ctx);
 }
 
-void McpServerImplement::HandleToolsList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleToolsList(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -114,7 +117,7 @@ void McpServerImplement::HandleToolsList(int64_t requestId, const Request& reque
     session->SendResponse(requestId, std::move(result), ctx);
 }
 
-void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleToolsCall(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -137,7 +140,7 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
     }
 }
 
-void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandlePromptsList(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
@@ -150,7 +153,7 @@ void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& req
     session->SendResponse(requestId, std::move(result), ctx);
 }
 
-void McpServerImplement::HandlePing(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandlePing(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
@@ -163,7 +166,7 @@ void McpServerImplement::HandlePing(int64_t requestId, const Request& request, R
     session->SendResponse(requestId, std::move(result), ctx);
 }
 
-void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandlePromptsGet(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -185,7 +188,7 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
     }
 }
 
-void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesList(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -206,7 +209,7 @@ void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& r
     }
 }
 
-void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesRead(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -233,7 +236,8 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
     }
 }
 
-void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesSubscribe(const RequestId& requestId, const Request& request,
+                                                  RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -262,7 +266,8 @@ void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Reque
     }
 }
 
-void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesUnsubscribe(const RequestId& requestId, const Request& request,
+                                                    RequestContext& ctx)
 {
     auto session = serverManager_->GetSession(ctx.sessionId);
     if (session == nullptr) {
@@ -291,7 +296,8 @@ void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Req
     }
 }
 
-void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesTemplatesList(const RequestId& requestId, const Request& request,
+                                                      RequestContext& ctx)
 {
     (void)request;
     auto session = serverManager_->GetSession(ctx.sessionId);
@@ -533,7 +539,7 @@ bool McpServerImplement::InitializeServerManager()
             return false;
         }
         serverManager_->SetIncomingRequestCallback(
-            [this](int64_t requestId, const Request& request, RequestContext& ctx) {
+            [this](const RequestId& requestId, const Request& request, RequestContext& ctx) {
             this->ReceiveIncomingMessages(requestId, request, ctx);
             });
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager initialized successfully");

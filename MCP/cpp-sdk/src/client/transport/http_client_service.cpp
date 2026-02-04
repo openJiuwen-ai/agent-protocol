@@ -18,6 +18,20 @@
 namespace Mcp {
 namespace Http {
 
+// Helper function to convert RequestId to string for logging
+static std::string RequestIdToString(const RequestId& requestId)
+{
+    return std::visit([](const auto& value) -> std::string {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, int64_t>) {
+            return std::to_string(value);
+        } else if constexpr (std::is_same_v<T, std::string>) {
+            return value;
+        }
+        return "";
+    }, requestId);
+}
+
 constexpr int MAX_PROCESSED_REQUEST_WHEN_STOP = 1000;
 constexpr int GRACEFUL_STOP_TIMEOUT = 3000;
 constexpr int GRACEFUL_STOP_SLEEP_TIME = 10;
@@ -199,8 +213,8 @@ void HttpClientService::Send(const HttpRequest& request, UserData& userData, int
         throw std::runtime_error("Response body callback is required");
     }
 
-    uint64_t requestId = userData.requestId;
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request " + std::to_string(requestId) + ": " +
+    RequestId requestId = userData.requestId;
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Send request " + RequestIdToString(requestId) + ": " +
             request.method + " " + request.url);
 
     auto requestContext = std::make_shared<RequestContext>(request, responseHeaderCallback, responseBodyCallback,
@@ -225,7 +239,8 @@ void HttpClientService::IoThreadMain()
 void HttpClientService::HandleErrorResponse(const std::shared_ptr<RequestContext>& request,
                                             const std::string& errorMessage)
 {
-    MCP_LOG(MCP_LOG_LEVEL_ERROR, "Request " + std::to_string(request->userData.requestId) + " error: " + errorMessage);
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "Request " + RequestIdToString(request->userData.requestId) + " error: " +
+            errorMessage);
     HttpResponse errorResponse;
     errorResponse.success = false;
     errorResponse.userData = request->userData;
@@ -242,7 +257,7 @@ void HttpClientService::HandleFinishedResponse(const std::shared_ptr<RequestCont
     }
     response.body = request->responseData;
 
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request " + std::to_string(request->userData.requestId) +
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Request " + RequestIdToString(request->userData.requestId) +
             " completed with status " + std::to_string(response.statusCode) +
             ", headers_count=" + std::to_string(response.headers.size()));
 
@@ -260,15 +275,15 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
         return;
     }
 
-    uint64_t requestId = request->userData.requestId;
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Processing request " + std::to_string(requestId) +
+    RequestId requestId = request->userData.requestId;
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Processing request " + RequestIdToString(requestId) +
             " in I/O thread: " + request->request.method + " " +
             request->request.url + " (timeout=" + std::to_string(request->timeoutMs) + "ms)");
 
     // Create CURL handle
     request->easyHandle = curl_easy_init();
     if (request->easyHandle == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create CURL handle for request " + std::to_string(requestId));
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create CURL handle for request " + RequestIdToString(requestId));
         HandleErrorResponse(request, "Failed to create CURL handle");
         return;
     }
@@ -295,7 +310,7 @@ void HttpClientService::HandleRequestInIOThread(const std::shared_ptr<RequestCon
     }
 
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "HandleRequestInIOThread: Created CURL handle for requestId " +
-            std::to_string(requestId) + ", activeRequests size: " + std::to_string(activeRequests_.size()));
+            RequestIdToString(requestId) + ", activeRequests size: " + std::to_string(activeRequests_.size()));
 }
 
 void HttpClientService::HandleStopRequestInIOThread()
@@ -844,7 +859,7 @@ void HttpClientService::CancelRequest(const std::shared_ptr<RequestContext>& req
         request->easyHandle = nullptr;
 
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, std::string("Request ") +
-                std::to_string(request->userData.requestId) + " cancelled successfully");
+                RequestIdToString(request->userData.requestId) + " cancelled successfully");
     }
 }
 

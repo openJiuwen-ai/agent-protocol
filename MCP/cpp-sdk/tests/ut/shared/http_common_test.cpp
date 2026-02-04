@@ -10,7 +10,7 @@
 
 static constexpr int HEADER_SIZE = 2;
 static constexpr int ARGS_NUM = 4;
-static constexpr int REQ_ID = 12345;
+static const Mcp::RequestId REQ_ID = int64_t(12345);
 
 // Additional HTTP header field names not defined in http_common.h
 static constexpr const char* USER_AGENT_HEADER = "user-agent";
@@ -246,7 +246,7 @@ TEST(HttpCommonTest, HttpResponse_DefaultConstructor)
     EXPECT_TRUE(response.body.empty());
     EXPECT_EQ(response.headers.size(), 1);
     EXPECT_EQ(response.headers[CONNECTION_HEADER], "keep-alive");
-    EXPECT_EQ(response.userData.requestId, 0);
+    EXPECT_EQ(response.userData.requestId, RequestId(int64_t(0)));
     EXPECT_TRUE(response.userData.method.empty());
 }
 

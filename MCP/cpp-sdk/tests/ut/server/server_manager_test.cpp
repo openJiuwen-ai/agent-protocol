@@ -101,7 +101,7 @@ TEST_F(ServerManagerTest, SetIncomingRequestCallback)
     auto manager = CreateStdioServerManager();
 
     bool callbackCalled = false;
-    auto callback = [&callbackCalled](int64_t, const Request&, RequestContext&) {
+    auto callback = [&callbackCalled](const RequestId&, const Request&, RequestContext&) {
         callbackCalled = true;
     };
 

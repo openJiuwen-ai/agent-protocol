@@ -55,19 +55,20 @@ public:
     void RemoveResourceTemplate(const std::string& uriTemplate) override;
 
 private:
-    void ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleToolsList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleToolsCall(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandlePromptsGet(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandlePing(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesRead(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesSubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesUnsubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesTemplatesList(int64_t requestId, const Request& request, RequestContext& ctx);
+    void ReceiveIncomingMessages(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleToolsList(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleToolsCall(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandlePromptsList(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandlePromptsGet(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandlePing(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleResourcesList(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleResourcesRead(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleResourcesSubscribe(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleResourcesUnsubscribe(const RequestId& requestId, const Request& request, RequestContext& ctx);
+    void HandleResourcesTemplatesList(const RequestId& requestId, const Request& request, RequestContext& ctx);
 
-    void SendErrorResponse(int64_t requestId, JsonRpcErrorCode code, const std::string& message, RequestContext& ctx);
+    void SendErrorResponse(const RequestId& requestId, JsonRpcErrorCode code, const std::string& message,
+                           RequestContext& ctx);
 
     bool ValidateConfig(const ServerConfig& config);
     bool ValidateStreamableHttpConfig(const StreamableHttpServerConfig& config);
