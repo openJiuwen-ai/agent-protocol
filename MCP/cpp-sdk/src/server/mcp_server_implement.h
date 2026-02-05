@@ -27,6 +27,13 @@
 namespace Mcp {
 using Json = nlohmann::json;
 
+enum class ServerState {
+    INIT = 0,       // Server initialized but not started
+    RUNNING,        // Server is running
+    STOPPED         // Server stopped and cannot be restarted
+};
+
+
 class McpServerImplement : public McpServer {
 public:
     explicit McpServerImplement(const ServerConfig& config);
@@ -37,7 +44,7 @@ public:
     void Stop() override;
     bool IsRunning() const override
     {
-        return running_;
+        return state_ == ServerState::RUNNING;
     }
 
     void AddTool(const std::string& name, ToolFunc fn,
@@ -74,11 +81,12 @@ private:
     bool ValidateStreamableHttpConfig(const StreamableHttpServerConfig& config);
     bool InitializeServerManager();
     bool ValidateTlsConfig(const TlsConfig& config);
+    void CheckServerState() const;
 
     ServerConfig config_;
     StreamableHttpServerConfig streamableConfig_;
     bool isStdio_{true};
-    std::atomic<bool> running_{false};
+    std::atomic<ServerState> state_{ServerState::INIT};
     std::shared_ptr<ServerManager> serverManager_{nullptr};
     std::mutex sessionMutex_;
     ToolManager toolManager_;

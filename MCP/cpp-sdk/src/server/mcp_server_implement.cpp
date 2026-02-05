@@ -27,6 +27,12 @@
 
 namespace Mcp {
 
+static const std::vector<std::string> SERVER_STATE_STRINGS = {
+    "INIT",
+    "RUNNING",
+    "STOPPED"
+};
+
 constexpr size_t MAX_HOSTNAME_LENGTH = 253;
 
 void McpServerImplement::ReceiveIncomingMessages(const RequestId& requestId, const Request& request,
@@ -344,15 +350,17 @@ McpServerImplement::McpServerImplement(const ServerConfig& config, const Streama
 
 McpServerImplement::~McpServerImplement()
 {
-    if (running_) {
-        Stop();
+    if (state_.load() == ServerState::RUNNING) {
+        McpServerImplement::Stop();
     }
 }
 
 bool McpServerImplement::Run()
 {
-    if (running_) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "Server is already running");
+    ServerState currentState = state_.load();
+    if (currentState != ServerState::INIT) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "run failed. Server is not in init state, current state: " +
+                std::string(SERVER_STATE_STRINGS[static_cast<int>(currentState)]));
         return false;
     }
 
@@ -360,26 +368,36 @@ bool McpServerImplement::Run()
         return false;
     }
 
-    running_ = true;
+    state_ = ServerState::RUNNING;
     MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP Server started successfully");
     return true;
 }
 
 void McpServerImplement::Stop()
 {
-    if (!running_) {
+    ServerState currentState = state_.load();
+    if (currentState != ServerState::RUNNING) {
         MCP_LOG(MCP_LOG_LEVEL_WARN, "Server is not running");
         return;
     }
 
-    running_ = false;
+    state_ = ServerState::STOPPED;
     serverManager_->Stop();
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "MCP Server stopped");
 }
 
+void McpServerImplement::CheckServerState() const
+{
+    if (state_.load() == ServerState::STOPPED) {
+        throw std::runtime_error("Cannot perform operation: server has been stopped");
+    }
+}
+
 void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOptionalParams params)
 {
+    CheckServerState();
+
     if (fn == nullptr) {
         throw std::invalid_argument("Tool function implementation cannot be null");
     }
@@ -393,11 +411,15 @@ void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOp
 
 void McpServerImplement::RemoveTool(const std::string& name)
 {
+    CheckServerState();
+
     toolManager_.RemoveTool(name);
 }
 
 void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc handler, AddPromptOptionalParams params)
 {
+    CheckServerState();
+
     PromptInfo prompt;
     prompt.name = name;
     if (params.description.has_value()) {
@@ -418,12 +440,16 @@ void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc han
 
 void McpServerImplement::RemovePrompt(const std::string& name)
 {
+    CheckServerState();
+
     promptManager_.RemovePrompt(name);
 }
 
 void McpServerImplement::AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
     AddResourceOptionalParams params)
 {
+    CheckServerState();
+
     ResourceInfo resource;
     resource.uri = uri;
     resource.name = name;
@@ -451,12 +477,16 @@ void McpServerImplement::AddResource(const std::string& uri, const std::string& 
 
 void McpServerImplement::RemoveResource(const std::string& uri)
 {
+    CheckServerState();
+
     resourceManager_.RemoveResource(uri);
 }
 
 void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, const std::string& name,
     AddResourceTemplateOptionalParams params)
 {
+    CheckServerState();
+
     ResourceTemplate resourceTemplate;
     resourceTemplate.uriTemplate = uriTemplate;
     resourceTemplate.name = name;
@@ -481,6 +511,8 @@ void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, con
 
 void McpServerImplement::RemoveResourceTemplate(const std::string& uriTemplate)
 {
+    CheckServerState();
+
     resourceManager_.RemoveResourceTemplate(uriTemplate);
 }
 

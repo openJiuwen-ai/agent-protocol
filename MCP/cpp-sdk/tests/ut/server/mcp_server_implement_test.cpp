@@ -169,6 +169,47 @@ TEST(McpServerImplementTest, Lifecycle_StopWithoutStart)
     EXPECT_FALSE(server.IsRunning());
 }
 
+TEST(McpServerImplementTest, Lifecycle_CannotRestartAfterStop)
+{
+    ServerConfig config = CreateValidHttpConfig();
+    StreamableHttpServerConfig transport = CreateValidTransportConfig();
+    McpServerImplement server(config, transport);
+
+    // 第一次启动应该成功
+    EXPECT_TRUE(server.Run());
+    EXPECT_TRUE(server.IsRunning());
+
+    // 停止服务器
+    EXPECT_NO_THROW(server.Stop());
+    EXPECT_FALSE(server.IsRunning());
+
+    // 尝试再次启动应该失败
+    EXPECT_FALSE(server.Run());
+    EXPECT_FALSE(server.IsRunning());
+}
+
+TEST(McpServerImplementTest, Lifecycle_CannotAddToolAfterStop)
+{
+    ServerConfig config = CreateValidHttpConfig();
+    StreamableHttpServerConfig transport = CreateValidTransportConfig();
+    McpServerImplement server(config, transport);
+
+    // 启动服务器
+    EXPECT_TRUE(server.Run());
+    EXPECT_TRUE(server.IsRunning());
+
+    // 停止服务器
+    EXPECT_NO_THROW(server.Stop());
+    EXPECT_FALSE(server.IsRunning());
+
+    // 尝试添加工具应该失败
+    auto tool = CreateTestTool();
+    Mcp::AddToolOptionalParams toolParams;
+    toolParams.description = tool.description;
+
+    EXPECT_THROW(server.AddTool(tool.name, tool.func, toolParams), std::runtime_error);
+}
+
 TEST(McpServerImplementTest, ToolManagement_AddTool)
 {
     auto config = CreateValidStdioConfig();
