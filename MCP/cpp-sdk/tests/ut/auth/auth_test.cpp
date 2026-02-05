@@ -27,14 +27,14 @@ TEST(BearerTokenProviderTest, SetsAuthorizationHeader) {
     BearerTokenProvider provider("abc123");
     provider.Apply(request.headers);
 
-    ASSERT_EQ(request.headers.count("Authorization"), 1u);
-    EXPECT_EQ(request.headers.at("Authorization"), "Bearer abc123");
+    ASSERT_EQ(request.headers.count(Http::AUTHORIZATION_HEADER), 1u);
+    EXPECT_EQ(request.headers.at(Http::AUTHORIZATION_HEADER), "Bearer abc123");
 
     provider.SetToken("new-token");
     EXPECT_EQ(provider.GetToken(), "new-token");
 
     provider.Apply(request.headers);
-    EXPECT_EQ(request.headers.at("Authorization"), "Bearer new-token");
+    EXPECT_EQ(request.headers.at(Http::AUTHORIZATION_HEADER), "Bearer new-token");
 }
 
 TEST(NoAuthAuthenticatorTest, AlwaysAuthenticatedWithContext) {
@@ -70,7 +70,7 @@ TEST(BearerTokenAuthenticatorTest, NonBearerSchemeFails) {
     auto verifier = std::make_shared<RecordingVerifier>(AuthenticationResult{});
     BearerTokenAuthenticator authenticator(verifier);
     Mcp::Http::HttpRequest request;
-    request.headers["Authorization"] = "Basic abc";
+    request.headers[Http::AUTHORIZATION_HEADER] = "Basic abc";
 
     AuthenticationResult result = authenticator.Authenticate(request.headers);
     EXPECT_FALSE(result.authenticated);
@@ -82,7 +82,7 @@ TEST(BearerTokenAuthenticatorTest, EmptyTokenFails) {
     auto verifier = std::make_shared<RecordingVerifier>(AuthenticationResult{});
     BearerTokenAuthenticator authenticator(verifier);
     Mcp::Http::HttpRequest request;
-    request.headers["Authorization"] = "Bearer ";
+    request.headers[Http::AUTHORIZATION_HEADER] = "Bearer ";
 
     AuthenticationResult result = authenticator.Authenticate(request.headers);
     EXPECT_FALSE(result.authenticated);
@@ -98,7 +98,7 @@ TEST(BearerTokenAuthenticatorTest, ForwardsTokenToVerifier) {
     auto verifier = std::make_shared<RecordingVerifier>(verifierResult);
     BearerTokenAuthenticator authenticator(verifier);
     Mcp::Http::HttpRequest request;
-    request.headers["Authorization"] = "Bearer live-token";
+    request.headers[Http::AUTHORIZATION_HEADER] = "Bearer live-token";
 
     AuthenticationResult result = authenticator.Authenticate(request.headers);
 
@@ -118,7 +118,7 @@ TEST(BearerTokenAuthenticatorTest, AcceptsBearerSchemeCaseInsensitively) {
     auto verifier = std::make_shared<RecordingVerifier>(verifierResult);
     BearerTokenAuthenticator authenticator(verifier);
     Mcp::Http::HttpRequest request;
-    request.headers["Authorization"] = "bEaReR MiXeD";
+    request.headers[Http::AUTHORIZATION_HEADER] = "bEaReR MiXeD";
 
     AuthenticationResult result = authenticator.Authenticate(request.headers);
 

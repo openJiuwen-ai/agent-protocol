@@ -35,6 +35,7 @@ constexpr const char* HOST_HEADER = "host";
 constexpr const char* CONTENT_LENGTH_HEADER = "content-length";
 constexpr const char* TRANSFER_ENCODING_HEADER = "transfer-encoding";
 constexpr const char* X_ACCEL_BUFFERING_HEADER = "x-accel-buffering";
+constexpr const char* AUTHORIZATION_HEADER = "authorization";
 
 // Content-Type constants
 constexpr const char* CONTENT_TYPE_JSON = "application/json";
