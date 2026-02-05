@@ -123,6 +123,11 @@ HttpServer::HttpServer(const std::string& host, uint16_t port, const TlsConfig& 
 {
 }
 
+HttpServer::~HttpServer()
+{
+    Stop();
+}
+
 void HttpServer::Run()
 {
     const bool useTls = tlsConfig_.enabled;
@@ -138,10 +143,10 @@ void HttpServer::Run()
 
     // Initialize task queue
     if (taskQueue_ == nullptr) {
-        taskQueue_ = std::make_unique<Mcp::MPSCNotifyQueue<std::function<void()>>>(HTTP_TASK_QUEUE_CAPACITY,
+        taskQueue_ = std::make_shared<Mcp::MPSCNotifyQueue<std::function<void()>>>(HTTP_TASK_QUEUE_CAPACITY,
             HTTP_TASK_QUEUE_BATCH_SIZE);
     }
-    if (taskQueue_ != nullptr && !taskQueue_->IsInitialized()) {
+    if (!taskQueue_->IsInitialized()) {
         bool inited = taskQueue_->Initialize(&eventSystem_, [](const std::function<void()>& cmd) {
             if (cmd) {
                 cmd();
@@ -166,19 +171,13 @@ void HttpServer::Run()
         [this](const Mcp::Net::TcpSocketPtr& connection) { this->HandleNewConnection(connection); });
 
     if (!listener_->Listen(host_, port_, HTTP_LISTEN_BACKLOG, true)) {
-        if (sslContext_ != nullptr) {
-            SSL_CTX_free(reinterpret_cast<SSL_CTX*>(sslContext_));
-            sslContext_ = nullptr;
-        }
+        sslContext_.reset();
         running_ = false;
         throw std::runtime_error("listen failed");
     }
 
     if (!listener_->Start()) {
-        if (sslContext_ != nullptr) {
-            SSL_CTX_free(reinterpret_cast<SSL_CTX*>(sslContext_));
-            sslContext_ = nullptr;
-        }
+        sslContext_.reset();
         running_ = false;
         throw std::runtime_error("start listener failed");
     }
@@ -201,13 +200,33 @@ void HttpServer::Stop()
     if (!running_.exchange(false)) {
         return;
     }
-    if (taskQueue_ != nullptr) {
-        taskQueue_->Cleanup();
+
+    // 1. Stop listener first to prevent new connections
+    if (listener_) {
+        listener_->Stop();
     }
+
+    // 2. Stop event system first to prevent new event callbacks
     eventSystem_.Stop();
     if (eventThread_.joinable()) {
         eventThread_.join();
     }
+
+    // 3. Now cleanup task queue after event thread has stopped
+    if (taskQueue_) {
+        taskQueue_->Cleanup();
+        taskQueue_.reset();  // Release shared_ptr reference
+    }
+
+    // 4. Now safely clean up all active connections after worker thread has stopped
+    while (!connections_.empty()) {
+        auto it = connections_.begin();
+        int fd = it->first;
+        CleanupConnection(fd);
+    }
+
+    // 5. Clean up SSL context
+    sslContext_.reset();  // shared_ptr automatically handles SSL_CTX_free
 }
 
 void HttpServer::SendResponseAsync(const HttpResponse& response, const RequestContext& ctx)
@@ -215,12 +234,16 @@ void HttpServer::SendResponseAsync(const HttpResponse& response, const RequestCo
     if (!running_.load()) {
         return;
     }
-    if (taskQueue_ == nullptr) {
+
+    // Get shared_ptr copy to ensure task queue remains valid during use
+    auto taskQueue = taskQueue_;
+    if (!taskQueue || !taskQueue->IsInitialized()) {
         return;
     }
+
     HttpResponse responseCopy = response;
     ConnectionId connectionId = ctx.connectionId;
-    taskQueue_->Send([this, connectionId, responseCopy]() { this->SendResponse(connectionId, responseCopy); });
+    taskQueue->Send([this, connectionId, responseCopy]() { this->SendResponse(connectionId, responseCopy); });
 }
 
 void HttpServer::HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection)
@@ -228,13 +251,26 @@ void HttpServer::HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection)
     if (!connection) {
         return;
     }
+
+    // Check if server is still running to avoid accessing freed SSL context
+    if (!running_.load()) {
+        connection->Close();
+        return;
+    }
+
     int fileDescriptor = connection->Fd();
-    ConnectionContext context;
-    context.connection = connection;
-    context.lastActivity = std::chrono::steady_clock::now();
+    auto context = std::make_shared<ConnectionContext>();
+    context->connection = connection;
+    context->lastActivity = std::chrono::steady_clock::now();
 
     if (tlsConfig_.enabled) {
-        SSL* ssl = SSL_new(sslContext_);
+        // Get shared_ptr copy to ensure SSL context remains valid during use
+        auto sslCtx = sslContext_;
+        if (!sslCtx) {
+            connection->Close();
+            return;
+        }
+        SSL* ssl = SSL_new(sslCtx.get());
         if (ssl == nullptr) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSL_new failed for HTTPS connection");
             connection->Close();
@@ -259,13 +295,13 @@ void HttpServer::HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection)
         SSL_set_bio(ssl, rbio, wbio);
         SSL_set_accept_state(ssl);
 
-        context.ssl = ssl;
-        context.rbio = rbio;
-        context.wbio = wbio;
-        context.handshaked = false;
+        context->ssl = ssl;
+        context->rbio = rbio;
+        context->wbio = wbio;
+        context->handshaked = false;
     }
 
-    connections_[fileDescriptor] = std::move(context);
+    connections_[fileDescriptor] = context;
 
     connection->OnError([this](const Mcp::Net::SocketPtr& socket, int errorCode, const std::string& message) {
         this->HandleError(socket, errorCode, message);
@@ -273,7 +309,16 @@ void HttpServer::HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection)
 
     connection->OnClose([this](const Mcp::Net::SocketPtr& socket) { this->HandleClose(socket); });
 
-    connection->OnRead([this, connection](const Mcp::Net::SocketPtr& /* socket */) { this->HandleRead(connection); });
+    connection->OnRead([this, fileDescriptor](const Mcp::Net::SocketPtr& socket) {
+        // Check if server is still running to avoid processing during shutdown
+        if (!running_.load()) {
+            return;
+        }
+        // shared_ptr ensures memory safety, HandleRead will check connection validity
+        if (socket) {
+            this->HandleRead(std::static_pointer_cast<Mcp::Net::TcpSocket>(socket));
+        }
+    });
 }
 
 void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
@@ -281,6 +326,7 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
     if (!connection) {
         return;
     }
+
     int fileDescriptor = connection->Fd();
 
     auto iterator = connections_.find(fileDescriptor);
@@ -288,15 +334,15 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
         return;
     }
 
-    ConnectionContext& context = iterator->second;
-    context.lastActivity = std::chrono::steady_clock::now();
+    auto context = iterator->second;  // Get shared_ptr copy to increase reference count
+    context->lastActivity = std::chrono::steady_clock::now();
 
     Mcp::Net::Buffer& buffer = connection->InputBuffer();
     if (buffer.ReadableBytes() == 0) {
         return;
     }
 
-    if (context.ssl == nullptr) {
+    if (context->ssl == nullptr) {
         std::string data = buffer.RetrieveAllAsString();
         OnRead(fileDescriptor, data);
         return;
@@ -307,7 +353,7 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
         return;
     }
 
-    int written = BIO_write(context.rbio, encryptedData.data(), static_cast<int>(encryptedData.size()));
+    int written = BIO_write(context->rbio, encryptedData.data(), static_cast<int>(encryptedData.size()));
     if (written <= 0) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "BIO_write failed for HTTPS connection, fd=" + std::to_string(fileDescriptor));
         CleanupConnection(fileDescriptor);
@@ -317,12 +363,12 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
     auto flushTlsPendingData = [&context, fileDescriptor, this]() {
         while (true) {
             char outBuffer[HTTPS_READ_BUFFER_SIZE];
-            int pending = BIO_read(context.wbio, outBuffer, sizeof(outBuffer));
+            int pending = BIO_read(context->wbio, outBuffer, sizeof(outBuffer));
             if (pending <= 0) {
                 break;
             }
 
-            if (!context.connection || !context.connection->Send(outBuffer, static_cast<size_t>(pending))) {
+            if (!context->connection || !context->connection->Send(outBuffer, static_cast<size_t>(pending))) {
                 MCP_LOG(MCP_LOG_LEVEL_ERROR, "failed to send TLS handshake data, fd=" + std::to_string(fileDescriptor));
                 CleanupConnection(fileDescriptor);
                 return false;
@@ -331,10 +377,10 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
         return true;
     };
 
-    if (!context.handshaked) {
-        int result = SSL_accept(context.ssl);
+    if (!context->handshaked) {
+        int result = SSL_accept(context->ssl);
         if (result == 1) {
-            context.handshaked = true;
+            context->handshaked = true;
             MCP_LOG(MCP_LOG_LEVEL_INFO, "SSL_accept succeeded for HTTPS connection, fd=" +
                     std::to_string(fileDescriptor));
 
@@ -342,7 +388,7 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
                 return;
             }
         } else {
-            int errorCode = SSL_get_error(context.ssl, result);
+            int errorCode = SSL_get_error(context->ssl, result);
             if (errorCode == SSL_ERROR_WANT_READ || errorCode == SSL_ERROR_WANT_WRITE) {
                 if (!flushTlsPendingData()) {
                     return;
@@ -358,9 +404,9 @@ void HttpServer::HandleRead(const Mcp::Net::TcpSocketPtr& connection)
 
     while (true) {
         char plainBuffer[HTTPS_READ_BUFFER_SIZE];
-        int bytesRead = SSL_read(context.ssl, plainBuffer, sizeof(plainBuffer));
+        int bytesRead = SSL_read(context->ssl, plainBuffer, sizeof(plainBuffer));
         if (bytesRead <= 0) {
-            int errorCode = SSL_get_error(context.ssl, bytesRead);
+            int errorCode = SSL_get_error(context->ssl, bytesRead);
             if (errorCode == SSL_ERROR_WANT_READ || errorCode == SSL_ERROR_WANT_WRITE) {
                 break;
             }
@@ -379,7 +425,7 @@ void HttpServer::HandleClose(const Mcp::Net::SocketPtr& socket)
 {
     int fileDescriptor = socket ? socket->Fd() : -1;
     MCP_LOG(MCP_LOG_LEVEL_INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
-    if (fileDescriptor >= 0) {
+    if (fileDescriptor >= 0 && running_.load()) {
         CleanupConnection(fileDescriptor);
     }
 }
@@ -389,7 +435,7 @@ void HttpServer::HandleError(const Mcp::Net::SocketPtr& socket, int errorCode, c
     int fileDescriptor = socket ? socket->Fd() : -1;
     MCP_LOG(MCP_LOG_LEVEL_ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
             " err=" + std::to_string(errorCode) + " msg=" + message);
-    if (fileDescriptor >= 0) {
+    if (fileDescriptor >= 0 && running_.load()) {
         CleanupConnection(fileDescriptor);
     }
 }
@@ -436,13 +482,13 @@ void HttpServer::OnRead(int connectionFd, const std::string& data)
         return;
     }
 
-    ConnectionContext& context = iterator->second;
-    context.requestBuffer.append(data);
+    auto context = iterator->second;  // Get shared_ptr copy to increase reference count
+    context->requestBuffer.append(data);
 
     while (true) {
         HttpRequest request;
         std::size_t consumedSize = 0;
-        int parseResult = ParseRequest(context.requestBuffer, request, consumedSize);
+        int parseResult = ParseRequest(context->requestBuffer, request, consumedSize);
         if (parseResult == HTTP_PARSE_NEED_MORE) {
             break; // need more data
         } else if (parseResult != HTTP_PARSE_OK) {
@@ -452,15 +498,15 @@ void HttpServer::OnRead(int connectionFd, const std::string& data)
             response.body = "Failed to parse HTTP request";
             std::string rawResponse = BuildHttpResponse(response);
             SendRawResponse(connectionFd, rawResponse);
-            context.requestBuffer.clear();
+            context->requestBuffer.clear();
             break;
         }
 
-        context.currentRequest = std::move(request);
-        HandleRequest(connectionFd, context);
+        context->currentRequest = std::move(request);
+        HandleRequest(connectionFd, *context);
 
-        context.requestBuffer.erase(0, consumedSize);
-        context.currentRequest = HttpRequest{};
+        context->requestBuffer.erase(0, consumedSize);
+        context->currentRequest = HttpRequest{};
     }
 }
 
@@ -573,22 +619,22 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
         return false;
     }
 
-    ConnectionContext& context = iterator->second;
-    if (!context.connection) {
+    auto context = iterator->second;  // Get shared_ptr copy to increase reference count
+    if (!context->connection) {
         return false;
     }
 
-    if (context.ssl == nullptr) {
-        if (!context.connection->Send(response.data(), response.size())) {
+    if (context->ssl == nullptr) {
+        if (!context->connection->Send(response.data(), response.size())) {
             CleanupConnection(fileDescriptor);
             return false;
         }
         return true;
     }
 
-    int writeResult = SSL_write(context.ssl, response.data(), static_cast<int>(response.size()));
+    int writeResult = SSL_write(context->ssl, response.data(), static_cast<int>(response.size()));
     if (writeResult <= 0) {
-        int errorCode = SSL_get_error(context.ssl, writeResult);
+        int errorCode = SSL_get_error(context->ssl, writeResult);
         if (errorCode != SSL_ERROR_WANT_READ && errorCode != SSL_ERROR_WANT_WRITE) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSL_write failed for HTTPS response, fd=" +
                     std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
@@ -599,12 +645,12 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
 
     while (true) {
         char outBuffer[HTTPS_READ_BUFFER_SIZE];
-        int pending = BIO_read(context.wbio, outBuffer, sizeof(outBuffer));
+        int pending = BIO_read(context->wbio, outBuffer, sizeof(outBuffer));
         if (pending <= 0) {
             break;
         }
 
-        if (!context.connection->Send(outBuffer, static_cast<size_t>(pending))) {
+        if (!context->connection->Send(outBuffer, static_cast<size_t>(pending))) {
             CleanupConnection(fileDescriptor);
             return false;
         }
@@ -620,7 +666,7 @@ bool HttpServer::SendResponse(int connectionFd, const HttpResponse& response)
         return false;
     }
 
-    ConnectionContext& context = iterator->second;
+    auto context = iterator->second;  // Get shared_ptr copy to increase reference count
 
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Response Status: " + std::to_string(response.statusCode) + " " + response.statusText);
     for (const auto& header : response.headers) {
@@ -633,13 +679,13 @@ bool HttpServer::SendResponse(int connectionFd, const HttpResponse& response)
     auto it = response.headers.find(TRANSFER_ENCODING_HEADER);
     if (it != response.headers.end() && it->second.find(TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
         isChunked = true;
-    } else if (context.sseChunked) {
+    } else if (context->sseChunked) {
         isChunked = true;
     }
 
     std::string rawResponse;
     if (isChunked) {
-        rawResponse = BuildchunkedResponse(response, context.sseChunked);
+        rawResponse = BuildchunkedResponse(response, context->sseChunked);
     } else {
         rawResponse = BuildHttpResponse(response);
     }
@@ -648,22 +694,50 @@ bool HttpServer::SendResponse(int connectionFd, const HttpResponse& response)
 
 void HttpServer::CleanupConnection(int fileDescriptor)
 {
+    // Use a more defensive approach to prevent double cleanup
     auto iterator = connections_.find(fileDescriptor);
-    if (iterator != connections_.end()) {
-        ConnectionContext& context = iterator->second;
-        if (context.ssl != nullptr) {
-            SSL_shutdown(context.ssl);
-            SSL_free(context.ssl);
-            context.ssl = nullptr;
+    if (iterator == connections_.end()) {
+        // Connection already cleaned up
+        return;
+    }
+
+    // Extract the shared_ptr and remove from map first to prevent re-entry
+    auto context = iterator->second;
+    connections_.erase(iterator);
+
+    // Now safely cleanup the extracted context
+    // Safely cleanup SSL resources
+    if (context->ssl != nullptr) {
+        // Only shutdown if SSL is in a valid state
+        int shutdownResult = SSL_shutdown(context->ssl);
+        if (shutdownResult < 0) {
+            // Log but don't fail - connection might already be closed
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "SSL_shutdown returned " +
+                    std::to_string(shutdownResult) + " for fd=" + std::to_string(fileDescriptor));
         }
-        // The rbio/wbio BIOs are owned by the SSL object after SSL_set_bio,
-        // so they are freed as part of SSL_free above. Just clear pointers.
-        context.rbio = nullptr;
-        context.wbio = nullptr;
-        if (context.connection) {
-            context.connection->Close();
+        SSL_free(context->ssl);
+        context->ssl = nullptr;
+    }
+
+    // The rbio/wbio BIOs are owned by the SSL object after SSL_set_bio,
+    // so they are freed as part of SSL_free above. Just clear pointers.
+    context->rbio = nullptr;
+    context->wbio = nullptr;
+
+    // Safely close the connection
+    if (context->connection) {
+        try {
+            // Clear callback functions to break circular references
+            context->connection->OnRead(nullptr);
+            context->connection->OnClose(nullptr);
+            context->connection->OnError(nullptr);
+
+            context->connection->Close();
+        } catch (const std::exception& e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Exception during connection close for fd=" +
+                    std::to_string(fileDescriptor) + ": " + e.what());
         }
-        connections_.erase(iterator);
+        context->connection.reset();
     }
 }
 
@@ -715,7 +789,11 @@ void HttpServer::InitializeSslContext()
         SSL_CTX_set_verify(context, SSL_VERIFY_NONE, nullptr);
     }
 
-    sslContext_ = context;
+    sslContext_ = std::shared_ptr<SSL_CTX>(context, [](SSL_CTX* ctx) {
+        if (ctx) {
+            SSL_CTX_free(ctx);
+        }
+    });
 }
 
 } // namespace Mcp::Http
