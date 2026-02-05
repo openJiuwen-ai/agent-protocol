@@ -37,6 +37,12 @@ const size_t g_UrlProtocolOffset = 3; // Length of "://"
 void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx)
 {
     const std::string& method = request.method_;
+    auto session = serverManager_->GetSession(ctx.sessionId);
+
+    {
+        std::lock_guard<std::mutex> lock(session->reqMtx);
+        session->sessionRequests[requestId] = ctx;
+    }
 
     try {
         if (method == "tools/list") {

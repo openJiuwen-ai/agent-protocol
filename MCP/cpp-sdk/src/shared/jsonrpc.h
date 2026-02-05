@@ -230,6 +230,18 @@ struct SetLoggingLevelRequest : public Request {
     SetLoggingLevelRequest();
 };
 
+struct CancelledNotificationParams : public NotificationParams {
+    int64_t requestId;
+    std::string reason;
+
+    explicit CancelledNotificationParams(const int64_t requestId,
+        const std::string& reason) : requestId(requestId), reason(reason) {}
+};
+
+struct CancelledNotification : public Notification {
+    CancelledNotification();
+};
+
 // resources/templates/list
 struct ListResourceTemplatesRequest : public Request {
     ListResourceTemplatesRequest();

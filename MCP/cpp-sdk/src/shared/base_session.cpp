@@ -62,7 +62,13 @@ void BaseSession::SendResponse(int64_t requestId, std::unique_ptr<Result> result
     JSONRPCMessage msg = std::move(response);
 
     if (serverTransport_ != nullptr) {
-        serverTransport_->SendMessage(msg, ctx);
+        {
+            std::lock_guard<std::mutex> lock(reqMtx);
+            sessionRequests.erase(requestId);
+        }
+        if (!ctx.isCancelled) {
+            serverTransport_->SendMessage(msg, ctx);
+        }
         return;
     }
 

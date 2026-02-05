@@ -230,6 +230,8 @@ void ServerSession::ReceivedNotification(const Notification& notification)
     // The "initialized" notification completes the initialization handshake.
     if (notification.method_ == "notifications/initialized") {
         HandleInitializeNotification(notification);
+    } else if (notification.method_ == "notifications/cancelled") {
+        HandleCancelledNotification(notification);
     } else {
         if (incomingNotificationCallback_) {
             incomingNotificationCallback_(notification);
@@ -264,6 +266,23 @@ void ServerSession::HandleInitializeNotification(const Notification& notificatio
     (void)notification;
     // From here on the server treats the client as fully initialized.
     isInitialized_ = true;
+}
+
+void ServerSession::HandleCancelledNotification(const Notification& notification)
+{
+    auto params = dynamic_cast<CancelledNotificationParams*>(notification.params_.get());
+
+    std::lock_guard<std::mutex> lock(reqMtx);
+    if (sessionRequests.count(params->requestId) > 0) {
+        auto ctx = sessionRequests[params->requestId];
+
+        JSONRPCError err;
+        err.id_ = params->requestId;
+        err.code_ = 0;
+        err.message_ = "Request cancelled";
+        SendResponse(static_cast<int>(params->requestId), err, ctx);
+        sessionRequests[params->requestId].isCancelled = true;
+    }
 }
 
 void ServerSession::SendNotification(std::unique_ptr<Notification> notification,

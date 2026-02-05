@@ -135,6 +135,12 @@ public:
         return sessionId_;
     }
 
+public:
+    // record requests
+    std::unordered_map<int64_t, RequestContext> sessionRequests;
+
+    std::mutex reqMtx;
+
 protected:
     /**
      * Called when a request is received.

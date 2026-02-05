@@ -136,6 +136,7 @@ struct RequestContext {
     std::string method;
 
     bool isGetStream = false;
+    bool isCancelled = false;
 
     HttpSendFunc httpSendFunc;
 };

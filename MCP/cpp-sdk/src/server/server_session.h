@@ -7,6 +7,7 @@
 
 #include <future>
 #include <optional>
+#include <mutex>
 
 #include "mcp_server.h"
 #include "mcp_type.h"
@@ -159,6 +160,8 @@ private:
      * regular MCP requests.
      */
     void HandleInitializeNotification(const Notification& notification);
+
+    void HandleCancelledNotification(const Notification& notification);
 
     // Server configuration used to guide session behavior.
     ServerConfig serverConfig_{};
