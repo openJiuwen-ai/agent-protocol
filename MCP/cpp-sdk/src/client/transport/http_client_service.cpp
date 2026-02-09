@@ -692,7 +692,9 @@ void HttpClientService::ExecuteCallback(const std::shared_ptr<RequestContext>& r
 {
     try {
         if (request->responseHeaderCallback != nullptr) {
-            request->responseHeaderCallback(response);
+            if (request->responseHeaderCallback(response)) {
+                return;
+            }
         }
         request->responseBodyCallback(response);
     } catch (const std::exception& e) {
@@ -846,13 +848,6 @@ void HttpClientService::CancelRequest(const std::shared_ptr<RequestContext>& req
     if (request->easyHandle != nullptr) {
         // Remove from multi handle
         curl_multi_remove_handle(multiHandle_, request->easyHandle);
-
-        HttpResponse response;
-        response.success = false;
-        response.statusCode = 0;
-        response.errorMessage = "Request cancelled during shutdown";
-        response.userData = request->userData;
-        ExecuteCallback(request, response);
 
         // Cleanup CURL handle
         curl_easy_cleanup(request->easyHandle);

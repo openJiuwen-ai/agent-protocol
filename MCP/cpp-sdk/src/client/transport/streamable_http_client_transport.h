@@ -13,6 +13,7 @@
 
 #include "http_client_service.h"
 #include "mcp_auth.h"
+#include "mcp_error.h"
 #include "mcp_type.h"
 #include "shared/http_common.h"
 #include "shared/jsonrpc.h"
@@ -60,7 +61,8 @@ private:
     void HandleUnexpectedContentType(const HttpResponse& response);
     void MayExtractSessionIdFromResponse(const HttpResponse& response);
     void MayExtractProtocolVersionFromMessage(const JSONRPCMessage& message);
-    void SendSessionTerminatedError(const HttpResponse& response);
+    void ReportError(const RequestId& requestId, JsonRpcErrorCode errorCode, const std::string& message,
+                     const std::optional<nlohmann::json>& data = std::nullopt);
 
     // Handle response from server (called internally when response received, triggers session callback)
     bool HandleResponseHeader(const HttpResponse& response);

@@ -72,18 +72,26 @@ StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
     }
 }
 
-void StreamableHttpClientTransport::SendSessionTerminatedError(const HttpResponse& response)
+
+void StreamableHttpClientTransport::ReportError(const RequestId& requestId, JsonRpcErrorCode errorCode,
+                                                const std::string& message, const std::optional<nlohmann::json>& data)
 {
     if (callback_ == nullptr) {
         return;
     }
-    // Construct JSON-RPC error per MCP spec: code -32600, message "Session terminated"
+
+    // Check if requestId is valid (not default int64_t(0))
+    if (std::holds_alternative<int64_t>(requestId) && std::get<int64_t>(requestId) == 0) {
+        return;
+    }
+
     JSONRPCError error;
     error.jsonrpc_ = JSONRPC_VERSION;
-    error.id_ = response.userData.requestId;
-    error.code_ = static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST); // -32600
-    error.message_ = "Session terminated";
-    error.data_ = std::nullopt;
+    error.id_ = requestId;
+    error.code_ = static_cast<int>(errorCode);
+    error.message_ = message;
+    error.data_ = data;
+
     // Send error message via callback
     callback_->OnMessageReceived(error, ctx_);
 }
@@ -139,13 +147,28 @@ void StreamableHttpClientTransport::StartGetStream()
 
 bool StreamableHttpClientTransport::HandleGetStreamHeader(const HttpResponse& response)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Received HTTP status " + std::to_string(response.statusCode));
+    if (!response.success) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSE header request failed: " + response.errorMessage);
+        return true; // Close connection on failure
+    }
+
+    // Check if status code is 2xx (success) : 100 is used to get the first digit, and the result is compared with 2
+    if (response.statusCode / 100 != 2) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status " + std::to_string(response.statusCode));
+        return true; // Close connection on status code error
+    }
+
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "GET SSE connection established");
     return false; // Continue processing
 }
 
 bool StreamableHttpClientTransport::HandleGetStreamBody(const HttpResponse& response)
 {
+    if (!response.success) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "SSE body request failed: " + response.errorMessage);
+        return true; // Close connection on failure
+    }
+
     HandleSseEvent(response.sseEvent);
     return false; // Continue processing
 }
@@ -208,13 +231,11 @@ bool StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& res
     // Check low-level HTTP client success flag first
     if (!response.success) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP request failed: " + response.errorMessage);
-        if (callback_ != nullptr) {
-            std::string reason = "HTTP request failed";
-            if (!response.errorMessage.empty()) {
-                reason += ": " + response.errorMessage;
-            }
-            callback_->OnDisconnected(reason);
+        std::string reason = "HTTP request failed";
+        if (!response.errorMessage.empty()) {
+            reason += ": " + response.errorMessage;
         }
+        ReportError(response.userData.requestId, JsonRpcErrorCode::INTERNAL_ERROR, reason);
         return true; // Request failed, close connection
     }
 
@@ -224,25 +245,20 @@ bool StreamableHttpClientTransport::HandleResponseHeader(const HttpResponse& res
         return false; // Continue processing
     }
 
+    // Handle 404 Not Found response (session not found or expired)
     if (response.statusCode == Http::HTTP_STATUS_NOT_FOUND) {
         MCP_LOG(MCP_LOG_LEVEL_WARN, "Session not found or expired (" +
                 std::to_string(Http::HTTP_STATUS_NOT_FOUND) + ")");
-        SendSessionTerminatedError(response);
+        ReportError(response.userData.requestId, JsonRpcErrorCode::INVALID_REQUEST, "Session terminated");
         return true; // Session terminated, close connection
     }
 
-    // Handle 401 Unauthorized and 403 Forbidden responses
-    if (response.statusCode == Http::HTTP_STATUS_UNAUTHORIZED ||
-        response.statusCode == Http::HTTP_STATUS_FORBIDDEN) {
+    // Check if status code is 2xx (success): 100 is used to get the first digit, and the result is compared with 2
+    if (response.statusCode / 100 != 2) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status " + std::to_string(response.statusCode));
-
-        return true; // Authentication failed, close connection
-    }
-
-    if (response.statusCode != Http::HTTP_STATUS_OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP error status " + std::to_string(response.statusCode));
-        // Handle other error responses
-        return true; // Error occurred, close connection
+        ReportError(response.userData.requestId, JsonRpcErrorCode::INVALID_REQUEST,
+                    "HTTP error: " + std::to_string(response.statusCode));
+        return true; // Close connection on status code error
     }
 
     // Determine if this response corresponds to an initialization request
@@ -262,6 +278,7 @@ bool StreamableHttpClientTransport::HandleResponseBody(const HttpResponse& respo
 {
     if (!response.success) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "HTTP request failed");
+        ReportError(response.userData.requestId, JsonRpcErrorCode::INTERNAL_ERROR, "HTTP request failed");
         return true; // Request failed, close connection
     }
 

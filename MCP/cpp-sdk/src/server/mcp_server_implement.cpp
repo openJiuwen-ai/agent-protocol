@@ -27,7 +27,7 @@
 
 namespace Mcp {
 
-static const std::vector<std::string> SERVER_STATE_STRINGS = {
+static const char* g_serverStateStrings[] = {
     "INIT",
     "RUNNING",
     "STOPPED"
@@ -360,7 +360,7 @@ bool McpServerImplement::Run()
     ServerState currentState = state_.load();
     if (currentState != ServerState::INIT) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "run failed. Server is not in init state, current state: " +
-                std::string(SERVER_STATE_STRINGS[static_cast<int>(currentState)]));
+                std::string(g_serverStateStrings[static_cast<int>(currentState)]));
         return false;
     }
 
