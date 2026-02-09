@@ -301,7 +301,25 @@ void ServerSession::SendNotification(std::unique_ptr<Notification> notification,
     dummy.sessionId = GetSessionId();
     dummy.method = rpcNotif.method_;
     dummy.connectionId = 0;
+    dummy.isGetStream = true;
+
     serverTransport_->SendMessage(message, dummy);
+}
+
+void ServerSession::SendLogMessage(const std::string& level, const std::string& data, const std::string& logger)
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<LoggingMessageNotification>();
+    auto params = std::make_unique<LoggingMessageNotificationParams>(std::string{}, std::string{}, std::string{});
+    params->level = level;
+    params->data = data;
+    params->logger = logger;
+    notif->params_ = std::move(params);
+
+    SendNotification(std::move(notif), std::nullopt);
 }
 
 void ServerSession::SendProgressNotification(const std::string& progressToken, double progress,

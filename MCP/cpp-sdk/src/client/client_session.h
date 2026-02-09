@@ -42,6 +42,9 @@ public:
     // Set the callback for handling roots/list requests from the server
     void SetListRootsCallback(ListRootsCallback cb);
 
+    // Set the callback for handling notifications/message from the server
+    void SetLoggingCallback(LoggingCallback cb);
+
     // Set the logging level
     std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(LoggingLevel level);
 
@@ -89,8 +92,14 @@ public:
 
     // Send notifications/initialized after successful initialize handshake
     void SendInitializedNotification();
-
 protected:
+    /**
+    * @brief Handle an incoming JSON-RPC notification from the server.
+    *
+    * This is called by `BaseSession` when a notification message is parsed.
+    */
+    void ReceivedNotification(const Notification& notification) override;
+
     void ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx) override;
 
 private:
@@ -127,6 +136,8 @@ private:
     // If set, the client supports roots/list. Used to decide whether to advertise
     // ClientCapabilities.roots in the initialize request.
     ListRootsCallback listRootsCallback_{nullptr};
+
+    LoggingCallback loggingCallback_{nullptr};
 
     // Client configuration used to build initialize.clientInfo
     ClientConfig clientConfig_;

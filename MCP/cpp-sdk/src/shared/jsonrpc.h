@@ -280,6 +280,19 @@ struct ResourceUpdatedNotification : public Notification {
     ResourceUpdatedNotification();
 };
 
+struct LoggingMessageNotificationParams : public NotificationParams {
+    std::string level;
+    std::string data;
+    std::string logger;
+
+    explicit LoggingMessageNotificationParams(const std::string &level,
+            const std::string &data, const std::string &logger) : level(level), data(data), logger(logger)  {}
+};
+
+struct LoggingMessageNotification : public Notification {
+    LoggingMessageNotification();
+};
+
 struct ToolListChangedNotification : public Notification {
     ToolListChangedNotification();
 };

@@ -1904,6 +1904,48 @@ struct adl_serializer<Mcp::ResourceUpdatedNotification> {
 };
 
 template <>
+struct adl_serializer<Mcp::LoggingMessageNotificationParams> {
+    static void to_json(json &j, const Mcp::LoggingMessageNotificationParams &p)
+    {
+        j["level"] = p.level;
+        j["logger"] = p.logger;
+        j["data"] = p.data;
+    }
+
+    static void from_json(const json &j, Mcp::LoggingMessageNotificationParams &p)
+    {
+        p.level = j.value("level", std::string{});
+        p.logger = j.value("logger", std::string{});
+        p.data = j.value("data", std::string{});
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::LoggingMessageNotification> {
+    static void to_json(json &j, const Mcp::LoggingMessageNotification &notif)
+    {
+        j = json::object();
+        if (notif.params_) {
+            auto p = static_cast<const Mcp::LoggingMessageNotificationParams *>(notif.params_.get());
+            if (p != nullptr) {
+                j = *p;
+            }
+        }
+    }
+
+    static void from_json(const json &j, Mcp::LoggingMessageNotification &notif)
+    {
+        if (j.contains("data")) {
+            Mcp::LoggingMessageNotificationParams p(std::string{}, std::string{}, std::string{});
+            j.get_to(p);
+            notif.params_ = std::make_unique<Mcp::LoggingMessageNotificationParams>(std::move(p));
+        } else {
+            notif.params_.reset();
+        }
+    }
+};
+
+template <>
 struct adl_serializer<Mcp::ToolListChangedNotification> {
     static void to_json(json &j, const Mcp::ToolListChangedNotification &)
     {
@@ -2184,6 +2226,12 @@ CancelledNotification::CancelledNotification()
 {
     method_ = "notifications/cancelled";
 }
+
+LoggingMessageNotification::LoggingMessageNotification()
+{
+    method_ = "notifications/message";
+}
+
 
 ToolListChangedNotification::ToolListChangedNotification()
 {
@@ -2616,23 +2664,28 @@ std::string JSONRPCNotification::Serialize(const std::string& method) const
     json j;
     j["jsonrpc"] = jsonrpc_;
     j["method"] = method_;
-    if (method_ == "notifications/initialized") {
+
+    if (method_ == "notifications/initialized" ||
+        method_ == "notifications/tools/list_changed" ||
+        method_ == "notifications/prompts/list_changed" ||
+        method_ == "notifications/resources/list_changed") {
         j["params"] = json::object();
-    } else if (notification_ != nullptr && method_ == "notifications/resources/updated") {
-        const auto* notif = dynamic_cast<const ResourceUpdatedNotification*>(notification_.get());
-        if (notif != nullptr) {
-            j["params"] = *notif;
-        }
-    } else if (method_ == "notifications/tools/list_changed") {
-        j["params"] = json::object();
-    } else if (method_ == "notifications/prompts/list_changed") {
-        j["params"] = json::object();
-    } else if (method_ == "notifications/resources/list_changed") {
-        j["params"] = json::object();
-    } else if (notification_ != nullptr && method_ == "notifications/cancelled") {
-        const auto* notif = dynamic_cast<const CancelledNotification*>(notification_.get());
-        if (notif != nullptr) {
-            j["params"] = *notif;
+    } else if (notification_ != nullptr) {
+        if (method_ == "notifications/resources/updated") {
+            const auto* notif = dynamic_cast<const ResourceUpdatedNotification*>(notification_.get());
+            if (notif != nullptr) {
+                j["params"] = *notif;
+            }
+        } else if (method_ == "notifications/message") {
+            const auto* notif = dynamic_cast<const LoggingMessageNotification*>(notification_.get());
+            if (notif != nullptr) {
+                j["params"] = *notif;
+            }
+        } else if (method_ == "notifications/cancelled") {
+            const auto* notif = dynamic_cast<const CancelledNotification*>(notification_.get());
+            if (notif != nullptr) {
+                j["params"] = *notif;
+            }
         }
     }
 
@@ -2667,6 +2720,13 @@ int JSONRPCNotification::Deserialize(const std::string& jsonStr, const std::stri
     } else if (method_ == "notifications/resources/list_changed") {
         auto notif = std::make_unique<ResourceListChangedNotification>();
         notif->method_ = method_;
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/message") {
+        auto notif = std::make_unique<LoggingMessageNotification>();
+        notif->method_ = method_;
+        if (j.contains("params")) {
+            j.at("params").get_to(*notif);
+        }
         notification_ = std::move(notif);
     } else if (method_ == "notifications/cancelled") {
         auto notif = std::make_unique<CancelledNotification>();

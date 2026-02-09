@@ -32,13 +32,6 @@ std::future<std::shared_ptr<InitializeResult>> McpClientImplement::Initialize()
         throw std::runtime_error("Failed to create session layer.");
     }
 
-    // Apply any pre-configured roots/list callback before the Initialize request is built,
-    // so the client advertises the `roots` capability correctly.
-    if (listRootsCallback_.has_value()) {
-        session_->SetListRootsCallback(std::move(*listRootsCallback_));
-        listRootsCallback_.reset();
-    }
-
     initialized_ = true;
     return session_->Initialize();
 }
@@ -147,11 +140,12 @@ std::future<std::shared_ptr<CompleteResult>> McpClientImplement::Complete(
 
 void McpClientImplement::SetListRootsCallback(ListRootsCallback cb)
 {
-    if (session_) {
-        session_->SetListRootsCallback(std::move(cb));
-        return;
-    }
-    listRootsCallback_ = std::move(cb);
+    session_->SetListRootsCallback(std::move(cb));
+}
+
+void McpClientImplement::SetLoggingCallback(LoggingCallback cb)
+{
+    session_->SetLoggingCallback(std::move(cb));
 }
 
 } // namespace Mcp

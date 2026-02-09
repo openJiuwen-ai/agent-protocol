@@ -119,6 +119,7 @@ void McpServerImplement::HandleToolsList(int64_t requestId, const Request& reque
     if (session == nullptr) {
         throw std::runtime_error("Session not found: " + ctx.sessionId);
     }
+
     auto result = std::make_unique<ListToolsResult>(toolManager_.ListTools());
     session->SendResponse(requestId, std::move(result), ctx);
 }

@@ -61,6 +61,11 @@ void ClientSession::SetListRootsCallback(ListRootsCallback cb)
     listRootsCallback_ = std::move(cb);
 }
 
+void ClientSession::SetLoggingCallback(LoggingCallback cb)
+{
+    loggingCallback_ = std::move(cb);
+}
+
 // Initialize implementation
 std::future<std::shared_ptr<InitializeResult>> ClientSession::Initialize()
 {
@@ -319,6 +324,25 @@ std::future<std::shared_ptr<EmptyResult>> ClientSession::SetLoggingLevel(Logging
     SendRequest(std::move(req), MakeTypedCompletion<EmptyResult>(promise, "SetLoggingLevel"));
 
     return future;
+}
+
+void ClientSession::ReceivedNotification(const Notification& notification)
+{
+    // The "initialized" notification completes the initialization handshake.
+    if (notification.method_ == "notifications/message") {
+        auto params = dynamic_cast<LoggingMessageNotificationParams*>(notification.params_.get());
+        if (params == nullptr) {
+            throw std::invalid_argument("notifications/message get no params");
+        }
+        if (loggingCallback_ == nullptr) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Received Server logging. level is %s, data is %s, logger is %s",
+                params->level.c_str(), params->data.c_str(), params->logger.c_str());
+            return;
+        }
+        loggingCallback_(params->level, params->data, params->logger);
+    } else {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "undefined notification: %s", notification.method_);
+    }
 }
 
 } // namespace Mcp

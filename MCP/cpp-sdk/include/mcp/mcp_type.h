@@ -392,6 +392,12 @@ enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Ale
 // If this is not set, the client must not advertise the `roots` capability in initialize.
 using ListRootsCallback = std::function<ListRootsResult()>;
 
+// Register a callback that will be invoked when the server sends `notifications/message`.
+// The default callback is print in MCP_LOG.
+using LoggingCallback = std::function<void(const std::string& level,
+                                                 const std::string& data,
+                                                 const std::string& logger)>;
+
 // completion/complete references
 struct ResourceTemplateReference {
     std::string type = "ref/resource";

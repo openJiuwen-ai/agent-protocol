@@ -105,6 +105,7 @@ public:
      */
     std::future<std::shared_ptr<ListRootsResult>> ListRoots();
 
+    void SendLogMessage(const std::string& level, const std::string& data, const std::string& logger);
     /**
      * @brief Request the client to sample a model message via `sampling/createMessage`.
      *
