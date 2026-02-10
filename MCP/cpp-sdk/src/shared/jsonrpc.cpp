@@ -2044,6 +2044,16 @@ struct adl_serializer<Mcp::ResourceListChangedNotification> {
     static void from_json(const json &, Mcp::ResourceListChangedNotification &) {}
 };
 
+template <>
+struct adl_serializer<Mcp::RootsListChangedNotification> {
+    static void to_json(json &j, const Mcp::RootsListChangedNotification &)
+    {
+        j = json::object();
+    }
+
+    static void from_json(const json &, Mcp::RootsListChangedNotification &) {}
+};
+
 // ResourceTemplateReference
 template <>
 struct adl_serializer<Mcp::ResourceTemplateReference> {
@@ -2315,6 +2325,11 @@ PromptListChangedNotification::PromptListChangedNotification()
 ResourceListChangedNotification::ResourceListChangedNotification()
 {
     method_ = "notifications/resources/list_changed";
+}
+
+RootsListChangedNotification::RootsListChangedNotification()
+{
+    method_ = "notifications/roots/list_changed";
 }
 
 CallToolParams::CallToolParams(const std::string& tool_name, std::optional<JsonValue> args)
@@ -2763,7 +2778,8 @@ std::string JSONRPCNotification::Serialize(const std::string& method) const
     if (method_ == "notifications/initialized" ||
         method_ == "notifications/tools/list_changed" ||
         method_ == "notifications/prompts/list_changed" ||
-        method_ == "notifications/resources/list_changed") {
+        method_ == "notifications/resources/list_changed" ||
+        method_ == "notifications/roots/list_changed") {
         j["params"] = json::object();
     } else if (notification_ != nullptr) {
         if (method_ == "notifications/resources/updated") {
@@ -2829,6 +2845,10 @@ int JSONRPCNotification::Deserialize(const std::string& jsonStr, const std::stri
         if (j.contains("params")) {
             j.at("params").get_to(*notif);
         }
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/roots/list_changed") {
+        auto notif = std::make_unique<RootsListChangedNotification>();
+        notif->method_ = method_;
         notification_ = std::move(notif);
     }
 

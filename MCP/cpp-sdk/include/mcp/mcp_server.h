@@ -5,6 +5,7 @@
 #ifndef MCP_SERVER_INCLUDE_H_
 #define MCP_SERVER_INCLUDE_H_
 
+#include <future>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -21,6 +22,15 @@ using CompleteFunc = std::function<CompleteResult(const CompleteReference& ref,
 class McpServerSession {
 public:
     virtual ~McpServerSession() = default;
+
+    // Notify the client that the server's tool list/prompt list/resource list has changed.
+    virtual void SendToolListChangedNotification() = 0;
+    virtual void SendPromptListChangedNotification() = 0;
+    virtual void SendResourceListChangedNotification() = 0;
+
+    // Request the client's roots list via `roots/list`.
+    virtual std::future<std::shared_ptr<ListRootsResult>> ListRoots() = 0;
+
     virtual void SendProgressNotification(const std::string& progressToken, double progress,
                                           std::optional<double> total = std::nullopt,
                                           const std::optional<std::string>& message = std::nullopt) = 0;

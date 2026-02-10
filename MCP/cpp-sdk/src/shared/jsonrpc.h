@@ -322,6 +322,10 @@ struct ResourceListChangedNotification : public Notification {
     ResourceListChangedNotification();
 };
 
+struct RootsListChangedNotification : public Notification {
+    RootsListChangedNotification();
+};
+
 inline const char* ToString(LoggingLevel lvl)
 {
     switch (lvl) {

@@ -69,7 +69,7 @@ public:
      * has been updated (added/removed). Clients can react by re-fetching
      * the tool list.
      */
-    void SendToolListChangedNotification();
+    void SendToolListChangedNotification() override;
 
     /**
      * @brief Notify the client that the server's prompt list has changed.
@@ -78,7 +78,7 @@ public:
      * has been updated (added/removed). Clients can react by re-fetching
      * the prompt list.
      */
-    void SendPromptListChangedNotification();
+    void SendPromptListChangedNotification() override;
 
     /**
      * @brief Notify the client that the server's resource list has changed.
@@ -87,7 +87,7 @@ public:
      * has been updated (added/removed). Clients can react by re-fetching
      * the resource list.
      */
-    void SendResourceListChangedNotification();
+    void SendResourceListChangedNotification() override;
 
     /**
      * @brief Get the capabilities advertised by the connected client.
@@ -103,7 +103,7 @@ public:
      * This sends a JSON-RPC request to the client and resolves the future when
      * the corresponding response arrives.
      */
-    std::future<std::shared_ptr<ListRootsResult>> ListRoots();
+    std::future<std::shared_ptr<ListRootsResult>> ListRoots() override;
 
     void SendLogMessage(const std::string& level, const std::string& data, const std::string& logger);
     /**

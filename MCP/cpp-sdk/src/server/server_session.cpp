@@ -272,6 +272,8 @@ void ServerSession::ReceivedNotification(const Notification& notification)
         HandleInitializeNotification(notification);
     } else if (notification.method_ == "notifications/cancelled") {
         HandleCancelledNotification(notification);
+    } else if (notification.method_ == "notifications/roots/list_changed") {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Server received notification: %s", notification.method_.c_str());
     } else {
         if (incomingNotificationCallback_) {
             incomingNotificationCallback_(notification);

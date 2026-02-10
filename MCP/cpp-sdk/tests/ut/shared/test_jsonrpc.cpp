@@ -1493,4 +1493,32 @@ TEST_F(JSONRPCSerializationTest, ResourceListChangedNotificationDeserializeCreat
     EXPECT_NE(nullptr, dynamic_cast<const Mcp::ResourceListChangedNotification *>(notif.notification_.get()));
 }
 
+TEST_F(JSONRPCSerializationTest, RootsListChangedNotificationSerializeIncludesParams)
+{
+    JSONRPCNotification notif;
+    notif.method_ = "notifications/roots/list_changed";
+
+    std::string serialized = notif.Serialize(notif.method_);
+    auto j = json::parse(serialized);
+
+    EXPECT_EQ(JSONRPC_VERSION, j.at("jsonrpc").get<std::string>());
+    EXPECT_EQ(std::string{"notifications/roots/list_changed"}, j.at("method").get<std::string>());
+    ASSERT_TRUE(j.contains("params"));
+    EXPECT_TRUE(j.at("params").is_object());
+}
+
+TEST_F(JSONRPCSerializationTest, RootsListChangedNotificationDeserializeCreatesTypedNotification)
+{
+    json j;
+    j["jsonrpc"] = JSONRPC_VERSION;
+    j["method"] = "notifications/roots/list_changed";
+    j["params"] = json::object();
+
+    JSONRPCNotification notif;
+    int result = notif.Deserialize(j.dump(), "notifications/roots/list_changed");
+    EXPECT_EQ(0, result);
+    ASSERT_NE(nullptr, notif.notification_);
+    EXPECT_NE(nullptr, dynamic_cast<const Mcp::RootsListChangedNotification *>(notif.notification_.get()));
+}
+
 } // namespace

@@ -51,7 +51,7 @@ ClientCapabilities ClientSession::BuildClientCapabilities() const
     // Only advertise `roots` when the client can handle roots/list.
     if (listRootsCallback_) {
         // Change the value to true after ListRoot is fully implemented.
-        caps.roots = RootsCapability{.listChanged = false};
+        caps.roots = RootsCapability{.listChanged = true};
     }
     if (elicitCallback_ || elicitUrlCallback_) {
         caps.elicitation = ElicitationCapability{};
@@ -293,7 +293,8 @@ std::future<EmptyResult> ClientSession::SendPing()
 
 void ClientSession::SendRootsListChanged()
 {
-    // Empty implementation
+    auto notification = std::make_unique<RootsListChangedNotification>();
+    SendNotification(std::move(notification), std::nullopt);
 }
 
 std::future<std::shared_ptr<ListResourcesResult>> ClientSession::ListResources()
@@ -388,6 +389,10 @@ void ClientSession::ReceivedNotification(const Notification& notification)
             return;
         }
         loggingCallback_(params->level, params->data, params->logger);
+    } else if (notification.method_ == "notifications/tools/list_changed" ||
+               notification.method_ == "notifications/prompts/list_changed" ||
+               notification.method_ == "notifications/resources/list_changed") {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Client received notification: %s", notification.method_.c_str());
     } else {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "undefined notification: %s", notification.method_);
     }

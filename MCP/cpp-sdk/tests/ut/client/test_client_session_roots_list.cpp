@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <utility>
@@ -36,7 +37,18 @@ public:
         // the serialized form and re-parse into an owned variant.
         lastMethod = method;
         lastSerialized = SerializeJSONRPCMessage(message, method);
-        auto parsed = DeserializeJSONRPCMessage(lastSerialized, method.value_or(""));
+
+        std::string deserializeMethod = method.value_or("");
+        if (deserializeMethod.empty()) {
+            try {
+                const auto j = nlohmann::json::parse(lastSerialized);
+                deserializeMethod = j.value("method", "");
+            } catch (...) {
+                deserializeMethod.clear();
+            }
+        }
+
+        auto parsed = DeserializeJSONRPCMessage(lastSerialized, deserializeMethod);
         lastMessage = std::move(parsed);
         sendCount++;
     }
@@ -102,4 +114,22 @@ TEST_F(ClientSessionRootsListTest, IncomingRootsListInvokesCallbackAndReplies)
     ASSERT_TRUE(rootsResult != nullptr);
     ASSERT_EQ(rootsResult->roots.size(), 1u);
     EXPECT_EQ(rootsResult->roots[0].uri, "file:///tmp");
+}
+
+TEST_F(ClientSessionRootsListTest, SendRootsListChangedSendsNotification)
+{
+    session_->SendRootsListChanged();
+
+    EXPECT_EQ(transport_->sendCount, 1);
+
+    const auto j = nlohmann::json::parse(transport_->lastSerialized);
+    EXPECT_EQ(j.value("jsonrpc", ""), JSONRPC_VERSION);
+    EXPECT_EQ(j.value("method", ""), "notifications/roots/list_changed");
+    ASSERT_TRUE(j.contains("params"));
+    EXPECT_TRUE(j.at("params").is_object());
+
+    ASSERT_TRUE(std::holds_alternative<JSONRPCNotification>(transport_->lastMessage));
+    const auto& notif = std::get<JSONRPCNotification>(transport_->lastMessage);
+    EXPECT_EQ(notif.method_, "notifications/roots/list_changed");
+    EXPECT_NE(dynamic_cast<RootsListChangedNotification*>(notif.notification_.get()), nullptr);
 }
