@@ -616,6 +616,29 @@ struct adl_serializer<Mcp::ListRootsResult> {
     }
 };
 
+// ElicitResult
+template <>
+struct adl_serializer<Mcp::ElicitResult> {
+    static void to_json(json& j, const Mcp::ElicitResult& res)
+    {
+        j = json::object();
+        j["action"] = res.action;
+        j["content"] = res.content;
+    }
+
+    static void from_json(const json& j, Mcp::ElicitResult& res)
+    {
+        res.action = j.value("action", std::string());
+        res.content.clear();
+        if (j.contains("content") && j.at("content").is_object()) {
+            const auto parsed = ParseMetaStringMap(j.at("content"));
+            if (parsed.has_value()) {
+                res.content = parsed.value();
+            }
+        }
+    }
+};
+
 // ResourceLink
 template <>
 struct adl_serializer<Mcp::ResourceLink> {
@@ -1371,6 +1394,52 @@ struct adl_serializer<Mcp::SetLoggingLevelRequest> {
             paramsJson.at("level").get_to(level);
 
             req.params_ = std::make_unique<Mcp::SetLoggingLevelParams>(std::move(level));
+        }
+    }
+};
+
+// Elicitation
+template <>
+struct adl_serializer<Mcp::ElicitRequest> {
+    static void to_json(json& j, const Mcp::ElicitRequest& req)
+    {
+        if (req.params_) {
+            if (auto* formParams = dynamic_cast<const Mcp::ElicitRequestFormParams*>(req.params_.get())) {
+                j["mode"] = formParams->mode;
+                j["message"] = formParams->message;
+                j["requestedSchema"] = formParams->requestedSchema;
+            } else if (auto* urlParams = dynamic_cast<const Mcp::ElicitRequestUrlParams*>(req.params_.get())) {
+                j["mode"] = urlParams->mode;
+                j["message"] = urlParams->message;
+                j["elicitationId"] = urlParams->elicitationId;
+            }
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ElicitRequest& req)
+    {
+        j.at("method").get_to(req.method_);
+
+        if (j.contains("params")) {
+            const auto& paramsJson = j.at("params");
+            std::string mode = paramsJson.at("mode").get<std::string>();
+            if (mode == "form") {
+                auto p = std::make_unique<Mcp::ElicitRequestFormParams>();
+                p->mode = mode;
+                p->message = paramsJson.at("message").get<std::string>();
+                const auto parsed = ParseMetaStringMap(paramsJson.at("requestedSchema"));
+                p->requestedSchema = parsed.value();
+
+                req.params_ = std::move(p);
+            } else if (mode == "url") {
+                auto p = std::make_unique<Mcp::ElicitRequestUrlParams>();
+                p->mode = mode;
+                p->url = paramsJson.at("url").get<std::string>();
+                p->message = paramsJson.at("message").get<std::string>();
+                p->elicitationId = paramsJson.at("elicitationId").get<std::string>();
+
+                req.params_ = std::move(p);
+            }
         }
     }
 };
@@ -2290,6 +2359,11 @@ SetLoggingLevelRequest::SetLoggingLevelRequest()
     method_ = "logging/setLevel";
 }
 
+ElicitRequest::ElicitRequest()
+{
+    method_ = "elicitation/create";
+}
+
 ListResourcesRequest::ListResourcesRequest()
 {
     method_ = "resources/list";
@@ -2402,6 +2476,11 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
         if (sampleReq != nullptr) {
             j["params"] = *sampleReq;
         }
+    } else if (request_ != nullptr && request_->method_ == "elicitation/create") {
+        const auto* elicitReq = dynamic_cast<const ElicitRequest*>(request_.get());
+        if (elicitReq != nullptr) {
+            j["params"] = *elicitReq;
+        }
     }
 
     return j.dump();
@@ -2478,6 +2557,10 @@ int JSONRPCRequest::Deserialize(const std::string& jsonStr, const std::string& m
         CreateMessageRequest sampleReq = j.get<CreateMessageRequest>();
         auto reqPtr = std::make_unique<CreateMessageRequest>(std::move(sampleReq));
         request_ = std::move(reqPtr);
+    } else if (method_ == "elicitation/create") {
+        ElicitRequest elicitReq = j.get<ElicitRequest>();
+        auto reqPtr = std::make_unique<ElicitRequest>(std::move(elicitReq));
+        request_ = std::move(reqPtr);
     }
 
     return 0;
@@ -2544,6 +2627,12 @@ std::string JSONRPCResponse::Serialize(const std::string& method) const
                 throw std::runtime_error("Failed to cast result to ListRootsResult");
             }
             j["result"] = *listRootsResult;
+        } else if (method == "elicitation/create") {
+            auto* elicitResult = dynamic_cast<const ElicitResult*>(result_.get());
+            if (elicitResult == nullptr) {
+                throw std::runtime_error("Failed to cast result to ElicitResult");
+            }
+            j["result"] = *elicitResult;
         } else if (method == "sampling/createMessage") {
             auto* sampleResult = dynamic_cast<const CreateMessageResult*>(result_.get());
             if (sampleResult == nullptr) {
@@ -2634,6 +2723,12 @@ int JSONRPCResponse::Deserialize(const std::string& jsonStr, const std::string& 
         result_ = std::move(p);
     } else if (method == "roots/list") {
         auto p = std::make_shared<ListRootsResult>();
+        if (j.contains("result")) {
+            j.at("result").get_to(*p);
+        }
+        result_ = std::move(p);
+    } else if (method == "elicitation/create") {
+        auto p = std::make_shared<ElicitResult>();
         if (j.contains("result")) {
             j.at("result").get_to(*p);
         }

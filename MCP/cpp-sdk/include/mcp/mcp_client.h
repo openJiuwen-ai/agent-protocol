@@ -192,6 +192,12 @@ public:
     // Register a callback that will be invoked when the server sends `notifications/message`.
     // The default callback is print in MCP_LOG.
     virtual void SetLoggingCallback(LoggingCallback cb) = 0;
+
+    // Register a callback that will be invoked when the server sends `elicitation/create` in form mode.
+    virtual void SetElicitCallback(ElicitCallback cb) = 0;
+    
+    // Register a callback that will be invoked when the server sends `elicitation/create` in url mode.
+    virtual void SetElicitUrlCallback(ElicitUrlCallback cb) = 0;
 };
 
 class McpClientFactory {

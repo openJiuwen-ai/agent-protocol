@@ -148,4 +148,14 @@ void McpClientImplement::SetLoggingCallback(LoggingCallback cb)
     session_->SetLoggingCallback(std::move(cb));
 }
 
+void McpClientImplement::SetElicitCallback(ElicitCallback cb)
+{
+    session_->SetElicitCallback(std::move(cb));
+}
+
+void McpClientImplement::SetElicitUrlCallback(ElicitUrlCallback cb)
+{
+    session_->SetElicitUrlCallback(std::move(cb));
+}
+
 } // namespace Mcp

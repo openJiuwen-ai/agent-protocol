@@ -289,7 +289,16 @@ struct SamplingCapability {
     bool tools = false;
 };
 
-struct ElicitationCapability {};
+struct FormElicitationCapability {
+};
+
+struct UrlElicitationCapability {
+};
+
+struct ElicitationCapability {
+    std::optional<FormElicitationCapability> form;
+    std::optional<UrlElicitationCapability> url;
+};
 
 struct RootsCapability {
     bool listChanged = false;
@@ -347,6 +356,11 @@ struct ListRootsResult : public Result {
     std::vector<Root> roots;
 };
 
+struct ElicitResult : public Result {
+    std::string action;
+    MetaMap content;
+};
+
 // A response that indicates success but carries no data.
 struct EmptyResult : public Result {};
 
@@ -391,6 +405,11 @@ enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Ale
 // Callback indicating the client can serve roots/list.
 // If this is not set, the client must not advertise the `roots` capability in initialize.
 using ListRootsCallback = std::function<ListRootsResult()>;
+
+// Callback indicating the client can serve elicitation/create.
+using ElicitCallback = std::function<ElicitResult(const std::string&, const Mcp::MetaMap&)>;
+
+using ElicitUrlCallback = std::function<ElicitResult(const std::string&, const std::string&, const std::string&)>;
 
 // Register a callback that will be invoked when the server sends `notifications/message`.
 // The default callback is print in MCP_LOG.

@@ -230,6 +230,23 @@ struct SetLoggingLevelRequest : public Request {
     SetLoggingLevelRequest();
 };
 
+struct ElicitRequestFormParams : public RequestParams {
+    std::string mode; // "form"
+    std::string message;
+    MetaMap requestedSchema;
+};
+
+struct ElicitRequestUrlParams : public RequestParams {
+    std::string mode; // "url"
+    std::string message;
+    std::string url;
+    std::string elicitationId;
+};
+
+struct ElicitRequest : public Request {
+    ElicitRequest();
+};
+
 struct CancelledNotificationParams : public NotificationParams {
     int64_t requestId;
     std::string reason;

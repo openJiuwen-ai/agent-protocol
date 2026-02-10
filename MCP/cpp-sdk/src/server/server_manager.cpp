@@ -364,7 +364,7 @@ void ServerManager::DispatchRequest(const HttpRequest& request, RequestContext& 
         context.sessionId = GenerateSessionId();
     }
 
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Get request from connection %u with session ID: %s", context.connectionId,
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Get request from connection %u with session ID: %s", context.connectionId,
             context.sessionId.c_str());
     int threadId = GetThreadIdForSession(context.sessionId);
 

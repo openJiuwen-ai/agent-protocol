@@ -42,6 +42,12 @@ public:
     // Set the callback for handling roots/list requests from the server
     void SetListRootsCallback(ListRootsCallback cb);
 
+    // Set the callback for handling elicitation/create requests from the server
+    void SetElicitCallback(ElicitCallback cb);
+
+    // Set the callback for handling elicitation/create requests from the server
+    void SetElicitUrlCallback(ElicitUrlCallback cb);
+
     // Set the callback for handling notifications/message from the server
     void SetLoggingCallback(LoggingCallback cb);
 
@@ -121,6 +127,8 @@ private:
     // provide its roots. The request is only supported when listRootsCallback_ is set.
     void HandleRootsListRequest(int64_t requestId, const Request& request, RequestContext& ctx);
 
+    void HandleElicitRequest(int64_t requestId, const Request& request, RequestContext& ctx);
+
     // Utility helpers for replying to server-initiated requests with JSON-RPC errors.
     // These helpers centralize error formatting and ensure consistent responses.
     void SendJsonRpcError(int64_t requestId, JsonRpcErrorCode code, const std::string& message, RequestContext& ctx);
@@ -138,6 +146,10 @@ private:
     ListRootsCallback listRootsCallback_{nullptr};
 
     LoggingCallback loggingCallback_{nullptr};
+
+    ElicitCallback elicitCallback_{nullptr};
+
+    ElicitUrlCallback elicitUrlCallback_{nullptr};
 
     // Client configuration used to build initialize.clientInfo
     ClientConfig clientConfig_;

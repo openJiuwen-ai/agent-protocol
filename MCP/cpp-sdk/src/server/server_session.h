@@ -114,6 +114,11 @@ public:
      */
     std::future<std::shared_ptr<CreateMessageResult>> SamplingCreateMessage(const CreateMessageRequestParams& params);
 
+    std::future<std::shared_ptr<ElicitResult>> elicit(const std::string& message, const Mcp::MetaMap& requestedSchema);
+
+    std::future<std::shared_ptr<ElicitResult>> elicitUrl(const std::string& message,
+        const std::string& url, const std::string& elicitationId);
+
 protected:
     /**
     * @brief Handle an incoming JSON-RPC request from the client.

@@ -55,6 +55,10 @@ public:
 
     void SetListRootsCallback(ListRootsCallback cb) override;
 
+    void SetElicitCallback(ElicitCallback cb) override;
+
+    void SetElicitUrlCallback(ElicitUrlCallback cb) override;
+
     void SetLoggingCallback(LoggingCallback cb) override;
 private:
     void CheckInitialized();

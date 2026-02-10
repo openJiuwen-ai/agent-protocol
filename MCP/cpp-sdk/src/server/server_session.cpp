@@ -161,10 +161,6 @@ void ServerSession::HandleRequest(const HttpRequest& request, RequestContext& co
 
 std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
 {
-    if (serverTransport_ == nullptr) {
-        throw std::runtime_error("Server transport is not available");
-    }
-
     if (!isInitialized_) {
         throw std::runtime_error("Session is not initialized");
     }
@@ -202,6 +198,50 @@ std::future<std::shared_ptr<CreateMessageResult>> ServerSession::SamplingCreateM
     req->params_ = std::move(reqParams);
 
     SendRequest(std::move(req), MakeTypedCompletion<CreateMessageResult>(promise, "SamplingCreateMessage"));
+    return future;
+}
+
+std::future<std::shared_ptr<ElicitResult>> ServerSession::elicit(const std::string& message,
+    const Mcp::MetaMap& requestedSchema)
+{
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<ElicitResult>>>();
+    auto future = promise->get_future();
+
+    auto params = std::make_unique<ElicitRequestFormParams>();
+    params->mode = "form";
+    params->message = message;
+    params->requestedSchema = requestedSchema;
+    auto req = std::make_unique<ElicitRequest>();
+    req->params_ = std::move(params);
+
+    SendRequest(std::move(req), MakeTypedCompletion<ElicitResult>(promise, "Elicit"));
+    return future;
+}
+
+std::future<std::shared_ptr<ElicitResult>> ServerSession::elicitUrl(const std::string& message,
+    const std::string& url, const std::string& elicitationId)
+{
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<ElicitResult>>>();
+    auto future = promise->get_future();
+
+    auto params = std::make_unique<ElicitRequestUrlParams>();
+    params->mode = "url";
+    params->message = message;
+    params->url = url;
+    params->elicitationId = elicitationId;
+    auto req = std::make_unique<ElicitRequest>();
+    req->params_ = std::move(params);
+
+    SendRequest(std::move(req), MakeTypedCompletion<ElicitResult>(promise, "ElicitUrl"));
+
     return future;
 }
 

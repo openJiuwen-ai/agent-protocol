@@ -53,6 +53,15 @@ ClientCapabilities ClientSession::BuildClientCapabilities() const
         // Change the value to true after ListRoot is fully implemented.
         caps.roots = RootsCapability{.listChanged = false};
     }
+    if (elicitCallback_ || elicitUrlCallback_) {
+        caps.elicitation = ElicitationCapability{};
+        if (elicitCallback_) {
+            caps.elicitation->form = FormElicitationCapability{};
+        }
+        if (elicitUrlCallback_) {
+            caps.elicitation->url = UrlElicitationCapability{};
+        }
+    }
     return caps;
 }
 
@@ -64,6 +73,16 @@ void ClientSession::SetListRootsCallback(ListRootsCallback cb)
 void ClientSession::SetLoggingCallback(LoggingCallback cb)
 {
     loggingCallback_ = std::move(cb);
+}
+
+void ClientSession::SetElicitCallback(ElicitCallback cb)
+{
+    elicitCallback_ = std::move(cb);
+}
+
+void ClientSession::SetElicitUrlCallback(ElicitUrlCallback cb)
+{
+    elicitUrlCallback_ = std::move(cb);
 }
 
 // Initialize implementation
@@ -196,15 +215,44 @@ void ClientSession::HandleRootsListRequest(int64_t requestId, const Request& req
     }
 }
 
+void ClientSession::HandleElicitRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    auto formParams = dynamic_cast<ElicitRequestFormParams*>(request.params_.get());
+    auto urlParams = dynamic_cast<ElicitRequestUrlParams*>(request.params_.get());
+
+    try {
+        ElicitResult result;
+        if (formParams) {
+            if (!elicitCallback_) {
+                SendMethodNotFound(requestId, request.method_, ctx);
+                return;
+            }
+            result = elicitCallback_(formParams->message, formParams->requestedSchema);
+        } else if (urlParams) {
+            if (!elicitUrlCallback_) {
+                SendMethodNotFound(requestId, request.method_, ctx);
+                return;
+            }
+            result = elicitUrlCallback_(urlParams->message, urlParams->url, urlParams->elicitationId);
+        }
+        auto resultPtr = std::make_unique<ElicitResult>(std::move(result));
+        SendResponse(requestId, std::move(resultPtr), ctx);
+    } catch (const std::exception& e) {
+        SendInternalError(requestId, e.what(), ctx);
+    }
+}
+
 void ClientSession::ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
 {
     if (clientTransport_ == nullptr) {
         return;
     }
-
     const std::string& method = request.method_;
     if (method == "roots/list") {
         HandleRootsListRequest(requestId, request, ctx);
+        return;
+    } else if (method == "elicitation/create") {
+        HandleElicitRequest(requestId, request, ctx);
         return;
     }
 
