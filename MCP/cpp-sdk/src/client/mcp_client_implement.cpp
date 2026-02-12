@@ -12,6 +12,17 @@ McpClientImplement::McpClientImplement(const ClientConfig config, std::shared_pt
 {
 }
 
+McpClientImplement::~McpClientImplement()
+{
+    if (transport_) {
+        transport_->Terminate();
+        transport_.reset();
+    }
+    if (session_) {
+        session_.reset();
+    }
+}
+
 void McpClientImplement::CheckInitialized()
 {
     if (!initialized_) {

@@ -19,7 +19,7 @@ namespace Mcp {
 class McpClientImplement : public McpClient {
 public:
     explicit McpClientImplement(const ClientConfig config, std::shared_ptr<ClientTransport> transport);
-    ~McpClientImplement() = default;
+    ~McpClientImplement();
 
     std::future<std::shared_ptr<InitializeResult>> Initialize() override;
 

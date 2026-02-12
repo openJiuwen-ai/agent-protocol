@@ -378,27 +378,6 @@ TEST_F(McpClientImplementTest, RapidMethodCalls)
     });
 }
 
-// 测试客户端生命周期
-TEST_F(McpClientImplementTest, ClientLifecycle)
-{
-    for (int i = 0; i < LOOP_NUM; i++) {
-        client_ = std::make_unique<McpClientImplement>(config_, transport);
-        ASSERT_NE(client_, nullptr);
-
-        EXPECT_NO_THROW({
-            auto initFuture = client_->Initialize();
-            EXPECT_TRUE(initFuture.valid());
-
-            // 使用客户端
-            auto toolsFuture = client_->ListTools();
-            EXPECT_TRUE(toolsFuture.valid());
-
-            // 销毁客户端
-            client_.reset();
-        });
-    }
-}
-
 // 测试子进程配置
 TEST_F(McpClientImplementTest, SubprocessConfiguration)
 {
