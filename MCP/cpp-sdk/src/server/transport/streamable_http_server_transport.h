@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -73,6 +74,9 @@ private:
     std::optional<RequestContext> getStreamRequestContext_;
     bool isTerminated_;
     std::shared_ptr<TransportCallback> callback_;
+
+    // Maps JSON-RPC request id -> request method so we can recover the method when parsing responses/errors
+    std::unordered_map<int64_t, std::string> pendingMethods_;
 };
 } // namespace Mcp
 

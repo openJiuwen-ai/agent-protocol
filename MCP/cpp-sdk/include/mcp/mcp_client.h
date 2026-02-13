@@ -198,6 +198,27 @@ public:
     
     // Register a callback that will be invoked when the server sends `elicitation/create` in url mode.
     virtual void SetElicitUrlCallback(ElicitUrlCallback cb) = 0;
+
+    // Callback for handling `sampling/createMessage` requests sent from a server to the client.
+    // - Return a value to accept the sampling request and respond with a CreateMessageResult.
+    // - Return std::nullopt to indicate the user rejected the sampling request; the SDK will
+    //   reply with a JSON-RPC error code -1 as recommended by the spec.
+    using SamplingCreateMessageCallback = std::function<std::optional<CreateMessageResult>(const CreateMessageParams&)>;
+
+    /**
+     * @brief Register a callback that will be invoked when the server sends `sampling/createMessage`.
+     *
+     * This must be called before Initialize() to ensure sampling capabilities are advertised correctly.
+     *
+     * @param cb The callback to handle incoming sampling requests.
+     * @param capability Controls the advertised sampling sub-capabilities:
+     *  - capability.tools=true enables tool-enabled sampling requests (sampling.tools)
+     *  - capability.context=true enables includeContext values beyond "none" (sampling.context)
+     *
+     * @throw std::runtime_error If the client is already initialized.
+     */
+    virtual void SetSamplingCreateMessageCallback(SamplingCreateMessageCallback cb,
+        SamplingCapability capability = SamplingCapability{}) = 0;
 };
 
 class McpClientFactory {

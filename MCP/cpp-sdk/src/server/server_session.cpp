@@ -6,96 +6,13 @@
 
 #include <future>
 #include <memory>
-#include <set>
 
 #include "mcp_log.h"
+#include "shared/sampling_validation.h"
 
 namespace Mcp {
 
 namespace {
-
-std::vector<Mcp::SamplingMessageContentBlock> ContentAsList(const Mcp::SamplingMessage& message)
-{
-    if (std::holds_alternative<Mcp::SamplingMessageContentBlock>(message.content)) {
-        return {std::get<Mcp::SamplingMessageContentBlock>(message.content)};
-    }
-    return std::get<std::vector<Mcp::SamplingMessageContentBlock>>(message.content);
-}
-
-void ValidateToolResultPreconditions(const std::vector<Mcp::SamplingMessageContentBlock>& lastContent,
-    bool hasPrevious, bool hasPreviousToolUse)
-{
-    for (const auto& c : lastContent) {
-        if (!std::holds_alternative<Mcp::ToolResultContent>(c)) {
-            throw std::runtime_error(
-                "The last message must contain only tool_result content if any is present");
-        }
-    }
-    if (!hasPrevious) {
-        throw std::runtime_error("tool_result requires a previous message containing tool_use");
-    }
-    if (!hasPreviousToolUse) {
-        throw std::runtime_error("tool_result blocks do not match any tool_use in the previous message");
-    }
-}
-
-// Validate tool_use/tool_result message structure.
-// 1) Messages with tool_result content contain ONLY tool_result content
-// 2) tool_result messages are preceded by a message with tool_use
-// 3) tool_result IDs match tool_use IDs from the previous message
-void ValidateToolUseResultMessages(const std::vector<Mcp::SamplingMessage>& messages)
-{
-    if (messages.empty()) {
-        return;
-    }
-
-    const auto lastContent = ContentAsList(messages.back());
-    bool hasToolResults = false;
-    for (const auto& c : lastContent) {
-        if (std::holds_alternative<Mcp::ToolResultContent>(c)) {
-            hasToolResults = true;
-            break;
-        }
-    }
-
-    const bool hasPrevious = messages.size() >= 2;
-    const std::vector<Mcp::SamplingMessageContentBlock> previousContent =
-        hasPrevious ? ContentAsList(messages[messages.size() - 2]) : std::vector<Mcp::SamplingMessageContentBlock>{};
-
-    bool hasPreviousToolUse = false;
-    for (const auto& c : previousContent) {
-        if (std::holds_alternative<Mcp::ToolUseContent>(c)) {
-            hasPreviousToolUse = true;
-            break;
-        }
-    }
-
-    if (hasToolResults) {
-        ValidateToolResultPreconditions(lastContent, hasPrevious, hasPreviousToolUse);
-    }
-
-    if (hasPreviousToolUse) {
-        std::set<std::string> toolUseIds;
-        for (const auto& c : previousContent) {
-            if (std::holds_alternative<Mcp::ToolUseContent>(c)) {
-                toolUseIds.insert(std::get<Mcp::ToolUseContent>(c).id);
-            }
-        }
-
-        std::set<std::string> toolResultIds;
-        for (const auto& c : lastContent) {
-            if (std::holds_alternative<Mcp::ToolResultContent>(c)) {
-                toolResultIds.insert(std::get<Mcp::ToolResultContent>(c).toolUseId);
-            }
-        }
-
-        // tool_result IDs match tool_use IDs from the previous message
-        if (toolUseIds != toolResultIds) {
-            throw std::runtime_error(
-                "ids of tool_result blocks and tool_use blocks from previous message do not match");
-        }
-    }
-}
 
 template <typename T>
 std::function<void(std::shared_ptr<Mcp::Result>)> MakeTypedCompletion(
@@ -175,16 +92,31 @@ std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
 }
 
 std::future<std::shared_ptr<CreateMessageResult>> ServerSession::SamplingCreateMessage(
-    const CreateMessageRequestParams& params)
+    const CreateMessageParams& params)
 {
     if (!isInitialized_) {
         throw std::runtime_error("Session is not initialized");
     }
 
     const auto caps = GetClientCapabilities();
-    const bool supported = caps.tasks.has_value() && caps.tasks->samplingCreateMessage;
+    const bool supported = caps.sampling.has_value();
     if (!supported) {
         throw std::runtime_error("Client does not support sampling/createMessage");
+    }
+
+    // Gate tool-enabled sampling requests by advertised capability.
+    if (params.tools.has_value() && !caps.sampling->tools) {
+        throw std::runtime_error(
+            "Tool-enabled sampling requested but client did not advertise sampling.tools capability");
+    }
+
+    // Gate includeContext values beyond "none" by advertised capability.
+    if (params.includeContext.has_value()) {
+        const auto& v = params.includeContext.value();
+        const bool wantsContext = (v == "thisServer" || v == "allServers");
+        if (wantsContext && !caps.sampling->context) {
+            throw std::runtime_error("includeContext requires sampling.context capability");
+        }
     }
 
     ValidateToolUseResultMessages(params.messages);
@@ -193,8 +125,7 @@ std::future<std::shared_ptr<CreateMessageResult>> ServerSession::SamplingCreateM
     auto future = promise->get_future();
 
     auto req = std::make_unique<CreateMessageRequest>();
-    auto reqParams = std::make_unique<CreateMessageRequestParams>();
-    *reqParams = params;
+    auto reqParams = std::make_unique<CreateMessageRequestParams>(params);
     req->params_ = std::move(reqParams);
 
     SendRequest(std::move(req), MakeTypedCompletion<CreateMessageResult>(promise, "SamplingCreateMessage"));

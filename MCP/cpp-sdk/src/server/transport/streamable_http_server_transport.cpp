@@ -9,6 +9,7 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <optional>
 
 #include "mcp_log.h"
 #include "shared/jsonrpc.h"
@@ -279,7 +280,14 @@ void StreamableHttpServerTransport::HandlePostRequest(RequestContext& ctx, const
         return;
     }
 
-    JSONRPCMessage message = DeserializeJSONRPCMessage(request.body, "");
+    std::string deserializeMethod{};
+    // For responses, recover the original request method via request-id.
+    const auto pendingMethod = TryTakePendingMethodForJsonRpcResponse(messageJson, pendingMethods_);
+    if (pendingMethod.has_value()) {
+        deserializeMethod = *pendingMethod;
+    }
+
+    JSONRPCMessage message = DeserializeJSONRPCMessage(request.body, deserializeMethod);
     bool isRequest = std::holds_alternative<JSONRPCRequest>(message);
     if (!isRequest) {
         HandleNonRequestMessage(ctx, message);
@@ -428,6 +436,11 @@ void StreamableHttpServerTransport::HandleUnsupportedRequest(RequestContext& ctx
 
 void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, RequestContext& ctx)
 {
+    if (std::holds_alternative<JSONRPCRequest>(message)) {
+        const auto& req = std::get<JSONRPCRequest>(message);
+        pendingMethods_[req.id_] = req.method_;
+    }
+
     bool isGetStream = ctx.isGetStream || ctx.connectionId == 0;
     if (isGetStream) {
         if (!getStreamRequestContext_.has_value()) {

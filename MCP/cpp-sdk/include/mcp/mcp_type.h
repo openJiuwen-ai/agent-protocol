@@ -6,6 +6,7 @@
 #define MCP_TYPE_INCLUDE_H_
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -245,6 +246,22 @@ struct Tool {
     std::string name;
     std::string description;
     JsonValue inputSchema;
+};
+
+// Parameters for the server-initiated sampling request `sampling/createMessage`.
+// This mirrors the MCP Sampling specification (2025-11-25).
+struct CreateMessageParams {
+    std::vector<SamplingMessage> messages;
+    std::optional<ModelPreferences> modelPreferences;
+    std::optional<std::string> systemPrompt;
+    // "none" | "thisServer" | "allServers" (the latter two are soft-deprecated in the spec).
+    std::optional<std::string> includeContext;
+    std::optional<double> temperature;
+    int64_t maxTokens = 0;
+    std::optional<std::vector<std::string>> stopSequences;
+    std::optional<MetaMap> metadata;
+    std::optional<std::vector<Tool>> tools;
+    std::optional<ToolChoice> toolChoice;
 };
 
 struct ListToolsResult : public Result {

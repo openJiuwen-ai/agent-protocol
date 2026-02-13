@@ -11,6 +11,7 @@
 
 #include "mcp_log.h"
 #include "shared/jsonrpc.h"
+#include "shared/sampling_validation.h"
 
 namespace {
 
@@ -62,6 +63,11 @@ ClientCapabilities ClientSession::BuildClientCapabilities() const
             caps.elicitation->url = UrlElicitationCapability{};
         }
     }
+
+    // Advertise sampling support only when the client can handle sampling/createMessage.
+    if (samplingCreateMessageCallback_) {
+        caps.sampling = samplingCapability_;
+    }
     return caps;
 }
 
@@ -83,6 +89,13 @@ void ClientSession::SetElicitCallback(ElicitCallback cb)
 void ClientSession::SetElicitUrlCallback(ElicitUrlCallback cb)
 {
     elicitUrlCallback_ = std::move(cb);
+}
+
+void ClientSession::SetSamplingCreateMessageCallback(McpClient::SamplingCreateMessageCallback cb,
+    SamplingCapability capability)
+{
+    samplingCreateMessageCallback_ = std::move(cb);
+    samplingCapability_ = capability;
 }
 
 // Initialize implementation
@@ -181,10 +194,15 @@ void ClientSession::SendNotification(std::unique_ptr<Notification> notification,
 void ClientSession::SendJsonRpcError(int64_t requestId, JsonRpcErrorCode code, const std::string& message,
                                      RequestContext& ctx)
 {
+    SendJsonRpcErrorRaw(requestId, static_cast<int>(code), message, ctx);
+}
+
+void ClientSession::SendJsonRpcErrorRaw(int64_t requestId, int code, const std::string& message, RequestContext& ctx)
+{
     JSONRPCError error;
     error.jsonrpc_ = JSONRPC_VERSION;
     error.id_ = requestId;
-    error.code_ = static_cast<int>(code);
+    error.code_ = code;
     error.message_ = message;
     SendResponse(requestId, std::move(error), ctx);
 }
@@ -242,6 +260,59 @@ void ClientSession::HandleElicitRequest(int64_t requestId, const Request& reques
     }
 }
 
+void ClientSession::HandleSamplingCreateMessageRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+{
+    if (!samplingCreateMessageCallback_) {
+        SendMethodNotFound(requestId, request.method_, ctx);
+        return;
+    }
+
+    const auto* p = dynamic_cast<const CreateMessageRequestParams*>(request.params_.get());
+    if (p == nullptr) {
+        SendJsonRpcError(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for sampling/createMessage", ctx);
+        return;
+    }
+
+    // Gate tool-enabled sampling requests by advertised capability.
+    if (p->tools.has_value() && !samplingCapability_.tools) {
+        SendJsonRpcError(requestId, JsonRpcErrorCode::INVALID_PARAMS,
+            "Tool-enabled sampling request received but client did not advertise sampling.tools capability", ctx);
+        return;
+    }
+
+    // Gate includeContext values beyond "none" by advertised capability.
+    if (p->includeContext.has_value()) {
+        const auto& v = p->includeContext.value();
+        if ((v == "thisServer" || v == "allServers") && !samplingCapability_.context) {
+            SendJsonRpcError(requestId, JsonRpcErrorCode::INVALID_PARAMS,
+                "includeContext requires sampling.context capability", ctx);
+            return;
+        }
+    }
+
+    // Enforce tool_use/tool_result constraints for compatibility across provider APIs.
+    try {
+        ValidateToolUseResultMessages(p->messages);
+    } catch (const std::exception& e) {
+        SendJsonRpcError(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx);
+        return;
+    }
+
+    try {
+        CreateMessageParams params = *p;
+        auto resultOpt = samplingCreateMessageCallback_(params);
+        if (!resultOpt.has_value()) {
+            // Spec recommends code -1 for user rejection.
+            SendJsonRpcErrorRaw(requestId, -1, "User rejected sampling request", ctx);
+            return;
+        }
+        auto resultPtr = std::make_unique<CreateMessageResult>(std::move(*resultOpt));
+        SendResponse(requestId, std::move(resultPtr), ctx);
+    } catch (const std::exception& e) {
+        SendInternalError(requestId, e.what(), ctx);
+    }
+}
+
 void ClientSession::ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
 {
     if (clientTransport_ == nullptr) {
@@ -253,6 +324,11 @@ void ClientSession::ReceivedRequest(int64_t requestId, const Request& request, R
         return;
     } else if (method == "elicitation/create") {
         HandleElicitRequest(requestId, request, ctx);
+        return;
+    }
+
+    if (method == "sampling/createMessage") {
+        HandleSamplingCreateMessageRequest(requestId, request, ctx);
         return;
     }
 

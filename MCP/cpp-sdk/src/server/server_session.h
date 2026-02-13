@@ -95,7 +95,7 @@ public:
      * Populated when the server receives the client's Initialize request.
      * If called before that, this returns an empty/default capabilities object.
      */
-    ClientCapabilities GetClientCapabilities() const;
+    ClientCapabilities GetClientCapabilities() const override;
 
     /**
      * @brief Request the client's roots list via `roots/list`.
@@ -112,7 +112,8 @@ public:
      * This is a server->client MCP request. The client must have advertised
      * support for this request via its initialize capabilities.
      */
-    std::future<std::shared_ptr<CreateMessageResult>> SamplingCreateMessage(const CreateMessageRequestParams& params);
+    std::future<std::shared_ptr<CreateMessageResult>> SamplingCreateMessage(
+        const CreateMessageParams& params) override;
 
     std::future<std::shared_ptr<ElicitResult>> elicit(const std::string& message, const Mcp::MetaMap& requestedSchema);
 

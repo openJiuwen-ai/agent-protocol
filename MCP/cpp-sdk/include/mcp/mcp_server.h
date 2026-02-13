@@ -31,9 +31,16 @@ public:
     // Request the client's roots list via `roots/list`.
     virtual std::future<std::shared_ptr<ListRootsResult>> ListRoots() = 0;
 
+    // Capabilities advertised by the connected client during `initialize`.
+    virtual ClientCapabilities GetClientCapabilities() const = 0;
+
     virtual void SendProgressNotification(const std::string& progressToken, double progress,
                                           std::optional<double> total = std::nullopt,
                                           const std::optional<std::string>& message = std::nullopt) = 0;
+    // Server -> Client sampling request.
+    // Requires the connected client to advertise support for `sampling/createMessage`.
+    virtual std::future<std::shared_ptr<CreateMessageResult>> SamplingCreateMessage(
+        const CreateMessageParams& params) = 0;
 };
 
 struct ServerContext {

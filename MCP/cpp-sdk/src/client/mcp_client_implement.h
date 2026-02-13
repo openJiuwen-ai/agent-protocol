@@ -60,6 +60,9 @@ public:
     void SetElicitUrlCallback(ElicitUrlCallback cb) override;
 
     void SetLoggingCallback(LoggingCallback cb) override;
+
+    void SetSamplingCreateMessageCallback(SamplingCreateMessageCallback cb,
+        SamplingCapability capability = SamplingCapability{}) override;
 private:
     void CheckInitialized();
 
@@ -70,6 +73,18 @@ private:
     // Configuration
     ClientConfig config_;
     bool initialized_ = false;
+
+    // Allows SetListRootsCallback() to be called before Initialize() creates session_.
+    // Once session_ is created, this callback is applied to the session and cleared.
+    std::optional<ListRootsCallback> listRootsCallback_{std::nullopt};
+
+    // Allows SetSamplingCreateMessageCallback() to be called before Initialize() creates session_.
+    // Once session_ is created, this callback is applied to the session and cleared.
+    struct PreInitSamplingHandler {
+        SamplingCreateMessageCallback cb;
+        SamplingCapability capability;
+    };
+    std::optional<PreInitSamplingHandler> samplingCreateMessageHandler_{std::nullopt};
 };
 
 } // namespace Mcp

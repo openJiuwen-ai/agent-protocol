@@ -32,6 +32,21 @@ std::future<std::shared_ptr<InitializeResult>> McpClientImplement::Initialize()
         throw std::runtime_error("Failed to create session layer.");
     }
 
+    // Apply any pre-configured roots/list callback before the Initialize request is built,
+    // so the client advertises the `roots` capability correctly.
+    if (listRootsCallback_.has_value()) {
+        session_->SetListRootsCallback(std::move(*listRootsCallback_));
+        listRootsCallback_.reset();
+    }
+
+    // Apply any pre-configured sampling/createMessage callback before the Initialize request is built,
+    // so the client advertises the `sampling` capability correctly.
+    if (samplingCreateMessageHandler_.has_value()) {
+        session_->SetSamplingCreateMessageCallback(std::move(samplingCreateMessageHandler_->cb),
+            samplingCreateMessageHandler_->capability);
+        samplingCreateMessageHandler_.reset();
+    }
+
     initialized_ = true;
     return session_->Initialize();
 }
@@ -156,6 +171,16 @@ void McpClientImplement::SetElicitCallback(ElicitCallback cb)
 void McpClientImplement::SetElicitUrlCallback(ElicitUrlCallback cb)
 {
     session_->SetElicitUrlCallback(std::move(cb));
+}
+
+void McpClientImplement::SetSamplingCreateMessageCallback(SamplingCreateMessageCallback cb,
+    SamplingCapability capability)
+{
+    if (session_) {
+        session_->SetSamplingCreateMessageCallback(std::move(cb), capability);
+        return;
+    }
+    samplingCreateMessageHandler_ = PreInitSamplingHandler{std::move(cb), capability};
 }
 
 } // namespace Mcp

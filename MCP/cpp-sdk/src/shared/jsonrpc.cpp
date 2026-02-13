@@ -11,6 +11,43 @@
 #include "common_type.h"
 #include "mcp_type.h"
 
+namespace Mcp {
+
+std::optional<int64_t> TryGetJsonRpcResponseId(const nlohmann::json& j)
+{
+    if (!j.is_object()) {
+        return std::nullopt;
+    }
+    if (!j.contains("id") || j.contains("method")) {
+        return std::nullopt;
+    }
+    const auto& id = j.at("id");
+    if (!id.is_number_integer()) {
+        return std::nullopt;
+    }
+    return id.get<int64_t>();
+}
+
+std::optional<std::string> TryTakePendingMethodForJsonRpcResponse(const nlohmann::json& messageJson,
+    std::unordered_map<int64_t, std::string>& pendingMethods)
+{
+    const auto id = TryGetJsonRpcResponseId(messageJson);
+    if (!id.has_value()) {
+        return std::nullopt;
+    }
+
+    auto it = pendingMethods.find(*id);
+    if (it == pendingMethods.end()) {
+        return std::nullopt;
+    }
+
+    std::string method = std::move(it->second);
+    pendingMethods.erase(it);
+    return method;
+}
+
+} // namespace Mcp
+
 namespace nlohmann {
 
 static inline std::optional<Mcp::MetaMap> ParseMetaStringMap(const json& j)
@@ -2891,7 +2928,7 @@ JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::
 
     bool hasId = j.contains("id");
     bool hasMethod = j.contains("method");
-    bool hasCode = j.contains("code");
+    bool hasCode = j.contains("error") && j.at("error").is_object() && j.at("error").contains("code");
 
     if (hasId && hasMethod) {
         JSONRPCRequest request;
@@ -2900,7 +2937,7 @@ JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::
         return std::move(request);
     }
 
-    if (hasId && !hasMethod) {
+    if (hasId && !hasMethod && !hasCode) {
         JSONRPCResponse response;
         response.Deserialize(jsonStr, method);
         return std::move(response);

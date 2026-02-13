@@ -6,6 +6,7 @@
 #define MCP_JSONRPC_INCLUDE_H_
 
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -121,6 +122,16 @@ using JSONRPCMessage = std::variant<JSONRPCRequest, JSONRPCResponse, JSONRPCNoti
 
 JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::string& method);
 std::string SerializeJSONRPCMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt);
+
+// Best-effort helpers for transports.
+// JSON-RPC responses/errors carry "id" but do not carry "method".
+// Our internal message envelopes use int64_t ids.
+std::optional<int64_t> TryGetJsonRpcResponseId(const nlohmann::json& j);
+
+// Consume (move + erase) the pending request method for a JSON-RPC response/error.
+// Returns nullopt if the message is not a response/error, id is missing/invalid, or id is not found.
+std::optional<std::string> TryTakePendingMethodForJsonRpcResponse(const nlohmann::json& messageJson,
+    std::unordered_map<int64_t, std::string>& pendingMethods);
 
 struct InitializeRequestParams : public RequestParams {
     std::string protocolVersion_;
@@ -270,17 +281,12 @@ struct ListRootsRequest : public Request {
 };
 
 // sampling/createMessage
-struct CreateMessageRequestParams : public RequestParams {
-    std::vector<SamplingMessage> messages;
-    std::optional<ModelPreferences> modelPreferences;
-    std::optional<std::string> systemPrompt;
-    std::optional<std::string> includeContext; // "none" | "thisServer" | "allServers"
-    std::optional<double> temperature;
-    int64_t maxTokens = 0;
-    std::optional<std::vector<std::string>> stopSequences;
-    std::optional<MetaMap> metadata;
-    std::optional<std::vector<Tool>> tools;
-    std::optional<ToolChoice> toolChoice;
+struct CreateMessageRequestParams : public RequestParams, public CreateMessageParams {
+    CreateMessageRequestParams() = default;
+    explicit CreateMessageRequestParams(const CreateMessageParams& params)
+    {
+        static_cast<CreateMessageParams&>(*this) = params;
+    }
 };
 
 struct CreateMessageRequest : public Request {

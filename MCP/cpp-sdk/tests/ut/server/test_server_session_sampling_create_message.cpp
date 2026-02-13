@@ -59,9 +59,38 @@ protected:
     void InitializeSessionWithSamplingCreateMessageCapability(bool supported)
     {
         ClientCapabilities caps;
-        ClientTasksCapability tasks;
-        tasks.samplingCreateMessage = supported;
-        caps.tasks = tasks;
+        if (supported) {
+            caps.sampling = SamplingCapability{};
+        }
+
+        JSONRPCRequest initRpc;
+        initRpc.jsonrpc_ = JSONRPC_VERSION;
+        initRpc.id_ = 1;
+        initRpc.method_ = "initialize";
+        initRpc.request_ = std::make_unique<InitializeRequest>("ut-client", "0.0.0", caps);
+        initRpc.request_->method_ = "initialize";
+
+        JSONRPCMessage initMsg{std::in_place_type<JSONRPCRequest>, std::move(initRpc)};
+        session_->OnTransportMessage(initMsg, ctx_);
+
+        JSONRPCMessage initializedMsg{std::in_place_type<JSONRPCNotification>};
+        auto& notif = std::get<JSONRPCNotification>(initializedMsg);
+        notif.jsonrpc_ = JSONRPC_VERSION;
+        notif.method_ = "notifications/initialized";
+        notif.notification_ = std::make_unique<InitializedNotification>();
+        notif.notification_->method_ = "notifications/initialized";
+        session_->OnTransportMessage(initializedMsg, ctx_);
+
+        transport_->sendCount = 0;
+        transport_->lastSerialized.clear();
+    }
+
+    void InitializeSessionWithSamplingCapability(std::optional<SamplingCapability> sampling)
+    {
+        ClientCapabilities caps;
+        if (sampling.has_value()) {
+            caps.sampling = sampling.value();
+        }
 
         JSONRPCRequest initRpc;
         initRpc.jsonrpc_ = JSONRPC_VERSION;
@@ -232,6 +261,34 @@ TEST_F(ServerSessionSamplingCreateMessageTest, SamplingCreateMessage_Unsupported
 {
     InitializeSessionWithSamplingCreateMessageCapability(false);
     auto params = MakeMinimalValidParams();
+    EXPECT_THROW(session_->SamplingCreateMessage(params), std::runtime_error);
+}
+
+TEST_F(ServerSessionSamplingCreateMessageTest,
+    SamplingCreateMessage_ToolsGating_ThrowsWhenClientHasNoToolsCapability)
+{
+    SamplingCapability sampling;
+    sampling.tools = false;
+    sampling.context = true;
+    InitializeSessionWithSamplingCapability(sampling);
+
+    CreateMessageParams params = MakeMinimalValidParams();
+    params.tools = std::vector<Tool>{};
+
+    EXPECT_THROW(session_->SamplingCreateMessage(params), std::runtime_error);
+}
+
+TEST_F(ServerSessionSamplingCreateMessageTest,
+    SamplingCreateMessage_ContextGating_ThrowsWhenIncludeContextBeyondNoneAndClientHasNoContextCapability)
+{
+    SamplingCapability sampling;
+    sampling.tools = true;
+    sampling.context = false;
+    InitializeSessionWithSamplingCapability(sampling);
+
+    CreateMessageParams params = MakeMinimalValidParams();
+    params.includeContext = std::string{"thisServer"};
+
     EXPECT_THROW(session_->SamplingCreateMessage(params), std::runtime_error);
 }
 

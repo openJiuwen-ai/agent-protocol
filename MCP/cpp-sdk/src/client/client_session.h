@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "mcp_client.h"
 #include "mcp_type.h"
 #include "shared/base_session.h"
 #include "shared/jsonrpc.h"
@@ -50,6 +51,11 @@ public:
 
     // Set the callback for handling notifications/message from the server
     void SetLoggingCallback(LoggingCallback cb);
+
+    // Set the callback for handling sampling/createMessage requests from the server.
+    // Must be set before Initialize() so the client advertises sampling support.
+    void SetSamplingCreateMessageCallback(McpClient::SamplingCreateMessageCallback cb,
+        SamplingCapability capability = SamplingCapability{});
 
     // Set the logging level
     std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(LoggingLevel level);
@@ -126,12 +132,15 @@ private:
     // Handle roots/list request. This is used when the server asks the client to
     // provide its roots. The request is only supported when listRootsCallback_ is set.
     void HandleRootsListRequest(int64_t requestId, const Request& request, RequestContext& ctx);
-
     void HandleElicitRequest(int64_t requestId, const Request& request, RequestContext& ctx);
+
+    // Handle sampling/createMessage server-initiated request.
+    void HandleSamplingCreateMessageRequest(int64_t requestId, const Request& request, RequestContext& ctx);
 
     // Utility helpers for replying to server-initiated requests with JSON-RPC errors.
     // These helpers centralize error formatting and ensure consistent responses.
     void SendJsonRpcError(int64_t requestId, JsonRpcErrorCode code, const std::string& message, RequestContext& ctx);
+    void SendJsonRpcErrorRaw(int64_t requestId, int code, const std::string& message, RequestContext& ctx);
     void SendMethodNotFound(int64_t requestId, const std::string& method, RequestContext& ctx);
     void SendInternalError(int64_t requestId, const std::string& message, RequestContext& ctx);
 
@@ -148,8 +157,11 @@ private:
     LoggingCallback loggingCallback_{nullptr};
 
     ElicitCallback elicitCallback_{nullptr};
-
     ElicitUrlCallback elicitUrlCallback_{nullptr};
+
+    // If set, the client supports sampling/createMessage.
+    McpClient::SamplingCreateMessageCallback samplingCreateMessageCallback_{nullptr};
+    SamplingCapability samplingCapability_{};
 
     // Client configuration used to build initialize.clientInfo
     ClientConfig clientConfig_;

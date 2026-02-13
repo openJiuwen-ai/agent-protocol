@@ -16,6 +16,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "event/event_system.h"
@@ -141,12 +142,13 @@ private:
     std::atomic<bool> running_{false};
     std::shared_ptr<TransportCallback> callback_;
     StdioClientConfig config_;
-    std::string method_;
     RequestContext ctx_;
+
+    // Maps JSON-RPC request id -> request method so we can recover the method when parsing responses/errors
+    std::unordered_map<int64_t, std::string> pendingMethods_;
 
     void SetupConnectionCallbacks();
     void CleanupConnection();
-    void GetMessageMethod(const JSONRPCMessage& message);
 };
 
 /**
@@ -168,12 +170,12 @@ private:
     std::shared_ptr<StdioConnection> connection_;
     std::atomic<bool> running_{false};
     std::shared_ptr<TransportCallback> callback_;
-    std::string method_;
+    // Maps JSON-RPC request id -> request method so we can recover the method when parsing responses/errors
+    std::unordered_map<int64_t, std::string> pendingMethods_;
     RequestContext ctx_;
 
     void SetupConnectionCallbacks();
     void CleanupConnection();
-    void GetMessageMethod(const JSONRPCMessage& message);
 };
 
 } // namespace Mcp

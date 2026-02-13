@@ -13,6 +13,8 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <random>
 #include <sstream>
 
@@ -23,6 +25,17 @@
 
 namespace Mcp {
 constexpr int DEFAULT_RECV_BUFF_SIZE = 4096;
+
+namespace {
+std::string ResolveDeserializeMethodFromPending(const std::string& message,
+                                                std::unordered_map<int64_t, std::string>& pendingMethods)
+{
+    const auto j = nlohmann::json::parse(message);
+    const auto method = TryTakePendingMethodForJsonRpcResponse(j, pendingMethods);
+    return method.value_or("");
+}
+
+} // namespace
 
 // StdioConnection Implementation
 StdioConnection::StdioConnection() : eventSystem_(std::make_unique<EventSystem>())
@@ -557,28 +570,12 @@ void StdioClientTransport::Terminate()
     MCP_LOG(MCP_LOG_LEVEL_INFO, "ClientStdioTransport terminated");
 }
 
-void StdioClientTransport::GetMessageMethod(const JSONRPCMessage& message)
-{
-    std::string methodName = std::visit(
-        [](auto&& arg) -> std::string {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, Mcp::JSONRPCRequest>) {
-                return arg.method_;
-            } else if constexpr (std::is_same_v<T, Mcp::JSONRPCNotification>) {
-                return arg.method_;
-            } else {
-                return "";
-            }
-        },
-        message);
-    method_ = methodName;
-}
-
 void StdioClientTransport::SendMessage(const JSONRPCMessage& message, std::optional<std::string> method)
 {
     if (connection_) {
-        if (std::holds_alternative<JSONRPCRequest>(message) || std::holds_alternative<JSONRPCNotification>(message)) {
-            GetMessageMethod(message);
+        if (std::holds_alternative<JSONRPCRequest>(message)) {
+            const auto& req = std::get<JSONRPCRequest>(message);
+            pendingMethods_[req.id_] = req.method_;
         }
 
         // Convert JSONRPCMessage to string for sending
@@ -606,7 +603,9 @@ void StdioClientTransport::SetupConnectionCallbacks()
         connection_->SetMessageReceivedCallback([this](const std::string& message) {
             try {
                 MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioClientTransport received message: %s", message.c_str());
-                JSONRPCMessage rpcMessage = DeserializeJSONRPCMessage(message, method_);
+                const std::string deserializeMethod =
+                    ResolveDeserializeMethodFromPending(message, pendingMethods_);
+                JSONRPCMessage rpcMessage = DeserializeJSONRPCMessage(message, deserializeMethod);
                 callback_->OnMessageReceived(rpcMessage, ctx_);
             } catch (const nlohmann::json::parse_error& e) {
                 MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse JSON message: %s, Message: %s", e.what(),
@@ -683,23 +682,6 @@ void StdioServerTransport::Terminate()
     MCP_LOG(MCP_LOG_LEVEL_INFO, "ClientStdioTransport terminated");
 }
 
-void StdioServerTransport::GetMessageMethod(const JSONRPCMessage& message)
-{
-    std::string methodName = std::visit(
-        [](auto&& arg) -> std::string {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, Mcp::JSONRPCRequest>) {
-                return arg.method_;
-            } else if constexpr (std::is_same_v<T, Mcp::JSONRPCNotification>) {
-                return arg.method_;
-            } else {
-                return "";
-            }
-        },
-        message);
-    method_ = methodName;
-}
-
 void StdioServerTransport::SetupConnectionCallbacks()
 {
     if (connection_ && callback_) {
@@ -707,7 +689,9 @@ void StdioServerTransport::SetupConnectionCallbacks()
         connection_->SetMessageReceivedCallback([this](const std::string& message) {
             try {
                 MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioServerTransport received message: %s", message.c_str());
-                JSONRPCMessage rpcMessage = DeserializeJSONRPCMessage(message, method_);
+                const std::string deserializeMethod =
+                    ResolveDeserializeMethodFromPending(message, pendingMethods_);
+                JSONRPCMessage rpcMessage = DeserializeJSONRPCMessage(message, deserializeMethod);
                 callback_->OnMessageReceived(rpcMessage, ctx_);
             } catch (const nlohmann::json::parse_error& e) {
                 MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to parse JSON message: %s, Message: %s", e.what(),
@@ -737,7 +721,10 @@ void StdioServerTransport::CleanupConnection()
 void StdioServerTransport::SendMessage(const JSONRPCMessage& message, RequestContext& ctx)
 {
     if (connection_) {
-        GetMessageMethod(message);
+        if (std::holds_alternative<JSONRPCRequest>(message)) {
+            const auto& req = std::get<JSONRPCRequest>(message);
+            pendingMethods_[req.id_] = req.method_;
+        }
         // Convert JSONRPCMessage to string for sending
         std::string data = SerializeJSONRPCMessage(message, ctx.method);
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "StdioServerTransport sending message: %s", data.c_str());
