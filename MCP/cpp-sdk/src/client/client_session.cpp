@@ -142,7 +142,12 @@ std::future<std::shared_ptr<ListToolsResult>> ClientSession::ListTools(const std
         try {
             auto listToolPtr = std::dynamic_pointer_cast<ListToolsResult>(resultPtr);
             if (listToolPtr == nullptr) {
-                throw std::runtime_error("Result type mismatch: cannot cast to ListToolsResult");
+                auto err = std::dynamic_pointer_cast<ErrorResult>(resultPtr);
+                if (err != nullptr) {
+                    throw MCPError(*err);
+                } else {
+                    throw std::runtime_error("Result type mismatch: cannot cast to ListToolsResult");
+                }
             }
             CacheToolSchemas(*listToolPtr);
             promise->set_value(listToolPtr);

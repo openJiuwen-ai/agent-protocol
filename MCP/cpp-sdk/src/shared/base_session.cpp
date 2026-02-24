@@ -3,6 +3,7 @@
  */
 
 #include "base_session.h"
+#include "mcp_error.h"
 #include "mcp_log.h"
 #include "mcp_type.h"
 
@@ -34,7 +35,20 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
     jsonrpcRequest.request_ = std::move(request);
 
     JSONRPCMessage msg = std::move(jsonrpcRequest);
-    clientTransport_->SendMessage(msg);
+    
+    try {
+        clientTransport_->SendMessage(msg);
+    } catch (const std::exception& e) {
+        if (completion) {
+            auto err = std::make_shared<ErrorResult>();
+            err->code = static_cast<int>(JsonRpcErrorCode::INTERNAL_ERROR);
+            err->message = std::string("Transport error: ") + e.what();
+            completion(err);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        completionCallbacks_.erase(requestId);
+        progressCallbacks_.erase(requestId);
+    }
 }
 
 void BaseSession::SendResponse(const RequestId& requestId, std::unique_ptr<Result> result, RequestContext& ctx)
