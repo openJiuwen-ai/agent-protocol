@@ -27,7 +27,7 @@ public:
     void AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler);
     void RemovePrompt(const std::string& name);
     ListPromptsResult ListPrompts();
-    GetPromptResult GetPrompt(const ServerContext& ctx, const std::string& name,
+    std::optional<GetPromptResult> GetPrompt(const ServerContext& ctx, const std::string& name,
         const std::optional<JsonValue>& argument = std::nullopt);
 
 private:

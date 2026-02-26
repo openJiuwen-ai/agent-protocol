@@ -17,7 +17,11 @@ void ToolManager::AddTool(const ToolInfo& tool)
     if (tool.description.empty()) {
         throw std::invalid_argument("Tool description cannot be empty");
     }
-    if (!tool.func) {
+    // Validate that the function in the variant is valid
+    bool hasValidFunc = std::visit([](auto&& f) -> bool {
+        return static_cast<bool>(f);
+    }, tool.func);
+    if (!hasValidFunc) {
         throw std::invalid_argument("Tool function implementation cannot be null");
     }
 
@@ -63,7 +67,7 @@ ListToolsResult ToolManager::ListTools() const
     return result;
 }
 
-CallToolResult ToolManager::CallTool(const ServerContext& ctx, const std::string& name,
+std::optional<CallToolResult> ToolManager::CallTool(const ServerContext& ctx, const std::string& name,
     const std::string& arguments) const
 {
     ToolFunc func;
@@ -78,7 +82,20 @@ CallToolResult ToolManager::CallTool(const ServerContext& ctx, const std::string
 
     try {
         JsonValue args = JsonValue::parse(arguments);
-        return func(ctx, name, args);
+
+        // Use std::visit to handle the variant
+        return std::visit([&](auto&& f) -> std::optional<CallToolResult> {
+            using T = std::decay_t<decltype(f)>;
+            if constexpr (std::is_same_v<T, SyncToolFunc>) {
+                // Synchronous function, create context without callback
+                ServerContext syncCtx = {ctx.session, nullptr};
+                return f(syncCtx, name, args);
+            } else if constexpr (std::is_same_v<T, AsyncToolFunc>) {
+                // Asynchronous function, use original context with callback
+                f(ctx, name, args);
+                return std::nullopt;
+            }
+        }, func);
     } catch (const std::exception& e) {
         throw std::runtime_error("Tool execution failed: " + std::string(e.what()));
     }

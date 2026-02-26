@@ -36,7 +36,7 @@ public:
 
     // Get operations
     ListResourcesResult ListResources();
-    ReadResourceResult ReadResource(const ServerContext& ctx, const std::string& uri);
+    std::optional<ReadResourceResult> ReadResource(const ServerContext& ctx, const std::string& uri);
     ListResourceTemplatesResult ListResourceTemplates();
 
     // Subscription operations

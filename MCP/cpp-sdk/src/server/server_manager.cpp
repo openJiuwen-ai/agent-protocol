@@ -175,7 +175,7 @@ void ServerManager::Start()
         }
 
         // Create MPSCQueue for this thread
-        auto queue = std::make_unique<MPSCQueue<DispatchRequestMsg>>(QUEUE_CAPACITY);
+        auto queue = std::make_unique<MPSCQueue<WorkerMessage>>(QUEUE_CAPACITY);
 
         // Create and store notifyArg to keep it alive
         auto notifyArg = std::make_shared<NotifyEventArg>();
@@ -370,7 +370,8 @@ void ServerManager::DispatchRequest(const HttpRequest& request, RequestContext& 
 
     // Push message to the thread's queue
     auto& queue = threadQueues_[threadId];
-    DispatchRequestMsg msg{request, context}; // Copy values instead of pointers
+    DispatchRequestMsg requestMsg{request, context}; // Copy values instead of pointers
+    WorkerMessage msg{MessageType::REQUEST, requestMsg};
 
     if (queue->Push(msg)) {
         // Notify the worker thread via EventSystem
@@ -405,18 +406,25 @@ void ServerManager::HandleQueueNotification(int fd, short events, void* arg)
 
     // Process messages in batch
     auto& queue = threadQueues_[notifyEventArg->threadId];
-    DispatchRequestMsg msg;
+    WorkerMessage msg;
     size_t processedCount = 0;
     size_t errorCount = 0;
 
     // Process up to MAX_BATCH_SIZE messages
     while (processedCount < MAX_BATCH_SIZE && queue->TryPop(msg)) {
         try {
-            // Handle the request
-            HandleRequest(msg.request, msg.context);
+            if (msg.type == MessageType::REQUEST) {
+                // Handle request message
+                auto& requestMsg = std::get<DispatchRequestMsg>(msg.data);
+                HandleRequest(requestMsg.request, requestMsg.context);
+            } else if (msg.type == MessageType::RESPONSE) {
+                // Handle response message
+                auto& responseMsg = std::get<DispatchResponseMsg>(msg.data);
+                HandleResponse(responseMsg);
+            }
         } catch (const std::exception& e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error handling request for session %s: %s", msg.context.sessionId.c_str(),
-                    e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error handling message in thread %d: %s",
+                    notifyEventArg->threadId, e.what());
             ++errorCount;
         }
         ++processedCount;
@@ -435,6 +443,58 @@ void ServerManager::HandleQueueNotification(int fd, short events, void* arg)
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Thread %d re-triggered notification for remaining messages",
                 notifyEventArg->threadId);
     }
+}
+
+void ServerManager::HandleResponse(const DispatchResponseMsg& responseMsg)
+{
+    // Find the session and send the response
+    auto session = GetSession(responseMsg.sessionId);
+    if (session) {
+        // Create a mutable copy of the context since SendResponse expects non-const reference
+        RequestContext mutableContext = responseMsg.context;
+
+        // Direct usage - no conversion needed since both use shared_ptr<Result>
+        session->SendResponse(responseMsg.requestId, responseMsg.result, mutableContext);
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Sent response for request %ld in session %s",
+                responseMsg.requestId, responseMsg.sessionId.c_str());
+    } else {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found for response: %s", responseMsg.sessionId.c_str());
+    }
+}
+
+bool ServerManager::DispatchResponse(int64_t requestId, std::shared_ptr<Result> result,
+                                     const RequestContext& context)
+{
+    if (isStdio_) {
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "DispatchResponse not supported in stdio mode");
+        return false;
+    }
+
+    // Determine which thread should handle this response
+    int threadId = GetThreadIdForSession(context.sessionId);
+
+    // Create response message
+    DispatchResponseMsg responseMsg{requestId, result, context, context.sessionId};
+    WorkerMessage msg{MessageType::RESPONSE, responseMsg};
+
+    // Push to the appropriate thread's queue
+    auto& queue = threadQueues_[threadId];
+    if (queue->Push(msg)) {
+        // Notify the worker thread
+        if (eventSystems_[threadId] && threadQueueEventIds_[threadId] != -1) {
+            if (eventSystems_[threadId]->NotifyEventId(threadQueueEventIds_[threadId])) {
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Dispatched response to thread %d for session %s",
+                        threadId, context.sessionId.c_str());
+                return true;
+            } else {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to notify thread %d for response", threadId);
+            }
+        }
+    } else {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to push response to queue for thread %d", threadId);
+    }
+
+    return false;
 }
 
 } // namespace Mcp

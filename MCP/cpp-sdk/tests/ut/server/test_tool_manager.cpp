@@ -58,7 +58,7 @@ protected:
         tool.name = name;
         tool.description = description;
         tool.inputSchema = R"({"type": "object", "properties": {}})"_json;
-        tool.func = TestToolFunc;
+        tool.func = SyncToolFunc(TestToolFunc);
         return tool;
     }
 
@@ -75,7 +75,7 @@ protected:
             },
             "required": ["param1"]
         })"_json;
-        tool.func = TestToolFunc;
+        tool.func = SyncToolFunc(TestToolFunc);
         return tool;
     }
 
@@ -100,7 +100,7 @@ protected:
         tool.name = name;
         tool.description = "Tool that throws exceptions";
         tool.inputSchema = R"({"type": "object"})"_json;
-        tool.func = errorFunc;
+        tool.func = SyncToolFunc(errorFunc);
         return tool;
     }
 
@@ -160,7 +160,7 @@ TEST_F(ToolManagerTest, AddToolEmptyDescription) {
 
 TEST_F(ToolManagerTest, AddToolNullFunction) {
     ToolInfo tool = CreateTestTool();
-    tool.func = nullptr;
+    tool.func = SyncToolFunc{};  // 空的 function 对象
 
     EXPECT_THROW(toolManager->AddTool(tool), std::invalid_argument);
 }
@@ -168,7 +168,7 @@ TEST_F(ToolManagerTest, AddToolNullFunction) {
 TEST_F(ToolManagerTest, AddToolOverwriteWhenOverwriteTrue) {
     ToolInfo tool1 = CreateTestTool("same_tool", "First description");
     ToolInfo tool2 = CreateTestTool("same_tool", "Second description");
-    tool2.func = TestCallbackToolFunc;
+    tool2.func = SyncToolFunc(TestCallbackToolFunc);
 
     EXPECT_NO_THROW(toolManager->AddTool(tool1));
 
@@ -288,7 +288,9 @@ TEST_F(ToolManagerTest, CallToolSuccess) {
 
     JsonValue arguments = R"({"param": "value"})"_json;
     const Mcp::ServerContext context = {};
-    CallToolResult result = toolManager->CallTool(context, "test_tool", arguments.dump());
+    auto optResult = toolManager->CallTool(context, "test_tool", arguments.dump());
+    ASSERT_TRUE(optResult.has_value());
+    CallToolResult result = optResult.value();
 
     EXPECT_FALSE(result.isError);
     EXPECT_FALSE(result.content.empty());
@@ -305,7 +307,9 @@ TEST_F(ToolManagerTest, CallToolWithJsonArguments) {
 
     std::string arguments = R"({"key1": "value1", "key2": 123, "key3": true})";
     const Mcp::ServerContext context = {};
-    CallToolResult result = toolManager->CallTool(context, "json_tool", arguments);
+    auto optResult = toolManager->CallTool(context, "json_tool", arguments);
+    ASSERT_TRUE(optResult.has_value());
+    CallToolResult result = optResult.value();
 
     EXPECT_FALSE(result.isError);
     EXPECT_FALSE(result.content.empty());
@@ -344,13 +348,15 @@ TEST_F(ToolManagerTest, CallToolAfterRemove) {
 TEST_F(ToolManagerTest, CallToolAfterOverwrite) {
     ToolInfo tool1 = CreateTestTool("tool", "First tool");
     ToolInfo tool2 = CreateTestTool("tool", "Second tool");
-    tool2.func = TestCallbackToolFunc;
+    tool2.func = SyncToolFunc(TestCallbackToolFunc);
 
     toolManager->AddTool(tool1);
     toolManager->AddTool(tool2);
 
     const Mcp::ServerContext context = {};
-    CallToolResult result = toolManager->CallTool(context, "tool", R"({})");
+    auto optResult = toolManager->CallTool(context, "tool", R"({})");
+    ASSERT_TRUE(optResult.has_value());
+    CallToolResult result = optResult.value();
 
     EXPECT_FALSE(result.isError);
     EXPECT_FALSE(result.content.empty());
@@ -387,7 +393,7 @@ TEST_F(ToolManagerTest, AddToolExceptionMessages) {
 
     tool.name = "";
     tool.description = "Test";
-    tool.func = TestToolFunc;
+    tool.func = SyncToolFunc(TestToolFunc);
 
     try {
         toolManager->AddTool(tool);
@@ -408,7 +414,7 @@ TEST_F(ToolManagerTest, AddToolExceptionMessages) {
     }
 
     tool.description = "Test";
-    tool.func = nullptr;
+    tool.func = SyncToolFunc{};
 
     try {
         toolManager->AddTool(tool);

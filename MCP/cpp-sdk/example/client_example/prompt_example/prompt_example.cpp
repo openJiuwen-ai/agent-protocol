@@ -76,26 +76,38 @@ int main(int argc, char** argv)
             }
         }
 
-        // Example 2: Get prompt (if available)
+        // Example 2: Get all prompts
         if (!promptList->prompts.empty()) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example GetPrompt ===");
-            const auto &firstPrompt = promptList->prompts.front();
-            std::optional<Mcp::JsonValue> promptArgs = std::nullopt;
-            if (firstPrompt.arguments.has_value() && !firstPrompt.arguments.value().empty()) {
-                nlohmann::json argsJson = nlohmann::json::object();
-                argsJson["name"] = "friend";
-                argsJson["language"] = "English";
-                promptArgs = argsJson;
-            }
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example GetPrompt (All Prompts) ===");
 
-            auto getFuture = mcpClient->GetPrompt(firstPrompt.name, promptArgs);
-            if (getFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
-                MCP_LOG(MCP_LOG_LEVEL_ERROR, "GetPrompt timeout");
-                return -1;
+            for (const auto &prompt : promptList->prompts) {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Testing prompt: %s", prompt.name.c_str());
+
+                std::optional<Mcp::JsonValue> promptArgs = std::nullopt;
+                if (prompt.arguments.has_value() && !prompt.arguments.value().empty()) {
+                    nlohmann::json argsJson = nlohmann::json::object();
+                    argsJson["name"] = "friend";
+                    argsJson["language"] = "English";
+                    promptArgs = argsJson;
+                }
+
+                auto getFuture = mcpClient->GetPrompt(prompt.name, promptArgs);
+                if (getFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+                    MCP_LOG(MCP_LOG_LEVEL_ERROR, "GetPrompt timeout for prompt: %s", prompt.name.c_str());
+                    continue;
+                }
+                auto promptDetail = getFuture.get();
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "GetPrompt success, prompt: %s, message count: %zu",
+                        prompt.name.c_str(), promptDetail->messages.size());
+
+                // Print the actual message content
+                for (const auto& message : promptDetail->messages) {
+                    if (std::holds_alternative<Mcp::TextContent>(message.content)) {
+                        const auto& textContent = std::get<Mcp::TextContent>(message.content);
+                        MCP_LOG(MCP_LOG_LEVEL_INFO, "  Message: %s", textContent.text.c_str());
+                    }
+                }
             }
-            auto promptDetail = getFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "GetPrompt success, prompt: %s, message count: %zu", firstPrompt.name.c_str(),
-                    promptDetail->messages.size());
         }
     } catch (const std::exception &e) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Prompt example failed: %s", e.what());

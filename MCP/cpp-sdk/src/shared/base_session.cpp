@@ -53,7 +53,7 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
     }
 }
 
-void BaseSession::SendResponse(int64_t requestId, std::unique_ptr<Result> result, RequestContext& ctx)
+void BaseSession::SendResponse(int64_t requestId, std::shared_ptr<Result> result, RequestContext& ctx)
 {
     JSONRPCResponse response;
     response.jsonrpc_ = JSONRPC_VERSION;

@@ -229,8 +229,8 @@ void ServerSession::SendInitializeResponse(int64_t requestId, const ServerCapabi
     Implementation serverInfo;
     serverInfo.name = serverConfig_.name;
     serverInfo.version = serverConfig_.version;
-    auto initResult = std::make_unique<InitializeResult>(DEFAULT_PROTOCOL_VERSION, capabilities, serverInfo);
-    SendResponse(requestId, std::move(initResult), ctx);
+    auto initResult = std::make_shared<InitializeResult>(DEFAULT_PROTOCOL_VERSION, capabilities, serverInfo);
+    SendResponse(requestId, initResult, ctx);
     isInitialized_ = true;
 }
 

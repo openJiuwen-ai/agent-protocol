@@ -125,7 +125,7 @@ public:
     /**
      * Send a response to a request.
      */
-    void SendResponse(int64_t requestId, std::unique_ptr<Result> result, RequestContext& ctx);
+    void SendResponse(int64_t requestId, std::shared_ptr<Result> result, RequestContext& ctx);
     void SendResponse(int64_t requestId, JSONRPCError error, RequestContext& ctx);
 
     void OnTransportMessage(const JSONRPCMessage& message, RequestContext& ctx);

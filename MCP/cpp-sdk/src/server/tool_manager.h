@@ -25,7 +25,8 @@ public:
     void RemoveTool(const std::string& name);
 
     ListToolsResult ListTools() const;
-    CallToolResult CallTool(const ServerContext& ctx, const std::string& name, const std::string& arguments) const;
+    std::optional<CallToolResult> CallTool(const ServerContext& ctx, const std::string& name,
+                                           const std::string& arguments) const;
 
     void SetOverwrite(bool overwrite)
     {

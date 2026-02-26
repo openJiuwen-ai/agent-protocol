@@ -17,9 +17,6 @@ void ResourceManager::AddResource(const ResourceInfo& resource, ReadResourceFunc
     if (resource.name.empty()) {
         throw std::invalid_argument("Resource name cannot be empty");
     }
-    if (!readFunc) {
-        throw std::invalid_argument("ReadResourceFunc cannot be null");
-    }
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = resources_.find(resource.uri);
@@ -95,7 +92,7 @@ ListResourcesResult ResourceManager::ListResources()
     return result;
 }
 
-ReadResourceResult ResourceManager::ReadResource(const ServerContext& ctx, const std::string& uri)
+std::optional<ReadResourceResult> ResourceManager::ReadResource(const ServerContext& ctx, const std::string& uri)
 {
     ReadResourceFunc readFunc;
     {
@@ -107,7 +104,18 @@ ReadResourceResult ResourceManager::ReadResource(const ServerContext& ctx, const
         readFunc = it->second.readFunc;
     }
 
-    return readFunc(ctx, uri);
+    // Use std::visit to handle both sync and async variants
+    return std::visit([&ctx, &uri](auto&& func) -> std::optional<ReadResourceResult> {
+        using T = std::decay_t<decltype(func)>;
+        if constexpr (std::is_same_v<T, SyncReadResourceFunc>) {
+            // Synchronous execution - return result immediately
+            return func(ctx, uri);
+        } else if constexpr (std::is_same_v<T, AsyncReadResourceFunc>) {
+            // Asynchronous execution - call function and return nullopt
+            func(ctx, uri);
+            return std::nullopt;
+        }
+    }, readFunc);
 }
 
 ListResourceTemplatesResult ResourceManager::ListResourceTemplates()

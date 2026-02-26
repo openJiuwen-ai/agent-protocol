@@ -120,8 +120,8 @@ void McpServerImplement::HandleToolsList(int64_t requestId, const Request& reque
         throw std::runtime_error("Session not found: " + ctx.sessionId);
     }
 
-    auto result = std::make_unique<ListToolsResult>(toolManager_.ListTools());
-    session->SendResponse(requestId, std::move(result), ctx);
+    auto result = std::make_shared<ListToolsResult>(toolManager_.ListTools());
+    session->SendResponse(requestId, result, ctx);
 }
 
 void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& request, RequestContext& ctx)
@@ -137,10 +137,23 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
         return;
     }
 
-    ServerContext serverCtx = {session};
+    // Create unified response callback for async tools to send responses from user threads
+    ResponseCallback responseCallback = [this, requestId, ctx](const Result& result) {
+        // Cast to CallToolResult and create shared_ptr
+        const auto& toolResult = static_cast<const CallToolResult&>(result);
+        auto resultPtr = std::make_shared<CallToolResult>(toolResult);
+        serverManager_->DispatchResponse(requestId, resultPtr, ctx);
+    };
+
+    ServerContext serverCtx = {session, responseCallback};
     std::string args = params->arguments.has_value() ? params->arguments->dump() : "{}";
-    auto result = std::make_unique<CallToolResult>(toolManager_.CallTool(serverCtx, params->name, args));
-    session->SendResponse(requestId, std::move(result), ctx);
+    auto optionalResult = toolManager_.CallTool(serverCtx, params->name, args);
+    // Only send response when there is a return value (synchronous function)
+    if (optionalResult.has_value()) {
+        auto result = std::make_shared<CallToolResult>(std::move(optionalResult.value()));
+        session->SendResponse(requestId, result, ctx);
+    }
+    // Asynchronous function has no return value, response will be sent via callback
 }
 
 void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx)
@@ -152,8 +165,8 @@ void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& req
         return;
     }
 
-    auto result = std::make_unique<ListPromptsResult>(promptManager_.ListPrompts());
-    session->SendResponse(requestId, std::move(result), ctx);
+    auto result = std::make_shared<ListPromptsResult>(promptManager_.ListPrompts());
+    session->SendResponse(requestId, result, ctx);
 }
 
 void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& request, RequestContext& ctx)
@@ -171,10 +184,22 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
     }
 
     try {
-        ServerContext serverCtx = {session};
-        auto result = std::make_unique<GetPromptResult>(promptManager_.GetPrompt(serverCtx, params->name,
-            params->arguments));
-        session->SendResponse(requestId, std::move(result), ctx);
+        // Create unified response callback for async prompts to send responses from user threads
+        ResponseCallback responseCallback = [this, requestId, ctx](const Result& result) {
+            // Cast to GetPromptResult and create shared_ptr
+            const auto& promptResult = static_cast<const GetPromptResult&>(result);
+            auto resultPtr = std::make_shared<GetPromptResult>(promptResult);
+            serverManager_->DispatchResponse(requestId, resultPtr, ctx);
+        };
+
+        ServerContext serverCtx = {session, responseCallback};
+        auto optionalResult = promptManager_.GetPrompt(serverCtx, params->name, params->arguments);
+        // Only send response when there is a return value (synchronous function)
+        if (optionalResult.has_value()) {
+            auto result = std::make_shared<GetPromptResult>(std::move(optionalResult.value()));
+            session->SendResponse(requestId, result, ctx);
+        }
+        // Asynchronous function has no return value, response will be sent via callback
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }
@@ -190,8 +215,8 @@ void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& r
     }
 
     try {
-        auto result = std::make_unique<ListResourcesResult>(resourceManager_.ListResources());
-        session->SendResponse(requestId, std::move(result), ctx);
+        auto result = std::make_shared<ListResourcesResult>(resourceManager_.ListResources());
+        session->SendResponse(requestId, result, ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }
@@ -217,9 +242,22 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
     }
 
     try {
-        ServerContext serverCtx = {session};
-        auto result = std::make_unique<ReadResourceResult>(resourceManager_.ReadResource(serverCtx, params->uri_));
-        session->SendResponse(requestId, std::move(result), ctx);
+        // Create unified response callback for async resources to send responses from user threads
+        ResponseCallback responseCallback = [this, requestId, ctx](const Result& result) {
+            // Cast to ReadResourceResult and create shared_ptr
+            const auto& resourceResult = static_cast<const ReadResourceResult&>(result);
+            auto resultPtr = std::make_shared<ReadResourceResult>(resourceResult);
+            serverManager_->DispatchResponse(requestId, resultPtr, ctx);
+        };
+
+        ServerContext serverCtx = {session, responseCallback};
+        auto optionalResult = resourceManager_.ReadResource(serverCtx, params->uri_);
+        if (optionalResult.has_value()) {
+            // Synchronous execution - send response immediately
+            auto result = std::make_shared<ReadResourceResult>(optionalResult.value());
+            session->SendResponse(requestId, result, ctx);
+        }
+        // For async execution, the response will be sent via the callback
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }
@@ -248,7 +286,7 @@ void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Reque
         resourceManager_.SubscribeResource(params->uri_);
         // For subscription, we just acknowledge with an empty result
         EmptyResult result;
-        session->SendResponse(requestId, std::make_unique<EmptyResult>(result), ctx);
+        session->SendResponse(requestId, std::make_shared<EmptyResult>(result), ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }
@@ -277,7 +315,7 @@ void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Req
         resourceManager_.UnsubscribeResource(params->uri_);
         // For unsubscription, we just acknowledge with an empty result
         EmptyResult result;
-        session->SendResponse(requestId, std::make_unique<EmptyResult>(result), ctx);
+        session->SendResponse(requestId, std::make_shared<EmptyResult>(result), ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }
@@ -293,8 +331,8 @@ void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const R
     }
 
     try {
-        auto result = std::make_unique<ListResourceTemplatesResult>(resourceManager_.ListResourceTemplates());
-        session->SendResponse(requestId, std::move(result), ctx);
+        auto result = std::make_shared<ListResourceTemplatesResult>(resourceManager_.ListResourceTemplates());
+        session->SendResponse(requestId, result, ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
     }
@@ -319,8 +357,8 @@ void McpServerImplement::HandleSetLoggingLevel(int64_t requestId, const Request&
             SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "not set LoggingLevelHandler", ctx);
         } else {
             setLevelHandler_(params->level);
-            auto result = std::make_unique<EmptyResult>();
-            session->SendResponse(requestId, std::move(result), ctx);
+            auto result = std::make_shared<EmptyResult>();
+            session->SendResponse(requestId, result, ctx);
         }
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, e.what(), ctx);
@@ -592,8 +630,8 @@ void McpServerImplement::HandleComplete(int64_t requestId, const Request& reques
 
     try {
         auto result = completeHandler_(params->ref, params->argument, params->context);
-        auto completeResult = std::make_unique<CompleteResult>(result);
-        session->SendResponse(requestId, std::move(completeResult), ctx);
+        auto completeResult = std::make_shared<CompleteResult>(result);
+        session->SendResponse(requestId, completeResult, ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR,
                           std::string("Complete handler error: ") + e.what(), ctx);

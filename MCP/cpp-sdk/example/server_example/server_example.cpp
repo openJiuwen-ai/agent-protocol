@@ -3,12 +3,16 @@
  */
 
 #include <csignal>
-
 #include <chrono>
 #include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "mcp_log.h"
 #include "mcp_server.h"
@@ -103,7 +107,8 @@ int main(int argc, char** argv)
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Starting MCP Server test...");
 
-    auto promptHandler = [](const Mcp::ServerContext& ctx [[maybe_unused]], const std::string &promptName,
+    // Synchronous prompt handler
+    auto syncPromptHandler = [](const Mcp::ServerContext& ctx [[maybe_unused]], const std::string &promptName,
         const std::optional<Mcp::JsonValue> &arguments) -> Mcp::GetPromptResult {
         Mcp::GetPromptResult result;
         result.description = PROMPT_NAME;
@@ -122,12 +127,51 @@ int main(int argc, char** argv)
         }
         Mcp::TextContent tc;
         tc.type = "text";
-        tc.text = "Hello, " + who + "! (language=" + lang + ")";
+        tc.text = "Hello, " + who + "! (language=" + lang + ") [SYNC]";
         Mcp::PromptMessage msg;
         msg.role = Mcp::RoleType::ASSISTANT;
         msg.content = tc;
         result.messages.push_back(msg);
         return result;
+    };
+
+    // Asynchronous prompt handler
+    auto asyncPromptHandler = [](const Mcp::ServerContext& ctx, const std::string &promptName,
+        const std::optional<Mcp::JsonValue> &arguments) -> void {
+        // Simulate async processing in a separate thread
+        std::thread([ctx, promptName, arguments]() {
+            // Simulate some processing delay
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+            Mcp::GetPromptResult result;
+            result.description = "async_" + promptName;
+
+            std::string who = "friend";
+            std::string lang = "English";
+
+            if (arguments.has_value()) {
+                const auto &j = arguments.value();
+                if (j.contains("name") && j["name"].is_string()) {
+                    who = j["name"].get<std::string>();
+                }
+                if (j.contains("language") && j["language"].is_string()) {
+                    lang = j["language"].get<std::string>();
+                }
+            }
+
+            Mcp::TextContent tc;
+            tc.type = "text";
+            tc.text = "Hello, " + who + "! (language=" + lang + ") [ASYNC]";
+            Mcp::PromptMessage msg;
+            msg.role = Mcp::RoleType::ASSISTANT;
+            msg.content = tc;
+            result.messages.push_back(msg);
+
+            // Send result via unified callback
+            if (ctx.responseCallback) {
+                ctx.responseCallback(result);
+            }
+        }).detach();
     };
 
     try {
@@ -160,8 +204,8 @@ int main(int argc, char** argv)
         echoTool.outputSchema = {
             {"type", "object"},
             {"properties", {{"result", {{"type", "string"}, {"description", "The echoed message"}}}}}};
-        echoTool.func = [](const Mcp::ServerContext& ctx [[maybe_unused]], const std::string &name,
-                           const Mcp::JsonValue &arguments) -> Mcp::CallToolResult {
+        echoTool.func = Mcp::ToolFunc(Mcp::SyncToolFunc([](const Mcp::ServerContext& ctx [[maybe_unused]],
+                            const std::string &name, const Mcp::JsonValue &arguments) -> Mcp::CallToolResult {
             Mcp::CallToolResult result;
             result.isError = false;
             try {
@@ -179,7 +223,7 @@ int main(int argc, char** argv)
                 result.content.push_back(errorContent);
             }
             return result;
-        };
+        }));
         try {
             server->AddTool(echoTool);
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool success: %s", echoTool.name.c_str());
@@ -189,7 +233,87 @@ int main(int argc, char** argv)
             MCP_LOG(MCP_LOG_LEVEL_INFO, "add tool failed as expected");
         }
 
-        // add Prompt
+        /*
+         * ========== ASYNC TOOL EXAMPLES ==========
+         *
+         * Async tools use AsyncToolFunc type and return results via ResponseCallback.
+         *
+         * Key concepts:
+         * 1. AsyncToolFunc - Async tool function type, no direct return value
+         * 2. ResponseCallback - Send responses through callback
+         * 3. Thread safety - Responses handled via queue system
+         *
+         * Usage:
+         * 1. Create background thread for task execution
+         * 2. Send result via ctx.responseCallback(result)
+         * 3. Handle errors and logging properly
+         */
+
+        // Add async echo tool example (similar to sync echo tool)
+        Mcp::ToolInfo asyncEchoTool;
+        asyncEchoTool.name = "async_echo";
+        asyncEchoTool.title = "Async Echo Tool";
+        asyncEchoTool.description = "Async version of echo tool - echoes back the input message after delay";
+        asyncEchoTool.inputSchema = {
+            {"type", "object"},
+            {"properties", {{"user_query", {{"type", "string"}, {"description", "The user query."}}}}},
+            {"required", {"user_query"}}};
+        asyncEchoTool.outputSchema = {
+            {"type", "object"},
+            {"properties", {{"result", {{"type", "string"}, {"description", "The echoed message"}}}}}};
+
+        // Async echo tool function using ResponseCallback
+        asyncEchoTool.func = Mcp::AsyncToolFunc([](const Mcp::ServerContext& ctx, const std::string& name,
+                                                  const Mcp::JsonValue& arguments) {
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Async echo tool '%s' started", name.c_str());
+
+            // Extract user query (same as sync echo tool)
+            std::string userQuery = "";
+            try {
+                if (arguments.contains("user_query") && arguments.at("user_query").is_string()) {
+                    userQuery = arguments.at("user_query").get<std::string>();
+                }
+            } catch (const std::exception& e) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error parsing async echo arguments: %s", e.what());
+            }
+
+            // Create async thread to simulate async processing
+            std::thread([ctx, userQuery, name]() {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Async echo thread started for query: %s", userQuery.c_str());
+
+                // Simulate some async processing time (1 second)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+
+                // Prepare result (same format as sync echo tool)
+                Mcp::CallToolResult result;
+                result.isError = false;
+
+                Mcp::TextContent textContent;
+                textContent.text = "Async Echo: " + userQuery;  // Same format as sync version
+                result.content.push_back(textContent);
+
+                // Send response via callback from user thread
+                if (ctx.responseCallback) {
+                    MCP_LOG(MCP_LOG_LEVEL_INFO, "Sending async echo response");
+                    ctx.responseCallback(result);
+                } else {
+                    MCP_LOG(MCP_LOG_LEVEL_ERROR, "No response callback available for async echo");
+                }
+
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Async echo thread completed");
+            }).detach();
+
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Async echo tool '%s' dispatched to background thread", name.c_str());
+        });
+
+        try {
+            server->AddTool(asyncEchoTool);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Added async echo tool success: %s", asyncEchoTool.name.c_str());
+        } catch (const std::exception& e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Add async echo tool failed: %s", e.what());
+        }
+
+        // Add synchronous prompt
         Mcp::PromptInfo greetingPrompt;
         greetingPrompt.name = PROMPT_NAME;
         greetingPrompt.description = PROMPT_DESCRIPTION;
@@ -198,38 +322,94 @@ int main(int argc, char** argv)
             Mcp::PromptArgument{"language", "Language for the greeting (default: English)", false}};
 
         try {
-            server->AddPrompt(greetingPrompt, promptHandler);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt success: %s", greetingPrompt.name.c_str());
+            // Explicitly cast to SyncRenderPromptFunc
+            Mcp::SyncRenderPromptFunc syncFunc = syncPromptHandler;
+            server->AddPrompt(greetingPrompt, Mcp::RenderPromptFunc(syncFunc));
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add sync prompt success: %s", greetingPrompt.name.c_str());
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add prompt failed: %s", e.what());
-        } catch (...) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add prompt failed as expected");
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add sync prompt failed: %s", e.what());
         }
 
-        // add resources
+        // Add asynchronous prompt
+        Mcp::PromptInfo asyncGreetingPrompt;
+        asyncGreetingPrompt.name = "async_" + std::string(PROMPT_NAME);
+        asyncGreetingPrompt.description = "Async version of " + std::string(PROMPT_DESCRIPTION);
+        asyncGreetingPrompt.arguments = {
+            Mcp::PromptArgument{"name", "The name of the person to greet", true},
+            Mcp::PromptArgument{"language", "Language for the greeting (default: English)", false}};
+
+        try {
+            // Explicitly cast to AsyncRenderPromptFunc
+            Mcp::AsyncRenderPromptFunc asyncFunc = asyncPromptHandler;
+            server->AddPrompt(asyncGreetingPrompt, Mcp::RenderPromptFunc(asyncFunc));
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add async prompt success: %s", asyncGreetingPrompt.name.c_str());
+        } catch (const std::exception &e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add async prompt failed: %s", e.what());
+        }
+
+        // Synchronous resource handler
+        auto syncResourceHandler = [](const Mcp::ServerContext& ctx [[maybe_unused]],
+            const std::string &uri) -> Mcp::ReadResourceResult {
+            Mcp::ReadResourceResult result;
+            Mcp::TextResourceContents textContents;
+            textContents.uri = uri;
+            textContents.text = "Hello from sync resource: " + uri + " [SYNC]";
+            textContents.mimeType = RESOURCE_MIME_TYPE;
+            result.contents.push_back(textContents);
+            return result;
+        };
+
+        // Asynchronous resource handler
+        auto asyncResourceHandler = [](const Mcp::ServerContext& ctx, const std::string &uri) -> void {
+            // Simulate async processing in a separate thread
+            std::thread([ctx, uri]() {
+                // Simulate some processing delay
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+                Mcp::ReadResourceResult result;
+                Mcp::TextResourceContents textContents;
+                textContents.uri = uri;
+                textContents.text = "Hello from async resource: " + uri + " [ASYNC]";
+                textContents.mimeType = RESOURCE_MIME_TYPE;
+                result.contents.push_back(textContents);
+
+                // Send result via unified callback
+                if (ctx.responseCallback) {
+                    ctx.responseCallback(result);
+                }
+            }).detach();
+        };
+
+        // Add synchronous resource
         Mcp::ResourceInfo resource;
         resource.uri = RESOURCE_URI;
         resource.name = RESOURCE_NAME;
         resource.description = RESOURCE_DESCRIPTION;
         resource.mimeType = RESOURCE_MIME_TYPE;
 
-        Mcp::ReadResourceFunc readResourceFunc = [](const Mcp::ServerContext& ctx [[maybe_unused]],
-            const std::string &uri) -> Mcp::ReadResourceResult {
-            Mcp::ReadResourceResult result;
-            Mcp::TextResourceContents textContents;
-            textContents.uri = uri;
-            textContents.text = "hello, " + uri;
-            textContents.mimeType = RESOURCE_MIME_TYPE;
-            result.contents.push_back(textContents);
-            return result;
-        };
         try {
-            server->AddResource(resource, readResourceFunc);
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource success: %s", resource.uri.c_str());
+            // Explicitly cast to SyncReadResourceFunc
+            Mcp::SyncReadResourceFunc syncFunc = syncResourceHandler;
+            server->AddResource(resource, Mcp::ReadResourceFunc(syncFunc));
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add sync resource success: %s", resource.uri.c_str());
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add resource failed: %s", e.what());
-        } catch (...) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "add resource failed as expected");
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add sync resource failed: %s", e.what());
+        }
+
+        // Add asynchronous resource
+        Mcp::ResourceInfo asyncResource;
+        asyncResource.uri = "async_" + std::string(RESOURCE_URI);
+        asyncResource.name = "Async " + std::string(RESOURCE_NAME);
+        asyncResource.description = "Async version of " + std::string(RESOURCE_DESCRIPTION);
+        asyncResource.mimeType = RESOURCE_MIME_TYPE;
+
+        try {
+            // Explicitly cast to AsyncReadResourceFunc
+            Mcp::AsyncReadResourceFunc asyncFunc = asyncResourceHandler;
+            server->AddResource(asyncResource, Mcp::ReadResourceFunc(asyncFunc));
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add async resource success: %s", asyncResource.uri.c_str());
+        } catch (const std::exception &e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add async resource failed: %s", e.what());
         }
 
         // add ResourceTemplate

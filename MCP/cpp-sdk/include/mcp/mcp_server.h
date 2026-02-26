@@ -43,12 +43,19 @@ public:
         const CreateMessageParams& params) = 0;
 };
 
+// Unified callback function type for sending responses from user threads
+using ResponseCallback = std::function<void(const Result& result)>;
+
 struct ServerContext {
     std::shared_ptr<McpServerSession> session;
+    ResponseCallback responseCallback;
 };
 
-using ToolFunc = std::function<CallToolResult(const ServerContext& ctx, const std::string& name,
+using SyncToolFunc = std::function<CallToolResult(const ServerContext& ctx, const std::string& name,
     const JsonValue& arguments)>;
+using AsyncToolFunc = std::function<void(const ServerContext& ctx, const std::string& name,
+    const JsonValue& arguments)>;
+using ToolFunc = std::variant<SyncToolFunc, AsyncToolFunc>;
 
 struct ToolInfo {
     std::string name;
@@ -59,15 +66,21 @@ struct ToolInfo {
     ToolFunc func;
 };
 
-// Render function for a prompt definition.
-// The function should take the prompt name and optional arguments, then return a GetPromptResult
-// whose `messages_` are ready to be used as model context.
-using RenderPromptFunc =
-    std::function<GetPromptResult(const ServerContext& ctx, const std::string& name,
-        const std::optional<JsonValue>& argument)>;
+// Synchronous prompt function - returns result immediately
+using SyncRenderPromptFunc = std::function<GetPromptResult(const ServerContext& ctx,
+    const std::string& name, const std::optional<JsonValue>& argument)>;
 
-// Function type for reading a resource
-using ReadResourceFunc = std::function<ReadResourceResult(const ServerContext& ctx, const std::string& uri)>;
+// Asynchronous prompt function - uses callback to send result
+using AsyncRenderPromptFunc = std::function<void(const ServerContext& ctx,
+    const std::string& name, const std::optional<JsonValue>& argument)>;
+
+// Variant type that can hold either sync or async prompt function
+using RenderPromptFunc = std::variant<SyncRenderPromptFunc, AsyncRenderPromptFunc>;
+
+// Function types for reading a resource
+using SyncReadResourceFunc = std::function<ReadResourceResult(const ServerContext& ctx, const std::string& uri)>;
+using AsyncReadResourceFunc = std::function<void(const ServerContext& ctx, const std::string& uri)>;
+using ReadResourceFunc = std::variant<SyncReadResourceFunc, AsyncReadResourceFunc>;
 
 /**
  * Abstract base class for MCP server implementations.
@@ -137,7 +150,7 @@ public:
 
     /**
      * Add a resource to the server.
-     * 
+     *
      * @param resource Resource infomation including URI, name, and read function
      * @param readFunc Function to read the resource content
      */
@@ -145,21 +158,21 @@ public:
 
     /**
      * Remove a resource by name.
-     * 
+     *
      * @param uri URI of the resource to remove
      */
     virtual void RemoveResource(const std::string& uri) = 0;
 
     /**
      * Add a resource template to the server.
-     * 
+     *
      * @param resourceTemplate Resource template information
      */
     virtual void AddResourceTemplate(const ResourceTemplate& resourceTemplate) = 0;
 
     /**
      * Remove a resource template by URI template.
-     * 
+     *
      * @param uriTemplate URI template of the resource template to remove
      */
     virtual void RemoveResourceTemplate(const std::string& uriTemplate) = 0;

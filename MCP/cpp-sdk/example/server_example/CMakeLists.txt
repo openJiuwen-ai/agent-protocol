@@ -10,6 +10,9 @@ target_include_directories(ServerExample PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../output/mcp
 )
 
+find_package(Threads REQUIRED)
+
 target_link_libraries(ServerExample PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../output/libmcp.so
+    Threads::Threads
 )

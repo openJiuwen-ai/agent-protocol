@@ -25,6 +25,21 @@ struct DispatchRequestMsg {
     RequestContext context; // Store by value, not pointer
 };
 
+struct DispatchResponseMsg {
+    int64_t requestId;
+    std::shared_ptr<Result> result;
+    RequestContext context;
+    std::string sessionId;
+};
+
+// Unified message type for worker thread queue
+enum class MessageType { REQUEST, RESPONSE };
+
+struct WorkerMessage {
+    MessageType type;
+    std::variant<DispatchRequestMsg, DispatchResponseMsg> data;
+};
+
 struct NotifyEventArg {
     int threadId;
     EventSystem* eventSystem;
@@ -40,6 +55,8 @@ public:
     void Stop();
     std::shared_ptr<ServerSession> GetSession(const std::string& sessionId);
     void SetIncomingRequestCallback(IncomingRequestCallback callback);
+    bool DispatchResponse(int64_t requestId, std::shared_ptr<Result> result,
+                         const RequestContext& context);
 
 private:
     void StdioServerManagerStart();
@@ -47,6 +64,7 @@ private:
     void HttpServerManagerStart();
     void ThreadMain(int id);
     void HandleRequest(const HttpRequest& request, RequestContext& context);
+    void HandleResponse(const DispatchResponseMsg& responseMsg);
     void DispatchRequest(const HttpRequest& request, RequestContext& context);
     std::shared_ptr<ServerSession> NewSession(const std::string& sessionId);
     int GetThreadIdForSession(const std::string& sessionId) const;
@@ -64,7 +82,7 @@ private:
     // Each thread has its own session map to avoid contention
     // Index: thread_id -> (session_id -> session)
     std::vector<std::unordered_map<std::string, std::shared_ptr<ServerSession>>> threadSessions_;
-    std::vector<std::unique_ptr<MPSCQueue<DispatchRequestMsg>>> threadQueues_;
+    std::vector<std::unique_ptr<MPSCQueue<WorkerMessage>>> threadQueues_;
     std::vector<int> threadQueueEventIds_;
     std::vector<std::shared_ptr<NotifyEventArg>> notifyArgs_;
     std::shared_ptr<ServerSession> stdioSession_{nullptr};

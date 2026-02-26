@@ -104,6 +104,30 @@ int main(int argc, char** argv)
         return -1;
     }
 
+    // Example 3.1: Call async echo tool
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example CallTool (Async Echo) ===");
+    try {
+        nlohmann::json asyncArguments;
+        asyncArguments["user_query"] = "Hello from async echo";
+        auto asyncCallFuture = mcpClient->CallTool("async_echo", asyncArguments, 30);
+        if (asyncCallFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Async CallTool timeout");
+            return -1;
+        }
+        auto asyncCallResult = asyncCallFuture.get();
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Async CallTool success, isError: %d, content count: %zu",
+                asyncCallResult->isError, asyncCallResult->content.size());
+        for (const auto &content : asyncCallResult->content) {
+            if (std::holds_alternative<Mcp::TextContent>(content)) {
+                const auto &text = std::get<Mcp::TextContent>(content);
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Async TextContent: %s", text.text.c_str());
+            }
+        }
+    } catch (const std::exception &e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Async CallTool failed: %s", e.what());
+        return -1;
+    }
+
     // Example 4: Complete - Get completions for a prompt argument
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example Complete (Prompt Completions) ===");
     try {
