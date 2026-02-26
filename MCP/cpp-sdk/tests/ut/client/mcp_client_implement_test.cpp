@@ -11,6 +11,7 @@
 #include "mcp_log.h"
 #include "shared/common_type.h"
 #include "mcp_type.h"
+#include "mcp_client.h"
 #include "client/mcp_client_implement.h"
 #include "transport/stdio_transport.h"
 #include "client/transport/streamable_http_client_transport.h"
@@ -40,7 +41,7 @@ protected:
     void TearDown() override
     {
         if (client_) {
-            // 确保client被销毁
+            client_->CloseGracefully();
             client_.reset();
         }
     }
@@ -287,6 +288,53 @@ TEST_F(McpClientImplementTest, SendPingAfterInitialize)
         auto pingFuture = client_->SendPing();
         EXPECT_TRUE(pingFuture.valid());
     });
+}
+
+// 测试CloseGracefully方法
+TEST_F(McpClientImplementTest, CloseGracefullyAfterInitialize)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    // 先初始化
+    EXPECT_NO_THROW({
+        auto initFuture = client_->Initialize();
+        EXPECT_TRUE(initFuture.valid());
+    });
+
+    // 调用CloseGracefully应该成功
+    EXPECT_NO_THROW(client_->CloseGracefully());
+}
+
+// 测试未初始化时调用CloseGracefully
+TEST_F(McpClientImplementTest, CloseGracefullyBeforeInitialize)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    // 未初始化时调用CloseGracefully不抛异常，直接返回无副作用
+    EXPECT_NO_THROW(client_->CloseGracefully());
+}
+
+// 测试CloseGracefully后再调用其他方法
+TEST_F(McpClientImplementTest, CallMethodsAfterCloseGracefully)
+{
+    client_ = std::make_unique<McpClientImplement>(config_, transport);
+    ASSERT_NE(client_, nullptr);
+
+    // 先初始化
+    EXPECT_NO_THROW({
+        auto initFuture = client_->Initialize();
+        EXPECT_TRUE(initFuture.valid());
+    });
+
+    // 调用CloseGracefully
+    EXPECT_NO_THROW(client_->CloseGracefully());
+
+    // CloseGracefully后调用其他方法应该抛出异常
+    EXPECT_THROW(client_->ListTools(), std::runtime_error);
+    EXPECT_THROW(client_->CallTool("test"), std::runtime_error);
+    EXPECT_THROW(client_->SendPing(), std::runtime_error);
 }
 
 // 测试SendRootsListChanged方法

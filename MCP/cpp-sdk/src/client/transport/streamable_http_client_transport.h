@@ -48,6 +48,8 @@ public:
 
     void Terminate() override;
 
+    void TerminateSession(std::chrono::milliseconds timeout = std::chrono::milliseconds{1000}) override;
+
     void SetCallback(std::shared_ptr<TransportCallback> callback) override;
 
 private:

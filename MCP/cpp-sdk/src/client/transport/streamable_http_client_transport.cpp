@@ -5,6 +5,7 @@
 #include "transport/streamable_http_client_transport.h"
 
 #include <cstring>
+#include <future>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
@@ -299,8 +300,6 @@ bool StreamableHttpClientTransport::HandleResponseBody(const HttpResponse& respo
 
 void StreamableHttpClientTransport::Terminate()
 {
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Clearing session state");
-
     // Stop HTTP client service if running
     if (httpClientService_ != nullptr) {
         httpClientService_->Stop();
@@ -310,6 +309,63 @@ void StreamableHttpClientTransport::Terminate()
     sessionId_.clear();
     protocolVersion_.clear();
     callback_ = nullptr;
+}
+
+void StreamableHttpClientTransport::TerminateSession(std::chrono::milliseconds timeout)
+{
+    // Check if session ID is set, if not, return early
+    if (sessionId_.empty()) {
+        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "No session ID set, skipping session termination");
+        return;
+    }
+
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Terminating session");
+    try {
+        // Create termination request
+        HttpRequest terminateRequest;
+        terminateRequest.method = "DELETE";
+        terminateRequest.url = url_;
+
+        PrepareRequestHeaders(terminateRequest);
+
+        // Send synchronous termination request
+        if (httpClientService_ != nullptr) {
+            UserData userData;
+
+            // Create promise/future for synchronous operation
+            auto promise = std::make_shared<std::promise<void>>();
+            std::future<void> future = promise->get_future();
+
+            // Create callbacks for termination response
+            HttpCallback headerCallback = [promise](const HttpResponse& response) -> bool {
+                if (response.statusCode >= Http::HTTP_STATUS_OK &&
+                    response.statusCode <= Http::HTTP_STATUS_NO_CONTENT) {
+                    MCP_LOG(MCP_LOG_LEVEL_INFO, "Session terminated successfully");
+                } else if (response.statusCode == Http::HTTP_STATUS_METHOD_NOT_ALLOWED) {
+                    MCP_LOG(MCP_LOG_LEVEL_WARN, "Server does not allow session termination");
+                } else {
+                    MCP_LOG(MCP_LOG_LEVEL_WARN,
+                            "Session termination returned status: " + std::to_string(response.statusCode));
+                }
+                promise->set_value(); // Signal completion
+                return false; // Don't continue processing
+            };
+
+            HttpCallback bodyCallback = [](const HttpResponse& response) -> bool {
+                return false; // Don't continue processing
+            };
+
+            httpClientService_->Send(terminateRequest, userData, static_cast<int>(timeout.count()), headerCallback,
+                                     bodyCallback);
+
+            // Wait for completion with timeout
+            if (future.wait_for(timeout) == std::future_status::timeout) {
+                MCP_LOG(MCP_LOG_LEVEL_WARN, "Session termination request timed out");
+            }
+        }
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session termination failed: " + std::string(e.what()));
+    }
 }
 
 void StreamableHttpClientTransport::PrepareRequestHeaders(HttpRequest& httpRequest)

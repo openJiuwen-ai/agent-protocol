@@ -126,6 +126,8 @@ static int RunToolDemo(const std::string& endpoint)
         return -1;
     }
 
+    mcpClient->CloseGracefully();
+
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example completed ===");
     return 0;
 }
@@ -182,6 +184,8 @@ static int RunToolDemoWithAuth(const std::string& endpoint)
         } catch (const std::exception& e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Unexpected error: ") + e.what());
         }
+
+        mcpClient->CloseGracefully();
     }
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "\n=== Example completed ===");

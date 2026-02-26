@@ -5,6 +5,7 @@
 #ifndef MCP_TRANSPORT_INCLUDE_H_
 #define MCP_TRANSPORT_INCLUDE_H_
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -53,6 +54,13 @@ public:
      * @brief Terminate the transport and release resources.
      */
     virtual void Terminate() = 0;
+
+    /**
+     * @brief Terminate the session gracefully.
+     * Default implementation does nothing for transports that don't support sessions.
+     * @param timeout Maximum time to wait for session termination (default 1s).
+     */
+    virtual void TerminateSession(std::chrono::milliseconds timeout = std::chrono::milliseconds{1000}) {}
 
     /**
      * @brief Send a JSON-RPC message through the transport.

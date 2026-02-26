@@ -132,6 +132,36 @@ std::future<std::shared_ptr<EmptyResult>> McpClientImplement::SendPing()
     return session_->SendPing();
 }
 
+void McpClientImplement::CloseGracefully()
+{
+    if (!initialized_) {
+        return;
+    }
+    try {
+        // First terminate session, then transport to avoid callbacks to destroyed session
+        if (transport_) {
+            transport_->TerminateSession();
+            transport_->Terminate();
+            transport_.reset();
+        }
+        if (session_) {
+            session_.reset();
+        }
+        initialized_ = false;
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Client closed gracefully.");
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("CloseGracefully failed: ") + e.what());
+        transport_.reset();
+        session_.reset();
+        initialized_ = false;
+    } catch (...) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "CloseGracefully failed: unknown exception");
+        transport_.reset();
+        session_.reset();
+        initialized_ = false;
+    }
+}
+
 void McpClientImplement::SetClientCapabilities(const McpClientCapabilities& caps)
 {
     CheckInitialized();

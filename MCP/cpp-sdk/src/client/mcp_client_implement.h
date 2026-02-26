@@ -19,7 +19,7 @@ namespace Mcp {
 class McpClientImplement : public McpClient {
 public:
     explicit McpClientImplement(const ClientConfig config, std::shared_ptr<ClientTransport> transport);
-    ~McpClientImplement();
+    ~McpClientImplement() override;
 
     std::future<std::shared_ptr<InitializeResult>> Initialize() override;
 
@@ -42,6 +42,7 @@ public:
 
     void SendRootsListChanged() override;
     std::future<std::shared_ptr<EmptyResult>> SendPing() override;
+    void CloseGracefully() override;
 
     void SetClientCapabilities(const McpClientCapabilities& caps) override;
     ServerCapabilities GetServerCapabilities() override;

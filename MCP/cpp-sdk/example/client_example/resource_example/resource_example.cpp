@@ -157,6 +157,8 @@ int main(int argc, char** argv)
         return -1;
     }
 
+    mcpClient->CloseGracefully();
+
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example completed ===");
     return 0;
 }

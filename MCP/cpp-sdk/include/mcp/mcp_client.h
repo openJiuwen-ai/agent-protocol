@@ -42,7 +42,7 @@ public:
      */
     virtual std::future<std::shared_ptr<ListToolsResult>> ListTools(
         const std::optional<std::string>& cursor = std::nullopt) = 0;
-    
+
     /**
      * @brief Call a tool by name with optional arguments and timeout.
      *
@@ -59,7 +59,7 @@ public:
      */
     virtual std::future<std::shared_ptr<CallToolResult>> CallTool(
         const std::string& name, const std::optional<std::string>& arguments = std::nullopt, int timeout = 0) = 0;
-    
+
     /**
      * @brief List available resources starting from the specified cursor.
      *
@@ -84,7 +84,7 @@ public:
      * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri) = 0;
-    
+
     /**
      * @brief Subscribe to updates for a resource by URI.
      *
@@ -95,7 +95,7 @@ public:
      * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri) = 0;
-    
+
     /**
      * @brief Unsubscribe from updates for a resource by URI.
      *
@@ -106,7 +106,7 @@ public:
      * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<EmptyResult>> UnsubscribeResource(const std::string& uri) = 0;
-    
+
     /**
      * @brief List all available resource templates on the server.
      *
@@ -150,6 +150,19 @@ public:
      * @throw std::runtime_error If the client is not initialized.
      */
     virtual std::future<std::shared_ptr<EmptyResult>> SendPing() = 0;
+
+    /**
+     * @brief Close the client connection gracefully and cleanup resources.
+     *
+     * Gracefully closes the client connection to the server and cleans up
+     * all associated resources. After calling this method, the client should
+     * not be used for further operations.
+     *
+     * Exceptions during close are caught internally; callers do not need
+     * to wrap this call in try-catch. If the client is not initialized, this
+     * method returns without effect.
+     */
+    virtual void CloseGracefully() = 0;
 
     /**
      * @brief Notify the server that the list of root resources has changed.
