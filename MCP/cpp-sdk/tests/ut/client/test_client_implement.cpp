@@ -13,12 +13,37 @@
 #include "shared/common_type.h"
 #include "mcp_type.h"
 #include "client/mcp_client_implement.h"
+#include "transport/transport.h"
 #include "transport/stdio_transport.h"
 #include "client/transport/streamable_http_client_transport.h"
 
 using json = nlohmann::json;
 
 namespace Mcp {
+
+namespace {
+
+class CapturingClientTransport final : public ClientTransport {
+public:
+    ~CapturingClientTransport() override = default;
+
+    void Connect() override {}
+    void Terminate() override {}
+
+    void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) override
+    {
+        lastSerialized = SerializeJSONRPCMessage(message, std::move(method));
+        sendCount++;
+    }
+
+    void SetCallback(std::shared_ptr<TransportCallback> callback) override { callback_ = std::move(callback); }
+
+    std::shared_ptr<TransportCallback> callback_;
+    std::string lastSerialized;
+    int sendCount{0};
+};
+
+} // namespace
 
 // Test fixture for McpClientImplement tests
 class McpClientImplementTest : public ::testing::Test {
@@ -52,6 +77,32 @@ protected:
 TEST_F(McpClientImplementTest, ConstructorWithConfig) {
     EXPECT_NO_THROW(client_ = std::make_unique<McpClientImplement>(config_, transport));
     ASSERT_NE(client_, nullptr);
+}
+
+TEST(McpClientImplementRootsCapabilityTest, PreInitSetListRootsCallbackAdvertisesRootsCapability)
+{
+    ClientConfig config;
+    config.name = "TestClient";
+    config.version = "1.0";
+
+    auto transport = std::make_shared<CapturingClientTransport>();
+    McpClientImplement client(config, transport);
+
+    client.SetListRootsCallback([]() {
+        ListRootsResult result;
+        return result;
+    });
+
+    auto future = client.Initialize();
+    EXPECT_TRUE(future.valid());
+
+    ASSERT_EQ(transport->sendCount, 1);
+    auto j = json::parse(transport->lastSerialized);
+    EXPECT_EQ(j.value("method", ""), "initialize");
+    ASSERT_TRUE(j.contains("params"));
+    ASSERT_TRUE(j["params"].contains("capabilities"));
+    ASSERT_TRUE(j["params"]["capabilities"].contains("roots"));
+    EXPECT_TRUE(j["params"]["capabilities"]["roots"].value("listChanged", false));
 }
 
 TEST_F(McpClientImplementTest, ConstructorWithAuthProvider) {

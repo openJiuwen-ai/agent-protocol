@@ -155,7 +155,11 @@ std::future<std::shared_ptr<CompleteResult>> McpClientImplement::Complete(
 
 void McpClientImplement::SetListRootsCallback(ListRootsCallback cb)
 {
-    session_->SetListRootsCallback(std::move(cb));
+    if (session_) {
+        session_->SetListRootsCallback(std::move(cb));
+        return;
+    }
+    listRootsCallback_ = std::move(cb);
 }
 
 void McpClientImplement::SetLoggingCallback(LoggingCallback cb)

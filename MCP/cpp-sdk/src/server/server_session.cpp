@@ -82,6 +82,12 @@ std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
         throw std::runtime_error("Session is not initialized");
     }
 
+    const auto caps = GetClientCapabilities();
+    const bool supported = caps.roots.has_value();
+    if (!supported) {
+        throw std::runtime_error("Client does not support roots/list");
+    }
+
     auto promise = std::make_shared<std::promise<std::shared_ptr<ListRootsResult>>>();
     auto future = promise->get_future();
 

@@ -84,6 +84,33 @@ protected:
         transport_->lastSerialized.clear();
     }
 
+    void InitializeSessionWithoutRootsCapability()
+    {
+        ClientCapabilities caps;
+
+        JSONRPCRequest initRpc;
+        initRpc.jsonrpc_ = JSONRPC_VERSION;
+        initRpc.id_ = 1;
+        initRpc.method_ = "initialize";
+        initRpc.request_ = std::make_unique<InitializeRequest>("ut-client", "0.0.0", caps);
+        initRpc.request_->method_ = "initialize";
+
+        JSONRPCMessage initMsg{std::in_place_type<JSONRPCRequest>, std::move(initRpc)};
+        session_->OnTransportMessage(initMsg, ctx_);
+
+        JSONRPCMessage initializedMsg{std::in_place_type<JSONRPCNotification>};
+        auto& notif = std::get<JSONRPCNotification>(initializedMsg);
+        notif.jsonrpc_ = JSONRPC_VERSION;
+        notif.method_ = "notifications/initialized";
+        notif.notification_ = std::make_unique<InitializedNotification>();
+        notif.notification_->method_ = "notifications/initialized";
+        session_->OnTransportMessage(initializedMsg, ctx_);
+
+        // Clear transport capture from initialization response.
+        transport_->sendCount = 0;
+        transport_->lastSerialized.clear();
+    }
+
     std::shared_ptr<CapturingServerTransport> transport_;
     std::shared_ptr<ServerSession> session_;
     RequestContext ctx_;
@@ -122,4 +149,13 @@ TEST_F(ServerSessionListRootsTest, ListRootsSendsRequestAndCompletesFuture)
     ASSERT_TRUE(rootsRes != nullptr);
     ASSERT_EQ(rootsRes->roots.size(), 1u);
     EXPECT_EQ(rootsRes->roots[0].uri, "file:///tmp");
+}
+
+TEST_F(ServerSessionListRootsTest, ListRootsThrowsIfClientDidNotAdvertiseRootsCapability)
+{
+    InitializeSessionWithoutRootsCapability();
+
+    EXPECT_EQ(transport_->sendCount, 0);
+    EXPECT_THROW(session_->ListRoots(), std::runtime_error);
+    EXPECT_EQ(transport_->sendCount, 0);
 }
