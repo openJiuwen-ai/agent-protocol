@@ -20,6 +20,9 @@ namespace Mcp {
 using JsonValue = nlohmann::json;
 using MetaMap = std::unordered_map<std::string, std::string>;
 
+/** MCP progress token: string or integer per spec. */
+using ProgressToken = std::variant<std::string, int64_t>;
+
 // Constants
 constexpr char DEFAULT_SERVER_NAME[] = "MCP Server";
 constexpr char DEFAULT_CLIENT_NAME[] = "MCP Client";

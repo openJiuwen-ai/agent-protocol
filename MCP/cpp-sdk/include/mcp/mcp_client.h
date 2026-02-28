@@ -37,21 +37,30 @@ public:
      */
     virtual std::future<std::shared_ptr<ListToolsResult>> ListTools() = 0;
     
+    /** Progress callback for long-running operations: (progress, total?, message?). */
+    using ProgressCallback =
+        std::function<void(double progress, std::optional<double> total, const std::optional<std::string>& message)>;
+
     /**
-     * @brief Call a tool by name with optional arguments and timeout.
+     * @brief Call a tool by name with optional arguments, timeout and progress callback.
      *
      * This method invokes a tool registered on the server, passing the specified arguments.
      * The call is asynchronous and returns a future to the result.
+     * When progressCallback is provided, the request includes a progressToken in params._meta
+     * (MCP progress tracking); the server may send notifications/progress and the callback is invoked.
      *
      * @param name The name of the tool to call.
      * @param arguments Optional arguments to pass to the tool (as a JSON value). Defaults to nullopt.
      * @param timeout Timeout in milliseconds for the tool call. If 0, uses the default timeout.
+     * @param progressCallback Optional callback for progress notifications (notifications/progress).
+     *        Defaults to nullopt.
      * @return A future to a shared pointer of CallToolResult containing the tool's response.
      *
      * @throw std::runtime_error If the client is not initialized or the call fails to start.
      */
     virtual std::future<std::shared_ptr<CallToolResult>> CallTool(
-        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt, int timeout = 0) = 0;
+        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt, int timeout = 0,
+        std::optional<ProgressCallback> progressCallback = std::nullopt) = 0;
     
     /**
      * @brief List all available resources on the server.
@@ -157,18 +166,20 @@ public:
     //virtual ExperimentalClientFeatures Experimental();
 
     /**
-     * @brief Send a progress notification to the server.
+     * @brief Send a progress notification to the server (notifications/progress).
      *
      * Notifies the server of the current progress of a long-running operation.
      *
-     * @param progressToken Token identifying the progress operation.
-     * @param progress The current progress value.
-     * @param total The total value for completion.
-     * @param message An optional message describing the progress.
+     * @param progressToken Token identifying the progress operation (string or int64_t per MCP spec).
+     * @param progress The current progress value (MUST increase with each notification).
+     * @param total Optional total value for completion; omit if unknown.
+     * @param message Optional human-readable progress message.
+     * @return A future that completes when the notification has been sent.
      * @throw std::runtime_error If the client is not initialized.
      */
-    virtual std::future<void> SendProgressNotification(std::string progressToken, float progress, float total,
-                                                       std::string message) = 0;
+    virtual std::future<void> SendProgressNotification(ProgressToken progressToken, double progress,
+                                                       std::optional<double> total = std::nullopt,
+                                                       std::optional<std::string> message = std::nullopt) = 0;
 
     /**
      * @brief Request completion options for a prompt or resource template.

@@ -60,10 +60,12 @@ public:
     // Set the logging level
     std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(LoggingLevel level);
 
-    // Call a tool on the server
+    // Call a tool on the server (optional progressCallback enables progressToken and notifications/progress).
     std::future<std::shared_ptr<CallToolResult>> CallTool(const std::string& name,
                                                           const std::optional<JsonValue>& arguments = std::nullopt,
-                                                          int timeout = 0);
+                                                          int timeout = 0,
+                                                          std::optional<ProgressCallback> progressCallback
+                                                              = std::nullopt);
 
     // List available tools
     std::future<std::shared_ptr<ListToolsResult>> ListTools();
@@ -104,6 +106,12 @@ public:
 
     // Send notifications/initialized after successful initialize handshake
     void SendInitializedNotification();
+
+    /** Send notifications/progress to the server (MCP progress tracking). progressToken is string or int64_t. */
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total = std::nullopt,
+                                  const std::optional<std::string>& message = std::nullopt);
+
 protected:
     /**
     * @brief Handle an incoming JSON-RPC notification from the server.
@@ -143,6 +151,10 @@ private:
     void SendJsonRpcErrorRaw(int64_t requestId, int code, const std::string& message, RequestContext& ctx);
     void SendMethodNotFound(int64_t requestId, const std::string& method, RequestContext& ctx);
     void SendInternalError(int64_t requestId, const std::string& message, RequestContext& ctx);
+
+    /** Handle notifications/progress: look up callback by progressToken (string or int64_t) and invoke it. */
+    void HandleProgressNotification(const ProgressToken& progressToken, double progress,
+                                    std::optional<double> total, const std::optional<std::string>& message);
 
     // Indicates whether initialize has succeeded
     bool initialized_{false};

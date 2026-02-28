@@ -59,10 +59,16 @@ std::future<std::shared_ptr<ListToolsResult>> McpClientImplement::ListTools()
 
 std::future<std::shared_ptr<CallToolResult>> McpClientImplement::CallTool(const std::string& name,
                                                                           const std::optional<JsonValue>& arguments,
-                                                                          int timeout)
+                                                                          int timeout,
+                                                                          std::optional<McpClient::ProgressCallback>
+                                                                              progressCallback)
 {
     CheckInitialized();
-    return session_->CallTool(name, arguments, timeout);
+    std::optional<ProgressCallback> internalCb;
+    if (progressCallback.has_value()) {
+        internalCb = std::move(*progressCallback);
+    }
+    return session_->CallTool(name, arguments, timeout, internalCb);
 }
 
 std::future<std::shared_ptr<ListResourcesResult>> McpClientImplement::ListResources()
@@ -135,13 +141,14 @@ ServerCapabilities McpClientImplement::GetServerCapabilities()
     return session_->GetServerCapabilities();
 }
 
-std::future<void> McpClientImplement::SendProgressNotification(std::string progressToken, float progress, float total,
-                                                               std::string message)
+std::future<void> McpClientImplement::SendProgressNotification(ProgressToken progressToken, double progress,
+                                                               std::optional<double> total,
+                                                               std::optional<std::string> message)
 {
     CheckInitialized();
+    session_->SendProgressNotification(std::move(progressToken), progress, total, message);
     std::promise<void> promise;
-    promise.set_exception(std::make_exception_ptr(
-        std::runtime_error("SendProgressNotification is not implemented.")));
+    promise.set_value();
     return promise.get_future();
 }
 

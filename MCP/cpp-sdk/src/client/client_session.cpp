@@ -141,14 +141,17 @@ ServerCapabilities ClientSession::GetServerCapabilities() const
 
 std::future<std::shared_ptr<CallToolResult>> ClientSession::CallTool(const std::string& name,
                                                                      const std::optional<JsonValue>& arguments,
-                                                                     int timeout)
+                                                                     int timeout,
+                                                                     std::optional<ProgressCallback> progressCallback)
 {
     auto promise = std::make_shared<std::promise<std::shared_ptr<CallToolResult>>>();
     auto future = promise->get_future();
     auto params = std::make_unique<CallToolParams>(name, arguments);
     auto req = std::make_unique<CallToolRequest>();
     req->params_ = std::move(params);
-    SendRequest(std::move(req), MakeTypedCompletion<CallToolResult>(promise, "CallTool"));
+
+    SendRequest(std::move(req), MakeTypedCompletion<CallToolResult>(promise, "CallTool"),
+                std::nullopt, progressCallback);
 
     return future;
 }
@@ -373,6 +376,21 @@ void ClientSession::SendRootsListChanged()
     SendNotification(std::move(notification), std::nullopt);
 }
 
+void ClientSession::SendProgressNotification(ProgressToken progressToken, double progress,
+                                             std::optional<double> total,
+                                             const std::optional<std::string>& message)
+{
+    auto notif = std::make_unique<ProgressNotification>();
+    notif->method_ = "notifications/progress";
+    auto params = std::make_unique<ProgressNotificationParams>();
+    params->progressToken = std::move(progressToken);
+    params->progress = progress;
+    params->total = total;
+    params->message = message;
+    notif->params_ = std::move(params);
+    SendNotification(std::move(notif), std::nullopt);
+}
+
 std::future<std::shared_ptr<ListResourcesResult>> ClientSession::ListResources()
 {
     auto promise = std::make_shared<std::promise<std::shared_ptr<ListResourcesResult>>>();
@@ -451,9 +469,41 @@ std::future<std::shared_ptr<EmptyResult>> ClientSession::SetLoggingLevel(Logging
     return future;
 }
 
+void ClientSession::HandleProgressNotification(const ProgressToken& progressToken, double progress,
+    std::optional<double> total, const std::optional<std::string>& message)
+{
+    int64_t requestId = 0;
+    if (std::holds_alternative<int64_t>(progressToken)) {
+        requestId = std::get<int64_t>(progressToken);
+    } else {
+        try {
+            requestId = std::stoll(std::get<std::string>(progressToken));
+        } catch (...) {
+            return; // ignore malformed string tokens
+        }
+    }
+    ProgressCallback cb;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto cit = progressCallbacks_.find(requestId);
+        if (cit != progressCallbacks_.end()) {
+            cb = cit->second;
+        }
+    }
+    if (cb) {
+        cb(progress, total, message);
+    }
+}
+
 void ClientSession::ReceivedNotification(const Notification& notification)
 {
-    // The "initialized" notification completes the initialization handshake.
+    if (notification.method_ == "notifications/progress") {
+        const auto* params = dynamic_cast<const ProgressNotificationParams*>(notification.params_.get());
+        if (params != nullptr) {
+            HandleProgressNotification(params->progressToken, params->progress, params->total, params->message);
+        }
+        return;
+    }
     if (notification.method_ == "notifications/message") {
         auto params = dynamic_cast<LoggingMessageNotificationParams*>(notification.params_.get());
         if (params == nullptr) {

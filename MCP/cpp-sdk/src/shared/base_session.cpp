@@ -21,6 +21,12 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
 
     int64_t requestId = requestId_.fetch_add(1);
 
+    // progressToken defaults to requestId (int64_t) when progress is requested (MCP progress spec).
+    std::optional<ProgressToken> progressToken;
+    if (progressCallback) {
+        progressToken = ProgressToken(requestId);
+    }
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (progressCallback) {
@@ -28,6 +34,13 @@ void BaseSession::SendRequest(std::unique_ptr<Request> request, std::function<vo
         }
         if (completion)
             completionCallbacks_[requestId] = std::move(completion);
+    }
+
+    // When progress requested, set optional params._meta.progressToken for any request that has params.
+    if (progressToken.has_value() && request->params_ != nullptr) {
+        RequestParamsMeta meta;
+        meta.progressToken = *progressToken;
+        request->params_->_meta = std::move(meta);
     }
 
     JSONRPCRequest jsonrpcRequest;

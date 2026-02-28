@@ -28,7 +28,9 @@ public:
     std::future<std::shared_ptr<ListToolsResult>> ListTools() override;
     std::future<std::shared_ptr<CallToolResult>> CallTool(const std::string& name,
                                                           const std::optional<JsonValue>& arguments = std::nullopt,
-                                                          int timeout = 0) override;
+                                                          int timeout = 0,
+                                                          std::optional<McpClient::ProgressCallback> progressCallback
+                                                              = std::nullopt) override;
 
     std::future<std::shared_ptr<ListResourcesResult>> ListResources() override;
     std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri) override;
@@ -45,9 +47,9 @@ public:
     std::future<EmptyResult> SendPing() override;
     ServerCapabilities GetServerCapabilities() override;
 
-    // Not yet developed, temporarily commented out
-    std::future<void> SendProgressNotification(std::string progressToken, float progress, float total,
-                                               std::string message) override;
+    std::future<void> SendProgressNotification(ProgressToken progressToken, double progress,
+                                               std::optional<double> total = std::nullopt,
+                                               std::optional<std::string> message = std::nullopt) override;
 
     std::future<std::shared_ptr<CompleteResult>> Complete(
         const CompleteReference& ref, const CompletionArgument& argument,

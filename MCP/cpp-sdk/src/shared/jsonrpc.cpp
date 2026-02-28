@@ -68,6 +68,25 @@ static inline std::optional<Mcp::MetaMap> ParseMetaStringMap(const json& j)
     return out;
 }
 
+// ProgressToken: string or int64_t per MCP spec
+template <>
+struct adl_serializer<Mcp::ProgressToken> {
+    static void to_json(json& j, const Mcp::ProgressToken& t)
+    {
+        std::visit([&j](const auto& v) { j = v; }, t);
+    }
+    static void from_json(const json& j, Mcp::ProgressToken& t)
+    {
+        if (j.is_string()) {
+            t = j.get<std::string>();
+        } else if (j.is_number_integer()) {
+            t = j.get<int64_t>();
+        } else {
+            t = std::string{};
+        }
+    }
+};
+
 // ---- Client capability details ----
 template <>
 struct adl_serializer<Mcp::SamplingCapability> {
@@ -1284,6 +1303,10 @@ struct adl_serializer<Mcp::CallToolRequest> {
             if (p->arguments.has_value()) {
                 j["arguments"] = p->arguments.value();
             }
+            if (p->_meta.has_value() && p->_meta->progressToken.has_value()) {
+                j["_meta"] = json::object();
+                j["_meta"]["progressToken"] = p->_meta->progressToken.value();
+            }
         }
     }
 
@@ -1298,8 +1321,17 @@ struct adl_serializer<Mcp::CallToolRequest> {
                 args = paramsJson.at("arguments");
             }
 
-            req.params_ =
-                std::make_unique<Mcp::CallToolParams>(paramsJson.at("name").get<std::string>(), std::move(args));
+            auto params = std::make_unique<Mcp::CallToolParams>(
+                paramsJson.at("name").get<std::string>(), std::move(args));
+            if (paramsJson.contains("_meta") && paramsJson.at("_meta").is_object()) {
+                const auto& metaJson = paramsJson.at("_meta");
+                Mcp::RequestParamsMeta meta;
+                if (metaJson.contains("progressToken") && !metaJson.at("progressToken").is_null()) {
+                    meta.progressToken = metaJson.at("progressToken").get<Mcp::ProgressToken>();
+                }
+                params->_meta = std::move(meta);
+            }
+            req.params_ = std::move(params);
         }
     }
 };
@@ -2052,6 +2084,66 @@ struct adl_serializer<Mcp::LoggingMessageNotification> {
 };
 
 template <>
+struct adl_serializer<Mcp::ProgressNotificationParams> {
+    static void to_json(json& j, const Mcp::ProgressNotificationParams& p)
+    {
+        j["progressToken"] = p.progressToken;
+        j["progress"] = p.progress;
+        if (p.total.has_value()) {
+            j["total"] = p.total.value();
+        }
+        if (p.message.has_value()) {
+            j["message"] = p.message.value();
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ProgressNotificationParams& p)
+    {
+        if (j.contains("progressToken") && !j.at("progressToken").is_null()) {
+            p.progressToken = j.at("progressToken").get<Mcp::ProgressToken>();
+        } else {
+            p.progressToken = std::string{};
+        }
+        p.progress = j.value("progress", 0.0);
+        if (j.contains("total") && !j.at("total").is_null()) {
+            p.total = j.at("total").get<double>();
+        } else {
+            p.total = std::nullopt;
+        }
+        if (j.contains("message") && !j.at("message").is_null()) {
+            p.message = j.at("message").get<std::string>();
+        } else {
+            p.message = std::nullopt;
+        }
+    }
+};
+
+template <>
+struct adl_serializer<Mcp::ProgressNotification> {
+    static void to_json(json& j, const Mcp::ProgressNotification& notif)
+    {
+        j = json::object();
+        if (notif.params_) {
+            auto p = static_cast<const Mcp::ProgressNotificationParams*>(notif.params_.get());
+            if (p != nullptr) {
+                j = *p;
+            }
+        }
+    }
+
+    static void from_json(const json& j, Mcp::ProgressNotification& notif)
+    {
+        if (j.contains("progressToken")) {
+            Mcp::ProgressNotificationParams p;
+            j.get_to(p);
+            notif.params_ = std::make_unique<Mcp::ProgressNotificationParams>(std::move(p));
+        } else {
+            notif.params_.reset();
+        }
+    }
+};
+
+template <>
 struct adl_serializer<Mcp::ToolListChangedNotification> {
     static void to_json(json &j, const Mcp::ToolListChangedNotification &)
     {
@@ -2348,6 +2440,10 @@ LoggingMessageNotification::LoggingMessageNotification()
     method_ = "notifications/message";
 }
 
+ProgressNotification::ProgressNotification()
+{
+    method_ = "notifications/progress";
+}
 
 ToolListChangedNotification::ToolListChangedNotification()
 {
@@ -2533,6 +2629,14 @@ std::string JSONRPCRequest::Serialize(const std::string& method) const
         if (elicitReq != nullptr) {
             j["params"] = *elicitReq;
         }
+    }
+
+    // Inject params._meta.progressToken when present (any request with params may have progress).
+    if (request_ != nullptr && request_->params_ != nullptr && request_->params_->_meta.has_value() &&
+        request_->params_->_meta->progressToken.has_value() && j.contains("params") &&
+        j.at("params").is_object()) {
+        j["params"]["_meta"] = json::object();
+        j["params"]["_meta"]["progressToken"] = request_->params_->_meta->progressToken.value();
     }
 
     return j.dump();
@@ -2818,23 +2922,43 @@ std::string JSONRPCNotification::Serialize(const std::string& method) const
         method_ == "notifications/resources/list_changed" ||
         method_ == "notifications/roots/list_changed") {
         j["params"] = json::object();
-    } else if (notification_ != nullptr) {
-        if (method_ == "notifications/resources/updated") {
-            const auto* notif = dynamic_cast<const ResourceUpdatedNotification*>(notification_.get());
-            if (notif != nullptr) {
-                j["params"] = *notif;
-            }
-        } else if (method_ == "notifications/message") {
-            const auto* notif = dynamic_cast<const LoggingMessageNotification*>(notification_.get());
-            if (notif != nullptr) {
-                j["params"] = *notif;
-            }
-        } else if (method_ == "notifications/cancelled") {
-            const auto* notif = dynamic_cast<const CancelledNotification*>(notification_.get());
-            if (notif != nullptr) {
-                j["params"] = *notif;
-            }
+        return j.dump();
+    }
+    if (notification_ == nullptr) {
+        return j.dump();
+    }
+
+    if (method_ == "notifications/resources/updated") {
+        const auto* notif = dynamic_cast<const ResourceUpdatedNotification*>(notification_.get());
+        if (notif != nullptr) {
+            j["params"] = *notif;
         }
+        return j.dump();
+    }
+    if (method_ == "notifications/message") {
+        const auto* notif = dynamic_cast<const LoggingMessageNotification*>(notification_.get());
+        if (notif != nullptr) {
+            j["params"] = *notif;
+        }
+        return j.dump();
+    }
+    if (method_ == "notifications/cancelled") {
+        const auto* notif = dynamic_cast<const CancelledNotification*>(notification_.get());
+        if (notif != nullptr) {
+            j["params"] = *notif;
+        }
+        return j.dump();
+    }
+    if (method_ == "notifications/progress") {
+        const auto* notif = dynamic_cast<const ProgressNotification*>(notification_.get());
+        const auto* p = (notif != nullptr && notif->params_ != nullptr)
+                            ? static_cast<const ProgressNotificationParams*>(notif->params_.get())
+                            : nullptr;
+        if (p == nullptr) {
+            return j.dump();
+        }
+        j["params"] = *p;
+        return j.dump();
     }
 
     return j.dump();
@@ -2871,6 +2995,13 @@ int JSONRPCNotification::Deserialize(const std::string& jsonStr, const std::stri
         notification_ = std::move(notif);
     } else if (method_ == "notifications/message") {
         auto notif = std::make_unique<LoggingMessageNotification>();
+        notif->method_ = method_;
+        if (j.contains("params")) {
+            j.at("params").get_to(*notif);
+        }
+        notification_ = std::move(notif);
+    } else if (method_ == "notifications/progress") {
+        auto notif = std::make_unique<ProgressNotification>();
         notif->method_ = method_;
         if (j.contains("params")) {
             j.at("params").get_to(*notif);

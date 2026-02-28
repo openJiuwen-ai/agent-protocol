@@ -178,7 +178,8 @@ TEST_F(McpClientImplementTest, CallMethodBeforeInitialize) {
     EXPECT_THROW(client_->GetServerCapabilities(), std::runtime_error);
 
     // 这些方法可能还未完全实现，但应该会抛出未初始化异常
-    EXPECT_THROW(client_->SendProgressNotification("", 0, 0, ""), std::runtime_error);
+    EXPECT_THROW(client_->SendProgressNotification(std::string(""), 0.0, std::nullopt, std::nullopt),
+                 std::runtime_error);
     
     // Complete method requires proper types
     PromptReference promptRef;

@@ -84,7 +84,7 @@ public:
      *
      * - The caller supplies an optional completion callback invoked when the response arrives.
      * - On success, the callback receives the result; on error or missing result, it receives nullptr.
-     * - Progress updates (if provided) invoke `progressCallback`.
+     * - When progressCallback is set, progressToken is set to requestId and included in params._meta (MCP progress).
      *
      * @param request Request payload to send.
      * @param completion Optional callback invoked with the response result (or nullptr on error).
@@ -92,14 +92,8 @@ public:
      * @param progressCallback Optional callback for progress notifications (defaults to nullopt).
      */
     void SendRequest(std::unique_ptr<Request> request, std::function<void(std::shared_ptr<Result>)> completion,
-                     std::optional<std::chrono::seconds> requestTimeout,
-                     std::optional<ProgressCallback> progressCallback);
-
-    // Convenience overload: only completion callback
-    void SendRequest(std::unique_ptr<Request> request, std::function<void(std::shared_ptr<Result>)> completion)
-    {
-        SendRequest(std::move(request), std::move(completion), std::nullopt, std::nullopt);
-    }
+                     std::optional<std::chrono::seconds> requestTimeout = std::nullopt,
+                     std::optional<ProgressCallback> progressCallback = std::nullopt);
 
     /**
      * Send a notification (one-way message with no response expected).
@@ -186,7 +180,7 @@ protected:
     // Mutex for thread-safe access to shared state
     std::mutex mutex_;
 
-    // Progress callbacks for requests
+    // Progress callbacks for requests (keyed by request id; progressToken is requestId as string)
     std::unordered_map<int64_t, ProgressCallback> progressCallbacks_;
 
     // Completion callbacks for requests

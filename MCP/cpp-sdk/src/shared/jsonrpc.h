@@ -19,9 +19,16 @@
 
 namespace Mcp {
 
+/** Optional _meta that may exist on any request params (e.g. progressToken for MCP progress). */
+struct RequestParamsMeta {
+    std::optional<ProgressToken> progressToken;
+};
+
 // Base class for pure parameter data
 struct RequestParams {
     virtual ~RequestParams() = default;
+    /** Optional _meta, serialized as params._meta when present. */
+    std::optional<RequestParamsMeta> _meta;
 };
 
 // Base for JSON-RPC envelopes
@@ -314,6 +321,18 @@ struct LoggingMessageNotificationParams : public NotificationParams {
 
 struct LoggingMessageNotification : public Notification {
     LoggingMessageNotification();
+};
+
+/** Params for notifications/progress (MCP progress tracking). */
+struct ProgressNotificationParams : public NotificationParams {
+    ProgressToken progressToken;
+    double progress{0.0};
+    std::optional<double> total;
+    std::optional<std::string> message;
+};
+
+struct ProgressNotification : public Notification {
+    ProgressNotification();
 };
 
 struct ToolListChangedNotification : public Notification {
