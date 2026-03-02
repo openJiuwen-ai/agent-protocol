@@ -109,6 +109,7 @@ Options:
                           tool    - Run tool client example
                           prompt  - Run prompt client example
                           resource - Run resource client example
+                          sampling - Run sampling client example (server-to-client sampling)
   -p, --port <PORT>     Server listen port (default: 8000, or env SERVER_PORT)
   -f, --force-kill-port If the server port is in use, kill the process(es) occupying it
   -b, --build-only      Only build examples, do not run
@@ -120,6 +121,7 @@ Examples:
   $0 -t server          # Run server example only
   $0 -t client          # Run all client examples
   $0 -t tool            # Run tool client example
+  $0 -t sampling        # Run sampling client example
   $0 --build-only       # Build all examples without running
 
 EOF
@@ -160,11 +162,11 @@ done
 
 # Validate example type
 case "${EXAMPLE_TYPE}" in
-    all|server|client|tool|prompt|resource)
+    all|server|client|tool|prompt|resource|sampling)
         ;;
     *)
         echo "Error: Invalid example type '${EXAMPLE_TYPE}'"
-        echo "Valid types: all, server, client, tool, prompt, resource"
+        echo "Valid types: all, server, client, tool, prompt, resource, sampling"
         exit 1
         ;;
 esac
@@ -334,6 +336,18 @@ run_resource_example() {
     run_example "${EXAMPLE_DIR}/client_example/resource_example" "Resource Example" "ResourceExample" "${EXAMPLE_DIR}/client_example/resource_example/build/resource_example_output.log"
 }
 
+# Function to run client sampling example (server-to-client sampling)
+run_sampling_example() {
+    echo ""
+    echo "========================================"
+    echo "  Sampling Client Example (Server-to-Client Sampling)"
+    echo "========================================"
+    echo ""
+
+    build_example "${EXAMPLE_DIR}/client_example/sampling_example" "Sampling Example"
+    run_example "${EXAMPLE_DIR}/client_example/sampling_example" "Sampling Example" "SamplingExample" "${EXAMPLE_DIR}/client_example/sampling_example/build/sampling_example_output.log"
+}
+
 # Run examples based on type
 case "${EXAMPLE_TYPE}" in
     all)
@@ -341,6 +355,7 @@ case "${EXAMPLE_TYPE}" in
         run_tool_example
         run_prompt_example
         run_resource_example
+        run_sampling_example
         ;;
     server)
         run_server_example
@@ -349,6 +364,7 @@ case "${EXAMPLE_TYPE}" in
         run_tool_example
         run_prompt_example
         run_resource_example
+        run_sampling_example
         ;;
     tool)
         run_tool_example
@@ -358,6 +374,9 @@ case "${EXAMPLE_TYPE}" in
         ;;
     resource)
         run_resource_example
+        ;;
+    sampling)
+        run_sampling_example
         ;;
 esac
 

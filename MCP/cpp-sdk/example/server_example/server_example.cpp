@@ -71,6 +71,112 @@ void FileLogCallback(MCP_LOG_LEVEL logLevel, const char *format, ...)
     fflush(g_logFile);
 }
 
+// Helper function to extract text from CreateMessageResult
+std::string ExtractTextContentFromResult(const Mcp::CreateMessageResult& result)
+{
+    auto toText = [](const Mcp::SamplingMessageContentBlock& block) -> std::string {
+        if (std::holds_alternative<Mcp::TextContent>(block)) {
+            return std::get<Mcp::TextContent>(block).text;
+        }
+        return "";
+    };
+
+    if (std::holds_alternative<Mcp::SamplingMessageContentBlock>(result.content)) {
+        return toText(std::get<Mcp::SamplingMessageContentBlock>(result.content));
+    }
+
+    const auto& blocks = std::get<std::vector<Mcp::SamplingMessageContentBlock>>(result.content);
+    for (const auto& block : blocks) {
+        std::string text = toText(block);
+        if (!text.empty()) {
+            return text;
+        }
+    }
+    return "<no text content>";
+}
+
+constexpr int SAMPLING_MAX_TOKENS = 100;
+
+Mcp::CreateMessageParams BuildSamplingParams(const std::string& prompt, int maxTokens)
+{
+    Mcp::CreateMessageParams params;
+    params.maxTokens = maxTokens;
+
+    Mcp::SamplingMessage userMsg;
+    userMsg.role = Mcp::RoleType::USER;
+    Mcp::TextContent userText;
+    userText.text = prompt;
+    userMsg.content = Mcp::SamplingMessageContentBlock{userText};
+    params.messages.push_back(std::move(userMsg));
+    return params;
+}
+
+Mcp::CallToolResult MakeSamplingErrorResult(const std::string& message)
+{
+    Mcp::CallToolResult result;
+    result.isError = true;
+    Mcp::TextContent errorText;
+    errorText.text = message;
+    result.content.emplace_back(errorText);
+    return result;
+}
+
+std::string ParseSamplingPrompt(const Mcp::JsonValue& arguments)
+{
+    std::string prompt = "Hello";
+    try {
+        if (arguments.contains("prompt") && arguments.at("prompt").is_string()) {
+            prompt = arguments.at("prompt").get<std::string>();
+        }
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error parsing sampling echo arguments: %s", e.what());
+    }
+    return prompt;
+}
+
+Mcp::CallToolResult RunSamplingRequest(const Mcp::ServerContext& ctx, const std::string& prompt)
+{
+    if (!ctx.session) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "No session available for sampling");
+        return MakeSamplingErrorResult("Error: No session available for sampling");
+    }
+
+    try {
+        const auto params = BuildSamplingParams(prompt, SAMPLING_MAX_TOKENS);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Sending sampling/createMessage request to client...");
+
+        auto samplingFuture = ctx.session->SamplingCreateMessage(params);
+        auto samplingResult = samplingFuture.get();
+        if (!samplingResult) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Sampling returned null result");
+            return MakeSamplingErrorResult("Error: Sampling returned null result");
+        }
+
+        const std::string sampledText = ExtractTextContentFromResult(*samplingResult);
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Sampling response received: %s", sampledText.c_str());
+
+        Mcp::CallToolResult result;
+        result.isError = false;
+        Mcp::TextContent responseText;
+        responseText.text = "Sampling response: " + sampledText;
+        result.content.emplace_back(responseText);
+        return result;
+    } catch (const std::exception& e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Sampling failed: %s", e.what());
+        return MakeSamplingErrorResult(std::string("Sampling error: ") + e.what());
+    }
+}
+
+void SendSamplingResponse(const Mcp::ServerContext& ctx, const Mcp::CallToolResult& result)
+{
+    if (ctx.responseCallback) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Sending sampling echo response");
+        ctx.responseCallback(result);
+        return;
+    }
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, "No response callback available for sampling echo");
+}
+
 int main(int argc, char** argv)
 {
     std::cout << "=== MCP Server Test Example ===" << std::endl;
@@ -311,6 +417,69 @@ int main(int argc, char** argv)
             MCP_LOG(MCP_LOG_LEVEL_INFO, "Added async echo tool success: %s", asyncEchoTool.name.c_str());
         } catch (const std::exception& e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "Add async echo tool failed: %s", e.what());
+        }
+
+        /*
+         * ========== SAMPLING TOOL EXAMPLE ==========
+         *
+         * The sampling_echo tool demonstrates server-to-client sampling.
+         * When called, the tool sends a sampling/createMessage request to the client,
+         * receives the response, and returns it as the tool result.
+         *
+         * Key concepts:
+         * 1. Server->Client sampling via ctx.session->SamplingCreateMessage()
+         * 2. CreateMessageParams - parameters for the sampling request
+         * 3. CreateMessageResult - the sampling response from the client
+         */
+        Mcp::ToolInfo samplingEchoTool;
+        samplingEchoTool.name = "sampling_echo";
+        samplingEchoTool.title = "Sampling Echo Tool";
+        samplingEchoTool.description =
+            "Demonstrates server-to-client sampling: requests sampling from client and returns "
+            "the response";
+        samplingEchoTool.inputSchema = nlohmann::json::object({
+            {"type", "object"},
+            {"properties", nlohmann::json::object({
+                {"prompt", nlohmann::json::object({
+                    {"type", "string"},
+                    {"description", "The prompt to send for sampling"}
+                })}
+            })},
+            {"required", nlohmann::json::array({"prompt"})}
+        });
+        samplingEchoTool.outputSchema = nlohmann::json::object({
+            {"type", "object"},
+            {"properties", nlohmann::json::object({
+                {"result", nlohmann::json::object({
+                    {"type", "string"},
+                    {"description", "The sampling response from client"}
+                })}
+            })}
+        });
+
+        samplingEchoTool.func = Mcp::AsyncToolFunc([](const Mcp::ServerContext& ctx,
+                                                      const std::string& name,
+                                                      const Mcp::JsonValue& arguments) {
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Sampling echo tool '%s' started", name.c_str());
+            const std::string prompt = ParseSamplingPrompt(arguments);
+
+            // Create async thread to handle sampling
+            std::thread([ctx, prompt, name]() {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Sampling thread started for prompt: %s", prompt.c_str());
+                const Mcp::CallToolResult result = RunSamplingRequest(ctx, prompt);
+                SendSamplingResponse(ctx, result);
+
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Sampling thread completed");
+            }).detach();
+
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Sampling echo tool '%s' dispatched to background thread", name.c_str());
+        });
+
+        try {
+            server->AddTool(samplingEchoTool);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Added sampling echo tool success: %s", samplingEchoTool.name.c_str());
+        } catch (const std::exception& e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Add sampling echo tool failed: %s", e.what());
         }
 
         // Add synchronous prompt
