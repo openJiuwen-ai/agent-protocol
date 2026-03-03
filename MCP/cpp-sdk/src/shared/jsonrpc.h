@@ -19,11 +19,6 @@
 
 namespace Mcp {
 
-/** Optional _meta that may exist on any request params (e.g. progressToken for MCP progress). */
-struct RequestParamsMeta {
-    std::optional<ProgressToken> progressToken;
-};
-
 // Base class for pure parameter data
 struct RequestParams {
     virtual ~RequestParams() = default;

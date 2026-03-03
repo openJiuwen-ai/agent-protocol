@@ -96,6 +96,16 @@ public:
         (void)relatedRequestId;
     }
 
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total,
+                                  const std::optional<std::string>& message) override
+    {
+        (void)progressToken;
+        (void)progress;
+        (void)total;
+        (void)message;
+    }
+
     int reqCount{0};
     int notifCount{0};
 
@@ -115,6 +125,16 @@ public:
         (void)notification;
         (void)relatedRequestId;
     }
+
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total,
+                                  const std::optional<std::string>& message) override
+    {
+        (void)progressToken;
+        (void)progress;
+        (void)total;
+        (void)message;
+    }
 };
 
 class DefaultHookSession : public BaseSession {
@@ -129,6 +149,16 @@ public:
     {
         (void)notification;
         (void)relatedRequestId;
+    }
+
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total,
+                                  const std::optional<std::string>& message) override
+    {
+        (void)progressToken;
+        (void)progress;
+        (void)total;
+        (void)message;
     }
 };
 

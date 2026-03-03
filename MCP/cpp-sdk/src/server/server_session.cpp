@@ -301,9 +301,22 @@ void ServerSession::SendLogMessage(const std::string& level, const std::string& 
     SendNotification(std::move(notif), std::nullopt);
 }
 
-void ServerSession::SendProgressNotification(const std::string& progressToken, double progress,
+void ServerSession::SendProgressNotification(ProgressToken progressToken, double progress,
     std::optional<double> total, const std::optional<std::string>& message)
 {
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<ProgressNotification>();
+    notif->method_ = "notifications/progress";
+    auto params = std::make_unique<ProgressNotificationParams>();
+    params->progressToken = std::move(progressToken);
+    params->progress = progress;
+    params->total = total;
+    params->message = message;
+    notif->params_ = std::move(params);
+    SendNotification(std::move(notif), std::nullopt);
 }
 
 void ServerSession::SendToolListChangedNotification()

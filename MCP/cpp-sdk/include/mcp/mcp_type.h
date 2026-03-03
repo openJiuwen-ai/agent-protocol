@@ -23,6 +23,11 @@ using MetaMap = std::unordered_map<std::string, std::string>;
 /** MCP progress token: string or integer per spec. */
 using ProgressToken = std::variant<std::string, int64_t>;
 
+/** Optional _meta that may exist on any request params (e.g. progressToken for MCP progress). */
+struct RequestParamsMeta {
+    std::optional<ProgressToken> progressToken;
+};
+
 // Constants
 constexpr char DEFAULT_SERVER_NAME[] = "MCP Server";
 constexpr char DEFAULT_CLIENT_NAME[] = "MCP Client";

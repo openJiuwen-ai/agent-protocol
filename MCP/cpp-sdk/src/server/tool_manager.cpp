@@ -87,8 +87,8 @@ std::optional<CallToolResult> ToolManager::CallTool(const ServerContext& ctx, co
         return std::visit([&](auto&& f) -> std::optional<CallToolResult> {
             using T = std::decay_t<decltype(f)>;
             if constexpr (std::is_same_v<T, SyncToolFunc>) {
-                // Synchronous function, create context without callback
-                ServerContext syncCtx = {ctx.session, nullptr};
+                // Synchronous function, create context without callback but keep meta
+                ServerContext syncCtx = {ctx.session, nullptr, ctx.meta};
                 return f(syncCtx, name, args);
             } else if constexpr (std::is_same_v<T, AsyncToolFunc>) {
                 // Asynchronous function, use original context with callback

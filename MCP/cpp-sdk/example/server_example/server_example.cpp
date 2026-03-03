@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 #include "mcp_log.h"
@@ -36,6 +37,13 @@ const char* const RESOURCE_URI = "http://example.com/resource";
 const char* const RESOURCE_NAME = "Test Resource";
 const char* const RESOURCE_DESCRIPTION = "A test resource for demonstration";
 const char* const RESOURCE_MIME_TYPE = "text/plain";
+
+// Progress tool constants
+constexpr int PROGRESS_TOOL_SIMULATION_DELAY_MS = 500; // Delay between progress updates in milliseconds
+
+// Async processing delays
+constexpr int ASYNC_PROMPT_PROCESSING_DELAY_MS = 500; // Delay for async prompt processing
+constexpr int ASYNC_RESOURCE_PROCESSING_DELAY_MS = 300; // Delay for async resource processing
 const char* const RESOURCE_TEMPLATE_URI = "http://example.com/resourceTemplate/{id}";
 const char* const RESOURCE_TEMPLATE_NAME = "Test Resource Template";
 const char* const RESOURCE_TEMPLATE_DESCRIPTION = "A test resource template for demonstration";
@@ -247,7 +255,7 @@ int main(int argc, char** argv)
         // Simulate async processing in a separate thread
         std::thread([ctx, promptName, arguments]() {
             // Simulate some processing delay
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(ASYNC_PROMPT_PROCESSING_DELAY_MS));
 
             Mcp::GetPromptResult result;
             result.description = "async_" + promptName;
@@ -481,6 +489,143 @@ int main(int argc, char** argv)
         } catch (const std::exception& e) {
             MCP_LOG(MCP_LOG_LEVEL_ERROR, "Add sampling echo tool failed: %s", e.what());
         }
+        
+        /*
+         * ========== PROGRESS NOTIFICATION TOOL EXAMPLE ==========
+         *
+         * This tool demonstrates how to send progress notifications during long-running operations.
+         * Key concepts:
+         * 1. Progress notifications can be sent from server to client
+         * 2. Progress token identifies the operation (string or int64_t)
+         * 3. Progress value ranges from 0.0 to 1.0 (or actual value)
+         * 4. Optional total value and message can be included
+         */
+
+        // Add progress notification tool example
+        Mcp::ToolInfo progressTool;
+        progressTool.name = "progress_tool";
+        progressTool.title = "Progress Notification Tool";
+        progressTool.description = "Demonstrates progress notifications during long-running operations";
+        progressTool.inputSchema = {
+            {"type", "object"},
+            {"properties", {
+                {"task_name", {{"type", "string"}, {"description", "Name of the task to process"}}},
+                {"steps", {{"type", "integer"}, {"description", "Number of steps to simulate"}, {"minimum", 1}}}
+            }},
+            {"required", {"task_name", "steps"}}
+        };
+        progressTool.outputSchema = {
+            {"type", "object"},
+            {"properties", {
+                {"result", {{"type", "string"}, {"description", "Final result message"}}},
+                {"total_time_ms", {{"type", "integer"}, {"description", "Total processing time in milliseconds"}}}
+            }}
+        };
+
+        // Progress tool function with progress notifications
+        progressTool.func = Mcp::AsyncToolFunc([](const Mcp::ServerContext& ctx, const std::string& name,
+                                                  const Mcp::JsonValue& arguments) {
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Progress tool '%s' started", name.c_str());
+
+            // Extract arguments
+            std::string taskName = "Unknown Task";
+            int steps = 5;
+            try {
+                if (arguments.contains("task_name") && arguments.at("task_name").is_string()) {
+                    taskName = arguments.at("task_name").get<std::string>();
+                }
+                if (arguments.contains("steps") && arguments.at("steps").is_number_integer()) {
+                    steps = arguments.at("steps").get<int>();
+                    if (steps < 1) steps = 1;
+                    if (steps > 100) steps = 100; // Limit to reasonable number: 100
+                }
+            } catch (const std::exception& e) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Error parsing progress tool arguments: %s", e.what());
+            }
+
+            // Create async thread to simulate long-running operation with progress updates
+            std::thread([ctx, taskName, steps, name]() {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Progress tool thread started for task: %s, steps: %d",
+                        taskName.c_str(), steps);
+
+                auto startTime = std::chrono::steady_clock::now();
+
+                // Use progressToken from client request if available, otherwise generate one
+                Mcp::ProgressToken progressToken;
+                if (ctx.meta && ctx.meta->progressToken) {
+                    // Use the progressToken from client request
+                    progressToken = ctx.meta->progressToken.value();
+                    // Log progress token value
+                    if (std::holds_alternative<std::string>(progressToken)) {
+                        MCP_LOG(MCP_LOG_LEVEL_INFO, "Using client-provided progress token: %s",
+                                std::get<std::string>(progressToken).c_str());
+                    } else if (std::holds_alternative<int64_t>(progressToken)) {
+                        MCP_LOG(MCP_LOG_LEVEL_INFO, "Using client-provided progress token: %ld",
+                                std::get<int64_t>(progressToken));
+                    }
+                } else {
+                    // Fallback: generate a progress token
+                    progressToken = "progress-" + taskName + "-" + std::to_string(std::time(nullptr));
+                    MCP_LOG(MCP_LOG_LEVEL_INFO, "Generated progress token: %s",
+                            std::get<std::string>(progressToken).c_str());
+                }
+
+                // Simulate processing with progress updates
+                for (int i = 0; i <= steps; i++) {
+                    // Calculate progress
+                    double progress = static_cast<double>(i) / steps;
+
+                    // Send progress notification
+                    if (ctx.session) {
+                        std::string message = "Processing " + taskName + ": step " +
+                                              std::to_string(i) + " of " + std::to_string(steps);
+
+                        ctx.session->SendProgressNotification(
+                            progressToken, // Progress token (string)
+                            progress,      // Current progress (0.0 to 1.0)
+                            steps,         // Total steps
+                            message);      // Human-readable message
+
+                        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Sent progress notification: %.1f%% - %s",
+                                progress * 100, message.c_str()); // 100: percent
+                    }
+
+                    // Simulate work
+                    if (i < steps) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(PROGRESS_TOOL_SIMULATION_DELAY_MS));
+                    }
+                }
+
+                auto endTime = std::chrono::steady_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+
+                // Prepare final result
+                Mcp::CallToolResult result;
+                result.isError = false;
+
+                Mcp::TextContent textContent;
+                textContent.text = "Task '" + taskName + "' completed successfully in " +
+                                   std::to_string(duration.count()) + "ms";
+                result.content.push_back(textContent);
+
+                // Send final response
+                if (ctx.responseCallback) {
+                    MCP_LOG(MCP_LOG_LEVEL_INFO, "Sending progress tool final response");
+                    ctx.responseCallback(result);
+                } else {
+                    MCP_LOG(MCP_LOG_LEVEL_ERROR, "No response callback available for progress tool");
+                }
+            }).detach();
+        });
+
+        try {
+            server->AddTool(progressTool);
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add progress tool success: %s", progressTool.name.c_str());
+        } catch (const std::exception &e) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "add progress tool failed: %s", e.what());
+        } catch (...) {
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "add progress tool failed as expected");
+        }
 
         // Add synchronous prompt
         Mcp::PromptInfo greetingPrompt;
@@ -533,7 +678,7 @@ int main(int argc, char** argv)
             // Simulate async processing in a separate thread
             std::thread([ctx, uri]() {
                 // Simulate some processing delay
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                std::this_thread::sleep_for(std::chrono::milliseconds(ASYNC_RESOURCE_PROCESSING_DELAY_MS));
 
                 Mcp::ReadResourceResult result;
                 Mcp::TextResourceContents textContents;

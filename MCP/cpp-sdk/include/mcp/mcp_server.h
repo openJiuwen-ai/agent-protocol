@@ -34,7 +34,7 @@ public:
     // Capabilities advertised by the connected client during `initialize`.
     virtual ClientCapabilities GetClientCapabilities() const = 0;
 
-    virtual void SendProgressNotification(const std::string& progressToken, double progress,
+    virtual void SendProgressNotification(ProgressToken progressToken, double progress,
                                           std::optional<double> total = std::nullopt,
                                           const std::optional<std::string>& message = std::nullopt) = 0;
     // Server -> Client sampling request.
@@ -49,6 +49,8 @@ using ResponseCallback = std::function<void(const Result& result)>;
 struct ServerContext {
     std::shared_ptr<McpServerSession> session;
     ResponseCallback responseCallback;
+    // Meta data from client request (e.g., progressToken for MCP progress)
+    std::optional<RequestParamsMeta> meta;
 };
 
 using SyncToolFunc = std::function<CallToolResult(const ServerContext& ctx, const std::string& name,

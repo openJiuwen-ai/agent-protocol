@@ -104,6 +104,44 @@ int main(int argc, char** argv)
         return -1;
     }
 
+    // Example 3.5: Call tool with progress callback
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example CallTool with Progress Callback ===");
+    try {
+        nlohmann::json progressArguments;
+        progressArguments["task_name"] = "Data Processing";
+        progressArguments["steps"] = 5; // 5 steps
+        
+        // Define progress callback function
+        std::function<void(double, std::optional<double>, const std::optional<std::string>&)> progressCallback =
+            [](double progress, std::optional<double> total, const std::optional<std::string>& message) {
+            // Always log when progress callback is called
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "=== PROGRESS CALLBACK CALLED ===");
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "Progress: %.2f (%.1f%%)", progress, progress * 100);
+            
+            if (message) {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "Message: %s", message->c_str());
+            }
+        };
+        
+        auto progressCallFuture = mcpClient->CallTool("progress_tool", progressArguments, 60, progressCallback);
+        if (progressCallFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, "CallTool with progress callback timeout");
+            return -1;
+        }
+        auto progressCallResult = progressCallFuture.get();
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool with progress callback success, isError: %d, content count: %zu",
+                progressCallResult->isError, progressCallResult->content.size());
+        for (const auto &content : progressCallResult->content) {
+            if (std::holds_alternative<Mcp::TextContent>(content)) {
+                const auto &text = std::get<Mcp::TextContent>(content);
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  TextContent: %s", text.text.c_str());
+            }
+        }
+    } catch (const std::exception &e) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "CallTool with progress callback failed: %s", e.what());
+        return -1;
+    }
+
     // Example 3.1: Call async echo tool
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example CallTool (Async Echo) ===");
     try {

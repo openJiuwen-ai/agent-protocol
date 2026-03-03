@@ -196,15 +196,4 @@ void BaseSession::OnTransportMessage(const JSONRPCMessage& message, RequestConte
         return;
     }
 }
-
-void BaseSession::SendProgressNotification(const std::string& progressToken, double progress,
-    std::optional<double> total, const std::optional<std::string>& message)
-{
-    // Empty implementation - subclasses can override if needed
-    (void)progressToken;
-    (void)progress;
-    (void)total;
-    (void)message;
-}
-
 } // namespace Mcp

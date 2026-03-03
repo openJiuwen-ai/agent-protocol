@@ -106,6 +106,17 @@ public:
     std::future<std::shared_ptr<ListRootsResult>> ListRoots() override;
 
     void SendLogMessage(const std::string& level, const std::string& data, const std::string& logger);
+    
+    /**
+     * @brief Send a progress notification to the client.
+     *
+     * Sends an MCP JSON-RPC notification indicating the progress of a long-running operation.
+     * The progress token can be a string or integer identifier for the operation.
+     */
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total = std::nullopt,
+                                  const std::optional<std::string>& message = std::nullopt) override;
+    
     /**
      * @brief Request the client to sample a model message via `sampling/createMessage`.
      *
@@ -140,12 +151,6 @@ protected:
      */
     void SendNotification(std::unique_ptr<Notification> notification,
                           std::optional<int64_t> relatedRequestId [[maybe_unused]] = std::nullopt) override;
-
-    /**
-     * @brief Send a progress notification to the client.
-     */
-    void SendProgressNotification(const std::string& progressToken, double progress, std::optional<double> total,
-                                  const std::optional<std::string>& message) override;
 
 private:
     /**

@@ -112,9 +112,9 @@ public:
      * @param total Optional total progress value
      * @param message Optional progress message
      */
-    virtual void SendProgressNotification(const std::string& progressToken, double progress,
+    virtual void SendProgressNotification(ProgressToken progressToken, double progress,
                                           std::optional<double> total = std::nullopt,
-                                          const std::optional<std::string>& message = std::nullopt);
+                                          const std::optional<std::string>& message = std::nullopt) = 0;
 
     /**
      * Send a response to a request.

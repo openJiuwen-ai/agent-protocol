@@ -145,7 +145,7 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
         serverManager_->DispatchResponse(requestId, resultPtr, ctx);
     };
 
-    ServerContext serverCtx = {session, responseCallback};
+    ServerContext serverCtx = {session, responseCallback, params->_meta};
     std::string args = params->arguments.has_value() ? params->arguments->dump() : "{}";
     auto optionalResult = toolManager_.CallTool(serverCtx, params->name, args);
     // Only send response when there is a return value (synchronous function)
@@ -192,7 +192,7 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
             serverManager_->DispatchResponse(requestId, resultPtr, ctx);
         };
 
-        ServerContext serverCtx = {session, responseCallback};
+        ServerContext serverCtx = {session, responseCallback, params->_meta};
         auto optionalResult = promptManager_.GetPrompt(serverCtx, params->name, params->arguments);
         // Only send response when there is a return value (synchronous function)
         if (optionalResult.has_value()) {
@@ -250,7 +250,7 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
             serverManager_->DispatchResponse(requestId, resultPtr, ctx);
         };
 
-        ServerContext serverCtx = {session, responseCallback};
+        ServerContext serverCtx = {session, responseCallback, params->_meta};
         auto optionalResult = resourceManager_.ReadResource(serverCtx, params->uri_);
         if (optionalResult.has_value()) {
             // Synchronous execution - send response immediately

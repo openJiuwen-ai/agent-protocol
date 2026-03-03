@@ -54,8 +54,8 @@ std::optional<GetPromptResult> PromptManager::GetPrompt(const ServerContext& ctx
         return std::visit([&](auto&& f) -> std::optional<GetPromptResult> {
             using T = std::decay_t<decltype(f)>;
             if constexpr (std::is_same_v<T, SyncRenderPromptFunc>) {
-                // Synchronous function, create context without callback
-                ServerContext syncCtx = {ctx.session, nullptr};
+                // Synchronous function, create context without callback but keep meta
+                ServerContext syncCtx = {ctx.session, nullptr, ctx.meta};
                 return f(syncCtx, name, argument);
             } else if constexpr (std::is_same_v<T, AsyncRenderPromptFunc>) {
                 // Asynchronous function, use original context with callback
