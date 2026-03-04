@@ -190,21 +190,29 @@ int main(int argc, char** argv)
     std::cout << "=== MCP Server Test Example ===" << std::endl;
 
     bool isJsonResponseEnabled = true;
+    bool stateless = false;
     std::string endpoint = ENDPOINT;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << (argv[0] ? argv[0] : "ServerExample")
-                      << " [--port=<1-65535>] [--isJsonResponseDisable]" << std::endl;
+                      << " [--port=<1-65535>] [--stateless] [--isJsonResponseDisable]" << std::endl;
             return 0;
         }
-        if (arg == "--isJsonResponseDisable") {
+        if (arg == "--stateless") {
+            stateless = true;
+        } else if (arg == "--isJsonResponseDisable") {
             isJsonResponseEnabled = false;
         } else if (arg.rfind("--port=", 0) == 0) {
             const std::string value = arg.substr(std::string("--port=").size());
             int port = std::stoi(value);
             endpoint = std::string("http://127.0.0.1:") + std::to_string(port) + "/mcp";
         }
+    }
+
+    if (stateless && !isJsonResponseEnabled) {
+        std::cerr << "Error: --stateless requires JSON responses; do not use --isJsonResponseDisable" << std::endl;
+        return -1;
     }
 
     signal(SIGINT, signalHandler);
@@ -298,6 +306,7 @@ int main(int argc, char** argv)
         streamableHttpConfig.tlsConfig.enabled = false;
         streamableHttpConfig.endpoint = endpoint;
         streamableHttpConfig.isJsonResponseEnabled = isJsonResponseEnabled;
+        streamableHttpConfig.stateless = stateless;
 
         auto server = Mcp::McpServerFactory::CreateStreamableHttpServer(config, streamableHttpConfig);
         if (server == nullptr) {

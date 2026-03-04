@@ -28,8 +28,10 @@ struct DispatchRequestMsg {
 struct DispatchResponseMsg {
     int64_t requestId;
     std::shared_ptr<Result> result;
-    RequestContext context;
-    std::string sessionId;
+    // Keep the owning session alive until the response is actually sent.
+    // This is critical for stateless mode where sessions are per-request.
+    std::shared_ptr<ServerSession> sessionKeepAlive;
+    ServerRequestContext context;
 };
 
 // Unified message type for worker thread queue
@@ -53,10 +55,10 @@ public:
 
     void Start();
     void Stop();
-    std::shared_ptr<ServerSession> GetSession(const std::string& sessionId);
     void SetIncomingRequestCallback(IncomingRequestCallback callback);
     bool DispatchResponse(int64_t requestId, std::shared_ptr<Result> result,
-                         const RequestContext& context);
+                         const ServerRequestContext& context,
+                         std::shared_ptr<ServerSession> sessionKeepAlive = nullptr);
 
 private:
     void StdioServerManagerStart();
@@ -65,6 +67,8 @@ private:
     void ThreadMain(int id);
     void HandleRequest(const HttpRequest& request, RequestContext& context);
     void HandleResponse(const DispatchResponseMsg& responseMsg);
+    void HandleRequestStateful(const HttpRequest& request, RequestContext& context);
+    void HandleRequestStateless(const HttpRequest& request, RequestContext& context);
     void DispatchRequest(const HttpRequest& request, RequestContext& context);
     std::shared_ptr<ServerSession> NewSession(const std::string& sessionId);
     int GetThreadIdForSession(const std::string& sessionId) const;

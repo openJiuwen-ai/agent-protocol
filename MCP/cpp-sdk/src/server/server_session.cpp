@@ -78,6 +78,9 @@ void ServerSession::HandleRequest(const HttpRequest& request, RequestContext& co
 
 std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
 {
+    if (stateless_) {
+        throw std::runtime_error("roots/list is not supported in stateless server mode");
+    }
     if (!isInitialized_) {
         throw std::runtime_error("Session is not initialized");
     }
@@ -100,6 +103,9 @@ std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
 std::future<std::shared_ptr<CreateMessageResult>> ServerSession::SamplingCreateMessage(
     const CreateMessageParams& params)
 {
+    if (stateless_) {
+        throw std::runtime_error("sampling/createMessage is not supported in stateless server mode");
+    }
     if (!isInitialized_) {
         throw std::runtime_error("Session is not initialized");
     }
@@ -141,6 +147,9 @@ std::future<std::shared_ptr<CreateMessageResult>> ServerSession::SamplingCreateM
 std::future<std::shared_ptr<ElicitResult>> ServerSession::elicit(const std::string& message,
     const Mcp::MetaMap& requestedSchema)
 {
+    if (stateless_) {
+        throw std::runtime_error("elicitation/create is not supported in stateless server mode");
+    }
     if (!isInitialized_) {
         throw std::runtime_error("Session is not initialized");
     }
@@ -162,6 +171,9 @@ std::future<std::shared_ptr<ElicitResult>> ServerSession::elicit(const std::stri
 std::future<std::shared_ptr<ElicitResult>> ServerSession::elicitUrl(const std::string& message,
     const std::string& url, const std::string& elicitationId)
 {
+    if (stateless_) {
+        throw std::runtime_error("elicitation/create is not supported in stateless server mode");
+    }
     if (!isInitialized_) {
         throw std::runtime_error("Session is not initialized");
     }
@@ -192,12 +204,14 @@ void ServerSession::ReceivedRequest(int64_t requestId, const Request& request, R
             HandleInitializeRequest(requestId, *initParams, ctx);
         }
     } else {
-        if (!isInitialized_) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Received request before initialization: %s", request.method_.c_str());
-            return;
-        }
         if (incomingRequestCallback_) {
-            incomingRequestCallback_(requestId, request, ctx);
+            // In stateless mode, serve requests without requiring initialization.
+            if (!stateless_ && !isInitialized_) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "Received request before initialization: %s", request.method_.c_str());
+                return;
+            }
+            ServerRequestContext serverCtx(ctx, shared_from_this());
+            incomingRequestCallback_(requestId, request, serverCtx);
         }
     }
 }

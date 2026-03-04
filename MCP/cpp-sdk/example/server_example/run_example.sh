@@ -2,10 +2,11 @@
 set -e
 
 print_help() {
-  echo "Usage: $0 [--port=<1-65535>] [--isJsonResponseDisable]"
+  echo "Usage: $0 [--port=<1-65535>] [--stateless] [--isJsonResponseDisable]"
   echo ""
   echo "Examples:"
   echo "  $0 --port=8000"
+  echo "  $0 --stateless --port=8000"
   echo "  $0 --isJsonResponseDisable"
   echo "  $0 --port=8000 --isJsonResponseDisable"
 }
@@ -27,6 +28,8 @@ for arg in "$@"; do
       print_help
       exit 1
     fi
+    SERVER_ARGS+=("$arg")
+  elif [ "$arg" = "--stateless" ]; then
     SERVER_ARGS+=("$arg")
   elif [ "$arg" = "--isJsonResponseDisable" ]; then
     SERVER_ARGS+=("$arg")

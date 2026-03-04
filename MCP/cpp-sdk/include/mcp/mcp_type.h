@@ -62,6 +62,8 @@ struct StreamableHttpClientConfig {
 struct StreamableHttpServerConfig {
     std::string endpoint;
     bool isJsonResponseEnabled{false};
+    // Stateless mode: each HTTP request is handled independently.
+    bool stateless{false};
     uint32_t ioThreads{1};
     TlsConfig tlsConfig;
 };

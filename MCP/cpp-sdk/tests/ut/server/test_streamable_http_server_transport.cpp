@@ -203,9 +203,9 @@ TEST_F(StreamableHttpServerTransportTest, HandleRequestTerminatedSession) {
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_FOUND);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNoCallback) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNoCallback)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
-
 
     RequestContext ctx = CreateRequestContext();
     Http::HttpRequest request = CreateHttpRequest("POST");
@@ -216,7 +216,8 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestNoCallback) {
     }, std::runtime_error);
 }
 
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidAcceptHeader) {
+TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidAcceptHeader)
+{
     StreamableHttpServerTransport transport(validSessionId, false);
     auto callback = std::make_shared<MockTransportCallback>();
     transport.SetCallback(callback);
@@ -224,6 +225,160 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidAcceptHeader) 
     RequestContext ctx = CreateRequestContext();
     std::unordered_map<std::string, std::string> headers = {
         {"accept", "application/xml"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateInitializeRequestJson());
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_FALSE(mockHttpSendFunc.responses.empty());
+    EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_ACCEPTABLE);
+    EXPECT_EQ(callback->messageCount, 0);
+}
+
+TEST_F(StreamableHttpServerTransportTest, JsonResponseModeAcceptsJsonOnlyAcceptHeader)
+{
+    StreamableHttpServerTransport transport(validSessionId, true, false);
+    auto callback = std::make_shared<MockTransportCallback>();
+    transport.SetCallback(callback);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "application/json"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateInitializeRequestJson());
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_EQ(callback->messageCount, 1);
+    EXPECT_TRUE(mockHttpSendFunc.responses.empty());
+}
+
+TEST_F(StreamableHttpServerTransportTest, JsonResponseModeRejectsWhenClientDoesNotAcceptJson)
+{
+    StreamableHttpServerTransport transport(validSessionId, true, false);
+    auto callback = std::make_shared<MockTransportCallback>();
+    transport.SetCallback(callback);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "text/event-stream"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateInitializeRequestJson());
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_FALSE(mockHttpSendFunc.responses.empty());
+    EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_ACCEPTABLE);
+    EXPECT_EQ(callback->messageCount, 0);
+}
+
+TEST_F(StreamableHttpServerTransportTest, SseResponseModeRejectsJsonOnlyAcceptHeader)
+{
+    StreamableHttpServerTransport transport(validSessionId, false, false);
+    auto callback = std::make_shared<MockTransportCallback>();
+    transport.SetCallback(callback);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "application/json"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateInitializeRequestJson());
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_FALSE(mockHttpSendFunc.responses.empty());
+    EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_NOT_ACCEPTABLE);
+    EXPECT_EQ(callback->messageCount, 0);
+}
+
+TEST_F(StreamableHttpServerTransportTest, StatelessSsePostStartsEventStreamAndDeliversRequest)
+{
+    StreamableHttpServerTransport transport("", false, true);
+    auto callback = std::make_shared<MockTransportCallback>();
+    transport.SetCallback(callback);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "application/json, text/event-stream"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateNonInitializeRequestJson());
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_EQ(callback->messageCount, 1);
+    ASSERT_FALSE(mockHttpSendFunc.responses.empty());
+    EXPECT_EQ(mockHttpSendFunc.responses.front().statusCode, Http::HTTP_STATUS_OK);
+    EXPECT_EQ(mockHttpSendFunc.responses.front().headers[Http::CONTENT_TYPE_HEADER], Http::CONTENT_TYPE_SSE);
+}
+
+TEST_F(StreamableHttpServerTransportTest, StatelessModeRejectsGetSseStream)
+{
+    StreamableHttpServerTransport transport("", true, true);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "text/event-stream"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("GET", headers, "");
+
+    transport.HandleRequest(request, ctx);
+
+    ASSERT_FALSE(mockHttpSendFunc.responses.empty());
+    EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_METHOD_NOT_ALLOWED);
+}
+
+TEST_F(StreamableHttpServerTransportTest, StatelessModeDeleteIsMethodNotAllowed)
+{
+    StreamableHttpServerTransport transport("", true, true);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "application/json"},
+        {"content-type", "application/json"}
+    };
+    Http::HttpRequest request = CreateHttpRequest("DELETE", headers, "");
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_FALSE(mockHttpSendFunc.responses.empty());
+    EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_METHOD_NOT_ALLOWED);
+}
+
+TEST_F(StreamableHttpServerTransportTest, StatelessPostAcceptsJsonOnlyAndSkipsSessionIdValidation)
+{
+    StreamableHttpServerTransport transport("", true, true);
+    auto callback = std::make_shared<MockTransportCallback>();
+    transport.SetCallback(callback);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "application/json"},
+        {"content-type", "application/json"}
+        // No mcp-session-id header on purpose.
+    };
+    Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateNonInitializeRequestJson());
+
+    transport.HandleRequest(request, ctx);
+
+    EXPECT_EQ(callback->messageCount, 1);
+    EXPECT_TRUE(mockHttpSendFunc.responses.empty());
+}
+
+TEST_F(StreamableHttpServerTransportTest, StatelessPostRejectsWhenClientDoesNotAcceptJson)
+{
+    StreamableHttpServerTransport transport(validSessionId, true, true);
+    auto callback = std::make_shared<MockTransportCallback>();
+    transport.SetCallback(callback);
+
+    RequestContext ctx = CreateRequestContext();
+    std::unordered_map<std::string, std::string> headers = {
+        {"accept", "text/event-stream"},
         {"content-type", "application/json"}
     };
     Http::HttpRequest request = CreateHttpRequest("POST", headers, CreateInitializeRequestJson());

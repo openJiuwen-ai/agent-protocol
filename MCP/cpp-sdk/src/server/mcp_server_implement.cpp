@@ -21,7 +21,6 @@
 #include "mcp_log.h"
 #include "mcp_type.h"
 #include "server/server_session.h"
-#include "shared/common_type.h"
 #include "shared/jsonrpc.h"
 
 namespace Mcp {
@@ -34,14 +33,22 @@ const uint16_t g_InvalidPort = 0; // Represents invalid or unspecified port
 const size_t g_MaxHostnameLength = 253;
 const size_t g_UrlProtocolOffset = 3; // Length of "://"
 
-void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx)
+namespace {
+
+std::shared_ptr<ServerSession> GetActiveSession(const ServerRequestContext& ctx)
+{
+    return ctx.activeSession.lock();
+}
+
+} // namespace
+
+void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
     const std::string& method = request.method_;
-    auto session = serverManager_->GetSession(ctx.sessionId);
-
+    auto session = GetActiveSession(ctx);
     {
         std::lock_guard<std::mutex> lock(session->reqMtx);
-        session->sessionRequests[requestId] = ctx;
+        session->sessionRequests[requestId] = static_cast<const RequestContext&>(ctx);
     }
 
     try {
@@ -89,7 +96,6 @@ void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Reques
             HandleComplete(requestId, request, ctx);
             return;
         }
-
         SendErrorResponse(requestId, JsonRpcErrorCode::METHOD_NOT_FOUND, "Method not found: " + method, ctx);
     } catch (const std::exception& e) {
         SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR,
@@ -98,13 +104,9 @@ void McpServerImplement::ReceiveIncomingMessages(int64_t requestId, const Reques
 }
 
 void McpServerImplement::SendErrorResponse(int64_t requestId, JsonRpcErrorCode code, const std::string& message,
-                                           RequestContext& ctx)
+                                           ServerRequestContext& ctx)
 {
-    auto session = serverManager_ ? serverManager_->GetSession(ctx.sessionId) : nullptr;
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found for error response: %s", ctx.sessionId.c_str());
-        return;
-    }
+    auto session = GetActiveSession(ctx);
 
     JSONRPCError error;
     error.id_ = requestId;
@@ -113,24 +115,17 @@ void McpServerImplement::SendErrorResponse(int64_t requestId, JsonRpcErrorCode c
     session->SendResponse(requestId, error, ctx);
 }
 
-void McpServerImplement::HandleToolsList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleToolsList(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        throw std::runtime_error("Session not found: " + ctx.sessionId);
-    }
+    auto session = GetActiveSession(ctx);
 
     auto result = std::make_shared<ListToolsResult>(toolManager_.ListTools());
     session->SendResponse(requestId, result, ctx);
 }
 
-void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        throw std::runtime_error("Session not found: " + ctx.sessionId);
-    }
-
+    auto session = GetActiveSession(ctx);
     auto params = dynamic_cast<CallToolParams*>(request.params_.get());
     if (params == nullptr) {
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for tools/call", ctx);
@@ -138,11 +133,11 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
     }
 
     // Create unified response callback for async tools to send responses from user threads
-    ResponseCallback responseCallback = [this, requestId, ctx](const Result& result) {
+    ResponseCallback responseCallback = [this, requestId, ctx, session](const Result& result) {
         // Cast to CallToolResult and create shared_ptr
         const auto& toolResult = static_cast<const CallToolResult&>(result);
         auto resultPtr = std::make_shared<CallToolResult>(toolResult);
-        serverManager_->DispatchResponse(requestId, resultPtr, ctx);
+        serverManager_->DispatchResponse(requestId, resultPtr, ctx, session);
     };
 
     ServerContext serverCtx = {session, responseCallback, params->_meta};
@@ -156,27 +151,18 @@ void McpServerImplement::HandleToolsCall(int64_t requestId, const Request& reque
     // Asynchronous function has no return value, response will be sent via callback
 }
 
-void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandlePromptsList(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
     (void)request;
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
+    auto session = GetActiveSession(ctx);
 
     auto result = std::make_shared<ListPromptsResult>(promptManager_.ListPrompts());
     session->SendResponse(requestId, result, ctx);
 }
 
-void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
-
+    auto session = GetActiveSession(ctx);
     auto params = dynamic_cast<GetPromptParams*>(request.params_.get());
     if (params == nullptr) {
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for prompts/get", ctx);
@@ -185,11 +171,11 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
 
     try {
         // Create unified response callback for async prompts to send responses from user threads
-        ResponseCallback responseCallback = [this, requestId, ctx](const Result& result) {
+        ResponseCallback responseCallback = [this, requestId, ctx, session](const Result& result) {
             // Cast to GetPromptResult and create shared_ptr
             const auto& promptResult = static_cast<const GetPromptResult&>(result);
             auto resultPtr = std::make_shared<GetPromptResult>(promptResult);
-            serverManager_->DispatchResponse(requestId, resultPtr, ctx);
+            serverManager_->DispatchResponse(requestId, resultPtr, ctx, session);
         };
 
         ServerContext serverCtx = {session, responseCallback, params->_meta};
@@ -205,14 +191,10 @@ void McpServerImplement::HandlePromptsGet(int64_t requestId, const Request& requ
     }
 }
 
-void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
     (void)request;
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
+    auto session = GetActiveSession(ctx);
 
     try {
         auto result = std::make_shared<ListResourcesResult>(resourceManager_.ListResources());
@@ -222,14 +204,9 @@ void McpServerImplement::HandleResourcesList(int64_t requestId, const Request& r
     }
 }
 
-void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
-
+    auto session = GetActiveSession(ctx);
     auto params = dynamic_cast<ReadResourceRequestParams*>(request.params_.get());
     if (params == nullptr) {
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for resources/read", ctx);
@@ -243,11 +220,11 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
 
     try {
         // Create unified response callback for async resources to send responses from user threads
-        ResponseCallback responseCallback = [this, requestId, ctx](const Result& result) {
+        ResponseCallback responseCallback = [this, requestId, ctx, session](const Result& result) {
             // Cast to ReadResourceResult and create shared_ptr
             const auto& resourceResult = static_cast<const ReadResourceResult&>(result);
             auto resultPtr = std::make_shared<ReadResourceResult>(resourceResult);
-            serverManager_->DispatchResponse(requestId, resultPtr, ctx);
+            serverManager_->DispatchResponse(requestId, resultPtr, ctx, session);
         };
 
         ServerContext serverCtx = {session, responseCallback, params->_meta};
@@ -263,14 +240,9 @@ void McpServerImplement::HandleResourcesRead(int64_t requestId, const Request& r
     }
 }
 
-void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
-
+    auto session = GetActiveSession(ctx);
     auto params = dynamic_cast<SubscribeRequestParams*>(request.params_.get());
     if (params == nullptr) {
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for resources/subscribe", ctx);
@@ -292,14 +264,10 @@ void McpServerImplement::HandleResourcesSubscribe(int64_t requestId, const Reque
     }
 }
 
-void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Request& request,
+    ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
-
+    auto session = GetActiveSession(ctx);
     auto params = dynamic_cast<UnsubscribeRequestParams*>(request.params_.get());
     if (params == nullptr) {
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for resources/unsubscribe", ctx);
@@ -321,14 +289,11 @@ void McpServerImplement::HandleResourcesUnsubscribe(int64_t requestId, const Req
     }
 }
 
-void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const Request& request,
+    ServerRequestContext& ctx)
 {
     (void)request;
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
+    auto session = GetActiveSession(ctx);
 
     try {
         auto result = std::make_shared<ListResourceTemplatesResult>(resourceManager_.ListResourceTemplates());
@@ -338,14 +303,9 @@ void McpServerImplement::HandleResourcesTemplatesList(int64_t requestId, const R
     }
 }
 
-void McpServerImplement::HandleSetLoggingLevel(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleSetLoggingLevel(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_->GetSession(ctx.sessionId);
-    if (session == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found: %s", ctx.sessionId.c_str());
-        return;
-    }
-
+    auto session = GetActiveSession(ctx);
     auto params = dynamic_cast<SetLoggingLevelParams*>(request.params_.get());
     if (params == nullptr) {
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, "Invalid params for logging/setLevel", ctx);
@@ -534,7 +494,7 @@ bool McpServerImplement::InitializeServerManager()
             return false;
         }
         serverManager_->SetIncomingRequestCallback(
-            [this](int64_t requestId, const Request& request, RequestContext& ctx) {
+            [this](int64_t requestId, const Request& request, ServerRequestContext& ctx) {
             this->ReceiveIncomingMessages(requestId, request, ctx);
             });
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager initialized successfully");
@@ -608,13 +568,9 @@ void McpServerImplement::AddCompletion(CompleteFunc handler)
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Completion handler registered");
 }
 
-void McpServerImplement::HandleComplete(int64_t requestId, const Request& request, RequestContext& ctx)
+void McpServerImplement::HandleComplete(int64_t requestId, const Request& request, ServerRequestContext& ctx)
 {
-    auto session = serverManager_ ? serverManager_->GetSession(ctx.sessionId) : nullptr;
-    if (session == nullptr) {
-        SendErrorResponse(requestId, JsonRpcErrorCode::SERVER_ERROR, "Session not found", ctx);
-        return;
-    }
+    auto session = GetActiveSession(ctx);
 
     const auto* completeReq = dynamic_cast<const CompleteRequest*>(&request);
     if (completeReq == nullptr || completeReq->params_ == nullptr) {

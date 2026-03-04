@@ -16,10 +16,10 @@
 
 #include "mcp_server.h"
 #include "mcp_type.h"
+#include "server/server_session.h"
 #include "server/prompt_manager.h"
 #include "resource_manager.h"
 #include "server_manager.h"
-#include "shared/common_type.h"
 #include "shared/jsonrpc.h"
 #include "tool_manager.h"
 
@@ -56,20 +56,21 @@ public:
     }
 
 private:
-    void ReceiveIncomingMessages(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleToolsList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleToolsCall(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandlePromptsList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandlePromptsGet(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesRead(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesSubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesUnsubscribe(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleResourcesTemplatesList(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleSetLoggingLevel(int64_t requestId, const Request& request, RequestContext& ctx);
-    void HandleComplete(int64_t requestId, const Request& request, RequestContext& ctx);
+    void ReceiveIncomingMessages(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleToolsList(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleToolsCall(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandlePromptsList(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandlePromptsGet(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleResourcesList(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleResourcesRead(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleResourcesSubscribe(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleResourcesUnsubscribe(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleResourcesTemplatesList(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleSetLoggingLevel(int64_t requestId, const Request& request, ServerRequestContext& ctx);
+    void HandleComplete(int64_t requestId, const Request& request, ServerRequestContext& ctx);
 
-    void SendErrorResponse(int64_t requestId, JsonRpcErrorCode code, const std::string& message, RequestContext& ctx);
+    void SendErrorResponse(int64_t requestId, JsonRpcErrorCode code, const std::string& message,
+        ServerRequestContext& ctx);
 
     bool ValidateConfig(const ServerConfig& config);
     bool ValidateStreamableHttpConfig(const StreamableHttpServerConfig& config);

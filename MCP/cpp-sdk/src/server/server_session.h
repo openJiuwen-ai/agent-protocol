@@ -6,6 +6,7 @@
 #define MCP_SERVER_SESSION_INCLUDE_H_
 
 #include <future>
+#include <memory>
 #include <optional>
 #include <mutex>
 
@@ -16,8 +17,11 @@
 
 namespace Mcp {
 
+struct ServerRequestContext;
+
 // Callback type invoked when the session receives a request from the client.
-using IncomingRequestCallback = std::function<void(int64_t requestId, const Request& request, RequestContext& ctx)>;
+using IncomingRequestCallback =
+    std::function<void(int64_t requestId, const Request& request, ServerRequestContext& ctx)>;
 
 // Callback type invoked when the session receives a notification from the client.
 using IncomingNotificationCallback = std::function<void(const Notification& notification)>;
@@ -33,8 +37,9 @@ class ServerSession final : public BaseSession, public McpServerSession,
     public std::enable_shared_from_this<ServerSession> {
 public:
     explicit ServerSession(std::shared_ptr<ServerTransport> transport,
-                           const ServerConfig& serverConfig = ServerConfig(), std::string sessionId = "")
-        : BaseSession(std::move(transport), sessionId), serverConfig_(serverConfig)
+                           const ServerConfig& serverConfig = ServerConfig(), std::string sessionId = "",
+                           bool stateless = false)
+        : BaseSession(std::move(transport), std::move(sessionId)), serverConfig_(serverConfig), stateless_(stateless)
     {
     }
     ~ServerSession() override;
@@ -187,11 +192,31 @@ private:
     // Whether the MCP initialization handshake has completed.
     bool isInitialized_{false};
 
+    // If true, do not require initialize() before serving requests.
+    // Also disables server->client requests (roots/list, sampling/createMessage, etc.).
+    bool stateless_{false};
+
     // request callback.
     IncomingRequestCallback incomingRequestCallback_{nullptr};
 
     // notification callback.
     IncomingNotificationCallback incomingNotificationCallback_{nullptr};
+};
+
+// Server-only request context carrying server session wiring.
+// Keeps server concerns out of shared RequestContext.
+struct ServerRequestContext : public RequestContext {
+    ServerRequestContext() = default;
+    explicit ServerRequestContext(const RequestContext& base) : RequestContext(base) {}
+    ServerRequestContext(const RequestContext& base, const std::shared_ptr<ServerSession>& session)
+        : RequestContext(base), activeSession(session)
+    {
+    }
+
+    // Weak reference to the active session handling this request.
+    // Kept as weak_ptr to prevent reference cycles when the base RequestContext
+    // is stored (e.g. for cancellation handling).
+    std::weak_ptr<ServerSession> activeSession;
 };
 
 } // namespace Mcp

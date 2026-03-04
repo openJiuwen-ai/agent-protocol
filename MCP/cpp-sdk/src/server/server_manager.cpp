@@ -257,21 +257,6 @@ void ServerManager::Stop()
     MCP_LOG(MCP_LOG_LEVEL_INFO, "ServerManager stopped successfully.");
 }
 
-std::shared_ptr<ServerSession> ServerManager::GetSession(const std::string& sessionId)
-{
-    if (isStdio_) {
-        return stdioSession_;
-    }
-
-    int threadId = GetThreadIdForSession(sessionId);
-    auto& sessions = threadSessions_[threadId];
-    auto it = sessions.find(sessionId);
-    if (it != sessions.end()) {
-        return it->second;
-    }
-    return nullptr;
-}
-
 void ServerManager::SetIncomingRequestCallback(IncomingRequestCallback callback)
 {
     requestCallback_ = callback;
@@ -281,14 +266,14 @@ std::shared_ptr<ServerSession> ServerManager::NewSession(const std::string& sess
 {
     // Create transport
     std::shared_ptr<ServerTransport> transport = std::make_shared<StreamableHttpServerTransport>(
-        sessionId, streamableConfig_.isJsonResponseEnabled);
+        sessionId, streamableConfig_.isJsonResponseEnabled, false);
     if (transport == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create transport layer.");
         throw std::runtime_error("Failed to create transport layer.");
     }
     transport->Listen();
 
-    auto session = std::make_shared<ServerSession>(transport, config_, sessionId);
+    auto session = std::make_shared<ServerSession>(transport, config_, sessionId, false);
     if (session == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create session layer.");
         throw std::runtime_error("Failed to create session layer.");
@@ -309,6 +294,30 @@ int ServerManager::GetThreadIdForSession(const std::string& sessionId) const
 }
 
 void ServerManager::HandleRequest(const HttpRequest& request, RequestContext& context)
+{
+    if (streamableConfig_.stateless) {
+        HandleRequestStateless(request, context);
+    } else {
+        HandleRequestStateful(request, context);
+    }
+}
+
+void ServerManager::HandleRequestStateless(const HttpRequest& request, RequestContext& context)
+{
+    // Stateless mode: handle each HTTP request independently.
+    // In end-to-end semantics, stateless is POST-only (no session id, so client does not
+    // establish GET SSE). Create an ephemeral transport/session and do not store it.
+    std::shared_ptr<ServerTransport> transport = std::make_shared<StreamableHttpServerTransport>(
+        "", streamableConfig_.isJsonResponseEnabled, true);
+    auto session = std::make_shared<ServerSession>(transport, config_, context.sessionId, true);
+    session->SetServerCapabilities(config_.capabilities);
+    if (requestCallback_) {
+        session->SetIncomingRequestCallback(requestCallback_);
+    }
+    session->HandleRequest(request, context);
+}
+
+void ServerManager::HandleRequestStateful(const HttpRequest& request, RequestContext& context)
 {
     // Get the thread ID from context
     int threadId = GetThreadIdForSession(context.sessionId);
@@ -447,34 +456,41 @@ void ServerManager::HandleQueueNotification(int fd, short events, void* arg)
 
 void ServerManager::HandleResponse(const DispatchResponseMsg& responseMsg)
 {
-    // Find the session and send the response
-    auto session = GetSession(responseMsg.sessionId);
-    if (session) {
-        // Create a mutable copy of the context since SendResponse expects non-const reference
-        RequestContext mutableContext = responseMsg.context;
+    // SendResponse needs a non-const context, copy to avoid mutating the queued message.
+    RequestContext mutableContext = responseMsg.context;
 
-        // Direct usage - no conversion needed since both use shared_ptr<Result>
-        session->SendResponse(responseMsg.requestId, responseMsg.result, mutableContext);
-        MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Sent response for request %ld in session %s",
-                responseMsg.requestId, responseMsg.sessionId.c_str());
-    } else {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found for response: %s", responseMsg.sessionId.c_str());
+    // Prefer the queued keep-alive session (stateless async), otherwise fall back to the weak_ptr.
+    auto session = responseMsg.sessionKeepAlive;
+    if (!session) {
+        session = responseMsg.context.activeSession.lock();
     }
+    if (!session) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Session not found for response: %s", mutableContext.sessionId.c_str());
+        return;
+    }
+
+    session->SendResponse(responseMsg.requestId, responseMsg.result, mutableContext);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Sent response for request %ld in session %s",
+            responseMsg.requestId, mutableContext.sessionId.c_str());
 }
 
 bool ServerManager::DispatchResponse(int64_t requestId, std::shared_ptr<Result> result,
-                                     const RequestContext& context)
+                                     const ServerRequestContext& context,
+                                     std::shared_ptr<ServerSession> sessionKeepAlive)
 {
     if (isStdio_) {
         MCP_LOG(MCP_LOG_LEVEL_WARN, "DispatchResponse not supported in stdio mode");
         return false;
     }
 
+    // Stateless mode: still dispatch to the owning worker thread so the actual HTTP send
+    // happens on a consistent thread (avoid writing to the connection from arbitrary threads).
+
     // Determine which thread should handle this response
     int threadId = GetThreadIdForSession(context.sessionId);
 
     // Create response message
-    DispatchResponseMsg responseMsg{requestId, result, context, context.sessionId};
+    DispatchResponseMsg responseMsg{requestId, result, std::move(sessionKeepAlive), context};
     WorkerMessage msg{MessageType::RESPONSE, responseMsg};
 
     // Push to the appropriate thread's queue

@@ -36,7 +36,8 @@ struct EventMessage {
 
 class StreamableHttpServerTransport : public ServerTransport {
 public:
-    StreamableHttpServerTransport(const std::string& mcpSessionId, bool isJsonResponseEnabled = false);
+    explicit StreamableHttpServerTransport(const std::string& mcpSessionId, bool isJsonResponseEnabled = false,
+                                           bool stateless = false);
     virtual ~StreamableHttpServerTransport() = default;
 
     // Set callback for handling transport events (used by ServerManager)
@@ -71,6 +72,7 @@ private:
 
     std::string mcpSessionId_;
     bool isJsonResponseEnabled_;
+    bool stateless_;
     std::optional<RequestContext> getStreamRequestContext_;
     bool isTerminated_;
     std::shared_ptr<TransportCallback> callback_;

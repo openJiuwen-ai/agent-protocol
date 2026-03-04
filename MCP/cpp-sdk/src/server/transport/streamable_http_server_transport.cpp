@@ -28,9 +28,10 @@ constexpr const char* GET_STREAM_KEY = "_GET_stream";
 static const std::regex SESSION_ID_PATTERN("^[\\x21-\\x7E]+$");
 
 StreamableHttpServerTransport::StreamableHttpServerTransport(const std::string& mcpSessionId,
-                                                             bool isJsonResponseEnabled)
+    bool isJsonResponseEnabled, bool stateless)
     : mcpSessionId_(mcpSessionId),
       isJsonResponseEnabled_(isJsonResponseEnabled),
+      stateless_(stateless),
       getStreamRequestContext_(std::nullopt),
       isTerminated_(false),
       callback_(nullptr)
@@ -94,6 +95,7 @@ HttpResponse StreamableHttpServerTransport::CreateErrorResponse(
     response.headers = headers;
     response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
 
+    // Stateless transport instances are constructed with an empty session id.
     if (!mcpSessionId_.empty()) {
         response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
     }
@@ -120,6 +122,7 @@ HttpResponse StreamableHttpServerTransport::CreateJsonResponse(
     response.headers = headers;
     response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
 
+    // Stateless transport instances are constructed with an empty session id.
     if (!mcpSessionId_.empty()) {
         response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
     }
@@ -150,10 +153,21 @@ std::string StreamableHttpServerTransport::CreateEventData(const EventMessage& e
 
 void StreamableHttpServerTransport::HandleRequest(const HttpRequest& request, RequestContext& ctx)
 {
-    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Hanle request for session %s, request.sessionid is %s", ctx.sessionId.c_str(),
-        GetSessionId(request));
+    const std::string requestSessionId = GetSessionId(request);
+    MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Handle request for session %s, request.sessionid is %s", ctx.sessionId.c_str(),
+        requestSessionId.c_str());
     if (ctx.httpSendFunc == nullptr) {
         throw std::runtime_error("HTTP callback not set");
+    }
+
+    // Stateless mode is POST-only (each request is handled independently).
+    if (stateless_ && request.method != "POST") {
+        std::unordered_map<std::string, std::string> headers{};
+        headers["Allow"] = "POST";
+        HttpResponse response = CreateErrorResponse("Method Not Allowed", Http::HTTP_STATUS_METHOD_NOT_ALLOWED,
+                                                    static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST), headers);
+        ctx.httpSendFunc(response, ctx);
+        return;
     }
 
     // Check if session has been terminated
@@ -185,16 +199,26 @@ bool StreamableHttpServerTransport::ValidatePostRequestHeaders(RequestContext& c
     }
     bool hasJson = acceptHeader.find(Http::CONTENT_TYPE_JSON) != std::string::npos;
     bool hasSse = acceptHeader.find(Http::CONTENT_TYPE_SSE) != std::string::npos;
-    if (!hasJson || !hasSse) {
-        // print headers
-        for (const auto& header : request.headers) {
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Header: %s: %s", header.first.c_str(), header.second.c_str());
+    if (isJsonResponseEnabled_) {
+        if (!hasJson) {
+            HttpResponse response = CreateErrorResponse(
+                "Not Acceptable: Client must accept application/json",
+                Http::HTTP_STATUS_NOT_ACCEPTABLE, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
+            ctx.httpSendFunc(response, ctx);
+            return false;
         }
-        HttpResponse response = CreateErrorResponse(
-            "Not Acceptable: Client must accept both application/json and text/event-stream",
-            Http::HTTP_STATUS_NOT_ACCEPTABLE, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
-        ctx.httpSendFunc(response, ctx);
-        return false;
+    } else {
+        if (!hasJson || !hasSse) {
+            // print headers
+            for (const auto& header : request.headers) {
+                MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Header: %s: %s", header.first.c_str(), header.second.c_str());
+            }
+            HttpResponse response = CreateErrorResponse(
+                "Not Acceptable: Client must accept both application/json and text/event-stream",
+                Http::HTTP_STATUS_NOT_ACCEPTABLE, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
+            ctx.httpSendFunc(response, ctx);
+            return false;
+        }
     }
     auto contentTypeIt = request.headers.find(Http::CONTENT_TYPE_HEADER);
     if (contentTypeIt == request.headers.end() ||
@@ -304,6 +328,7 @@ void StreamableHttpServerTransport::HandlePostRequest(RequestContext& ctx, const
         response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
         response.headers[Http::X_ACCEL_BUFFERING_HEADER] = "no";
 
+        // Stateless transport instances are constructed with an empty session id.
         if (!mcpSessionId_.empty()) {
             response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
         }
@@ -335,7 +360,8 @@ void StreamableHttpServerTransport::HandleGetRequest(RequestContext& ctx, const 
     if (!hasSse) {
         HttpResponse response =
             CreateErrorResponse("Not Acceptable: Client must accept text/event-stream",
-                                Http::HTTP_STATUS_NOT_ACCEPTABLE, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
+                                Http::HTTP_STATUS_NOT_ACCEPTABLE, static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST),
+                                {});
         ctx.httpSendFunc(response, ctx);
         return;
     }
@@ -381,6 +407,7 @@ void StreamableHttpServerTransport::HandleGetRequest(RequestContext& ctx, const 
     response.headers[Http::CONNECTION_HEADER] = Http::CONNECTION_KEEP_ALIVE;
     response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
 
+    // Stateless transport instances are constructed with an empty session id.
     if (!mcpSessionId_.empty()) {
         response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
     }
@@ -464,6 +491,7 @@ void StreamableHttpServerTransport::SendMessage(const JSONRPCMessage& message, R
             HttpResponse response{};
             response.statusCode = Http::HTTP_STATUS_OK;
             response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+            // Stateless transport instances are constructed with an empty session id.
             if (!mcpSessionId_.empty()) {
                 response.headers[Http::MCP_SESSION_ID_HEADER] = mcpSessionId_;
             }
