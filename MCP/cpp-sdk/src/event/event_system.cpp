@@ -183,6 +183,7 @@ bool EventSystem::Init()
 
 int EventSystem::ToEventFd(int eventId)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = impl_->events.find(eventId);
     if (it == impl_->events.end()) {
         return -1;
@@ -219,15 +220,26 @@ int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void
 
     data->handle.reset(ev);
 
+    const int assignedId = data->id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        impl_->events.emplace(assignedId, std::move(data));
+    }
+
     timeval tv{};
     if (event_add(ev, ToTimeval(timeoutMs, tv)) != 0) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to add event for fd=") + std::to_string(fd));
-        data->handle.reset();
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = impl_->events.find(assignedId);
+        if (it != impl_->events.end()) {
+            if (it->second != nullptr && it->second->handle != nullptr) {
+                it->second->handle.reset();
+            }
+            impl_->events.erase(it);
+        }
         return -1;
     }
 
-    const int assignedId = data->id;
-    impl_->events.emplace(assignedId, std::move(data));
     return assignedId;
 }
 
@@ -333,22 +345,19 @@ bool EventSystem::CloseNotifyEventId(int eventId)
         return false;
     }
 
-    int eventFd = ToEventFd(eventId);
-    if (eventFd == -1) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "The eventId not found.");
-        return false;
-    }
-
-    // Remove the libevent watcher and close the fd.
-    RemoveEvent(eventId);
-    ::close(eventFd);
-    return true;
+    return RemoveEventInternal(eventId, true);
 }
 
 bool EventSystem::RemoveEvent(int eventId)
 {
+    return RemoveEventInternal(eventId, false);
+}
+
+bool EventSystem::RemoveEventInternal(int eventId, bool closeFd)
+{
     std::unique_ptr<Impl::EventData> data;
     {
+        // Remove from map first so concurrent Notify fails immediately.
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = impl_->events.find(eventId);
         if (it == impl_->events.end()) {
@@ -362,6 +371,10 @@ bool EventSystem::RemoveEvent(int eventId)
     if (data != nullptr && data->handle != nullptr) {
         event_del(data->handle.get());
         data->handle.reset();
+    }
+
+    if (closeFd && data != nullptr && data->fd >= 0) {
+        ::close(data->fd);
     }
 
     return true;
