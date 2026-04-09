@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 os.environ["WORKFLOW_EXECUTE_TIMEOUT"] = "300"
 
 DEMO_LLM_CONFIG = {
-    "api_key": "sk-3d784c54aa334377a27821fe1f4d0091",
+    "api_key": "xxxx",
     "base_url": "https://api.deepseek.com/v1",
     "model": "deepseek-chat",
     "temperature": 0.1,
