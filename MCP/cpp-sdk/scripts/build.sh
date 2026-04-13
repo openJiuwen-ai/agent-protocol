@@ -96,8 +96,15 @@ if [[ ${WITH_COVERAGE} -eq 1 && "${BUILD_TYPE}" != "Debug" ]]; then
   echo "[INFO] Continuing with ${BUILD_TYPE}..."
 fi
 
-# Determine optimal job count for Linux (CPU cores + 1, but max 8 to avoid memory issues)
-CPU_CORES=$(nproc)
+# Determine optimal job count (CPU cores + 1, but max 8 to avoid memory issues)
+if command -v nproc >/dev/null 2>&1; then
+  CPU_CORES=$(nproc)
+elif command -v sysctl >/dev/null 2>&1; then
+  CPU_CORES=$(sysctl -n hw.ncpu)
+else
+  CPU_CORES=4
+fi
+
 OPTIMAL_JOBS=$((CPU_CORES + 1))
 if [[ ${OPTIMAL_JOBS} -gt 8 ]]; then
   OPTIMAL_JOBS=8
@@ -111,6 +118,17 @@ mkdir -p "${BUILD_DIR_ABS}"
 cd "${BUILD_DIR_ABS}"
 
 CMAKE_ARGS=("${SOURCE_DIR}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+
+if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+  HOMEBREW_PREFIXES=(
+    "$(brew --prefix openssl@3)"
+    "$(brew --prefix curl)"
+    "$(brew --prefix libevent)"
+    "$(brew --prefix nlohmann-json)"
+  )
+  CMAKE_PREFIX_PATH=$(IFS=';'; echo "${HOMEBREW_PREFIXES[*]}")
+  CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
+fi
 
 if [[ ${WITH_TESTS} -eq 1 ]]; then
   CMAKE_ARGS+=("-DMCP_ENABLE_TESTS=ON")

@@ -15,9 +15,9 @@
 namespace Mcp {
 
 // SSE field prefix lengths
-constexpr size_t SSE_EVENT_PREFIX_LEN = std::strlen("event:"); // "event:"
-constexpr size_t SSE_ID_PREFIX_LEN = std::strlen("id:"); // "id:"
-constexpr size_t SSE_DATA_PREFIX_LEN = std::strlen("data:"); // "data:"
+constexpr size_t SSE_EVENT_PREFIX_LEN = sizeof("event:") - 1;
+constexpr size_t SSE_ID_PREFIX_LEN = sizeof("id:") - 1;
+constexpr size_t SSE_DATA_PREFIX_LEN = sizeof("data:") - 1;
 constexpr std::chrono::milliseconds MAX_TIMEOUT_MS{30 * 60 * 1000}; // 30 minutes in milliseconds
 
 StreamableHttpClientTransport::StreamableHttpClientTransport(std::string url,
@@ -301,7 +301,7 @@ void StreamableHttpClientTransport::HandleSseResponse(const HttpResponse& respon
 
         // Empty line indicates end of event
         if (line.empty()) {
-            if (!currentEvent.data.index() == 0 || !currentEvent.event.empty()) {
+            if (currentEvent.data.index() != 0 || !currentEvent.event.empty()) {
                 HandleSseEvent(currentEvent, isInitialization);
             }
             currentEvent = EventData();

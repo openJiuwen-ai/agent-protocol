@@ -27,6 +27,7 @@ struct DispatchRequestMsg {
 
 struct NotifyEventArg {
     int threadId;
+    int eventId;
     EventSystem* eventSystem;
 };
 
