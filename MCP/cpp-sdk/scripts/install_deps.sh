@@ -12,7 +12,10 @@ set -euo pipefail
 echo "==> Checking system dependencies for mcp_cpp..."
 
 # Detect OS type
-if [ -f /etc/os-release ]; then
+if [ "$(uname -s)" = "Darwin" ]; then
+    OS="macos"
+    OS_VERSION="$(sw_vers -productVersion)"
+elif [ -f /etc/os-release ]; then
     . /etc/os-release
     OS=$ID
     OS_VERSION=$VERSION_ID
@@ -136,6 +139,40 @@ install_dependencies() {
             fi
             ;;
 
+        macos)
+            if ! command_exists brew; then
+                echo "  - Homebrew: NOT FOUND"
+                echo "Please install Homebrew first: https://brew.sh/"
+                exit 1
+            fi
+
+            if brew list --versions curl >/dev/null 2>&1; then
+                echo "  - curl (Homebrew): OK"
+            else
+                echo "  - curl (Homebrew): NOT FOUND"
+                need_curl=1
+            fi
+
+            if brew list --versions openssl@3 >/dev/null 2>&1; then
+                echo "  - openssl@3: OK"
+            else
+                echo "  - openssl@3: NOT FOUND"
+                need_openssl=1
+            fi
+
+            if brew list --versions cmake >/dev/null 2>&1; then
+                echo "  - cmake: OK"
+            else
+                echo "  - cmake: NOT FOUND"
+            fi
+
+            if brew list --versions pkgconf >/dev/null 2>&1; then
+                echo "  - pkgconf: OK"
+            else
+                echo "  - pkgconf: NOT FOUND"
+            fi
+            ;;
+
         *)
             # Fallback: check for header files
             if command_exists curl-config; then
@@ -215,6 +252,21 @@ install_dependencies() {
             fi
             ;;
 
+        macos)
+            echo "Detected macOS system"
+
+            local packages=(cmake pkgconf libevent nlohmann-json)
+            if [ $need_curl -eq 1 ]; then
+                packages+=(curl)
+            fi
+            if [ $need_openssl -eq 1 ]; then
+                packages+=(openssl@3)
+            fi
+
+            echo "Installing Homebrew packages: ${packages[*]}"
+            brew install "${packages[@]}"
+            ;;
+
         *)
             echo "Error: Unsupported OS: $OS"
             echo "Please install libcurl-devel and openssl manually"
@@ -232,7 +284,12 @@ install_dependencies
 # Verify installation
 echo ""
 echo "==> Verifying installation..."
-if command_exists curl-config && command_exists openssl; then
+if [ "$OS" = "macos" ]; then
+    if brew list --versions cmake pkgconf curl openssl@3 libevent nlohmann-json >/dev/null 2>&1; then
+        echo "✓ All dependencies verified successfully!"
+        exit 0
+    fi
+elif command_exists curl-config && command_exists openssl; then
     echo "✓ All dependencies verified successfully!"
     exit 0
 else

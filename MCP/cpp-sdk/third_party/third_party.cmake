@@ -150,6 +150,18 @@ function(fetch_or_find_package)
 
   else()
     message(STATUS "Using system ${ARG_NAME}")
+
+    if(APPLE)
+      if(TARGET "${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}")
+        target_link_libraries(third_party_headers INTERFACE "${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}")
+      elseif(TARGET "${ARG_NAME}::${ARG_NAME}")
+        target_link_libraries(third_party_headers INTERFACE "${ARG_NAME}::${ARG_NAME}")
+      elseif("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "Libevent" AND TARGET event)
+        target_link_libraries(third_party_headers INTERFACE event)
+      elseif("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "nlohmann_json" AND TARGET nlohmann_json::nlohmann_json)
+        target_link_libraries(third_party_headers INTERFACE nlohmann_json::nlohmann_json)
+      endif()
+    endif()
   endif()
 endfunction()
 

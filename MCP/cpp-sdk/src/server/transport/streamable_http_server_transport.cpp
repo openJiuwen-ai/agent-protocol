@@ -18,10 +18,10 @@ namespace Mcp {
 using Http::HttpResponse;
 
 // Header names
-constexpr const char* LAST_EVENT_ID_HEADER = "last-event-id";
+[[maybe_unused]] constexpr const char* LAST_EVENT_ID_HEADER = "last-event-id";
 
 // Special key for the standalone GET stream
-constexpr const char* GET_STREAM_KEY = "_GET_stream";
+[[maybe_unused]] constexpr const char* GET_STREAM_KEY = "_GET_stream";
 
 // Session ID validation pattern (visible ASCII characters ranging from 0x21 to 0x7E)
 static const std::regex SESSION_ID_PATTERN("^[\\x21-\\x7E]+$");
@@ -150,7 +150,7 @@ std::string StreamableHttpServerTransport::CreateEventData(const EventMessage& e
 void StreamableHttpServerTransport::HandleRequest(const HttpRequest& request, RequestContext& ctx)
 {
     MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Hanle request for session %s, request.sessionid is %s", ctx.sessionId.c_str(),
-        GetSessionId(request));
+        GetSessionId(request).c_str());
     if (ctx.httpSendFunc == nullptr) {
         throw std::runtime_error("HTTP callback not set");
     }

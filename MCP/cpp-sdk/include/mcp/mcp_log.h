@@ -9,10 +9,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <pthread.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +56,19 @@ static inline void GetCurrentTimeStamp(char* buffer, size_t bufferSize)
     snprintf(buffer + len, bufferSize - len, ".%03ld", ts.tv_nsec / 1000000);
 }
 
+static inline long long McpGetCurrentThreadId(void)
+{
+#if defined(__APPLE__)
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return (long long)tid;
+#elif defined(__linux__)
+    return (long long)syscall(SYS_gettid);
+#else
+    return (long long)getpid();
+#endif
+}
+
 #define MCP_LOG_COMMON(logLevel, format, ...)                                                                        \
     do {                                                                                                             \
         if (g_logCallback != NULL) {                                                                                 \
@@ -58,7 +76,7 @@ static inline void GetCurrentTimeStamp(char* buffer, size_t bufferSize)
             GetCurrentTimeStamp(timestamp, sizeof(timestamp));                                                       \
             const char* filename = strrchr(__FILE__, '/');                                                           \
             filename = filename ? filename + 1 : __FILE__;                                                           \
-            g_logCallback(logLevel, "[%s] [%ld] %s::%s:[%d] " format "\n", timestamp, syscall(SYS_gettid), filename, \
+            g_logCallback(logLevel, "[%s] [%lld] %s::%s:[%d] " format "\n", timestamp, McpGetCurrentThreadId(), filename, \
                           __FUNCTION__, __LINE__, ##__VA_ARGS__);                                                    \
         }                                                                                                            \
     } while (0)

@@ -6,7 +6,6 @@
 
 #include <event2/util.h>
 #include <fcntl.h>
-#include <sys/eventfd.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -19,12 +18,41 @@
 
 #include "mcp_log.h"
 
+#if defined(__linux__)
+#include <sys/eventfd.h>
+#endif
+
 namespace Mcp {
 
 using EventMask = std::underlying_type_t<EventType>;
 
 constexpr long MS_PER_SECOND = 1000;
 constexpr long US_PER_MS = 1000;
+
+namespace {
+
+int SetFdFlags(int fd)
+{
+    int fileStatusFlags = fcntl(fd, F_GETFL, 0);
+    if (fileStatusFlags < 0) {
+        return -1;
+    }
+    if (fcntl(fd, F_SETFL, fileStatusFlags | O_NONBLOCK) < 0) {
+        return -1;
+    }
+
+    int descriptorFlags = fcntl(fd, F_GETFD, 0);
+    if (descriptorFlags < 0) {
+        return -1;
+    }
+    if (fcntl(fd, F_SETFD, descriptorFlags | FD_CLOEXEC) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+} // namespace
 
 // Translate the internal EventType bitmask into libevent flags.
 short ToLibeventFlags(EventType events)
@@ -92,6 +120,8 @@ struct EventSystem::Impl {
         std::unique_ptr<event, decltype(&event_free)> handle{nullptr, &event_free};
         short flags{0};
         bool persistent{false};
+        int notifyWriteFd{-1};
+        std::atomic<uint64_t> notifyCounter{0};
 
         static void eventCallbackAdapter(evutil_socket_t eventFd, short events, void* arg)
         {
@@ -152,6 +182,16 @@ EventSystem::~EventSystem()
         if (entry.second != nullptr && entry.second->handle != nullptr) {
             event_del(entry.second->handle.get());
             entry.second->handle.reset();
+        }
+        if (entry.second != nullptr) {
+            if (entry.second->notifyWriteFd != -1 && entry.second->notifyWriteFd != entry.second->fd) {
+                ::close(entry.second->notifyWriteFd);
+                entry.second->notifyWriteFd = -1;
+            }
+            if (entry.second->fd != -1) {
+                ::close(entry.second->fd);
+                entry.second->fd = -1;
+            }
         }
     }
 
@@ -250,12 +290,32 @@ int EventSystem::CreateNotifyEventId(EventCallback callback, void* arg, bool per
         return -1;
     }
 
-    // Create an eventfd with non-blocking and close-on-exec flags.
-    int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (efd < 0) {
+    int readFd = -1;
+    int writeFd = -1;
+
+#if defined(__linux__)
+    readFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    writeFd = readFd;
+    if (readFd < 0) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Create eventfd failed.");
         return -1;
     }
+#else
+    int pipeFds[2] = {-1, -1};
+    if (pipe(pipeFds) != 0) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Create notify pipe failed.");
+        return -1;
+    }
+
+    readFd = pipeFds[0];
+    writeFd = pipeFds[1];
+    if (SetFdFlags(readFd) != 0 || SetFdFlags(writeFd) != 0) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Configure notify pipe failed.");
+        ::close(readFd);
+        ::close(writeFd);
+        return -1;
+    }
+#endif
 
     // Register the eventfd for read events. Make it persistent by default unless caller says otherwise.
     EventType type = EventType::READ;
@@ -263,11 +323,19 @@ int EventSystem::CreateNotifyEventId(EventCallback callback, void* arg, bool per
         type = static_cast<EventType>(static_cast<int>(type) | static_cast<int>(EventType::PERSIST));
     }
 
-    int eventId = AddEvent(efd, type, std::move(callback), arg, 0);
+    int eventId = AddEvent(readFd, type, std::move(callback), arg, 0);
     if (eventId < 0) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to add eventFd to the event system.");
-        ::close(efd);
+        ::close(readFd);
+        if (writeFd != readFd) {
+            ::close(writeFd);
+        }
         return -1;
+    }
+
+    auto it = impl_->events.find(eventId);
+    if (it != impl_->events.end() && it->second != nullptr) {
+        it->second->notifyWriteFd = writeFd;
     }
 
     return eventId;
@@ -275,20 +343,33 @@ int EventSystem::CreateNotifyEventId(EventCallback callback, void* arg, bool per
 
 bool EventSystem::NotifyEventId(int eventId, uint64_t increment)
 {
-    // Use eventfd write to increment the counter atomically.
-    ssize_t written = 0;
-    const uint64_t val = increment;
-
-    int eventFd = ToEventFd(eventId);
-    if (eventFd == -1) {
+    auto it = impl_->events.find(eventId);
+    if (it == impl_->events.end() || it->second == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "The eventId not found.");
         return false;
     }
+
+    ssize_t written = 0;
+
     while (true) {
-        written = ::write(eventFd, &val, sizeof(val));
+#if defined(__linux__)
+        const uint64_t val = increment;
+        written = ::write(it->second->fd, &val, sizeof(val));
         if (written == static_cast<ssize_t>(sizeof(val))) {
             return true;
         }
+#else
+        const uint64_t previous = it->second->notifyCounter.fetch_add(increment, std::memory_order_acq_rel);
+        if (previous > 0) {
+            return true;
+        }
+
+        const uint8_t wakeByte = 1;
+        written = ::write(it->second->notifyWriteFd, &wakeByte, sizeof(wakeByte));
+        if (written == static_cast<ssize_t>(sizeof(wakeByte))) {
+            return true;
+        }
+#endif
         if (written < 0) {
             if (errno == EINTR) {
                 continue; // retry
@@ -303,6 +384,7 @@ bool EventSystem::NotifyEventId(int eventId, uint64_t increment)
 
 bool EventSystem::ReadEventFd(int fd, uint64_t& outValue)
 {
+#if defined(__linux__)
     uint64_t val = 0;
     ssize_t rd = 0;
     while (true) {
@@ -320,6 +402,46 @@ bool EventSystem::ReadEventFd(int fd, uint64_t& outValue)
         // Partial read or EOF
         return false;
     }
+#else
+    Impl::EventData* notifyEvent = nullptr;
+    for (auto& entry : impl_->events) {
+        if (entry.second != nullptr && entry.second->fd == fd && entry.second->notifyWriteFd != -1) {
+            notifyEvent = entry.second.get();
+            break;
+        }
+    }
+
+    if (notifyEvent == nullptr) {
+        return false;
+    }
+
+    uint8_t buffer[64];
+    while (true) {
+        const ssize_t rd = ::read(fd, buffer, sizeof(buffer));
+        if (rd > 0) {
+            continue;
+        }
+        if (rd < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+            return false;
+        }
+        break;
+    }
+
+    const uint64_t count = notifyEvent->notifyCounter.exchange(0, std::memory_order_acq_rel);
+    if (count == 0) {
+        errno = EAGAIN;
+        return false;
+    }
+
+    outValue = count;
+    return true;
+#endif
 }
 
 bool EventSystem::CloseNotifyEventId(int eventId)
@@ -335,9 +457,18 @@ bool EventSystem::CloseNotifyEventId(int eventId)
         return false;
     }
 
+    int writeFd = -1;
+    auto it = impl_->events.find(eventId);
+    if (it != impl_->events.end() && it->second != nullptr) {
+        writeFd = it->second->notifyWriteFd;
+    }
+
     // Remove the libevent watcher and close the fd.
     RemoveEvent(eventId);
     ::close(eventFd);
+    if (writeFd != -1 && writeFd != eventFd) {
+        ::close(writeFd);
+    }
     return true;
 }
 

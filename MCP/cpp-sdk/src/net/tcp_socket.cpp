@@ -283,25 +283,35 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
             MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_KEEPALIVE) failed: %s (%d)", std::strerror(errno), errno);
         }
         if (opts.keepAliveIdleSec > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &opts.keepAliveIdleSec,
+            int idleOpt = 0;
+#if defined(__APPLE__)
+            idleOpt = TCP_KEEPALIVE;
+#else
+            idleOpt = TCP_KEEPIDLE;
+#endif
+            rc = ::setsockopt(fd_, IPPROTO_TCP, idleOpt, &opts.keepAliveIdleSec,
                               static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
             if (rc != 0) {
-                MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPIDLE) failed: %s (%d)", std::strerror(errno), errno);
+                MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(keepalive idle) failed: %s (%d)", std::strerror(errno), errno);
             }
         }
         if (opts.keepAliveIntvlSec > 0) {
+#ifdef TCP_KEEPINTVL
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &opts.keepAliveIntvlSec,
                               static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
             if (rc != 0) {
                 MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPINTVL) failed: %s (%d)", std::strerror(errno), errno);
             }
+#endif
         }
         if (opts.keepAliveCnt > 0) {
+#ifdef TCP_KEEPCNT
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &opts.keepAliveCnt,
                               static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
             if (rc != 0) {
                 MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPCNT) failed: %s (%d)", std::strerror(errno), errno);
             }
+#endif
         }
     }
 }
