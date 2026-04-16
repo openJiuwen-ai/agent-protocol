@@ -122,7 +122,17 @@ void BaseSession::HandleResponse(const JSONRPCError& error)
 void BaseSession::ProcessIncomingRequest(const JSONRPCRequest& rpcRequest, RequestContext& ctx)
 {
     if (!rpcRequest.request_) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "rpcRequest.request_ is null");
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "rpcRequest.request_ is null, method: " + rpcRequest.method_);
+
+        if (rpcRequest.method_.empty()) {
+            return;
+        }
+
+        Request fallbackRequest;
+        fallbackRequest.method_ = rpcRequest.method_;
+        ctx.method = fallbackRequest.method_;
+        ReceivedRequest(rpcRequest.id_, fallbackRequest, ctx);
+        return;
     }
     const Request& typedRequest = *static_cast<const Request*>(rpcRequest.request_.get());
     ctx.method = typedRequest.method_;
