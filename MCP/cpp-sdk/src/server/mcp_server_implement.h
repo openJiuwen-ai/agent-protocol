@@ -82,6 +82,8 @@ private:
     bool InitializeServerManager();
     bool ValidateTlsConfig(const TlsConfig& config);
     void CheckServerState() const;
+    ServerCapabilities BuildServerCapabilities();
+    void RefreshServerCapabilities();
 
     ServerConfig config_;
     StreamableHttpServerConfig streamableConfig_;

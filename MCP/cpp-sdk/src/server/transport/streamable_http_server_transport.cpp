@@ -5,6 +5,7 @@
 #include "streamable_http_server_transport.h"
 
 #include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <sstream>
@@ -26,6 +27,31 @@ constexpr const char* GET_STREAM_KEY = "_GET_stream";
 // Session ID validation pattern (visible ASCII characters ranging from 0x21 to 0x7E)
 static const std::regex SESSION_ID_PATTERN("^[\\x21-\\x7E]+$");
 
+static std::optional<std::string> GetHeaderValueCaseInsensitive(
+    const Http::HttpRequest& request, const std::string& headerName)
+{
+    auto exactIt = request.headers.find(headerName);
+    if (exactIt != request.headers.end()) {
+        return exactIt->second;
+    }
+
+    for (const auto& [key, value] : request.headers) {
+        if (key.size() != headerName.size()) {
+            continue;
+        }
+
+        bool same = std::equal(key.begin(), key.end(), headerName.begin(),
+            [](unsigned char left, unsigned char right) {
+                return std::tolower(left) == std::tolower(right);
+            });
+        if (same) {
+            return value;
+        }
+    }
+
+    return std::nullopt;
+}
+
 StreamableHttpServerTransport::StreamableHttpServerTransport(const std::string& mcpSessionId,
                                                              bool isJsonResponseEnabled)
     : mcpSessionId_(mcpSessionId),
@@ -46,10 +72,9 @@ void StreamableHttpServerTransport::SetCallback(std::shared_ptr<TransportCallbac
 
 std::string StreamableHttpServerTransport::GetSessionId(const HttpRequest& request) const
 {
-    // Extract the session ID from request headers
-    auto it = request.headers.find(Http::MCP_SESSION_ID_HEADER);
-    if (it != request.headers.end()) {
-        return it->second;
+    auto sessionId = GetHeaderValueCaseInsensitive(request, Http::MCP_SESSION_ID_HEADER);
+    if (sessionId.has_value()) {
+        return sessionId.value();
     }
     return "";
 }
@@ -62,9 +87,9 @@ bool StreamableHttpServerTransport::ValidateProtocolVersion(RequestContext& ctx,
 
     // Get the protocol version from the request headers
     std::string protocolVersion{};
-    auto versionIt = request.headers.find(Http::MCP_PROTOCOL_VERSION_HEADER);
-    if (versionIt != request.headers.end()) {
-        protocolVersion = versionIt->second;
+    auto version = GetHeaderValueCaseInsensitive(request, Http::MCP_PROTOCOL_VERSION_HEADER);
+    if (version.has_value()) {
+        protocolVersion = version.value();
     } else {
         // If no protocol version provided, assume default version
         protocolVersion = DEFAULT_PROTOCOL_VERSION;
@@ -177,11 +202,7 @@ void StreamableHttpServerTransport::HandleRequest(const HttpRequest& request, Re
 
 bool StreamableHttpServerTransport::ValidatePostRequestHeaders(RequestContext& ctx, const HttpRequest& request)
 {
-    auto acceptIt = request.headers.find(Http::ACCEPT_HEADER);
-    std::string acceptHeader{};
-    if (acceptIt != request.headers.end()) {
-        acceptHeader = acceptIt->second;
-    }
+    std::string acceptHeader = GetHeaderValueCaseInsensitive(request, Http::ACCEPT_HEADER).value_or("");
     bool hasJson = acceptHeader.find(Http::CONTENT_TYPE_JSON) != std::string::npos;
     bool hasSse = acceptHeader.find(Http::CONTENT_TYPE_SSE) != std::string::npos;
     if (!hasJson || !hasSse) {
@@ -195,9 +216,8 @@ bool StreamableHttpServerTransport::ValidatePostRequestHeaders(RequestContext& c
         ctx.httpSendFunc(response, ctx);
         return false;
     }
-    auto contentTypeIt = request.headers.find(Http::CONTENT_TYPE_HEADER);
-    if (contentTypeIt == request.headers.end() ||
-        contentTypeIt->second.find(Http::CONTENT_TYPE_JSON) == std::string::npos) {
+    auto contentType = GetHeaderValueCaseInsensitive(request, Http::CONTENT_TYPE_HEADER);
+    if (!contentType.has_value() || contentType->find(Http::CONTENT_TYPE_JSON) == std::string::npos) {
         HttpResponse response = CreateErrorResponse("Unsupported Media Type: Content-Type must be application/json",
                                                     Http::HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE,
                                                     static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
@@ -317,11 +337,7 @@ void StreamableHttpServerTransport::HandleGetRequest(RequestContext& ctx, const 
     }
 
     // Check Accept header
-    auto acceptIt = request.headers.find("accept");
-    std::string acceptHeader{};
-    if (acceptIt != request.headers.end()) {
-        acceptHeader = acceptIt->second;
-    }
+    std::string acceptHeader = GetHeaderValueCaseInsensitive(request, Http::ACCEPT_HEADER).value_or("");
 
     bool hasSse = acceptHeader.find(Http::CONTENT_TYPE_SSE) != std::string::npos;
     if (!hasSse) {

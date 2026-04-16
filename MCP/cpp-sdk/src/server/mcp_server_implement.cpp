@@ -407,6 +407,7 @@ void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOp
     ServerTool tool(name, fn, params.title, params.description, params.inputSchema, params.outputSchema,
                     params.structuredOutput, params.annotations, params.icons);
     toolManager_.AddTool(tool);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::RemoveTool(const std::string& name)
@@ -414,6 +415,7 @@ void McpServerImplement::RemoveTool(const std::string& name)
     CheckServerState();
 
     toolManager_.RemoveTool(name);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc handler, AddPromptOptionalParams params)
@@ -436,6 +438,7 @@ void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc han
     }
 
     promptManager_.AddPrompt(prompt, handler);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::RemovePrompt(const std::string& name)
@@ -443,6 +446,7 @@ void McpServerImplement::RemovePrompt(const std::string& name)
     CheckServerState();
 
     promptManager_.RemovePrompt(name);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
@@ -473,6 +477,7 @@ void McpServerImplement::AddResource(const std::string& uri, const std::string& 
     }
 
     resourceManager_.AddResource(resource, readFunc);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::RemoveResource(const std::string& uri)
@@ -480,6 +485,7 @@ void McpServerImplement::RemoveResource(const std::string& uri)
     CheckServerState();
 
     resourceManager_.RemoveResource(uri);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, const std::string& name,
@@ -507,6 +513,7 @@ void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, con
     }
 
     resourceManager_.AddResourceTemplate(resourceTemplate);
+    RefreshServerCapabilities();
 }
 
 void McpServerImplement::RemoveResourceTemplate(const std::string& uriTemplate)
@@ -514,6 +521,7 @@ void McpServerImplement::RemoveResourceTemplate(const std::string& uriTemplate)
     CheckServerState();
 
     resourceManager_.RemoveResourceTemplate(uriTemplate);
+    RefreshServerCapabilities();
 }
 
 bool McpServerImplement::ValidateStreamableHttpConfig(const StreamableHttpServerConfig& config)
@@ -574,6 +582,7 @@ bool McpServerImplement::InitializeServerManager()
             [this](const RequestId& requestId, const Request& request, RequestContext& ctx) {
             this->ReceiveIncomingMessages(requestId, request, ctx);
             });
+        serverManager_->SetServerCapabilities(BuildServerCapabilities());
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager initialized successfully");
         serverManager_->Start();
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "ServerManager start successfully");
@@ -582,6 +591,39 @@ bool McpServerImplement::InitializeServerManager()
         MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Exception while creating ServerManager: ") + e.what());
         return false;
     }
+}
+
+ServerCapabilities McpServerImplement::BuildServerCapabilities()
+{
+    ServerCapabilities capabilities;
+
+    auto toolsResult = toolManager_.ListTools(std::nullopt);
+    if (!toolsResult.tools.empty()) {
+        capabilities.tools = ToolsCapabilities{};
+    }
+
+    auto promptsResult = promptManager_.ListPrompts();
+    if (!promptsResult.prompts.empty()) {
+        capabilities.prompts = PromptsCapabilities{};
+    }
+
+    auto resourcesResult = resourceManager_.ListResources(std::nullopt);
+    auto resourceTemplatesResult = resourceManager_.ListResourceTemplates();
+    if (!resourcesResult.resources.empty() || !resourceTemplatesResult.resourceTemplates.empty()) {
+        ResourcesCapabilities resourcesCaps{};
+        resourcesCaps.subscribe = true;
+        capabilities.resources = resourcesCaps;
+    }
+
+    return capabilities;
+}
+
+void McpServerImplement::RefreshServerCapabilities()
+{
+    if (serverManager_ == nullptr) {
+        return;
+    }
+    serverManager_->SetServerCapabilities(BuildServerCapabilities());
 }
 
 static bool ValidateFilePathWithRealpath(const std::string& path, const char* what)

@@ -111,6 +111,36 @@ struct adl_serializer<Mcp::InitializeResult> {
     {
         j["protocolVersion"] = r.protocolVersion;
         j["capabilities"] = json::object();
+        if (r.capabilities.tools.has_value()) {
+            json toolsObj = json::object();
+            if (r.capabilities.tools->listChanged.has_value()) {
+                toolsObj["listChanged"] = r.capabilities.tools->listChanged.value();
+            }
+            j["capabilities"]["tools"] = std::move(toolsObj);
+        }
+        if (r.capabilities.prompts.has_value()) {
+            json promptsObj = json::object();
+            if (r.capabilities.prompts->listChanged.has_value()) {
+                promptsObj["listChanged"] = r.capabilities.prompts->listChanged.value();
+            }
+            j["capabilities"]["prompts"] = std::move(promptsObj);
+        }
+        if (r.capabilities.resources.has_value()) {
+            json resourcesObj = json::object();
+            if (r.capabilities.resources->subscribe.has_value()) {
+                resourcesObj["subscribe"] = r.capabilities.resources->subscribe.value();
+            }
+            if (r.capabilities.resources->listChanged.has_value()) {
+                resourcesObj["listChanged"] = r.capabilities.resources->listChanged.value();
+            }
+            j["capabilities"]["resources"] = std::move(resourcesObj);
+        }
+        if (r.capabilities.logging.has_value()) {
+            j["capabilities"]["logging"] = json::object();
+        }
+        if (r.capabilities.experimental.has_value()) {
+            j["capabilities"]["experimental"] = r.capabilities.experimental.value();
+        }
         j["serverInfo"] = {
             {"name", r.serverInfo.name},
             {"version", r.serverInfo.version},
@@ -131,6 +161,48 @@ struct adl_serializer<Mcp::InitializeResult> {
             r.protocolVersion = Mcp::DEFAULT_PROTOCOL_VERSION;
         }
         r.capabilities = Mcp::ServerCapabilities{};
+        if (j.contains("capabilities") && j.at("capabilities").is_object()) {
+            const auto& caps = j.at("capabilities");
+
+            if (caps.contains("tools") && caps.at("tools").is_object()) {
+                Mcp::ToolsCapabilities toolsCaps{};
+                const auto& toolsObj = caps.at("tools");
+                if (toolsObj.contains("listChanged") && toolsObj.at("listChanged").is_boolean()) {
+                    toolsCaps.listChanged = toolsObj.at("listChanged").get<bool>();
+                }
+                r.capabilities.tools = toolsCaps;
+            }
+
+            if (caps.contains("prompts") && caps.at("prompts").is_object()) {
+                Mcp::PromptsCapabilities promptsCaps{};
+                const auto& promptsObj = caps.at("prompts");
+                if (promptsObj.contains("listChanged") && promptsObj.at("listChanged").is_boolean()) {
+                    promptsCaps.listChanged = promptsObj.at("listChanged").get<bool>();
+                }
+                r.capabilities.prompts = promptsCaps;
+            }
+
+            if (caps.contains("resources") && caps.at("resources").is_object()) {
+                Mcp::ResourcesCapabilities resourcesCaps{};
+                const auto& resourcesObj = caps.at("resources");
+                if (resourcesObj.contains("subscribe") && resourcesObj.at("subscribe").is_boolean()) {
+                    resourcesCaps.subscribe = resourcesObj.at("subscribe").get<bool>();
+                }
+                if (resourcesObj.contains("listChanged") && resourcesObj.at("listChanged").is_boolean()) {
+                    resourcesCaps.listChanged = resourcesObj.at("listChanged").get<bool>();
+                }
+                r.capabilities.resources = resourcesCaps;
+            }
+
+            if (caps.contains("logging") && caps.at("logging").is_object()) {
+                r.capabilities.logging = Mcp::LoggingCapabilities{};
+            }
+
+            if (caps.contains("experimental") && caps.at("experimental").is_object()) {
+                r.capabilities.experimental =
+                    caps.at("experimental").get<std::unordered_map<std::string, std::string>>();
+            }
+        }
         if (j.contains("serverInfo")) {
             const auto& si = j.at("serverInfo");
             r.serverInfo.name = si.value("name", std::string{});

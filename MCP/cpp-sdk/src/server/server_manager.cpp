@@ -144,6 +144,7 @@ void ServerManager::StdioServerManagerStart()
 {
     std::shared_ptr<ServerTransport> stdioTransport_ = std::make_shared<StdioServerTransport>();
     stdioSession_ = std::make_shared<ServerSession>(stdioTransport_, config_, GenerateSessionId());
+    stdioSession_->SetServerCapabilities(serverCapabilities_);
     // Set incoming request callback if provided
     if (requestCallback_) {
         stdioSession_->SetIncomingRequestCallback(requestCallback_);
@@ -285,6 +286,24 @@ void ServerManager::SetIncomingRequestCallback(IncomingRequestCallback callback)
     requestCallback_ = callback;
 }
 
+void ServerManager::SetServerCapabilities(const ServerCapabilities& capabilities)
+{
+    serverCapabilities_ = capabilities;
+
+    if (stdioSession_) {
+        stdioSession_->SetServerCapabilities(serverCapabilities_);
+    }
+
+    for (auto& sessions : threadSessions_) {
+        for (auto& [sessionId, session] : sessions) {
+            (void)sessionId;
+            if (session) {
+                session->SetServerCapabilities(serverCapabilities_);
+            }
+        }
+    }
+}
+
 std::shared_ptr<ServerSession> ServerManager::NewSession(const std::string& sessionId)
 {
     // Create transport
@@ -301,6 +320,7 @@ std::shared_ptr<ServerSession> ServerManager::NewSession(const std::string& sess
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create session layer.");
         throw std::runtime_error("Failed to create session layer.");
     }
+    session->SetServerCapabilities(serverCapabilities_);
     // Set incoming request callback if provided
     if (requestCallback_) {
         session->SetIncomingRequestCallback(requestCallback_);

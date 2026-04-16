@@ -41,6 +41,7 @@ public:
     void Stop();
     std::shared_ptr<ServerSession> GetSession(const std::string& sessionId);
     void SetIncomingRequestCallback(IncomingRequestCallback callback);
+    void SetServerCapabilities(const ServerCapabilities& capabilities);
 
 private:
     void StdioServerManagerStart();
@@ -72,6 +73,7 @@ private:
     std::vector<std::shared_ptr<NotifyEventArg>> notifyArgs_;
     std::shared_ptr<ServerSession> stdioSession_{nullptr};
     std::shared_ptr<ServerTransport> stdioTransport_{nullptr};
+    ServerCapabilities serverCapabilities_;
 };
 } // namespace Mcp
 
