@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* ── Base typography ── */
+html {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #3f3f46;
+}
+
+/* ── Animations ── */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up {
+  animation: fade-in-up 0.25s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fade-in 0.18s ease-out;
+}
+
+/* ── Query glow — active while searching, fades out on completion ── */
+@keyframes query-breathe {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(199,0,11,0.10); border-color: rgba(199,0,11,0.5); }
+  50%       { box-shadow: 0 0 0 5px rgba(199,0,11,0.22); border-color: #C7000B; }
+}
+.query-searching {
+  animation: query-breathe 1.8s ease-in-out infinite;
+}
+@keyframes query-glow-out {
+  from { box-shadow: 0 0 0 3px rgba(199,0,11,0.15); border-color: #C7000B; }
+  to   { box-shadow: 0 0 0 0px rgba(199,0,11,0.0);  border-color: #e4e4e7; }
+}
+.query-fading {
+  animation: query-glow-out 0.6s ease-out forwards;
+}
+
+/* ── D3 tree ── */
+.tree-link { fill: none; stroke: #e4e4e7; stroke-width: 1.5; }
+.tree-link.active { stroke: #C7000B; stroke-width: 2; transition: stroke 0.4s; }
+.tree-link.pruned { stroke: #d4d4d8; stroke-width: 1; stroke-dasharray: 4; }
+.tree-node-circle { transition: fill 0.3s, r 0.2s; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }

@@ -1,20 +1,297 @@
-# Agent Protocol
+# A2X Registry — 智能体服务发现注册中心
 
-## 简介
+**v0.1.5**
 
-**Agent Protocol** 是一套智能体互操作协议的软件开发工具包（SDK）集合，帮助开发者在不同运行环境中快速集成智能体与工具/智能体之间的互操作能力。
-当前，仓库包含两个软件开发工具包：
-- Model Context Protocol (MCP) CPP SDK
-- Agent2Agent Protocol (A2A) CPP SDK
+## 概述
 
-## 参与贡献
+A2X Registry 是一个 **Agent 及 Agent 可调用服务的注册中心**，同时内置 **Agent 原生的高效服务发现方案（A2X 搜索）**。
 
-我们欢迎所有形式的贡献，包括但不限于:
-- 提交问题和功能建议
-- 改进文档
-- 提交代码
-- 分享使用经验
+作为注册中心，它提供服务全生命周期的常规管理能力：注册 / 注销、按字段查询、整卡覆盖与字段级更新、状态声明（online / busy / offline）、基于所有权的权限控制，以及 Agent Team 场景下的短时预订锁（reservation lease），便于多 agent 在同一池子里互相协调。数据集隔离、Embedding 模型可选、多种服务类型（generic / A2A / Skill）并存。
 
-## 开源许可证
+特色功能是 A2X 搜索，用于解决智能体互联网时代的核心问题：**如何让智能体从海量服务中高效、准确地找到所需能力。** 现有方案各有局限 —— MCP 全量上下文溢出、"Lost in the Middle" 效应；向量检索不理解跨术语意图；查询改写方向不确定。A2X 通过自动构建 **层次化能力目录**（分类树）+ **LLM 递归语义导航**，由 LLM 沿"领域 → 子领域 → 具体能力 → 服务"逐层逼近目标，查找成本接近 O(log N)，兼顾召回与精度。分类树由 LLM 从服务描述中全自动构建，无需人工维护。
 
-本项目依据Apache-2.0许可证授权。
+## 评估结果
+
+### [ToolRet_clean](https://github.com/Weizheng96/A2X-registry-demo-data/tree/main/ToolRet_clean)（1839 服务 · 1714 查询）
+
+数据来源：[tool-retrieval-benchmark](https://github.com/mangopy/tool-retrieval-benchmark)，经过数据清洗。
+
+| 方法 | Hit Rate | Recall | Precision | Avg Tokens/q | Avg LLM Calls |
+|------|:--------:|:------:|:--------:|:------------:|:-------------:|
+| **A2X** (v0.1.1) | **92.59%** | **89.19%** | 16.06% | 7,069 | 7.96 |
+| Vector (top-5) | 69.08% | 61.81% | 15.24% | 0 | 0 |
+| Traditional (MCP)* | 86.00% | 83.67% | 5.17% | 66,568 | 1.00 |
+
+\* Traditional 方案仅使用 name + description。若加入完整 inputSchema，单次查询 Token 消耗将达到 ~200k，已超出大多数模型的上下文窗口限制。
+
+### [publicMCP](https://github.com/Weizheng96/A2X-registry-demo-data/tree/main/publicMCP)（1387 MCP 服务 · 50 查询）
+
+数据来源：[MCP 官方服务器列表](https://github.com/modelcontextprotocol/servers)，共 1387 条 MCP 服务器描述。查询模拟真实用户请求（含个人偏好、多服务组合等）。
+
+| 方法 | Hit Rate | Recall | Precision | Avg Tokens/q | Avg LLM Calls |
+|------|:--------:|:------:|:--------:|:------------:|:-------------:|
+| **A2X** (v0.1.1) | **100%** | **94.87%** | 10.54% | 15,366 | 14.10 |
+| Vector (top-5) | 72.0% | 42.77% | 22.00% | 0 | 0 |
+| Vector (top-10) | 78.0% | 50.50% | 13.20% | 0 | 0 |
+
+> **关于 Precision**：在大规模服务库中，ground truth 难以标注所有与请求相关的服务。人工抽样检查发现超过 60% 的假阳选项实际上与请求功能相关，因此 Precision 指标显著低估了实际检索质量，本文不引用该指标。
+
+## 快速开始
+
+### 1. 安装
+
+从 GitCode 克隆 `agent-protocol` 的 `feature/Agentregistry` 分支并安装依赖：
+
+```bash
+git clone -b feature/Agentregistry https://gitcode.com/openJiuwen/agent-protocol.git
+cd agent-protocol
+pip install -e .
+```
+
+要求 Python ≥ 3.10。`pip install -e .` 会自动安装全部依赖并注册 `a2x-backend` 命令行入口。
+
+### 2. 配置 LLM API（可选，A2X 搜索和分类树构建必需）
+
+默认位置 `~/.a2x_registry/llm_apikey.json`（Windows 下 `C:\Users\<你>\.a2x_registry\llm_apikey.json`）。参考 `a2x_registry/llm_apikey.example.json` 模板：
+
+```json
+{
+  "providers": [
+    {
+      "name": "deepseek",
+      "base_url": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-chat",
+      "api_keys": ["sk-your-deepseek-api-key"]
+    }
+  ]
+}
+```
+
+支持多 provider 配置，按顺序轮询使用，兼容所有 OpenAI-compatible API。
+
+> 仅使用向量检索 / 通用 CRUD 时不需要此配置。
+> 如需把 key 文件放到别处，设 `A2X_REGISTRY_HOME=/your/path` 环境变量即可。
+
+### 3. 下载演示数据集（可选）
+
+项目提供预构建的演示数据集（含服务描述、分类树、评估查询）：
+
+```bash
+# 克隆到项目根下的 database/ 目录
+git clone https://github.com/Weizheng96/A2X-registry-demo-data.git database
+```
+
+包含以下数据集：
+
+| 数据集 | 服务数 | 语言 | 说明 |
+|--------|:-----:|:---:|------|
+| `ToolRet_clean` | 1839 | EN | [tool-retrieval-benchmark](https://github.com/mangopy/tool-retrieval-benchmark) 清洗版 |
+| `publicMCP` | 1387 | EN | [MCP 官方服务器列表](https://github.com/modelcontextprotocol/servers) |
+| `ToolRet_clean_CN` | 1839 | ZH | ToolRet_clean 中文翻译版 |
+| `publicMCP_CN` | 1387 | ZH | publicMCP 中文翻译版 |
+| `default` | — | — | 21 个公开 A2A Agent（启动后自动拉取） |
+| `publicSkill` | 17 | EN | Claude Code Skill 集合 |
+
+> 不下载也可以正常使用，通过 UI 或 API 创建自己的数据集并注册服务。
+
+### 4. 启动
+
+两种启动方式二选一。方式 A 仅起后端（走 HTTP API 或本地配置），方式 B 同时起后端和网页 UI。
+
+**方式 A：常规启动（仅后端）**
+
+```bash
+a2x-backend                    # http://127.0.0.1:8000，docs 在 /docs
+a2x-backend --port 8080        # 换端口
+a2x-backend --host 0.0.0.0     # 开放到局域网
+```
+
+**方式 B：带前端启动（后端 + 网页 UI，仅源码安装可用）**
+
+```bash
+python ui/launcher.py
+```
+
+launcher 自带后端，无需额外跑方式 A。启动模式根据 `ui/frontend/dist/` 是否存在自动判断：
+
+| 情况 | 行为 | 访问地址 |
+|------|------|----------|
+| 有 `dist/` | 后端直接托管静态文件，无需 Node.js | http://localhost:8000 |
+| 无 `dist/`（首次） | 自动启动 Vite 开发服务器（需 Node.js） | http://localhost:5173 |
+
+构建前端生产版本：`cd ui/frontend && npm install && npm run build`
+
+### 5. 使用
+
+#### 方式一：网页 UI
+
+启动时选择了方式 B 即可打开浏览器使用。UI 提供两个模式：
+
+- **搜索模式** — 交互对比 A2X / 向量 / MCP 的检索效果，D3.js 实时动画展示分类树导航过程
+- **管理员模式** — 数据集管理、服务注册/注销（含 Skill 文件夹上传）、服务查询、分类树构建、Embedding 模型配置
+
+#### 方式二：HTTP Fast API
+
+直接通过 HTTP 调用 `a2x-backend` 暴露的接口。
+
+**数据集管理**：
+
+```bash
+# 列出数据集
+curl http://localhost:8000/api/datasets
+
+# 创建数据集（指定 Embedding 模型）
+curl -X POST http://localhost:8000/api/datasets \
+     -H "Content-Type: application/json" \
+     -d '{"name": "my_dataset", "embedding_model": "all-MiniLM-L6-v2"}'
+
+# 删除数据集
+curl -X DELETE http://localhost:8000/api/datasets/my_dataset
+```
+
+**服务注册/注销**：
+
+```bash
+# 注册通用服务
+curl -X POST http://localhost:8000/api/datasets/my_dataset/services/generic \
+     -H "Content-Type: application/json" \
+     -d '{"name": "天气查询", "description": "查询城市天气和预报"}'
+
+# 注册 A2A Agent（通过 URL 自动拉取 Agent Card）
+curl -X POST http://localhost:8000/api/datasets/my_dataset/services/a2a \
+     -H "Content-Type: application/json" \
+     -d '{"agent_card_url": "https://agent.example.com/.well-known/agent.json"}'
+
+# 注册 A2A Agent（直接提供 Agent Card）
+curl -X POST http://localhost:8000/api/datasets/my_dataset/services/a2a \
+     -H "Content-Type: application/json" \
+     -d '{"agent_card": {"name": "翻译助手", "description": "支持中英日韩多语言互译", "url": "https://translate.example.com/a2a"}}'
+
+# 注册 Skill（上传 ZIP）
+curl -X POST http://localhost:8000/api/datasets/my_dataset/skills \
+     -F "file=@my_skill.zip"
+
+# 注销服务
+curl -X DELETE http://localhost:8000/api/datasets/my_dataset/services/{service_id}
+
+# 注销 Skill（移至 removed_skills/）
+curl -X DELETE http://localhost:8000/api/datasets/my_dataset/skills/{skill_name}
+
+# 下载 Skill（ZIP）
+curl -O http://localhost:8000/api/datasets/my_dataset/skills/{skill_name}/download
+
+# 浏览服务
+curl http://localhost:8000/api/datasets/my_dataset/services?mode=browse
+
+# 查询单个服务（skill 类型返回 ZIP）
+curl http://localhost:8000/api/datasets/my_dataset/services?mode=single&service_id={id}
+```
+
+**分类树构建**：
+
+```bash
+# 触发构建（后台运行）
+curl -X POST http://localhost:8000/api/datasets/my_dataset/build \
+     -H "Content-Type: application/json" -d '{}'
+
+# 查看构建状态
+curl http://localhost:8000/api/datasets/my_dataset/build/status
+
+# 实时日志流（SSE）
+curl http://localhost:8000/api/datasets/my_dataset/build/stream
+```
+
+**搜索**：
+
+```bash
+# 同步搜索
+curl -X POST http://localhost:8000/api/search \
+     -H "Content-Type: application/json" \
+     -d '{"query": "帮我预订航班", "method": "a2x_get_all", "dataset": "my_dataset"}'
+```
+
+搜索方法：`a2x_get_all`（所有相关服务）、`a2x_get_one`（最相关的服务）、`a2x_get_important`（同类服务去重）、`vector`（向量检索）、`traditional`（MCP 全量）。
+
+A2X 搜索支持 WebSocket 流式返回（`/api/search/ws`），实时推送分类导航步骤。
+
+**Embedding 模型配置**：
+
+```bash
+# 查看支持的模型
+curl http://localhost:8000/api/datasets/embedding-models
+
+# 查看/切换数据集的 Embedding 模型
+curl http://localhost:8000/api/datasets/my_dataset/vector-config
+curl -X POST http://localhost:8000/api/datasets/my_dataset/vector-config \
+     -H "Content-Type: application/json" \
+     -d '{"embedding_model": "shibing624/text2vec-base-chinese"}'
+```
+
+支持 3 种 Embedding 模型：
+
+| 模型 | 维度 | 适用语言 |
+|------|:---:|:---:|
+| `all-MiniLM-L6-v2` | 384 | 英文（默认） |
+| `shibing624/text2vec-base-chinese` | 768 | 中文 |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 384 | 多语言 |
+
+> 完整 API 文档见 [docs/backend_api.md](docs/backend_api.md)，各模块内部接口见对应设计文档。
+
+> 同时我们为 Agent Team 场景提供特化的 Python 客户端 SDK：[A2X-registry-client](https://gitcode.com/openJiuwen/agent-protocol/tree/develop/registry/registry_client)。
+
+#### 方式三：基于本地配置文档
+
+不通过 API，直接在磁盘上编辑 `database/{数据集名}/user_config.json`，声明要注册的服务；下次启动时后端自动加载。
+
+```json
+{
+  "services": [
+    {
+      "type": "generic",
+      "name": "天气查询",
+      "description": "根据城市名查询实时天气和未来预报",
+      "url": "https://api.example.com/weather"
+    },
+    {
+      "type": "a2a",
+      "agent_card_url": "https://agent.example.com/.well-known/agent.json"
+    },
+    {
+      "type": "a2a",
+      "agent_card": {
+        "name": "翻译助手",
+        "description": "支持中英日韩多语言互译",
+        "url": "https://translate.example.com/a2a",
+        "skills": [
+          {"name": "translate", "description": "将文本翻译为目标语言"}
+        ]
+      }
+    }
+  ]
+}
+```
+
+支持四种注册对象：
+- **generic** — 通用服务，提供 name + description
+- **a2a (URL)** — 通过 `agent_card_url` 自动拉取 [A2A 协议](https://google.github.io/A2A/) Agent Card
+- **a2a (内联)** — 通过 `agent_card` 直接提供 Agent Card 内容
+- **skill (文件夹)** — 放入 `database/{数据集名}/skills/{skill名}/` 目录（需含 `SKILL.md`），或通过 API 上传 ZIP
+
+## 文档
+
+| 文档 | 内容 |
+|------|------|
+| [docs/backend_api.md](docs/backend_api.md) | 后端全量 API 接口说明（请求/响应格式、SSE 协议） |
+| [docs/frontend_design.md](docs/frontend_design.md) | 前端架构与 API 调用说明（搜索流程、WebSocket、SSE） |
+| [docs/a2x_design.md](docs/a2x_design.md) | A2X 搜索算法设计 |
+| [docs/build_design.md](docs/build_design.md) | 分类树自动构建设计 |
+| [docs/register_design.md](docs/register_design.md) | 服务注册模块设计 |
+| [docs/search_design.md](docs/search_design.md) | 搜索流程详细设计 |
+| [docs/incremental_design.md](docs/incremental_design.md) | 增量构建设计 |
+
+## 适用场景
+
+A2X 可索引任何带有 `description` 字段的智能体服务，包括：垂域智能体、MCP 工具、Agent Skill、以及可被智能体调用的社会服务与资源。
+
+- **互联网级 Agent DNS**：作为海量智能体与服务之上的统一能力发现层
+- **组织级网关**：在内部工具、部门服务、数据接口之间实现高效的能力发现与路由

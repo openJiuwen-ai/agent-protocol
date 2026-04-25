@@ -1,8 +1,0 @@
-add_subdirectory(event)
-add_subdirectory(auth)
-add_subdirectory(net)
-add_subdirectory(shared)
-add_subdirectory(http)
-add_subdirectory(log)
-add_subdirectory(client)
-add_subdirectory(server)

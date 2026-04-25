@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2x-registry"
+dynamic = ["version"]
+description = "A2X Registry — hierarchical taxonomy service registry with LLM-based recursive search."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "A2X Registry" }]
+keywords = ["a2x", "registry", "agent", "taxonomy", "retrieval", "a2a"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "requests>=2.28",
+    "tqdm>=4.64",
+    "numpy>=1.23",
+    "sentence-transformers>=2.2",
+    "chromadb>=0.4",
+    "fastapi>=0.104",
+    "pydantic>=2.0",
+    "python-multipart>=0.0.6",
+    "uvicorn[standard]>=0.24",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = ["build>=1.0", "twine>=5.0", "pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry"
+Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
+Documentation = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry#readme"
+
+[project.scripts]
+a2x-backend = "a2x_registry.backend.__main__:main"
+a2x-build = "a2x_registry.a2x.build.__main__:main"
+a2x-register = "a2x_registry.register.__main__:main"
+a2x-evaluate-a2x = "a2x_registry.a2x.evaluation.__main__:main"
+a2x-evaluate-vector = "a2x_registry.vector.evaluation.__main__:main"
+a2x-evaluate-traditional = "a2x_registry.traditional.evaluation.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "a2x_registry.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["a2x_registry*"]
+exclude = ["reference*", "examples*", "tests*"]
+
+[tool.setuptools.package-data]
+a2x_registry = ["llm_apikey.example.json"]
