@@ -10,7 +10,8 @@ import json
 import logging
 from typing import List, Dict, Any
 
-from a2x_registry.vector.utils import EmbeddingModel, ChromaStore
+from a2x_registry.vector.utils.embedding import EmbeddingModel
+from a2x_registry.vector.utils.chroma_store import ChromaStore
 
 logger = logging.getLogger(__name__)
 

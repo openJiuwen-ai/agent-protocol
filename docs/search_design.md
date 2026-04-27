@@ -2,18 +2,18 @@
 
 **版本**: v0.1.1
 
-本文档详细描述搜索模块（`src/a2x/search/`）的设计。系统整体视图见 [a2x_design.md](a2x_design.md)，构建模块见 [build_design.md](build_design.md)。
+本文档详细描述搜索模块（`a2x_registry/a2x/search/`）的设计。系统整体视图见 [a2x_design.md](a2x_design.md)，构建模块见 [build_design.md](build_design.md)。
 
 ---
 
 ## 1. 模块结构
 
 ```
-src/a2x/search/
+a2x_registry/a2x/search/
 ├── __init__.py      — 公共 API: A2XSearch, SearchResult, SearchStats, NavigationStep
 ├── __main__.py      — CLI 入口 (python -m a2x_registry.a2x.search)
 ├── a2x_search.py    — 编排器: 组合 Navigator + Selector，管理搜索流程和流式输出
-├── models.py        — 数据类: SearchStats, NavigationStep, TerminalNode, ServiceGroup (SearchResult 已移至 src/common/models.py)
+├── models.py        — 数据类: SearchStats, NavigationStep, TerminalNode, ServiceGroup (SearchResult 已移至 a2x_registry/common/models.py)
 ├── navigator.py     — Phase 1: CategoryNavigator (LLM 递归分类导航)
 ├── selector.py      — Phase 2+3: ServiceSelector (去重、分组合并、LLM 服务筛选)
 └── prompts.py       — Prompt 模板 + 响应解析 (纯函数，无状态)
@@ -70,7 +70,7 @@ for msg in searcher.search(query, stream=True):
 ### 数据类
 
 ```python
-# SearchResult 定义在 src/common/models.py，三个搜索方法共用
+# SearchResult 定义在 a2x_registry/common/models.py，三个搜索方法共用
 @dataclass
 class SearchResult:
     id: str
@@ -167,5 +167,5 @@ classDiagram
     A2XSearch *-- ServiceSelector
     CategoryNavigator ..> prompts : uses
     ServiceSelector ..> prompts : uses
-    A2XSearch --> LLMClient : uses (src.common.llm_client)
+    A2XSearch --> LLMClient : uses (a2x_registry.common.llm_client)
 ```

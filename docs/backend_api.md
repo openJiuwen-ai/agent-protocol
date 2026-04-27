@@ -8,17 +8,42 @@ python -m a2x_registry.backend
 # 交互文档: http://127.0.0.1:8000/docs
 ```
 
+## 安装模式与可用性（0.1.6+）
+
+后端按已装依赖动态决定哪些路由真正可用。**所有路由始终挂载**（OpenAPI 不变），但调用未装依赖的路由会返回 **503**：
+
+```http
+HTTP/1.1 503 Service Unavailable
+Content-Type: application/json
+
+{
+  "feature": "vector",
+  "extras":  "vector",
+  "detail":  "This endpoint requires 'vector', which is not installed. Run: pip install 'a2x-registry[vector]' and restart the backend."
+}
+```
+
+| 路由组 | 精简（默认）`pip install` | `[full]` extras |
+|---|---|---|
+| 数据集 CRUD、注册/注销/更新、预订锁、Skill 上传/下载、`/embedding-models`、`/vector-config`、`/register-config`、`/default-queries`、`/taxonomy`（只读） | ✅ | ✅ |
+| `POST /api/datasets/{ds}/build`（触发构建） | 503 | ✅ |
+| `GET /api/datasets/{ds}/build/status` / `DELETE /build` / SSE 流 | ✅（纯字典读写） | ✅ |
+| `POST /api/search`、`POST /api/search/judge`、`/api/search/ws` | 503（WS 握手后发 `{"type":"error","message":"… pip install …"}` 再关闭） | ✅ |
+| `/api/providers/*` | ✅（仅读 `llm_apikey.json`，需 LLM 配置） | ✅ |
+
+**复原**：在同一 venv 里运行 `pip install 'a2x-registry[full]'`（或 `[vector]` / `[evaluation]`）后**重启 `a2x-registry`** 即可，无需改代码或配置。检测使用 `importlib.util.find_spec`，重启时即时生效。
+
 ## 路由总览
 
 API 由 4 个路由模块 + 1 个应用级端点组成：
 
 | 模块 | 前缀 | 源文件 | 说明 |
 |------|------|--------|------|
-| 数据集 | `/api/datasets` | `src/backend/routers/dataset.py` | 数据集 CRUD、服务注册/注销、分类树、嵌入配置 |
-| 构建 | `/api/datasets/{dataset}/build` | `src/backend/routers/build.py` | 分类树构建触发、状态、取消、SSE 日志流 |
-| 搜索 | `/api/search` | `src/backend/routers/search.py` | 同步搜索、WebSocket 流式搜索、LLM 相关性判断 |
-| 提供商 | `/api/providers` | `src/backend/routers/provider.py` | LLM 提供商列表与切换 |
-| 应用级 | `/api/warmup-status` | `src/backend/app.py` | 启动预热进度 |
+| 数据集 | `/api/datasets` | `a2x_registry/backend/routers/dataset.py` | 数据集 CRUD、服务注册/注销、分类树、嵌入配置 |
+| 构建 | `/api/datasets/{dataset}/build` | `a2x_registry/backend/routers/build.py` | 分类树构建触发、状态、取消、SSE 日志流 |
+| 搜索 | `/api/search` | `a2x_registry/backend/routers/search.py` | 同步搜索、WebSocket 流式搜索、LLM 相关性判断 |
+| 提供商 | `/api/providers` | `a2x_registry/backend/routers/provider.py` | LLM 提供商列表与切换 |
+| 应用级 | `/api/warmup-status` | `a2x_registry/backend/app.py` | 启动预热进度 |
 
 ---
 
@@ -860,5 +885,5 @@ LLM 相关性判断，用于对比图中验证检索结果质量。
 多个数据集可同时构建，互不干扰：
 
 - `_build_jobs` / `_log_subs` / `_cancel_flags` 均以 `dataset` 为 key 独立存储
-- `_LogCapture` handler 按**线程 ID** 过滤日志记录，防止两个构建线程共享同一 `src.a2x` logger 时日志串流；日志捕获级别由请求参数 `log_level` 控制，未指定时跟随 `src.a2x` logger 的系统默认级别
+- `_LogCapture` handler 按**线程 ID** 过滤日志记录，防止两个构建线程共享同一 `a2x_registry.a2x` logger 时日志串流；日志捕获级别由请求参数 `log_level` 控制，未指定时跟随 `a2x_registry.a2x` logger 的系统默认级别
 - `_push_to_subs(dataset, event)` 只向该数据集的订阅者队列推送

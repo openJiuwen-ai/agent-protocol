@@ -417,7 +417,7 @@ class TaxonomyBuilder:
     def _compute_service_hash(self) -> str:
         """Hash (name, description) pairs of all services — order-independent.
 
-        Mirrors _compute_build_hash in src/register/service.py.
+        Mirrors _compute_build_hash in a2x_registry/register/service.py.
         Only these two fields drive taxonomy structure, so only they matter for
         detecting whether a rebuild is needed.
         """

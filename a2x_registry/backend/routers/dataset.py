@@ -482,8 +482,13 @@ async def default_queries(dataset: str):
 
 @router.get("/embedding-models")
 async def list_embedding_models():
-    """Return the list of supported embedding models."""
-    from a2x_registry.vector.utils.embedding import EMBEDDING_MODELS
+    """Return the list of supported embedding models.
+
+    Lite-safe: reads from the zero-dep ``embedding_constants`` submodule, so
+    the route works without ``[vector]`` extras (the model list is just
+    metadata; users still need ``[vector]`` to actually run vector search).
+    """
+    from a2x_registry.vector.utils.embedding_constants import EMBEDDING_MODELS
     return {"models": EMBEDDING_MODELS}
 
 

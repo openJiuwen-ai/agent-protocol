@@ -9,7 +9,13 @@ from .models import SearchResult
 from .llm_client import LLMClient, LLMResponse, parse_json_response
 from .evaluation import compute_set_metrics
 from .naming import generate_output_dir
-from .errors import A2XRegistryError, VectorSearchUnavailableError, LLMNotConfiguredError
+from .errors import (
+    A2XRegistryError,
+    VectorSearchUnavailableError,
+    LLMNotConfiguredError,
+    FeatureNotInstalledError,
+)
+from . import feature_flags
 
 __all__ = [
     'SearchResult',
@@ -17,4 +23,6 @@ __all__ = [
     'compute_set_metrics',
     'generate_output_dir',
     'A2XRegistryError', 'VectorSearchUnavailableError', 'LLMNotConfiguredError',
+    'FeatureNotInstalledError',
+    'feature_flags',
 ]

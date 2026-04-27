@@ -7,28 +7,10 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from a2x_registry.common.errors import VectorSearchUnavailableError
-
-# ── Supported embedding models ────────────────────────────────────────────────
-
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-EMBEDDING_MODELS: Dict[str, dict] = {
-    "all-MiniLM-L6-v2": {
-        "dim": 384,
-        "language": "en",
-        "description": "English general-purpose (default)",
-    },
-    "shibing624/text2vec-base-chinese": {
-        "dim": 768,
-        "language": "zh",
-        "description": "Chinese text embedding",
-    },
-    "paraphrase-multilingual-MiniLM-L12-v2": {
-        "dim": 384,
-        "language": "multilingual",
-        "description": "Multilingual 50+ languages",
-    },
-}
+from a2x_registry.vector.utils.embedding_constants import (
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDING_MODELS,
+)
 
 
 def _find_cached_model(model_name: str) -> str:

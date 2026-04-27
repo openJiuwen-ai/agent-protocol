@@ -17,14 +17,14 @@ A2X Registry 由以下模块组成，围绕核心数据结构 **分类树** 和 
 
 | 模块 | 职责 | 状态 |
 |------|------|------|
-| **注册模块** (`src/register/`) | 服务注册/注销/查询，管理三类服务（Generic + A2A + Skill），输出 service.json | ✅ |
-| **构建模块** (`src/a2x/build/`) | 从服务列表自动构建层次化分类树 | ✅ |
-| **搜索模块** (`src/a2x/search/`) | 基于分类树执行两阶段 LLM 递归检索 | ✅ |
-| **增量构建** (`src/a2x/incremental/`) | 将增量新服务插入已有分类树 | 待实现 |
-| **向量基线** (`src/vector/`) | ChromaDB 向量检索（对比基线） | ✅ |
-| **传统基线** (`src/traditional/`) | MCP 全上下文基线（对比基线） | ✅ |
-| **后端** (`src/backend/`) | FastAPI，路由 + 服务编排 | ✅ |
-| **前端** (`src/frontend/`) | React + D3.js 可视化 + 管理面板 | ✅ |
+| **注册模块** (`a2x_registry/register/`) | 服务注册/注销/查询，管理三类服务（Generic + A2A + Skill），输出 service.json | ✅ |
+| **构建模块** (`a2x_registry/a2x/build/`) | 从服务列表自动构建层次化分类树 | ✅ |
+| **搜索模块** (`a2x_registry/a2x/search/`) | 基于分类树执行两阶段 LLM 递归检索 | ✅ |
+| **增量构建** (`a2x_registry/a2x/incremental/`) | 将增量新服务插入已有分类树 | 待实现 |
+| **向量基线** (`a2x_registry/vector/`) | ChromaDB 向量检索（对比基线） | ✅ |
+| **传统基线** (`a2x_registry/traditional/`) | MCP 全上下文基线（对比基线） | ✅ |
+| **后端** (`a2x_registry/backend/`) | FastAPI，路由 + 服务编排 | ✅ |
+| **前端** (`ui/frontend/`) | React + D3.js 可视化 + 管理面板（仅源码克隆，不在 pip wheel 内） | ✅ |
 
 **数据流**：
 - 注册模块管理服务生命周期 → 输出 service.json → 构建模块、向量基线、传统基线消费
@@ -250,7 +250,7 @@ classDiagram
     }
 
     class LLMClient {
-        <<src.common.llm_client>>
+        <<a2x_registry.common.llm_client>>
         +call(messages, temperature, max_tokens) LLMResponse
         +call_batch(prompts, system_prompt, max_workers) List
     }
@@ -272,13 +272,15 @@ classDiagram
 ### 6. 目录结构
 
 ```
-src/
-├── common/          # 共享工具（models, llm_client, evaluation, naming）
-├── a2x/             # A2X 分类树检索（build / search / evaluation / incremental）
-├── vector/          # 向量基线（ChromaDB 索引 / search / evaluation）
-├── traditional/     # 传统基线（全上下文 search / evaluation）
+a2x_registry/        # pip 包根（随 wheel 发布）
+├── common/          # 共享工具（models, llm_client, paths, errors, feature_flags, evaluation, naming）
+├── a2x/             # A2X 分类树检索（build / search / evaluation / incremental）—— 需 [vector] extras
+├── vector/          # 向量基线（ChromaDB 索引 / search / evaluation）—— 需 [vector] extras
+├── traditional/     # 传统基线（全上下文 search / evaluation）—— 需 [vector] extras
 ├── register/        # 服务注册（generic / a2a / skill）
-├── backend/         # FastAPI 后端（routers: dataset, build, search, provider）
-├── frontend/        # React + Vite + Tailwind + D3.js
-└── ui/              # 集成启动器（python -m a2x_registry.ui）
+└── backend/         # FastAPI 后端（routers: dataset, build, search, provider）
+
+ui/                  # 仅源码克隆可用，不在 pip wheel 内
+├── launcher.py      # 集成启动器：后端 + Vite dev / 静态托管
+└── frontend/        # React + Vite + Tailwind + D3.js
 ```

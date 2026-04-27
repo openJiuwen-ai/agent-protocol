@@ -585,7 +585,7 @@ if __name__ == '__main__':
         results_dir = sys.argv[1]
     else:
         # Default to latest results
-        results_base = Path('src/a2x/evaluation/results')
+        results_base = Path('results')
         # Find most recent
         dirs = sorted([d for d in results_base.iterdir() if d.is_dir()],
                      key=lambda x: x.name, reverse=True)

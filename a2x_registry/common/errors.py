@@ -27,3 +27,20 @@ class LLMNotConfiguredError(A2XRegistryError):
     Raised when :class:`~a2x_registry.common.llm_client.LLMClient` cannot
     locate, parse, or find any usable provider in ``llm_apikey.json``.
     """
+
+
+class FeatureNotInstalledError(A2XRegistryError):
+    """A heavy backend feature was hit but its optional extras are not installed.
+
+    Carries ``feature`` (logical capability name) and ``extras`` (the pip
+    extras key) so the FastAPI exception handler can render a structured
+    503 body. ``str(exc)`` is a copy-pasteable install command.
+    """
+
+    def __init__(self, feature: str, extras: str):
+        self.feature = feature
+        self.extras = extras
+        super().__init__(
+            f"This endpoint requires '{feature}', which is not installed. "
+            f"Run: pip install 'a2x-registry[{extras}]' and restart the backend."
+        )

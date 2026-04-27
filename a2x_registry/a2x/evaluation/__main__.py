@@ -9,12 +9,24 @@ Usage:
 
 import argparse
 import logging
+import sys
+from pathlib import Path
 
-from a2x_registry.a2x.evaluation.a2x_evaluator import A2XEvaluator
+from a2x_registry.common import feature_flags
+from a2x_registry.common.errors import FeatureNotInstalledError
 from a2x_registry.common.naming import generate_output_dir
 
 
 def main():
+    for f in ("vector", "evaluation"):
+        try:
+            feature_flags.require(f)
+        except FeatureNotInstalledError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(2)
+
+    from a2x_registry.a2x.evaluation.a2x_evaluator import A2XEvaluator
+
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     parser = argparse.ArgumentParser(description="Evaluate A2X taxonomy search")

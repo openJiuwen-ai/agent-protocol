@@ -62,7 +62,7 @@ class LLMClient:
         Args:
             config_path: Path to config file with providers list or legacy single-provider format.
                 Default ``None`` resolves to ``<A2X_REGISTRY_HOME>/llm_apikey.json``
-                via :mod:`src.common.paths`.
+                via :mod:`a2x_registry.common.paths`.
             max_retries: Maximum retry attempts per API key
             timeout: Request timeout in seconds
             pool_maxsize: Max connections in the HTTP connection pool

@@ -1,16 +1,42 @@
 # A2X 版本说明
 
-## 当前版本: v0.1.5
+## 当前版本: v0.1.6
+
+---
+
+## v0.1.6 (2026-04-26)
+
+### 概述
+功能解耦版本。把重 ML / 索引依赖从默认安装中剥离：默认 `pip install` 仅装 SDK 必需的 5 个轻量包，A2X 分类构建 / 向量检索 / 评估 CLI 等增强功能放进 `[vector]` / `[evaluation]` / `[full]` extras。Agent Team 场景无需再安装数百 MB 的 ML 依赖。算法无变更。
+
+### 新功能
+- **Lite 默认安装**：`pip install` 默认只装 `requests` / `fastapi` / `pydantic` / `python-multipart` / `uvicorn[standard]` 五个包
+- **依赖分组 extras**：
+  - `[vector]` — `numpy` / `sentence-transformers` / `chromadb`（启用 A2X 构建、向量检索、传统全量检索）
+  - `[evaluation]` — `tqdm`（`a2x-evaluate-*` 进度条）
+  - `[full]` — 等价旧版（≤ 0.1.5）默认安装
+- **503 契约**：未装 `[vector]` 时 `/api/search` 与 `POST /api/datasets/{ds}/build` 返回结构化 503，body 含 `{feature, extras, detail}`，detail 是可执行的 `pip install` 命令；WebSocket 握手后发 `{"type":"error",...}` 再关闭
+- **`feature_flags`**：`a2x_registry.common.feature_flags.has() / .require()` 在路由入口探测 extras，使用 `importlib.util.find_spec`，重启 backend 即时生效，无需改代码
+- **整体架构文档**：新增 `docs/architecture_overview.md`，覆盖模块布局、对外接口、数据流、安装模式
+
+### 重构
+- `pyproject.toml` 依赖布局重写为 lite + extras 三段式
+- **CLI 重命名**：后端启动命令 `a2x-backend` → `a2x-registry`（与包名一致）；老命令在 0.1.6 起不再可用
+- README 快速开始拆分为"启动" / "使用"独立章节；`README_forAgentTeam.md` 重写围绕新的 lite 默认
+- 清理残留 `src.*` / `src/*` 路径引用（5 处文档/注释 + 1 处 evaluation CLI 默认路径修复）
+
+### 评估结果
+与 v0.1.5 一致（本次为依赖打包重构，无算法变更）。
 
 ---
 
 ## v0.1.5 (2026-04-23)
 
 ### 概述
-pip 打包正式发布版本。包名从 `src/` 重命名为 `a2x_registry/`，客户端 SDK 拆到独立仓库 [A2X-registry-client](https://github.com/Weizheng96/A2X-registry-client)；新增 6 个 CLI 入口；配置文件移至用户目录；Web UI 迁出 pip 包作为 clone-only demo。算法无变更。
+pip 打包正式发布版本。包名从 `src/` 重命名为 `a2x_registry/`，客户端 SDK 拆到独立仓库（暂未对外开源）；新增 6 个 CLI 入口；配置文件移至用户目录；Web UI 迁出 pip 包作为 clone-only demo。算法无变更。
 
 ### 新功能
-- **pip 可装**：`pip install git+https://github.com/Weizheng96/A2X-registry.git@v0.1.5`
+- **pip 可装**：从 GitCode 克隆 `agent-protocol` 的 `feature/Agentregistry` 分支后 `pip install -e .`
 - **CLI 入口**：`a2x-backend` / `a2x-build` / `a2x-register` / `a2x-evaluate-a2x` / `a2x-evaluate-vector` / `a2x-evaluate-traditional`
 - **客户端 SDK**：`a2x-registry-client` 独立包，`A2XRegistryClient` / `AsyncA2XRegistryClient` 双入口对称
 - **路径抽象**：`A2X_REGISTRY_HOME` 环境变量 + `~/.a2x_registry/` 默认位置

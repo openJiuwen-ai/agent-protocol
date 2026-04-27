@@ -2,7 +2,7 @@
 
 This launcher is **only** shipped with the source clone — it is not part of
 the ``a2x-registry`` pip package. Users who ``pip install a2x-registry`` get
-the API server only (``a2x-backend``); the demo web UI requires cloning the
+the API server only (``a2x-registry``); the demo web UI requires cloning the
 repo and having Node.js installed.
 
 Two modes (auto-selected from whether ``ui/frontend/dist/`` exists):

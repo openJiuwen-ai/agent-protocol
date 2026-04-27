@@ -11,6 +11,7 @@ from a2x_registry.backend.schemas.models import (
     SearchRequest, SearchResponse, JudgeRequest, JudgeResponse, JudgeResult,
 )
 from a2x_registry.backend.services.search_service import search_service
+from a2x_registry.common import feature_flags
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -21,6 +22,7 @@ _executor = ThreadPoolExecutor(max_workers=4)
 @router.post("", response_model=SearchResponse)
 async def search(req: SearchRequest):
     """Synchronous search — returns the full result at once."""
+    feature_flags.require("vector")
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         _executor,
@@ -37,6 +39,7 @@ async def search(req: SearchRequest):
 @router.post("/judge", response_model=JudgeResponse)
 async def judge_relevance(req: JudgeRequest):
     """Use shared LLM to judge whether each service is relevant to the query."""
+    feature_flags.require("vector")
     loop = asyncio.get_event_loop()
     raw = await loop.run_in_executor(
         _executor,
@@ -58,6 +61,11 @@ async def search_ws(websocket: WebSocket):
     """
     await websocket.accept()
     try:
+        # Gate before reading the request — same require() that the HTTP
+        # routes use; the existing `except Exception` below renders the
+        # FeatureNotInstalledError's str() (the install hint) as a WS
+        # error message, then closes the socket.
+        feature_flags.require("vector")
         raw = await websocket.receive_text()
         req = json.loads(raw)
 

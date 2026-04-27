@@ -42,6 +42,13 @@ from .validation import (
     validate_service,
 )
 
+# Embedding-model literals live in the vector domain but are exposed via a
+# zero-heavy-dep submodule so the lite install path can import them safely.
+from a2x_registry.vector.utils.embedding_constants import (
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDING_MODELS,
+)
+
 logger = logging.getLogger(__name__)
 
 USER_CONFIG_FILE = "user_config.json"
@@ -199,7 +206,6 @@ class RegistryService:
         Embedding model and formats can be changed later via the dedicated
         ``POST /vector-config`` and ``POST /register-config`` endpoints.
         """
-        from a2x_registry.vector.utils.embedding import DEFAULT_EMBEDDING_MODEL
         config_file = self._database_dir / dataset / "vector_config.json"
         if config_file.exists():
             return
@@ -994,7 +1000,6 @@ class RegistryService:
         if ds_dir.exists():
             raise ValueError(f"Dataset '{name}' already exists")
         if embedding_model is None:
-            from a2x_registry.vector.utils.embedding import DEFAULT_EMBEDDING_MODEL
             embedding_model = DEFAULT_EMBEDDING_MODEL
         # Validate formats first so we fail fast before touching disk.
         normalized = self._normalize_or_default_formats(formats)
@@ -1096,7 +1101,6 @@ class RegistryService:
         without writing it (callers can use this to render a "current
         effective" view without forcing a write).
         """
-        from a2x_registry.vector.utils.embedding import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
         cfg = self._get_store(dataset).load_vector_config()
         if cfg is not None:
             return dict(cfg)
@@ -1120,7 +1124,6 @@ class RegistryService:
         The caller is responsible for triggering any vector-index rebuild
         side effects (e.g. ``SearchService.schedule_vector_sync``).
         """
-        from a2x_registry.vector.utils.embedding import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
         model_name = embedding_model or DEFAULT_EMBEDDING_MODEL
         info = EMBEDDING_MODELS.get(model_name)
         dim = info["dim"] if info else embedding_dim

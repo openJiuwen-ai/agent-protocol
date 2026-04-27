@@ -21,20 +21,32 @@ classifiers = [
     "Framework :: FastAPI",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# Default install (== "agentteam" mode) — only what the SDK-facing slice
+# of the backend needs. Heavy ML/index deps are factored into the [vector]
+# and [evaluation] extras; install [full] to restore prior 0.1.5 default
+# behavior.
 dependencies = [
     "requests>=2.28",
-    "tqdm>=4.64",
-    "numpy>=1.23",
-    "sentence-transformers>=2.2",
-    "chromadb>=0.4",
     "fastapi>=0.104",
     "pydantic>=2.0",
     "python-multipart>=0.0.6",
-    "uvicorn[standard]>=0.24",
-    "websockets>=12.0",
+    "uvicorn[standard]>=0.24",       # bundles websockets
 ]
 
 [project.optional-dependencies]
+# Vector search + A2X taxonomy build/search + traditional search backends.
+# Without this group, /api/search and POST /api/datasets/{ds}/build return
+# 503 with a structured install hint; SDK CRUD/registration/reservation
+# routes are unaffected.
+vector = [
+    "numpy>=1.23",
+    "sentence-transformers>=2.2",
+    "chromadb>=0.4",
+]
+# Progress bars used by the a2x-evaluate-* CLIs.
+evaluation = ["tqdm>=4.64"]
+# Convenience: equivalent to the pre-0.1.6 default install.
+full = ["a2x-registry[vector,evaluation]"]
 dev = ["build>=1.0", "twine>=5.0", "pytest>=7.0"]
 
 [project.urls]
@@ -43,7 +55,7 @@ Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
 Documentation = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry#readme"
 
 [project.scripts]
-a2x-backend = "a2x_registry.backend.__main__:main"
+a2x-registry = "a2x_registry.backend.__main__:main"
 a2x-build = "a2x_registry.a2x.build.__main__:main"
 a2x-register = "a2x_registry.register.__main__:main"
 a2x-evaluate-a2x = "a2x_registry.a2x.evaluation.__main__:main"

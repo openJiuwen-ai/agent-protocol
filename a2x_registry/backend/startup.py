@@ -8,6 +8,7 @@ import logging
 import time
 
 from a2x_registry.common.paths import database_dir
+from a2x_registry.common import feature_flags
 
 DATABASE_DIR = database_dir()
 
@@ -49,7 +50,13 @@ def run_warmup() -> None:
             logger.info("  Registry %s: %d services, taxonomy=%s", ds, count, state.value)
 
         set_registry(registry_svc)
-        registry_svc.set_on_service_changed(lambda ds: search_service.schedule_vector_sync(ds))
+        # Only wire vector-sync side effects when the [vector] extras are
+        # installed; otherwise every SDK register/deregister would spawn a
+        # daemon thread that immediately ImportErrors on chromadb.
+        if feature_flags.has("vector"):
+            registry_svc.set_on_service_changed(
+                lambda ds: search_service.schedule_vector_sync(ds)
+            )
         logger.info("Warmup: registry done (%.1fs)", time.time() - t0)
 
         # 2. Taxonomy caches
@@ -63,70 +70,76 @@ def run_warmup() -> None:
                 logger.warning("  Taxonomy failed for %s: %s", ds, e)
         logger.info("Warmup: taxonomy done (%.1fs)", time.time() - t0)
 
-        # 3. A2X engines
-        _stage("加载 A2X 搜索引擎...", 35)
-        for ds in discover_datasets():
-            paths = resolve_dataset_paths(ds)
-            if paths["taxonomy_path"].exists():
-                for mode in ("get_one", "get_all", "get_important"):
-                    _stage(f"加载 A2X {mode} ({ds})...", 35)
-                    try:
-                        search_service._get_a2x(ds, mode)
-                        logger.info("  A2X %s ready: %s", mode, ds)
-                    except Exception as e:
-                        logger.warning("  A2X %s failed for %s: %s", mode, ds, e)
-        logger.info("Warmup: A2X done (%.1fs)", time.time() - t0)
+        # Stages 3-6 all need the [vector] extras (numpy / sentence_transformers
+        # / chromadb). In lite installs we skip them cleanly so warmup still
+        # completes — the registry/dataset routes are already serving by now.
+        if feature_flags.has("vector"):
+            # 3. A2X engines
+            _stage("加载 A2X 搜索引擎...", 35)
+            for ds in discover_datasets():
+                paths = resolve_dataset_paths(ds)
+                if paths["taxonomy_path"].exists():
+                    for mode in ("get_one", "get_all", "get_important"):
+                        _stage(f"加载 A2X {mode} ({ds})...", 35)
+                        try:
+                            search_service._get_a2x(ds, mode)
+                            logger.info("  A2X %s ready: %s", mode, ds)
+                        except Exception as e:
+                            logger.warning("  A2X %s failed for %s: %s", mode, ds, e)
+            logger.info("Warmup: A2X done (%.1fs)", time.time() - t0)
 
-        # 4. Clean stale ChromaDB collections
-        _stage("清理向量数据库...", 58)
-        try:
-            import chromadb
-            chroma_dir = str(DATABASE_DIR / "chroma")
-            client = chromadb.PersistentClient(path=chroma_dir)
-            active_datasets = set(discover_datasets())
-            active_collections = {ds.lower().replace("-", "_") for ds in active_datasets}
-            for col in client.list_collections():
-                if col.name not in active_collections:
-                    client.delete_collection(col.name)
-                    logger.info("  Removed stale collection: %s", col.name)
-        except Exception as e:
-            logger.warning("  ChromaDB cleanup failed: %s", e)
-
-        # 5. Vector sync for registry-managed datasets
-        _stage("同步向量数据库...", 62)
-        for ds in registry_states:
-            _stage(f"同步向量数据库 ({ds})...", 62)
+            # 4. Clean stale ChromaDB collections
+            _stage("清理向量数据库...", 58)
             try:
-                search_service.sync_vector(ds)
-                logger.info("  Vector sync done: %s", ds)
+                import chromadb
+                chroma_dir = str(DATABASE_DIR / "chroma")
+                client = chromadb.PersistentClient(path=chroma_dir)
+                active_datasets = set(discover_datasets())
+                active_collections = {ds.lower().replace("-", "_") for ds in active_datasets}
+                for col in client.list_collections():
+                    if col.name not in active_collections:
+                        client.delete_collection(col.name)
+                        logger.info("  Removed stale collection: %s", col.name)
             except Exception as e:
-                logger.warning("  Vector sync failed for %s: %s", ds, e)
-        logger.info("Warmup: vector sync done (%.1fs)", time.time() - t0)
+                logger.warning("  ChromaDB cleanup failed: %s", e)
 
-        # 5. Vector engines
-        _stage("加载向量搜索引擎...", 75)
-        for ds in discover_datasets():
-            _stage(f"加载向量引擎 ({ds})...", 75)
-            try:
-                search_service._get_vector(ds)
-                logger.info("  Vector ready: %s", ds)
-            except Exception as e:
-                logger.warning("  Vector failed for %s: %s", ds, e)
-        logger.info("Warmup: vector done (%.1fs)", time.time() - t0)
-
-        # 6. Pre-heat embedding models (one per unique model across datasets)
-        _stage("预热向量模型...", 90)
-        seen_models = set()
-        for ds in discover_datasets():
-            model_name = search_service.read_vector_config(ds)
-            if model_name not in seen_models:
+            # 5. Vector sync for registry-managed datasets
+            _stage("同步向量数据库...", 62)
+            for ds in registry_states:
+                _stage(f"同步向量数据库 ({ds})...", 62)
                 try:
-                    model = search_service._get_embedding_model(model_name)
-                    model.encode("warmup query", show_progress=False)
-                    logger.info("  Embedding model pre-heated: %s", model_name)
-                    seen_models.add(model_name)
+                    search_service.sync_vector(ds)
+                    logger.info("  Vector sync done: %s", ds)
                 except Exception as e:
-                    logger.warning("  Embedding warmup failed for %s: %s", model_name, e)
+                    logger.warning("  Vector sync failed for %s: %s", ds, e)
+            logger.info("Warmup: vector sync done (%.1fs)", time.time() - t0)
+
+            # 5b. Vector engines
+            _stage("加载向量搜索引擎...", 75)
+            for ds in discover_datasets():
+                _stage(f"加载向量引擎 ({ds})...", 75)
+                try:
+                    search_service._get_vector(ds)
+                    logger.info("  Vector ready: %s", ds)
+                except Exception as e:
+                    logger.warning("  Vector failed for %s: %s", ds, e)
+            logger.info("Warmup: vector done (%.1fs)", time.time() - t0)
+
+            # 6. Pre-heat embedding models (one per unique model across datasets)
+            _stage("预热向量模型...", 90)
+            seen_models = set()
+            for ds in discover_datasets():
+                model_name = search_service.read_vector_config(ds)
+                if model_name not in seen_models:
+                    try:
+                        model = search_service._get_embedding_model(model_name)
+                        model.encode("warmup query", show_progress=False)
+                        logger.info("  Embedding model pre-heated: %s", model_name)
+                        seen_models.add(model_name)
+                    except Exception as e:
+                        logger.warning("  Embedding warmup failed for %s: %s", model_name, e)
+        else:
+            logger.info("Warmup: lite install detected — skipping A2X / vector / chroma stages")
 
         warmup_state["stage"] = "完成"
         warmup_state["progress"] = 100

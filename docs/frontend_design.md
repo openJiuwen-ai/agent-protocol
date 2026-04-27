@@ -3,7 +3,7 @@
 前端基于 **React 18 + TypeScript + Vite + Tailwind CSS + D3.js**，构建产物由后端静态托管，无独立服务器。
 
 ```
-src/frontend/src/
+ui/frontend/src/
 ├── App.tsx                          # 根组件：模式切换、全局状态
 ├── types/index.ts                   # TypeScript 接口定义
 ├── methodColors.ts                  # 各搜索方法配色
@@ -249,11 +249,11 @@ GET /api/datasets/{dataset}/taxonomy
 
 ```bash
 # 开发模式（Vite 热更新）
-python -m a2x_registry.ui   # 自动启动 Vite dev server（port 5173）+ 后端（port 8000）
+python ui/launcher.py            # 自动启动 Vite dev server（port 5173）+ 后端（port 8000）
 
-# 生产构建
-python -m a2x_registry.frontend  # 执行 npm run build，产物输出到 src/frontend/dist/
+# 生产构建（Node.js 必需）
+cd ui/frontend && npm install && npm run build   # 产物输出到 ui/frontend/dist/
 
 # 生产模式（后端托管静态文件）
-python -m a2x_registry.ui   # 检测到 dist/ 存在，后端直接托管，访问 http://localhost:8000
+python ui/launcher.py            # 检测到 dist/ 存在，后端直接托管，访问 http://localhost:8000
 ```

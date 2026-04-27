@@ -6,12 +6,14 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from a2x_registry.backend.routers import search, dataset, build, provider
 from a2x_registry.backend.startup import warmup_state, run_warmup
+from a2x_registry.common.errors import FeatureNotInstalledError
 
 app = FastAPI(
     title="A2X Registry Demo",
@@ -31,6 +33,25 @@ app.include_router(search.router)
 app.include_router(dataset.router)
 app.include_router(build.router)
 app.include_router(provider.router)
+
+
+@app.exception_handler(FeatureNotInstalledError)
+async def _feature_not_installed_handler(_request: Request, exc: FeatureNotInstalledError):
+    """Render missing-extras failures as 503 with a structured install hint.
+
+    Routes hit by the SDK never reach here (they don't gate behind extras).
+    Heavy routes (search/build) raise this from their entry-point
+    ``feature_flags.require()`` call when the corresponding extras are
+    not installed. The body's ``detail`` is a copy-pasteable pip command.
+    """
+    return JSONResponse(
+        status_code=503,
+        content={
+            "feature": exc.feature,
+            "extras": exc.extras,
+            "detail": str(exc),
+        },
+    )
 
 
 @app.get("/api/warmup-status")

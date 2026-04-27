@@ -10,7 +10,7 @@ Usage:
 from dataclasses import dataclass
 
 from a2x_registry.common.models import SearchResult  # noqa: F401
-from a2x_registry.vector.utils import EmbeddingModel
+from a2x_registry.vector.utils.embedding import EmbeddingModel
 from a2x_registry.vector.build.index_builder import IndexBuilder
 
 

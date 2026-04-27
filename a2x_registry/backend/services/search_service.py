@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Dict, Generator, List, Optional
 
+from a2x_registry.common import feature_flags
+
 logger = logging.getLogger(__name__)
 
 # Optional reference to RegistryService for taxonomy state checks.
@@ -107,11 +109,11 @@ class SearchService:
 
     def _get_embedding_model(self, model_name: str | None = None):
         """Get or create an EmbeddingModel by name (cached by model name)."""
-        from a2x_registry.vector.utils.embedding import DEFAULT_EMBEDDING_MODEL
+        from a2x_registry.vector.utils.embedding_constants import DEFAULT_EMBEDDING_MODEL
         name = model_name or DEFAULT_EMBEDDING_MODEL
         with self._lock:
             if name not in self._embedding_models:
-                from a2x_registry.vector.utils import EmbeddingModel
+                from a2x_registry.vector.utils.embedding import EmbeddingModel
                 self._embedding_models[name] = EmbeddingModel(name)
             return self._embedding_models[name]
 
@@ -127,6 +129,7 @@ class SearchService:
             return self._llm_client
 
     def _get_a2x(self, dataset: str, mode: str):
+        feature_flags.require("vector")
         key = f"{dataset}_{mode}"
         with self._lock:
             if key not in self._a2x_instances:
@@ -143,6 +146,7 @@ class SearchService:
             return self._a2x_instances[key]
 
     def _get_traditional(self, dataset: str):
+        feature_flags.require("vector")
         with self._lock:
             if dataset not in self._traditional_instances:
                 from a2x_registry.traditional.search.traditional_search import TraditionalSearch
@@ -153,6 +157,7 @@ class SearchService:
             return self._traditional_instances[dataset]
 
     def _get_vector(self, dataset: str):
+        feature_flags.require("vector")
         with self._lock:
             if dataset not in self._vector_instances:
                 from a2x_registry.vector.search.vector_search import VectorSearch
@@ -180,7 +185,13 @@ class SearchService:
         to know about ChromaDB internals or the cache dict layout.
         Best-effort: ChromaDB clear failures are logged but not raised
         (the caller is mid-delete and shouldn't be blocked by side state).
+
+        Lite-safe: when ``[vector]`` is not installed, returns immediately —
+        there's nothing cached and no chroma collection to clear, so SDK
+        ``delete_dataset`` stays silent (no ImportError log noise).
         """
+        if not feature_flags.has("vector"):
+            return
         # Clear ChromaDB collection (idempotent — collection may not exist)
         try:
             from a2x_registry.vector.utils.chroma_store import ChromaStore
@@ -266,7 +277,15 @@ class SearchService:
             self._vector_instances.pop(dataset, None)
 
     def schedule_vector_sync(self, dataset: str) -> None:
-        """Launch a background daemon thread to sync the vector index."""
+        """Launch a background daemon thread to sync the vector index.
+
+        Lite-safe: returns early without spawning a thread when ``[vector]``
+        is not installed (the on_service_changed callback registered in
+        startup.py is also skipped in that case, but this guard is a
+        defense in depth).
+        """
+        if not feature_flags.has("vector"):
+            return
         t = threading.Thread(target=self._sync_vector_safe, args=(dataset,), daemon=True)
         t.start()
 

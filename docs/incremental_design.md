@@ -2,7 +2,7 @@
 
 **版本**: v0.1.0
 
-本文档描述增量构建模块（`src/a2x/incremental/`）的设计。系统整体视图见 [a2x_design.md](a2x_design.md)。
+本文档描述增量构建模块（`a2x_registry/a2x/incremental/`）的设计。系统整体视图见 [a2x_design.md](a2x_design.md)。
 
 ---
 
@@ -117,7 +117,7 @@ classDiagram
     }
 
     class LLMClient {
-        <<src.common.llm_client>>
+        <<a2x_registry.common.llm_client>>
         +call(messages, temperature, max_tokens) LLMResponse
     }
 

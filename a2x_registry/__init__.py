@@ -16,4 +16,4 @@ these resources in the current working directory, falling back to
 ``~/.a2x_registry/``.
 """
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"

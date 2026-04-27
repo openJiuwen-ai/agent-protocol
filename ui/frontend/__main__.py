@@ -1,7 +1,7 @@
 """Build the frontend for production.
 
 Usage:
-    python -m src.frontend   # clean dist/ (if exists), install deps (if needed), build
+    python ui/frontend/__main__.py   # clean dist/ (if exists), install deps (if needed), build
 """
 
 import shutil
@@ -31,7 +31,7 @@ def main():
         print("  ERROR: build failed.")
         sys.exit(1)
 
-    print("  Done. Run `python -m src.ui` to start.")
+    print("  Done. Run `python ui/launcher.py` to start.")
 
 
 if __name__ == "__main__":

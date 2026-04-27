@@ -1,12 +1,12 @@
 # 注册模块设计文档
 
-本文档详细描述注册模块（`src/register/`）的设计。系统整体视图及其他模块设计见 [a2x_design.md](a2x_design.md)。
+本文档详细描述注册模块（`a2x_registry/register/`）的设计。系统整体视图及其他模块设计见 [a2x_design.md](a2x_design.md)。
 
 ---
 
 ## 1. 流程逻辑说明
 
-注册模块为 A2X Registry 提供服务注册能力，支持三类服务（Generic + A2A Agent + Skill），多数据集，多种注册入口（本地配置文件 / Python API / CLI / Skill 文件夹）。后端 HTTP API（`src/backend/routers/`）通过调用本模块的 Python 接口实现远程访问。
+注册模块为 A2X Registry 提供服务注册能力，支持三类服务（Generic + A2A Agent + Skill），多数据集，多种注册入口（本地配置文件 / Python API / CLI / Skill 文件夹）。后端 HTTP API（`a2x_registry/backend/routers/`）通过调用本模块的 Python 接口实现远程访问。
 
 参考 Nacos 设计思路：分离"注册存储"与"消费输出"，但针对单机文件驱动场景做了简化。
 
@@ -619,7 +619,7 @@ registry_svc.set_on_service_changed(callback)
 ## 11. 模块结构
 
 ```
-src/register/
+a2x_registry/register/
     __init__.py          导出 RegistryService, RegistryStore, validate_service, FormatValidator, ...
     models.py            Pydantic 数据模型（RegistryEntry, AgentCard, Request/Response 等）
     store.py             RegistryStore: 单数据集文件 I/O（含 register_config 读写）

@@ -32,7 +32,7 @@ npm install
 npm run build
 ```
 
-After this, `ui/launcher.py` (or `a2x-backend` with `A2X_FRONTEND_DIST_DIR` set) will serve the built assets in prod mode.
+After this, `ui/launcher.py` (or `a2x-registry` with `A2X_FRONTEND_DIST_DIR` set) will serve the built assets in prod mode.
 
 ## Options
 
