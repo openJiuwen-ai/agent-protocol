@@ -26,7 +26,7 @@ public:
     void DeleteInfo(const std::string& taskId, const std::optional<std::string>& configId = std::nullopt) override;
 
 private:
-    std::mutex m_;
+    std::mutex m;
     std::unordered_map<std::string, std::vector<A2A::PushNotificationConfig>> data_;
 };
 

@@ -21,7 +21,7 @@ struct HttpServerManagerConfig {
     std::string host; // Host address.
     uint16_t port{0}; // Port number.
     size_t ioThreadNum{0}; // Number of IO threads.
-    TlsConfig tlsConfig_{};
+    TlsConfig tlsConfig{};
     RouteMap routeMap;
 };
 

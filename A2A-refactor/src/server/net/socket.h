@@ -15,7 +15,7 @@ namespace A2A::Server {
 
 class Socket;
 using SocketPtr = std::shared_ptr<Socket>;
-constexpr int ListenerPortStringSize = 16;
+constexpr int LISTENER_PORT_STRING_SIZE = 16;
 
 // Callback signatures
 using ReadCallback = std::function<void(const SocketPtr& sock)>;
@@ -59,7 +59,7 @@ public:
     virtual void Close();
 
     // Send data (pure virtual; implemented by subclasses)
-    virtual bool Send(const void* data, size_t len) = 0;
+    virtual bool Send(const char* data, size_t len) = 0;
 
     // Internal fd settings
     static bool SetNonBlocking(int fd);

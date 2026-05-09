@@ -41,7 +41,7 @@ public:
     void RetrieveAll();
     std::string RetrieveAllAsString();
 
-    void Append(const void* data, size_t len);
+    void Append(const char* data, size_t len);
     void Append(std::string_view sv);
 
     // Read data from the given fd. Returns number of bytes read,
@@ -76,7 +76,7 @@ public:
     bool Connected() const;
 
     // Send data. Returns true on success or if data was queued.
-    bool Send(const void* data, size_t len) override;
+    bool Send(const char* data, size_t len) override;
 
     // Half-close / close the connection
     void ShutdownWrite();

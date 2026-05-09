@@ -67,7 +67,7 @@ std::string Buffer::RetrieveAllAsString()
     return s;
 }
 
-void Buffer::Append(const void* data, size_t len)
+void Buffer::Append(const char* data, size_t len)
 {
     EnsureWritable(len);
     std::memcpy(buf_.data() + w_, data, len);
@@ -174,7 +174,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     hints.ai_family = AF_UNSPEC;
     hints.ai_flags = AI_ADDRCONFIG;
 
-    char portStr[ListenerPortStringSize];
+    char portStr[LISTENER_PORT_STRING_SIZE];
     std::snprintf(portStr, sizeof(portStr), "%u", static_cast<unsigned>(port));
 
     addrinfo* res = nullptr;
@@ -450,7 +450,7 @@ void TcpSocket::HandleWritable()
     }
 }
 
-bool TcpSocket::Send(const void* data, size_t len)
+bool TcpSocket::Send(const char* data, size_t len)
 {
     if (!Connected()) {
         return false;
@@ -459,7 +459,7 @@ bool TcpSocket::Send(const void* data, size_t len)
         return true;
     }
 
-    const char* p = static_cast<const char*>(data);
+    const char* p = data;
 
     // If there is no queued data, try an immediate non-blocking send to
     // avoid copying into the send queue. On EAGAIN/EWOULDBLOCK we fall

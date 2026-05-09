@@ -53,7 +53,7 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     hints.ai_flags = AI_PASSIVE;
     hints.ai_family = AF_UNSPEC;
 
-    char portStr[ListenerPortStringSize];
+    char portStr[LISTENER_PORT_STRING_SIZE];
     std::snprintf(portStr, sizeof(portStr), "%u", static_cast<unsigned>(port));
 
     addrinfo* res = nullptr;

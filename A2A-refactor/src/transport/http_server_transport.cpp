@@ -20,10 +20,12 @@
 namespace A2A::Transport {
 
 struct EmptyEmitter : TransportEmitter {
-    void WriteData(const std::string& data) override {
+    void WriteData(const std::string& data) override
+    {
         // Do nothing for non-streaming requests
     }
-    void WriteDone() override {
+    void WriteDone() override
+    {
         // Do nothing for non-streaming requests
     }
 } g_emptyEmitter;
@@ -70,7 +72,7 @@ int HttpServerTransport::Start()
     config.ioThreadNum = config_.ioThreadNum;
 
     // Disable TLS for simple HTTP service
-    config.tlsConfig_.enabled = false;
+    config.tlsConfig.enabled = false;
 
     config.routeMap = routeMap;
 
@@ -259,7 +261,8 @@ void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, 
     }
 }
 
-void HttpServerTransport::SetCommonHeaders(Http::HttpResponse& response) {
+void HttpServerTransport::SetCommonHeaders(Http::HttpResponse& response)
+{
     response.success = true;
     response.statusCode = Http::HTTP_STATUS_OK;
     response.headers[Http::CACHE_CONTROL_HEADER] = Http::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;

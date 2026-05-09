@@ -10,7 +10,7 @@ namespace A2A::Server {
 void InMemoryPushNotificationConfigStore::SetInfo(const std::string& taskId,
                                                   PushNotificationConfig notification_config)
 {
-    std::lock_guard<std::mutex> g(m_);
+    std::lock_guard<std::mutex> g(m);
     auto& vec = data_[taskId];
     if (!notification_config.id)
         notification_config.id = taskId;
@@ -25,7 +25,7 @@ void InMemoryPushNotificationConfigStore::SetInfo(const std::string& taskId,
 
 std::vector<A2A::PushNotificationConfig> InMemoryPushNotificationConfigStore::GetInfo(const std::string& taskId)
 {
-    std::lock_guard<std::mutex> g(m_);
+    std::lock_guard<std::mutex> g(m);
     auto it = data_.find(taskId);
     if (it == data_.end()) {
         return {};
@@ -36,7 +36,7 @@ std::vector<A2A::PushNotificationConfig> InMemoryPushNotificationConfigStore::Ge
 void InMemoryPushNotificationConfigStore::DeleteInfo(const std::string& taskId,
                                                      const std::optional<std::string>& configId)
 {
-    std::lock_guard<std::mutex> g(m_);
+    std::lock_guard<std::mutex> g(m);
     auto it = data_.find(taskId);
     if (it == data_.end()) {
         return;

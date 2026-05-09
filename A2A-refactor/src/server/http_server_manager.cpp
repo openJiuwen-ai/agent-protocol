@@ -34,7 +34,7 @@ void HttpServerManager::Start()
 
     for (size_t i = 0; i < config_.ioThreadNum; ++i) {
         servers_.push_back(
-            std::make_unique<HttpServer>(config_.host, config_.port, config_.tlsConfig_, config_.routeMap));
+            std::make_unique<HttpServer>(config_.host, config_.port, config_.tlsConfig, config_.routeMap));
     }
 
     for (auto& server : servers_) {
