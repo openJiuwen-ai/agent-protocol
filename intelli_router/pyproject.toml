@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "intelli-router"
+version = "0.1.0"
+description = "轻量级LLM代理SDK，实现多部署端点管理和智能路由"
+requires-python = ">=3.9"
+dependencies = [
+    "httpx",
+]
+
+[project.urls]
+Source = "https://gitcode.com/openJiuwen/agent-protocol.git"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
