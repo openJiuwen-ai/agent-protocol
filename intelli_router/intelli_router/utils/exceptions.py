@@ -1,18 +1,18 @@
 """
-SDK LLM 异常定义
+IntelliRouter 异常定义
 
 分层异常体系:
-- SdkLlmError (基桩)
+- IntelliRouterError (基类)
 - RouterError (路由)
 - DeploymentError (部署)
 - CacheError (缓存)
-- HealthCheckError (健查)
+- HealthCheckError (健康检查)
 - ConfigError (配置)
 """
 from typing import Optional, Dict, Any
 
-class SdkLlmError(Exception):
-    """SDK LLM 基础异常"""
+class IntelliRouterError(Exception):
+    """IntelliRouter 基础异常"""
 
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         self.message = message
@@ -29,7 +29,7 @@ class SdkLlmError(Exception):
 
 # ============ 路由异常 ============
 
-class RouterError(SdkLlmError):
+class RouterError(IntelliRouterError):
     """路由器基础异常"""
     pass
 
@@ -62,7 +62,7 @@ class StrategyError(RouterError):
 
 # ============ 部署异常 ============
 
-class DeploymentError(SdkLlmError):
+class DeploymentError(IntelliRouterError):
     """部署基础异常"""
     pass
 
@@ -143,7 +143,7 @@ class DeploymentNetworkError(DeploymentError):
 
 # ============ 缓存异常 ============
 
-class CacheError(SdkLlmError):
+class CacheError(IntelliRouterError):
     """缓存基础异常"""
     pass
 
@@ -167,7 +167,7 @@ class CacheExpired(CacheError):
 
 # ============ 健康检查异常 ============
 
-class HealthCheckError(SdkLlmError):
+class HealthCheckError(IntelliRouterError):
     """健庭检查基础异常"""
     pass
 
@@ -191,7 +191,7 @@ class HealthCheckTimeout(HealthCheckError):
 
 # ============ 配置异常 ============
 
-class ConfigError(SdkLlmError):
+class ConfigError(IntelliRouterError):
     """配罫基础异常"""
     pass
 
@@ -237,7 +237,7 @@ ERROR_STATUS_MAP = {
     CacheError: 500,
     HealthCheckError: 500,
     ConfigError: 400,
-    SdkLlmError: 500,
+    IntelliRouterError: 500,
 }
 
 def get_status_code(error: Exception) -> int:

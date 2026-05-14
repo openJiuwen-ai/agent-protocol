@@ -15,12 +15,12 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 
-from sdk_llm.strategy.token_aware import TokenAwareStrategy
-from sdk_llm.strategy.rate_limit_aware import RateLimitAwareStrategy
-from sdk_llm.strategy.adaptive import AdaptiveStrategy
-from sdk_llm.core.state import LocalRouterState, TokenUsage, RPMTracker, LatencyRecord
-from sdk_llm.core.deployment import Deployment, DeploymentStatus
-from sdk_llm.core.context import RoutingContext
+from intelli_router.strategy.token_aware import TokenAwareStrategy
+from intelli_router.strategy.rate_limit_aware import RateLimitAwareStrategy
+from intelli_router.strategy.adaptive import AdaptiveStrategy
+from intelli_router.core.state import LocalRouterState, TokenUsage, RPMTracker, LatencyRecord
+from intelli_router.core.deployment import Deployment, DeploymentStatus
+from intelli_router.core.context import RoutingContext
 
 
 def create_demo_state() -> LocalRouterState:

@@ -1,8 +1,8 @@
-# SDK LLM - 轻件LLM代理SDK
+# IntelliRouter - 轻量LLM代理SDK
 
 ## 项目简介
 
-**SDK LLM** 是一个轻量级LLM代理SDK，实现多部署端点管理和智能路由。
+**IntelliRouter** 是一个轻量级LLM代理SDK，实现多部署端点管理和智能路由。
 
 核心特性:
 - **API池化**: 单一模型名 → 多部署端点映射
@@ -14,7 +14,7 @@
 ## 代码结构设计
 
 ```
-sdk_llm/
+intelli_router/
 ├── __init__.py              公共接口
 ├── core/
 │   ├── __init__.py
@@ -64,7 +64,7 @@ sdk_llm/
 
 ## 路由策略介绍
 
-本SDK实现三三路由策略:
+本SDK实现了三种路由策略:
 
 ### 1. Token感知策略 (TokenAwareStrategy)
 
@@ -125,7 +125,7 @@ score = w_health * health_score
 
 **运行**:
 ```bash
-python3 sdk_llm/demo_adaptive_strategy.py
+python3 intelli_router/demo_adaptive_strategy.py
 ```
 
 **输出**:
@@ -166,7 +166,7 @@ MODEL_PORT_MAP = {
 
 **运行**:
 ```bash
-python3 sdk_llm/demo_real_llm_adaptive.py
+python3 intelli_router/demo_real_llm_adaptive.py
 ```
 
 **输出**:
@@ -192,7 +192,7 @@ python3 sdk_llm/demo_real_llm_adaptive.py
 
 **运行**:
 ```bash
-python3 -m pytest sdk_llm/tests/sdk_proxy_demo/test_adaptive_strategy.py -v
+python3 -m pytest intelli_router/tests/sdk_proxy_demo/test_adaptive_strategy.py -v
 ```
 
 ## 项目结构

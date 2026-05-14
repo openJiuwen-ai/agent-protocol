@@ -1,6 +1,5 @@
 """
-SDK LLM - 公开接口
-
+IntelliRouter - 公开接口
 """
 from .router.reliable_router import ReliableRouter
 from .router.base_router import BaseRouter

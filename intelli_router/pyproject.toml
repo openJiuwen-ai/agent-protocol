@@ -11,8 +11,18 @@ dependencies = [
     "httpx",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
 [project.urls]
 Source = "https://gitcode.com/openJiuwen/agent-protocol.git"
 
+[tool.hatch.build.targets.wheel]
+packages = ["intelli_router"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

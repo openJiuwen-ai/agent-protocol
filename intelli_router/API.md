@@ -536,7 +536,7 @@ class HealthCheckResult:
 ### 异常层次
 
 ```
-SdkLlmError (基类)
+IntelliRouterError (基类)
 ├── RouterError
 │   ├── NoDeploymentAvailable
 │   ├── AllDeploymentsFailed
@@ -557,12 +557,12 @@ SdkLlmError (基类)
 
 ---
 
-### `SdkLlmError`
+### `IntelliRouterError`
 
 基类异常。
 
 ```python
-class SdkLlmError(Exception):
+class IntelliRouterError(Exception):
     def __init__(
         self,
         message: str,
@@ -578,7 +578,7 @@ class SdkLlmError(Exception):
 路由器相关异常基类。
 
 ```python
-class RouterError(SdkLlmError): ...
+class RouterError(IntelliRouterError): ...
 ```
 
 ---
@@ -633,7 +633,7 @@ class StrategyError(RouterError):
 部署相关异常基类。
 
 ```python
-class DeploymentError(SdkLlmError): ...
+class DeploymentError(IntelliRouterError): ...
 ```
 
 ---
@@ -673,7 +673,7 @@ class DeploymentFailed(DeploymentError):
 缓存相关异常基类。
 
 ```python
-class CacheError(SdkLlmError): ...
+class CacheError(IntelliRouterError): ...
 ```
 
 ---
@@ -709,7 +709,7 @@ class CacheExpired(CacheError):
 健康检查相关异常基类。
 
 ```python
-class HealthCheckError(SdkLlmError): ...
+class HealthCheckError(IntelliRouterError): ...
 ```
 
 ---
@@ -749,7 +749,7 @@ class HealthCheckTimeout(HealthCheckError):
 配置相关异常基类。
 
 ```python
-class ConfigError(SdkLlmError): ...
+class ConfigError(IntelliRouterError): ...
 ```
 
 ---
@@ -867,7 +867,7 @@ class RoutingContext:
 ### 基础使用
 
 ```python
-from sdk_llm import ReliableRouter, Deployment
+from intelli_router import ReliableRouter, Deployment
 
 deployments = [
     Deployment(
@@ -900,9 +900,9 @@ response = await router.completion(
 ### 使用自定义策略
 
 ```python
-from sdk_llm import ReliableRouter, Deployment
-from sdk_llm.core.state import LocalRouterState
-from sdk_llm.strategy import create_strategy
+from intelli_router import ReliableRouter, Deployment
+from intelli_router.core.state import LocalRouterState
+from intelli_router.strategy import create_strategy
 
 state = LocalRouterState()
 
@@ -937,7 +937,7 @@ results = await router.batch_completion(requests, max_concurrent=5)
 ### 使用缓存
 
 ```python
-from sdk_llm.cache import LocalCache
+from intelli_router.cache import LocalCache
 
 cache = LocalCache(max_size=1000, default_ttl=3600)
 cache.set_cache("my_key", {"result": "value"}, ttl=1800)
@@ -949,8 +949,8 @@ remaining_ttl, expires_at = cache.get_cache_with_ttl("my_key")
 ### 健康检查
 
 ```python
-from sdk_llm.health import SDKHealthChecker
-from sdk_llm.core.state import LocalRouterState
+from intelli_router.health import SDKHealthChecker
+from intelli_router.core.state import LocalRouterState
 
 state = LocalRouterState()
 health_checker = SDKHealthChecker(
@@ -969,9 +969,9 @@ print(f"Healthy: {result.is_healthy}, Latency: {result.latency}")
 ### 异常处理
 
 ```python
-from sdk_llm import ReliableRouter, Deployment
-from sdk_llm.exceptions import (
-    SdkLlmError,
+from intelli_router import ReliableRouter, Deployment
+from intelli_router.exceptions import (
+    IntelliRouterError,
     NoDeploymentAvailable,
     AllDeploymentsFailed,
     get_status_code
@@ -986,7 +986,7 @@ except NoDeploymentAvailable as e:
     print(f"No deployment available for {e.model}")
 except AllDeploymentsFailed as e:
     print(f"All deployments failed: {e.errors}")
-except SdkLlmError as e:
+except IntelliRouterError as e:
     print(f"SDK Error: {e.to_dict()}")
     status_code = get_status_code(e)
 ```
