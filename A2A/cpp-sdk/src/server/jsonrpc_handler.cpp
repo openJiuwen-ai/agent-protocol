@@ -1,11 +1,14 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include "jsonrpc_handler.h"
-#include "utils/errors.h"
+#include "types.h"
+#include "error.h"
+#include "jsonrpc.h"
+#include "a2a_errno.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 using nlohmann::json;
 
@@ -28,10 +31,15 @@ json JSONRPCHandler::OnMessageSend(const json& req)
             p.metadata = pr.at("metadata");
         }
         auto r = handler_->OnSendMessage(p, nullptr);
-        json result = std::holds_alternative<Message>(r) ? json(std::get<Message>(r)) : json(std::get<Task>(r));
+        json result;
+        if (std::holds_alternative<Message>(r)) {
+            result = std::get<Message>(r);
+        } else {
+            result = std::get<Task>(r);
+        }
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -51,7 +59,7 @@ json JSONRPCHandler::OnGetTask(const json& req)
         auto t = handler_->OnGetTask(p, nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", t}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -68,7 +76,7 @@ json JSONRPCHandler::OnCancelTask(const json& req)
         auto t = handler_->OnCancelTask(p, nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", t}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -80,7 +88,7 @@ json JSONRPCHandler::OnSetPushNotificationConfig(const json& req)
         auto r = handler_->OnSetTaskPushNotificationConfig(cfg, nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", r}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -92,7 +100,7 @@ json JSONRPCHandler::OnGetPushNotificationConfig(const json& req)
         auto r = handler_->OnGetTaskPushNotificationConfig(p, nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", r}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -104,7 +112,7 @@ json JSONRPCHandler::OnListPushNotificationConfig(const json& req)
         auto r = handler_->OnListTaskPushNotificationConfigs(p, nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", r}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -116,7 +124,7 @@ json JSONRPCHandler::OnDeletePushNotificationConfig(const json& req)
         handler_->OnDeleteTaskPushNotificationConfig(p, nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", nullptr}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -127,7 +135,7 @@ json JSONRPCHandler::OnGetAgentCard(const json& req)
         auto c = handler_->OnGetCard(nullptr);
         return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", c}};
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::InternalError), e.what());
+        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
     }
 }
 
@@ -156,4 +164,4 @@ void JSONRPCHandler::OnResubscribeToTask(const json& req, const RequestHandler::
     handler_->OnResubscribeToTask(p, emit, nullptr);
 }
 
-} // namespace a2a::server
+} // namespace A2A::Server

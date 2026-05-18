@@ -1,17 +1,17 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <iomanip>
 
-#include "utils/id_generator.h"
-#include "utils/uuid.h"
+#include "uuid.h"
+#include "id_generator.h"
 
-namespace a2a {
+namespace A2A {
 
 std::string UUIDGenerator::Generate(const IDGeneratorContext& ctx)
 {
-    return generateUuid();
+    return GenerateUuid();
 }
 
-} // namespace a2a
+} // namespace A2A

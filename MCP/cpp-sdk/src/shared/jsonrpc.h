@@ -6,6 +6,7 @@
 #define MCP_JSONRPC_INCLUDE_H_
 
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -18,9 +19,23 @@
 
 namespace Mcp {
 
+// Internal type alias for JSON processing
+using JsonValue = nlohmann::json;
+
+// JSON-RPC request ID type (can be int64_t or string)
+using RequestId = std::variant<int64_t, std::string>;
+
+// ProgressToken and RequestParamsMeta are defined in mcp_type.h
+
 // Base class for pure parameter data
+// All request-specific parameter structs can optionally use `cursor` for pagination.
 struct RequestParams {
     virtual ~RequestParams() = default;
+    /** Optional _meta, serialized as params._meta when present. */
+    std::optional<RequestParamsMeta> _meta;
+
+    // Optional pagination cursor used by list-style methods (e.g., tools/list, resources/list).
+    std::optional<std::string> cursor;
 };
 
 struct Request : public MCPBaseType {
@@ -40,7 +55,7 @@ struct Request : public MCPBaseType {
 class JSONRPCRequest {
 public:
     std::string jsonrpc_;
-    int64_t id_;
+    RequestId id_;
     std::string method_;
     std::unique_ptr<Request> request_;
 
@@ -53,7 +68,7 @@ public:
 class JSONRPCResponse {
 public:
     std::string jsonrpc_;
-    int64_t id_;
+    RequestId id_;
     std::shared_ptr<Result> result_;
 
     JSONRPCResponse();
@@ -96,12 +111,13 @@ public:
 // JSON-RPC error response structure
 struct JSONRPCError {
     std::string jsonrpc_;
-    int64_t id_;
+    RequestId id_;
     int code_;
     std::string message_;
     std::optional<nlohmann::json> data_;
 
-    JSONRPCError() : jsonrpc_(JSONRPC_VERSION), id_(0), code_(-1), message_("Internal error"), data_(std::nullopt)
+    JSONRPCError() : jsonrpc_(JSONRPC_VERSION), id_(int64_t(0)), code_(-1),
+                     message_("Internal error"), data_(std::nullopt)
     {
     }
 
@@ -114,6 +130,15 @@ using JSONRPCMessage = std::variant<JSONRPCRequest, JSONRPCResponse, JSONRPCNoti
 JSONRPCMessage DeserializeJSONRPCMessage(const std::string& jsonStr, const std::string& method);
 std::string SerializeJSONRPCMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt);
 
+// Best-effort helpers for transports.
+// JSON-RPC responses/errors carry "id" but do not carry "method".
+std::optional<RequestId> TryGetJsonRpcResponseId(const nlohmann::json& j);
+
+// Consume (move + erase) the pending request method for a JSON-RPC response/error.
+// Returns nullopt if the message is not a response/error, id is missing/invalid, or id is not found.
+std::optional<std::string> TryTakePendingMethodForJsonRpcResponse(const nlohmann::json& messageJson,
+    std::unordered_map<RequestId, std::string>& pendingMethods);
+
 struct InitializeRequestParams : public RequestParams {
     std::string protocolVersion_;
     ClientCapabilities capabilities_;
@@ -124,19 +149,12 @@ struct InitializeRequestParams : public RequestParams {
 
 struct InitializeRequest : public Request {
     InitializeRequest();
-    InitializeRequest(const std::string& clientName, const std::string& clientVersion);
+    InitializeRequest(const std::string& clientName, const std::string& clientVersion,
+                      ClientCapabilities capabilities = ClientCapabilities{});
 };
 
 struct ListPromptsRequest : public Request {
     ListPromptsRequest();
-};
-
-struct ListToolsParams : public RequestParams {
-    std::optional<std::string> cursor;
-
-    ListToolsParams(std::optional<std::string> c = std::nullopt) : cursor(std::move(c))
-    {
-    }
 };
 
 struct ListToolsRequest : public Request {
@@ -211,11 +229,170 @@ struct ListResourcesRequest : public Request {
     ListResourcesRequest();
 };
 
+struct SetLoggingLevelParams : public RequestParams {
+    std::string level;
+
+    explicit SetLoggingLevelParams(const std::string& level) : level(level) {}
+};
+
+struct SetLoggingLevelRequest : public Request {
+    SetLoggingLevelRequest();
+};
+
+struct ElicitRequestFormParams : public RequestParams {
+    std::string mode; // "form"
+    std::string message;
+    MetaMap requestedSchema;
+};
+
+struct ElicitRequestUrlParams : public RequestParams {
+    std::string mode; // "url"
+    std::string message;
+    std::string url;
+    std::string elicitationId;
+};
+
+struct ElicitRequest : public Request {
+    ElicitRequest();
+};
+
+struct CancelledNotificationParams : public NotificationParams {
+    int64_t requestId;
+    std::string reason;
+
+    explicit CancelledNotificationParams(const int64_t requestId,
+        const std::string& reason) : requestId(requestId), reason(reason) {}
+};
+
+struct CancelledNotification : public Notification {
+    CancelledNotification();
+};
+
 // resources/templates/list
 struct ListResourceTemplatesRequest : public Request {
     ListResourceTemplatesRequest();
 };
 
+// ping
+struct PingRequest : public Request {
+    PingRequest();
+};
+
+// roots/list
+struct ListRootsRequest : public Request {
+    ListRootsRequest();
+};
+
+// sampling/createMessage
+struct CreateMessageRequestParams : public RequestParams, public CreateMessageParams {
+    CreateMessageRequestParams() = default;
+    explicit CreateMessageRequestParams(const CreateMessageParams& params)
+    {
+        static_cast<CreateMessageParams&>(*this) = params;
+    }
+};
+
+struct CreateMessageRequest : public Request {
+    CreateMessageRequest();
+};
+
+struct ResourceUpdatedNotificationParams : public NotificationParams {
+    std::string uri;
+
+    explicit ResourceUpdatedNotificationParams(const std::string &resourceUri) : uri(resourceUri) {}
+};
+
+struct ResourceUpdatedNotification : public Notification {
+    ResourceUpdatedNotification();
+};
+
+struct LoggingMessageNotificationParams : public NotificationParams {
+    std::string level;
+    std::string data;
+    std::string logger;
+
+    explicit LoggingMessageNotificationParams(const std::string &level,
+            const std::string &data, const std::string &logger) : level(level), data(data), logger(logger)  {}
+};
+
+struct LoggingMessageNotification : public Notification {
+    LoggingMessageNotification();
+};
+
+/** Params for notifications/progress (MCP progress tracking). */
+struct ProgressNotificationParams : public NotificationParams {
+    ProgressToken progressToken;
+    double progress{0.0};
+    std::optional<double> total;
+    std::optional<std::string> message;
+};
+
+struct ProgressNotification : public Notification {
+    ProgressNotification();
+};
+
+struct ToolListChangedNotification : public Notification {
+    ToolListChangedNotification();
+};
+
+struct PromptListChangedNotification : public Notification {
+    PromptListChangedNotification();
+};
+
+struct ResourceListChangedNotification : public Notification {
+    ResourceListChangedNotification();
+};
+
+struct RootsListChangedNotification : public Notification {
+    RootsListChangedNotification();
+};
+
+inline const char* ToString(LoggingLevel lvl)
+{
+    switch (lvl) {
+        case LoggingLevel::Debug:    return "debug";
+        case LoggingLevel::Info:     return "info";
+        case LoggingLevel::Notice:   return "notice";
+        case LoggingLevel::Warning:  return "warning";
+        case LoggingLevel::Error:    return "error";
+        case LoggingLevel::Critical: return "critical";
+        case LoggingLevel::Alert:    return "alert";
+        case LoggingLevel::Emergency:return "emergency";
+    }
+    return "unknown";
+}
+
+// completion/complete
+struct CompleteRequestParams : public RequestParams {
+    CompleteReference ref;
+    CompletionArgument argument;
+    std::optional<CompletionContext> context;
+
+    CompleteRequestParams() = default;
+    CompleteRequestParams(CompleteReference r, CompletionArgument arg,
+        std::optional<CompletionContext> ctx = std::nullopt)
+        : ref(std::move(r)), argument(std::move(arg)), context(std::move(ctx))
+    {
+    }
+};
+
+struct CompleteRequest : public Request {
+    CompleteRequest();
+};
+
 } // namespace Mcp
+
+// Hash specialization for RequestId to enable use in std::unordered_map
+namespace std {
+template <>
+struct hash<Mcp::RequestId> {
+    std::size_t operator()(const Mcp::RequestId& id) const noexcept
+    {
+        return std::visit([](const auto& value) -> std::size_t {
+            return std::hash<std::decay_t<decltype(value)>>{}(value);
+        }, id);
+    }
+};
+} // namespace std
 
 #endif // MCP_JSONRPC_INCLUDE_H_

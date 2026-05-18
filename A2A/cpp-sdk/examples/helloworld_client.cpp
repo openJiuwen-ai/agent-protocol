@@ -9,7 +9,6 @@
 
 #include "client/a2a_card_resolver.h"
 #include "client/client_factory.h"
-#include "utils/utils_message.h"
 
 constexpr int MAX_PORT = 65535;
 
@@ -86,36 +85,48 @@ int main(int argc, char** argv)
 
     std::string base_url = std::string("http://") + ip + ":" + std::to_string(port);
 
-    a2a::client::A2ACardResolver resolver(base_url);
-    auto card = resolver.GetAgentCard();
-    a2a::client::ClientConfig cfg;
+    A2A::AgentCard card;
+    card.name = "ExampleAgent";
+    card.description = "A2A Hello World Example";
+    card.url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
+    card.version = "1.0.0";
+    card.defaultInputModes = {"text"};
+    card.defaultOutputModes = {"text"};
+    card.capabilities.streaming = false;
+    card.preferredTransport = A2A::JSONRPC_TRANSPORT;
+
+    A2A::Client::ClientConfig cfg;
     cfg.streaming = false;
     cfg.supportedTransports = {"JSONRPC"};
 
-    a2a::client::ClientFactory factory(cfg);
-    auto client = factory.Create(card);
+    auto client = A2A::Client::ClientFactory::Create(card, cfg);
 
     // Build a user message with text + data parts
-    a2a::Message msg;
-    msg.role = a2a::Role::USER;
+    A2A::Message msg;
+    msg.role = A2A::Role::USER;
     msg.messageId = "123";
 
-    a2a::TextPart tp;
+    A2A::TextPart tp;
     tp.text = "hello remote server";
     msg.parts.push_back(tp);
 
-    a2a::DataPart dp;
+    A2A::DataPart dp;
     dp.data = nlohmann::json{{"key", "value"}, {"number", 1}};
     msg.parts.push_back(dp);
 
     std::cout << "--> Sending to " << card.url << std::endl;
-    client->SendMessage(msg, nullptr, [&](const a2a::client::ClientEvent& ev, const a2a::AgentCard& card) {
-        if (std::holds_alternative<a2a::Message>(ev)) {
-            auto m = std::get<a2a::Message>(ev);
-            std::cout << "<-- Response: " << nlohmann::json(m).dump() << std::endl;
+    client->SendMessage(msg, nullptr, [&](const A2A::Client::ClientEvent& ev, const A2A::AgentCard& card) {
+        if (std::holds_alternative<A2A::Message>(ev)) {
+            auto m = std::get<A2A::Message>(ev);
+            std::cout << "<-- Response: " << std::endl
+                      << "<---- kind: " << m.kind << std::endl
+                      << "<---- Role: " << (uint32_t)m.role << std::endl
+                      << "<---- messageId: " << m.messageId << std::endl;
         } else {
             std::cout << "<-- Unexpected Task variant received (non-streaming config)" << std::endl;
         }
     });
+
+    ::getchar();
     return 0;
 }

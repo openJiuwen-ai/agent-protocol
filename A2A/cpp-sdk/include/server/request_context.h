@@ -1,71 +1,136 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_REQUEST_CONTEXT
 #define A2A_REQUEST_CONTEXT
 
+#include <unordered_set>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <vector>
+#include <memory>
 
-#include "server/server_call_context.h"
-#include "utils/id_generator.h"
-#include "utils/types.h"
-#include "utils/utils_message.h"
+#include "server_call_context.h"
+#include "types.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 class RequestContextImpl;
 
-// Request Context equivalent to Python's RequestContext
+struct RequestContextParam {
+    std::optional<A2A::MessageSendParams> request = std::nullopt;
+    std::optional<std::string> taskId = std::nullopt;
+    std::optional<std::string> contextId = std::nullopt;
+    std::optional<A2A::Task> task = std::nullopt;
+    std::vector<A2A::Task> relatedTasks;
+    std::shared_ptr<A2A::Server::ServerCallContext> callContext;
+};
+
 class RequestContext {
 public:
     /**
      * @brief constructor
      *
-     * @param[in] service credential service
+     * @param[in] param params used to construct RequestContext
      */
-    RequestContext(const std::optional<a2a::MessageSendParams>& request = std::nullopt,
-                   const std::optional<std::string>& taskId = std::nullopt,
-                   const std::optional<std::string>& contextId = std::nullopt,
-                   const std::optional<a2a::Task>& task = std::nullopt, const std::vector<a2a::Task>& relatedTasks = {},
-                   const a2a::server::ServerCallContext* callContext = nullptr,
-                   std::shared_ptr<IDGenerator> taskIdGenerator = nullptr,
-                   std::shared_ptr<IDGenerator> contextIdGenerator = nullptr);
+    RequestContext(const RequestContextParam& param);
 
-    // Helpers
+    /**
+     * @brief extracts text content from the users's message parts
+     *
+     * @param[in] delimiter the string to use when joining multiple text parts
+     * @return a single string containing akk text content from the user message
+     */
     std::string GetUserInput(const std::string& delimiter = "\n") const;
 
-    void AttachRelatedTask(const a2a::Task& task);
+    /**
+     * @brief attach a related task to the context
+     *
+     * @param[in] task the 'Task' object to attach
+     */
+    void AttachRelatedTask(const A2A::Task& task);
 
-    // Accessors
-    const a2a::Message* Message() const;
+    /**
+     * @brief get the 'Message' object from the request, if available
+     *
+     * @return the 'Message' object from the request, if available
+     */
+    const A2A::Message* GetMessage() const;
 
-    const std::vector<a2a::Task>& RelatedTasks() const;
+    /**
+     * @brief get a list of other tasks related to the current request
+     *
+     * @return a list of other tasks related to the current request
+     */
+    const std::vector<A2A::Task>& GetRelatedTasks() const;
 
-    const std::optional<a2a::Task>& CurrentTask() const;
+    /**
+     * @brief get the current 'Task' being processed
+     *
+     * @return the current 'Task' being processed
+     */
+    const std::optional<A2A::Task>& GetCurrentTask() const;
 
-    void SetCurrentTask(const a2a::Task& t);
+    /**
+     * @brief set the current 'Task'
+     *
+     * @param[in] t the current 'Task' object
+     */
+    void SetCurrentTask(const A2A::Task& t);
 
-    const std::optional<std::string>& TaskId() const;
+    /**
+     * @brief get the ID of the task associated with this task
+     *
+     * @return the ID of the task associated with this task
+     */
+    const std::optional<std::string>& GetTaskId() const;
 
-    const std::optional<std::string>& ContextId() const;
+    /**
+     * @brief get the ID of the context associated with this task
+     *
+     * @return the ID of the context associated with this task
+     */
+    const std::optional<std::string>& GetContextId() const;
 
-    const std::optional<nlohmann::json> Configuration() const;
+    /**
+     * @brief get the 'MessageSendConfiguration' from the request, if available
+     *
+     * @return the 'MessageSendConfiguration' from the request
+     */
+    std::shared_ptr<MessageSendConfiguration> GetConfiguration() const;
 
-    const a2a::server::ServerCallContext* CallContext() const;
+    /**
+     * @brief get server call context from the request, if available
+     *
+     * @return server call context from the request
+     */
+    std::shared_ptr<ServerCallContext> GetCallContext() const;
 
-    nlohmann::json Metadata() const;
+    /**
+     * @brief get metadate associated whit the request, if available
+     *
+     * @return metadate associated whit the request
+     */
+    nlohmann::json GetMetadata() const;
 
+    /**
+     * @brief add an extension to the set of activated extensions for this request
+     *
+     * @param[in] uri uri of extension
+     */
     void AddActivatedExtension(const std::string& uri);
 
-    std::unordered_set<std::string> RequestedExtensions() const;
+    /**
+     * @brief get the extensions that the client requested to activate
+     *
+     * @return a list of the extensions that the client requested to activate
+     */
+    std::unordered_set<std::string> GetRequestedExtensions() const;
 
 private:
     std::unique_ptr<RequestContextImpl> impl_;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 #endif

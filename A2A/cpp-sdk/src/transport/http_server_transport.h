@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_HTTP_SERVER_TRANSPORT
@@ -9,39 +9,42 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <memory>
 
-#include "abstract_server_transport.h"
-#include "utils/types.h"
+#include "http_server_manager.h"
+#include "server/http_server_builder.h"
+#include "server_transport.h"
 
-namespace a2a::transport {
+namespace A2A::Transport {
 
-class HttpServerTransport : public AbstractServerTransport {
+constexpr const char* JSONRPC_ENDPOINT = "/jsonrpc";
+constexpr const char* AGENT_CARD_ENDPOINT = "/.well-known/agent-card.json";
+
+class HttpServerTransport : public ServerTransport {
 public:
     /**
      * @brief constructor
      */
-    explicit HttpServerTransport(std::shared_ptr<AgentCard> agentCard);
+    explicit HttpServerTransport(const Server::HttpConfig& config) : config_(config) {}
 
     ~HttpServerTransport() override;
 
     // Configure static headers and auth
-    HttpServerTransport& SetHeader(std::string key, std::string value);
-    HttpServerTransport& SetBearerToken(std::string token);
-    HttpServerTransport& SetTimeoutMs(long connectMs, long readMs);
+    void SetHeader(const std::string& key, const std::string& value);
+    void SetBearerToken(const std::string& token);
+    void SetTimeoutMs(long connectMs, long readMs);
 
     /**
      * @brief start to listen
      *
-     * @param[in] ipAddr ip address
-     * @param[in] port port
      * @return 0 on succeed
      */
-    virtual int Start(const std::string& ipAddr, uint16_t port) override;
+    int Start() override;
 
     /**
      * @brief stop listen
      */
-    virtual void Stop() override;
+    void Stop() override;
 
     /**
      * @brief send data to specific url
@@ -50,40 +53,46 @@ public:
      * @param[in] data payload
      * @return response data
      */
-    virtual int SendData(const std::string& url, const std::string& data) const override;
+    int SendData(const std::string& url, const std::string& data) const override;
 
     /**
-     * @brief set event handler
-     * handler will be called when server receive non-streaming data
+     * @brief set RPC handler
+     * handler will be called when server receive data (both streaming and non-streaming)
      *
      * @param[in] handler event handler
      */
-    virtual void SetEventHandler(ServerTransportEventHandler handler) override;
+    void SetRpcHandler(ServerTransportRpcHandler handler) override;
 
-    /**
-     * @brief set stream event handler
-     * handler will be called when server receive streaming data
-     *
-     * @param[in] handler event handler
-     */
-    virtual void SetStreamEventHandler(ServerTransportStreamEventHandler handler) override;
+    void SetCardHandler(ServerTransportCardHandler handler) override;
+
+    static void SetCommonHeaders(Http::HttpResponse& response);
 
 private:
     std::map<std::string, std::string> headers_;
     std::optional<std::string> bearerToken_;
-    long connectTimeoutMs_ = 10000; // default 10s connect
-    long readTimeoutMs_ = 60000; // default 60s total
+    long connectTimeoutMs_ = 10000; // default 10000ms connect
+    long readTimeoutMs_ = 60000; // default 60000ms total
 
-    httplib::Server server_;
-    std::string ipAddr_;
-    uint16_t port_;
-    std::thread listen_thread_;
+    std::unique_ptr<Server::HttpServerManager> httpServerMgr_{};
+    Server::HttpConfig config_;
+    std::thread listenThread_;
+    std::vector<std::thread> workerThreads_;
+    mutable std::mutex workerThreadsMutex_;
 
-    ServerTransportEventHandler handler_;
-    ServerTransportStreamEventHandler streamHandler_;
-    std::shared_ptr<AgentCard> agentCard_;
+    ServerTransportRpcHandler handler_;
+    ServerTransportCardHandler handlerCard_;
+
+    // Private helper methods for route handlers
+    void SetupJsonRpcEndpoint(Server::RouteMap& routeMap);
+    void SetupCardEndpoint(Server::RouteMap& routeMap);
+    void HandleJsonRpcRequest(const Http::HttpRequest& req, const Http::HttpRequestContext& ctx);
+    void HandleStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
+        const std::map<std::string, std::string>& headersCopy);
+    void HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
+        const std::map<std::string, std::string>& headersCopy);
+    bool IsStreamingMethod(const std::string& reqBody);
 };
 
-} // namespace a2a::transport
+} // namespace A2A::Transport
 
 #endif

@@ -1,22 +1,20 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_PUSH_NOTIFICATION_SENDER
 #define A2A_PUSH_NOTIFICATION_SENDER
 
-#include <memory>
+#include "types.h"
 
-#include "utils/types.h"
-
-namespace a2a::server {
+namespace A2A::Server {
 
 struct PushNotificationSender {
     virtual ~PushNotificationSender() = default;
 
-    virtual void SendNotification(const a2a::Task& task) = 0;
+    virtual void SendNotification(const A2A::Task& task) = 0;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

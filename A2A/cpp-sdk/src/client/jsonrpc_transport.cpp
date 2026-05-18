@@ -1,216 +1,227 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "client/a2a_card_resolver.h"
-#include "http_client_transport.h"
+#include <nlohmann/json.hpp>
+#include "jsonrpc.h"
+#include "common_types.h"
+#include "libcurl_conn.h"
+#include "a2a_errno.h"
 #include "jsonrpc_transport.h"
-#include "utils/errors.h"
 
-namespace a2a::client {
+namespace A2A::Client {
 
-JsonRpcTransport::JsonRpcTransport(std::string url, const a2a::AgentCard* agentCard,
-                                   std::vector<ClientCallInterceptor*> interceptors)
-    : url_(std::move(url)), http_(url_), interceptors_(std::move(interceptors)), generator_()
+void SessionTransportCallback::OnMessageReceived(const ConnEventData& message, const UserData* userData)
 {
-    if (agentCard) {
-        agentCard_ = *agentCard;
+    if (t_ != nullptr) {
+        t_->OnTransportMessage(message, userData);
     }
 }
 
-std::variant<Task, Message> JsonRpcTransport::SendMessage(const MessageSendParams& params,
-                                                          const ClientCallContext* context)
+JsonRpcTransport::JsonRpcTransport(const std::string& url, const AgentCard& agentCard,
+    const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
+    : url_(url), interceptors_(interceptors)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"},
-                       {"id", generator_.Generate(IDGeneratorContext())},
-                       {"method", "message/send"},
-                       {"params", params}};
-
-    std::map<std::string, std::string> headers;
-    auto payload = ApplyInterceptors("message/send", rpc, headers, context);
-    // apply headers to http_ if needed
-    // (per-request headers not supported by simple HttpClientTransport; merge into default)
-    a2a::transport::HttpClientTransport http = http_;
-    for (const auto& kv : headers) {
-        http.SetHeader(kv.first, kv.second);
-    }
-
-    auto respStr = http.SendData(payload.dump());
-    auto resp = nlohmann::json::parse(respStr);
-    if (resp.contains("error")) {
-        throw a2a::A2AClientJSONRPCError(resp["error"]);
-    }
-
-    const auto& r = resp.at("result");
-    if (r.contains("kind") && r.at("kind") == "message") {
-        return r.get<Message>();
-    }
-
-    return r.get<Task>();
+    agentCard_ = std::make_shared<AgentCard>(agentCard);
+    conn_ = std::make_shared<Http::LibcurlConn>(url);
+    conn_->SetCallback(std::make_shared<SessionTransportCallback>(this));
 }
 
-void JsonRpcTransport::SendMessageStreaming(const MessageSendParams& params, const TransportEventCallback& onEvent,
-                                            const ClientCallContext* context)
+JsonRpcTransport::~JsonRpcTransport() = default;
+
+void JsonRpcTransport::SendMessage(const std::string& requestId, const MessageSendParams& request,
+    const ClientCallContext* context)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"},
-                       {"id", generator_.Generate(IDGeneratorContext())},
-                       {"method", "message/stream"},
-                       {"params", params}};
-
-    std::map<std::string, std::string> hdrs;
-    auto payload = ApplyInterceptors("message/stream", rpc, hdrs, context);
-    auto http = http_;
-    for (const auto& kv : hdrs) {
-        http.SetHeader(kv.first, kv.second);
-    }
-
-    http.SendDataStreaming(payload.dump(), onEvent);
+    Send(requestId, METHOD_MESSAGE_SEND, nlohmann::json(request), context);
 }
 
-Task JsonRpcTransport::GetTask(const TaskQueryParams& params, const ClientCallContext* context)
+void JsonRpcTransport::SendMessageStreaming(const std::string& requestId, const MessageSendParams& request,
+    const ClientCallContext* context)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"},
-                       {"id", generator_.Generate(IDGeneratorContext())},
-                       {"method", "tasks/get"},
-                       {"params", params}};
-
-    std::map<std::string, std::string> headers;
-    auto payload = ApplyInterceptors("tasks/get", rpc, headers, context);
-    a2a::transport::HttpClientTransport http = http_;
-    for (const auto& kv : headers) {
-        http.SetHeader(kv.first, kv.second);
-    }
-
-    auto respStr = http.SendData(payload.dump());
-    auto resp = nlohmann::json::parse(respStr);
-    if (resp.contains("error")) {
-        throw a2a::A2AClientJSONRPCError(resp["error"]);
-    }
-
-    return resp.at("result").get<Task>();
+    Send(requestId, METHOD_MESSAGE_STREAM, nlohmann::json(request), context);
 }
 
-Task JsonRpcTransport::CancelTask(const TaskIdParams& params, const ClientCallContext* context)
+void JsonRpcTransport::GetTask(const std::string& requestId, const TaskQueryParams& params,
+    const ClientCallContext* context)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"},
-                       {"id", generator_.Generate(IDGeneratorContext())},
-                       {"method", "tasks/cancel"},
-                       {"params", params}};
-
-    std::map<std::string, std::string> headers;
-    auto payload = ApplyInterceptors("tasks/cancel", rpc, headers, context);
-    a2a::transport::HttpClientTransport http = http_;
-    for (const auto& kv : headers) {
-        http.SetHeader(kv.first, kv.second);
-    }
-
-    auto respStr = http.SendData(payload.dump());
-    auto resp = nlohmann::json::parse(respStr);
-    if (resp.contains("error")) {
-        throw a2a::A2AClientJSONRPCError(resp["error"]);
-    }
-
-    return resp.at("result").get<Task>();
+    Send(requestId, METHOD_TASK_GET, nlohmann::json(params), context);
 }
 
-TaskPushNotificationConfig JsonRpcTransport::SetTaskPushNotificationConfig(const TaskPushNotificationConfig& config,
-                                                                           const ClientCallContext* context)
+void JsonRpcTransport::CancelTask(const std::string& requestId, const TaskIdParams& params,
+    const ClientCallContext* context)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"},
-                       {"id", generator_.Generate(IDGeneratorContext())},
-                       {"method", "tasks/pushNotificationConfig/set"},
-                       {"params", config}};
-
-    std::map<std::string, std::string> headers;
-    auto payload = ApplyInterceptors("tasks/pushNotificationConfig/set", rpc, headers, context);
-    a2a::transport::HttpClientTransport http = http_;
-    for (const auto& kv : headers) {
-        http.SetHeader(kv.first, kv.second);
-    }
-    auto respStr = http.SendData(payload.dump());
-    auto resp = nlohmann::json::parse(respStr);
-    if (resp.contains("error")) {
-        throw a2a::A2AClientJSONRPCError(resp["error"]);
-    }
-
-    return resp.at("result").get<TaskPushNotificationConfig>();
+    Send(requestId, METHOD_TASK_CANCEL, nlohmann::json(params), context);
 }
 
-TaskPushNotificationConfig JsonRpcTransport::GetTaskPushNotificationConfig(
+void JsonRpcTransport::SetTaskPushNotificationConfig(const std::string& requestId,
+    const TaskPushNotificationConfig& config, const ClientCallContext* context)
+{
+    Send(requestId, METHOD_TASK_PUSH_NOTIFICATION_CONFIG_SET, nlohmann::json(config), context);
+}
+
+void JsonRpcTransport::GetTaskPushNotificationConfig(const std::string& requestId,
     const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"},
-                       {"id", generator_.Generate(IDGeneratorContext())},
-                       {"method", "tasks/pushNotificationConfig/get"},
-                       {"params", params}};
-
-    std::map<std::string, std::string> headers;
-    auto payload = ApplyInterceptors("tasks/pushNotificationConfig/get", rpc, headers, context);
-    a2a::transport::HttpClientTransport http = http_;
-    for (const auto& kv : headers) {
-        http.SetHeader(kv.first, kv.second);
-    }
-
-    auto respStr = http.SendData(payload);
-    auto resp = nlohmann::json::parse(respStr);
-    if (resp.contains("error")) {
-        throw a2a::A2AClientJSONRPCError(resp["error"]);
-    }
-
-    return resp.at("result").get<TaskPushNotificationConfig>();
+    Send(requestId, METHOD_TASK_PUSH_NOTIFICATION_CONFIG_GET, nlohmann::json(params), context);
 }
 
-std::vector<TaskPushNotificationConfig> JsonRpcTransport::ListTaskPushNotificationConfigs(
+void JsonRpcTransport::ListTaskPushNotificationConfigs(const std::string& requestId,
     const ListTaskPushNotificationConfigParams& params, const ClientCallContext* context)
 {
-    return {};
+    Send(requestId, METHOD_TASK_PUSH_NOTIFICATION_CONFIG_LIST, nlohmann::json(params), context);
 }
 
-void JsonRpcTransport::DeleteTaskPushNotificationConfig(const DeleteTaskPushNotificationConfigParams& params,
-                                                        const ClientCallContext* context)
+void JsonRpcTransport::DeleteTaskPushNotificationConfig(const std::string& requestId,
+    const DeleteTaskPushNotificationConfigParams& params, const ClientCallContext* context)
 {
+    Send(requestId, METHOD_TASK_PUSH_NOTIFICATION_CONFIG_DELETE, nlohmann::json(params), context);
 }
 
-void JsonRpcTransport::Resubscribe(const TaskIdParams& params, const TransportEventCallback& onEvent,
-                                   const ClientCallContext* context)
+void JsonRpcTransport::Resubscribe(const std::string& requestId, const TaskIdParams& params,
+    const ClientCallContext* context)
 {
-    nlohmann::json rpc{{"jsonrpc", "2.0"}, {"method", "tasks/resubscribe"}, {"params", params}};
+    Send(requestId, METHOD_TASK_RESUBSCRIBE, nlohmann::json(params), context);
+}
 
-    std::map<std::string, std::string> hdrs;
-    auto payload = ApplyInterceptors("tasks/resubscribe", rpc, hdrs, context);
-    auto http = http_;
-    for (const auto& kv : hdrs) {
-        http.SetHeader(kv.first, kv.second);
+void JsonRpcTransport::GetCard(const std::string& requestId, const ClientCallContext* context)
+{
+    nlohmann::json rpc {
+        {JSON_FIELD_JSONRPC, "2.0"},
+        {JSON_FIELD_ID, requestId}
+    };
+
+    UserData userData;
+    userData.requestId = requestId;
+    userData.method = METHOD_AGENT_CARD_GET;
+    conn_->SendMessage(rpc.dump(), {}, &userData);
+}
+
+void JsonRpcTransport::SetTransportCallback(TransportEventCallback callback)
+{
+    transportEventCb_ = callback;
+}
+
+void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const UserData* userData)
+{
+    if (!transportEventCb_) {
+        return;
     }
 
-    http.SendDataStreaming(payload.dump(), onEvent);
-}
-
-a2a::AgentCard JsonRpcTransport::GetCard(const ClientCallContext* context)
-{
-    if (agentCard_) {
-        return *agentCard_;
+    if (message.errCode != 0) {
+        TransportError err;
+        err.errorCode = message.errCode;
+        err.errInfo = message.data;
+        transportEventCb_(userData->requestId, err);
+        return;
     }
 
-    A2ACardResolver resolver(url_);
-    auto card = resolver.GetAgentCard();
-    agentCard_ = card;
-    return card;
+    if (message.isStream) {
+        OnStreamResp(message, userData);
+        return;
+    }
+
+    TransportEvent ev;
+    nlohmann::json j = nlohmann::json::parse(message.data);
+    try {
+        if (userData->method == METHOD_MESSAGE_SEND) {
+            ev = j.at(JSON_FIELD_RESULT).get<Message>();
+        } else if (userData->method == METHOD_TASK_GET) {
+            ev = j.at(JSON_FIELD_RESULT).get<Task>();
+        } else if (userData->method == METHOD_TASK_CANCEL) {
+            ev = j.at(JSON_FIELD_RESULT).get<Task>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_SET) {
+            ev = j.at(JSON_FIELD_RESULT).get<TaskPushNotificationConfig>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_GET) {
+            ev = j.at(JSON_FIELD_RESULT).get<TaskPushNotificationConfig>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_LIST) {
+            ev = j.at(JSON_FIELD_RESULT).get<std::vector<TaskPushNotificationConfig>>();
+        } else if (userData->method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_DELETE) {
+            ev = std::monostate{};
+        } else if (userData->method == METHOD_AGENT_CARD_GET) {
+            ev = j.get<AgentCard>();
+        } else {
+            return;
+        }
+    } catch (const nlohmann::json::exception& e) {
+        TransportError err;
+        err.errorCode = static_cast<int>(JSONRPCErrorCode::PARSE_ERROR);
+        err.errInfo = e.what();
+        transportEventCb_(userData->requestId, err);
+    }
+
+    transportEventCb_(userData->requestId, ev);
 }
 
 void JsonRpcTransport::Close()
 {
+    conn_->Terminate();
 }
 
-nlohmann::json JsonRpcTransport::ApplyInterceptors(const std::string& method, nlohmann::json payload,
-                                                   std::map<std::string, std::string>& headers,
-                                                   const ClientCallContext* context) const
+void JsonRpcTransport::ApplyInterceptors(const std::string& method, nlohmann::json& payload,
+    std::map<std::string, std::string>& headers, const ClientCallContext* context) const
 {
-    const a2a::AgentCard* cardPtr = agentCard_ ? &*agentCard_ : nullptr;
-    for (auto* i : interceptors_) {
-        i->Intercept(method, payload, headers, cardPtr, context);
+    for (auto& i : interceptors_) {
+        i->Intercept(method, payload, headers, agentCard_.get(), context);
     }
-    return payload;
 }
 
-} // namespace a2a::client
+void JsonRpcTransport::Send(const std::string& requestId, const std::string& method, const nlohmann::json& payload,
+    const ClientCallContext* context)
+{
+    nlohmann::json rpc {
+        {JSON_FIELD_JSONRPC, JSON_VERSION},
+        {JSON_FIELD_ID, requestId},
+        {JSON_FIELD_METHOD, method},
+        {JSON_FIELD_PARAMS, payload}
+    };
+
+    std::map<std::string, std::string> headers;
+    ApplyInterceptors(method, rpc, headers, context);
+
+    UserData userData;
+    userData.requestId = requestId;
+    userData.method = method;
+    if (method == METHOD_MESSAGE_STREAM || method == METHOD_TASK_RESUBSCRIBE) {
+        userData.isStream = true;
+    }
+    conn_->SendMessage(rpc.dump(), headers, &userData);
+}
+
+void JsonRpcTransport::OnStreamResp(const ConnEventData& message, const UserData* userData)
+{
+    if (message.isStreamFin) {
+        TransportError err;
+        err.errorCode = 0;
+        transportEventCb_(userData->requestId, err);
+        return;
+    }
+
+    nlohmann::json result = nlohmann::json::parse(message.data);
+    if (!result.contains(JSON_FIELD_RESULT)) {
+        TransportError err;
+        err.errorCode = 1;
+        err.errInfo = "result not found";
+        transportEventCb_(userData->requestId, err);
+        return;
+    }
+
+    auto& j = result.at(JSON_FIELD_RESULT);
+    // Only task/update events
+    if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_TASK) {
+        auto t = j.get<Task>();
+        transportEventCb_(userData->requestId, t);
+        return;
+    }
+    if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_STATUS_UPDATE) {
+        auto u = j.get<TaskStatusUpdateEvent>();
+        transportEventCb_(userData->requestId, u);
+        return;
+    }
+    if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE) {
+        auto u = j.get<TaskArtifactUpdateEvent>();
+        transportEventCb_(userData->requestId, u);
+        return;
+    }
+}
+
+} // namespace A2A::Client

@@ -1,23 +1,64 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
+#include "default_client.h"
+#include "jsonrpc_transport.h"
 #include "client/client_factory.h"
-#include "client_factory_impl.h"
 
-namespace a2a::client {
-
-ClientFactory::ClientFactory(ClientConfig config, std::vector<Consumer> consumers)
-    : impl_(std::make_unique<ClientFactoryImpl>(config, consumers))
-{
-}
+namespace A2A::Client {
 
 ClientFactory::~ClientFactory() = default;
 
-std::unique_ptr<Client> ClientFactory::Create(const a2a::AgentCard& card, const std::vector<Consumer>& extraConsumers,
-                                              const std::vector<ClientCallInterceptor*>& interceptors) const
+std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const ClientConfig& config,
+    const std::vector<Consumer>& consumers,
+    const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
 {
-    return impl_->Create(card, extraConsumers, interceptors);
+    std::string serverPreferred = card.preferredTransport.value_or(JSONRPC_TRANSPORT);
+    std::map<std::string, std::string> serverSet{{serverPreferred, card.url}};
+    if (card.additionalInterfaces) {
+        for (const auto& itf : *card.additionalInterfaces) {
+            serverSet[itf.transport] = itf.url;
+        }
+    }
+
+    std::vector<std::string> clientSet = config.supportedTransports.empty() ?
+        std::vector<std::string>{JSONRPC_TRANSPORT} : config.supportedTransports;
+    std::string chosenProtocol;
+    std::string chosenUrl;
+
+    if (config.useClientPreference) {
+        for (const auto& x : clientSet) {
+            auto it = serverSet.find(x);
+            if (it != serverSet.end()) {
+                chosenProtocol = x;
+                chosenUrl = it->second;
+                break;
+            }
+        }
+    } else {
+        for (const auto& kv : serverSet) {
+            if (std::find(clientSet.begin(), clientSet.end(), kv.first) != clientSet.end()) {
+                chosenProtocol = kv.first;
+                chosenUrl = kv.second;
+                break;
+            }
+        }
+    }
+    if (chosenProtocol.empty() || chosenUrl.empty()) {
+        return nullptr;
+    }
+
+    std::shared_ptr<ClientTransport> transport = nullptr;
+    if (chosenProtocol == JSONRPC_TRANSPORT) {
+        transport = std::make_shared<JsonRpcTransport>(chosenUrl, card, interceptors);
+    }
+
+    if (transport == nullptr) {
+        return nullptr;
+    }
+
+    return std::make_shared<DefaultClient>(card, config, transport, consumers, interceptors);
 }
 
-} // namespace a2a::client
+} // namespace A2A::Client

@@ -1,21 +1,21 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <algorithm>
 
-#include "utils/uuid.h"
+#include "uuid.h"
 #include "utils_helpers.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 Task CreateTaskObj(MessageSendParams& params)
 {
     if (!params.message.contextId) {
-        params.message.contextId = generateUuid();
+        params.message.contextId = GenerateUuid();
     }
     Task t;
-    t.id = generateUuid();
+    t.id = GenerateUuid();
     t.contextId = *params.message.contextId;
     t.status = TaskStatus{std::nullopt, TaskState::SUBMITTED, std::nullopt};
     t.history = std::vector<Message>{params.message};
@@ -30,12 +30,12 @@ void AppendArtifactToTask(Task& task, const TaskArtifactUpdateEvent& event)
 
     const auto& new_artifact = event.artifact;
     const auto& id = new_artifact.artifactId;
-    const bool append_parts = event.append.value_or(false);
+    const bool appendParts = event.append.value_or(false);
 
     auto& list = *task.artifacts;
     auto it = std::find_if(list.begin(), list.end(), [&](const Artifact& a) { return a.artifactId == id; });
 
-    if (!append_parts) {
+    if (!appendParts) {
         if (it != list.end()) {
             *it = new_artifact;
         } else {
@@ -78,11 +78,4 @@ Artifact BuildTextArtifact(const std::string& text, const std::string& artifactI
     return a;
 }
 
-inline void ValidateOrThrow(bool expr, const std::string& errorMessage)
-{
-    if (!expr) {
-        throw A2AServerError(errorMessage);
-    }
-}
-
-} // namespace a2a::server
+} // namespace A2A::Server

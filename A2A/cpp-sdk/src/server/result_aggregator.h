@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_RESULT_AGGREGATOR
@@ -13,9 +13,9 @@
 
 #include "events/event_consumer.h"
 #include "tasks/task_manager.h"
-#include "utils/types.h"
+#include "types.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 class ResultAggregator {
 public:
@@ -23,23 +23,31 @@ public:
     {
     }
 
-    std::optional<std::variant<a2a::Task, a2a::Message>> CurrentResult();
+    ~ResultAggregator() = default;
+
+    std::optional<std::variant<A2A::Task, A2A::Message>> CurrentResult();
 
     // Consume and re-emit events to a callback
-    void ConsumeAndEmit(EventConsumer& consumer, const std::function<void(const RequestHandler::StreamEvent&)>& emit);
+    void ConsumeAndEmit(std::shared_ptr<EventConsumer> consumer,
+        const std::function<void(const RequestHandler::StreamEvent&)>& emit);
 
     // Consume all and return final result
-    std::optional<std::variant<a2a::Task, a2a::Message>> ConsumeAll(EventConsumer& consumer);
+    std::optional<std::variant<A2A::Task, A2A::Message>> ConsumeAll(std::shared_ptr<EventConsumer> consumer);
 
-    std::tuple<bool, std::future<void>> ConsumeAndBreakOnInterrupt(EventConsumer& consumer, bool blocking);
+    std::tuple<bool, std::future<void>> ConsumeAndBreakOnInterrupt(std::shared_ptr<EventConsumer> consumer,
+        bool blocking);
 
 private:
     std::shared_ptr<TaskManager> taskManager_;
-    std::optional<a2a::Message> message_;
+    std::optional<A2A::Message> message_;
 
-    static bool ShouldInterruptOnTerminalState(const std::optional<std::variant<a2a::Task, a2a::Message>> &result);
+    static bool ShouldInterruptOnTerminalState(const std::optional<std::variant<A2A::Task, A2A::Message>> &result);
+    void ProcessEvent(const RequestHandler::StreamEvent& event,
+                      std::optional<std::variant<Task, Message>>& result,
+                      bool& interrupted);
+    std::future<void> CreateBackgroundProcessingFuture(std::shared_ptr<EventConsumer> consumer);
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

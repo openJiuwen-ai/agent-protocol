@@ -1,33 +1,36 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_INMEMORY_TASK_STORE
 #define A2A_INMEMORY_TASK_STORE
 
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
 
-#include "task_store.h"
+#include "server/server_call_context.h"
+#include "server/task_store.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 class InMemoryTaskStore : public TaskStore {
 public:
-    void Save(const a2a::Task& task, const a2a::server::ServerCallContext* context = nullptr) override;
+    void Save(const A2A::Task& task, std::shared_ptr<ServerCallContext> context) override;
 
-    std::optional<a2a::Task> Get(const std::string& taskId,
-                                 const a2a::server::ServerCallContext* context = nullptr) override;
+    ~InMemoryTaskStore() override = default;
 
-    void Delete(const std::string& taskId, const a2a::server::ServerCallContext* context = nullptr) override;
+    std::optional<A2A::Task> Get(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
+
+    void Delete(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
 
 private:
-    std::mutex m_;
-    std::unordered_map<std::string, a2a::Task> tasks_;
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_ptr<A2A::Task>> tasks_;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

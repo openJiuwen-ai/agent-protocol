@@ -16,6 +16,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "event/event_system.h"
@@ -39,7 +40,7 @@ public:
     // Connection interface
     bool Listen();
     bool Connect();
-    void Disconnect();
+    void Disconnect(bool runInCallback);
     bool IsConnected() const;
     void SendMessage(const std::string& data);
 
@@ -133,7 +134,7 @@ public:
     // Transport interface implementation
     void Connect() override;
     void Terminate() override;
-    void SendMessage(const JSONRPCMessage& message) override;
+    void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) override;
     void SetCallback(std::shared_ptr<TransportCallback> callback) override;
 
 private:
@@ -141,12 +142,13 @@ private:
     std::atomic<bool> running_{false};
     std::shared_ptr<TransportCallback> callback_;
     StdioClientConfig config_;
-    std::string method_;
     RequestContext ctx_;
+
+    // Maps JSON-RPC request id -> request method so we can recover the method when parsing responses/errors
+    std::unordered_map<RequestId, std::string> pendingMethods_;
 
     void SetupConnectionCallbacks();
     void CleanupConnection();
-    void GetMessageMethod(const JSONRPCMessage& message);
 };
 
 /**
@@ -160,7 +162,7 @@ public:
     // Transport interface implementation
     void Listen() override;
     void Terminate() override;
-    void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) override;
+    void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override;
     void SetCallback(std::shared_ptr<TransportCallback> callback) override;
     void HandleRequest(const Http::HttpRequest& request, RequestContext& ctx) override;
 
@@ -168,12 +170,12 @@ private:
     std::shared_ptr<StdioConnection> connection_;
     std::atomic<bool> running_{false};
     std::shared_ptr<TransportCallback> callback_;
-    std::string method_;
+    // Maps JSON-RPC request id -> request method so we can recover the method when parsing responses/errors
+    std::unordered_map<RequestId, std::string> pendingMethods_;
     RequestContext ctx_;
 
     void SetupConnectionCallbacks();
     void CleanupConnection();
-    void GetMessageMethod(const JSONRPCMessage& message);
 };
 
 } // namespace Mcp

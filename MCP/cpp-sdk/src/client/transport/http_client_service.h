@@ -9,10 +9,9 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -20,9 +19,17 @@
 
 #include "event/event_system.h"
 #include "shared/http_common.h"
+#include "shared/message_queue/mpsc_notify_queue.h"
 
 namespace Mcp {
 namespace Http {
+
+// Service state enumeration
+enum class ServiceState {
+    RUNNING,  // Service is running and accepting requests
+    STOPPING, // Service is stopping (no new requests, but finishing active ones)
+    STOPPED   // Service has stopped completely
+};
 
 // HTTP Client constants (same as original)
 constexpr int DEFAULT_CONNECTION_TIMEOUT_MS = 30000; // 30 seconds
@@ -53,32 +60,28 @@ struct HttpClientServiceConfig {
 };
 
 /**
- * @brief Result of sending request to queue
- */
-struct SendResult {
-    bool success = false; // Whether successfully added to queue
-    uint64_t requestId = 0; // Request ID
-    std::string errorMessage; // Reason for failure (e.g., queue full)
-};
-
-/**
  * @brief HTTP request context containing all necessary request information
  */
 struct RequestContext {
     UserData userData;
     HttpRequest request;
-    HttpCallback callback;
+    HttpResponse response;
+    HttpCallback responseHeaderCallback;
+    HttpCallback responseBodyCallback;
     CURL* easyHandle = nullptr;
     std::string responseData;
     std::string headerData;
     int timeoutMs;
     std::chrono::steady_clock::time_point startTime;
     struct curl_slist* headers = nullptr; // Store headers for cleanup
+    bool shouldClose = false; // Flag to indicate if connection should be closed
 
-    RequestContext(const HttpRequest& req, HttpCallback cb, int timeout, void* userData)
-        : userData(*(UserData*)userData),
+    RequestContext(const HttpRequest& req, HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback,
+        int timeout, UserData& userData)
+        : userData(userData),
           request(req),
-          callback(cb),
+          responseHeaderCallback(responseHeaderCallback),
+          responseBodyCallback(responseBodyCallback),
           timeoutMs(timeout),
           startTime(std::chrono::steady_clock::now()),
           headers(nullptr)
@@ -125,7 +128,7 @@ struct CurlSocketContext {
  */
 class HttpClientService {
 public:
-    explicit HttpClientService(const HttpClientServiceConfig& config);
+    explicit HttpClientService(const HttpClientServiceConfig& config, size_t ioThreadIndex = 0);
     ~HttpClientService();
 
     /**
@@ -145,7 +148,7 @@ public:
      */
     bool IsRunning() const
     {
-        return running_;
+        return state_.load(std::memory_order_acquire) == ServiceState::RUNNING;
     }
 
     /**
@@ -153,28 +156,30 @@ public:
      * @param request HTTP request structure with URL, method, headers, and body
      * @param userData User data pointer
      * @param timeoutMs Request timeout in milliseconds
-     * @param callback Response callback function called on completion
-     * @return SendResult containing success status, requestId, and error message if applicable
+     * @param responseHeaderCallback Response header callback function called on completion
+     * @param responseBodyCallback Response body callback function called on completion
      */
-    SendResult Send(const HttpRequest& request, void* userData, int timeoutMs, HttpCallback callback);
+    void Send(const HttpRequest& request, UserData& userData, int timeoutMs, HttpCallback responseHeaderCallback,
+        HttpCallback responseBodyCallback);
 
 private:
     // Core components
     HttpClientServiceConfig config_; // Service configuration parameters
-    CURLM* multiHandle_; // libcurl multi handle for concurrent transfers
-    std::atomic<bool> running_; // Service running state flag
+    CURLM* multiHandle_{nullptr}; // libcurl multi handle for concurrent transfers
+    std::atomic<ServiceState> state_{ServiceState::STOPPED}; // Service state
     std::unique_ptr<EventSystem> eventSystem_; // Event system for async I/O
-    std::unordered_map<uint64_t, std::shared_ptr<RequestContext>> activeRequests_; // Active requests tracking
-    std::unordered_map<curl_socket_t, std::shared_ptr<CurlSocketContext>> socketContexts_; // Socket contexts
+
+    // Request queue for async submission from user threads to I/O thread
+    MPSCNotifyQueue<std::shared_ptr<RequestContext>> requestQueue_;
+
+    // activeRequests_ is only accessed in I/O thread, no lock needed
+    std::unordered_map<uintptr_t, std::shared_ptr<RequestContext>> activeRequests_;
+    std::unordered_map<curl_socket_t, std::shared_ptr<CurlSocketContext>> socketContexts_;
 
     int timerEventId_{-1}; // Timer event ID
-    int stopEventId_{-1}; // Event ID for stopping the event loop
+    int stopNotifyEventId_{-1}; // Event ID for stopping the service
     std::thread ioThread_; // I/O thread for event processing
-
-    // Graceful shutdown support
-    static constexpr int GRACEFUL_STOP_TIMEOUT_MS = 3000; // 3 seconds timeout for graceful shutdown
-    std::condition_variable stopCondition_; // Condition variable for graceful shutdown
-    std::mutex stopMutex_; // Mutex for condition variable
+    size_t ioThreadIndex_{0};  // Index for naming IO threads
 
     /**
      * @brief Main I/O thread function for event-driven HTTP processing
@@ -189,20 +194,22 @@ private:
     void HandleErrorResponse(const std::shared_ptr<RequestContext>& request, const std::string& errorMessage);
 
     /**
-     * @brief Handle successful HTTP response
+     * @brief Handle finished HTTP response
      * @param request Shared pointer to request context
-     * @param statusCode HTTP status code
-     * @param headers Response headers from curl_easy_getinfo
      */
-    void HandleSuccessResponse(const std::shared_ptr<RequestContext>& request, long statusCode,
-                               const std::unordered_map<std::string, std::string>& headers = {});
+    void HandleFinishedResponse(const std::shared_ptr<RequestContext>& request);
 
     /**
-     * @brief Process single HTTP request
-     * Creates CURL handle, configures with request data, and adds to multi interface
+     * @brief Handle request in I/O thread (called from queue callback)
      * @param request Shared pointer to request context containing all request information
      */
-    void HandleRequest(const std::shared_ptr<RequestContext>& request);
+    void HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request);
+
+    /**
+     * @brief Handle stop request in I/O thread
+     * Processes remaining queue items and cancels active requests before stopping
+     */
+    void HandleStopRequestInIOThread();
 
     /**
      * @brief Check for completed HTTP requests and process results
@@ -219,17 +226,6 @@ private:
      * @brief Cancel all active requests during shutdown
      */
     void CancelAllActiveRequests();
-
-    /**
-     * @brief Process pending events to allow requests to complete
-     */
-    void ProcessPendingEvents();
-
-    /**
-     * @brief Notify when a request is completed (for graceful shutdown)
-     * @param requestId ID of the completed request
-     */
-    void NotifyRequestCompleted(uint64_t requestId);
 
     /**
      * @brief libcurl socket callback
@@ -322,11 +318,23 @@ private:
     static size_t HeaderCallback(char* contents, size_t size, size_t nmemb, void* userp);
 
     /**
+     * @brief libcurl callback for progress
+     * @param clientp User data pointer (RequestContext)
+     * @param dltotal Total download size
+     * @param dlnow Downloaded size
+     * @param ultotal Total upload size
+     * @param ulnow Uploaded size
+     * @return 0 to continue, non-zero to abort
+     */
+    static int ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal,
+                                curl_off_t ulnow);
+
+    /**
      * @brief Parse raw HTTP header data into key-value pairs
      * @param headerData Raw header data string from HTTP response
      * @return Unordered map of header name to header value
      */
-    std::unordered_map<std::string, std::string> ParseHeaderData(const std::string& headerData);
+    static std::unordered_map<std::string, std::string> ParseHeaderData(const std::string& headerData);
 };
 
 /**
@@ -337,9 +345,10 @@ public:
     /**
      * @brief Create HTTP client service instance
      * @param config Service configuration
+     * @param ioThreadIndex Index for naming IO threads (default 0)
      * @return Unique pointer to created service
      */
-    static std::unique_ptr<HttpClientService> Create(const HttpClientServiceConfig& config);
+    static std::unique_ptr<HttpClientService> Create(const HttpClientServiceConfig& config, size_t ioThreadIndex = 0);
 };
 
 } // namespace Http

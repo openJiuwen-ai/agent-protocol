@@ -18,6 +18,23 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --break-system-packages junit2html
 
+# 下载并安装 nlohmann-json-schema-validator
+RUN curl -L https://github.com/pboettch/json-schema-validator/archive/refs/tags/2.3.0.tar.gz \
+    -o /tmp/json-schema-validator.tar.gz \
+    && tar -xzf /tmp/json-schema-validator.tar.gz -C /tmp \
+    && cd /tmp/json-schema-validator-2.3.0 \
+    && mkdir build && cd build \
+    && cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_SHARED_LIBS=ON \
+        -DJSON_VALIDATOR_BUILD_EXAMPLES=OFF \
+        -DJSON_VALIDATOR_BUILD_TESTS=OFF \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/*
+
 # 下载并安装 http_parser v2.9.4
 RUN curl -L https://github.com/nodejs/http-parser/archive/refs/tags/v2.9.4.tar.gz \
     -o /tmp/http_parser.tar.gz \

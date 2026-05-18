@@ -1,11 +1,11 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "utils/utils_message.h"
-#include "utils/uuid.h"
+#include "utils_message.h"
+#include "uuid.h"
 
-namespace a2a {
+namespace A2A {
 
 Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& context_id,
                             const std::optional<std::string>& task_id)
@@ -15,7 +15,7 @@ Message NewAgentTextMessage(const std::string& text, const std::optional<std::st
     Message m;
     m.role = Role::AGENT;
     m.parts = {p};
-    m.messageId = a2a::generateUuid();
+    m.messageId = A2A::GenerateUuid();
     m.taskId = task_id;
     m.contextId = context_id;
     return m;
@@ -27,7 +27,7 @@ Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional
     Message m;
     m.role = Role::AGENT;
     m.parts = parts;
-    m.messageId = a2a::generateUuid();
+    m.messageId = A2A::GenerateUuid();
     m.taskId = task_id;
     m.contextId = context_id;
     return m;
@@ -79,4 +79,4 @@ std::string GetMessageText(const Message& message, const std::string& delimiter)
     return joined;
 }
 
-} // namespace a2a
+} // namespace A2A

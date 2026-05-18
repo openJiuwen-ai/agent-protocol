@@ -1,154 +1,60 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include <algorithm>
-#include <atomic>
 #include <future>
 #include <stdexcept>
 #include <thread>
 
-#include "default_request_handler.h"
 #include "events/event_consumer.h"
 #include "request_context_impl.h"
 #include "result_aggregator.h"
 #include "server/agent_executor.h"
-#include "server/queue_manager.h"
+#include "queue_manager.h"
 #include "tasks/push_notification_config_store.h"
 #include "tasks/push_notification_sender.h"
 #include "tasks/task_manager.h"
-#include "tasks/task_store.h"
-#include "utils/errors.h"
-#include "utils/types.h"
+#include "server/task_store.h"
+#include "types.h"
+#include "error.h"
+#include "id_generator.h"
+#include "server/task_updater.h"
+#include "default_request_handler.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 std::variant<Task, Message> DefaultRequestHandler::OnSendMessage(const MessageSendParams& params,
-                                                                 const ServerCallContext* ctx)
+    const std::shared_ptr<ServerCallContext> ctx)
 {
-    // Check if this is an existing task or a new one
+    // Determine task ID and check if it's an existing task
     std::optional<Task> existing_task = std::nullopt;
-    std::string task_id;
-
-    if (params.message.taskId.has_value()) {
-        // This is an existing task
-        task_id = params.message.taskId.value();
-        if (auto task_opt = task_store_->Get(task_id, ctx); task_opt.has_value()) {
-            existing_task = task_opt.value();
-        }
-    } else {
-        // This is a new task
-        task_id = generate_task_id();
-    }
+    std::string taskId = DetermineTaskId(params, ctx, existing_task);
 
     // Create task manager
-    auto task_manager =
-        std::make_shared<TaskManager>(task_id, params.message.contextId.value_or(""), task_store_, params.message, ctx);
+    auto taskManager = CreateTaskManager(taskId, params.message.contextId.value_or(""), params.message, ctx);
 
-    // If this is an existing task, update it with the new message
-    if (existing_task.has_value()) {
-        const Task updated_task = task_manager->UpdateWithMessage(params.message, existing_task.value());
-        task_store_->Save(updated_task, ctx);
-    } else {
-        // Create a new task
-        Task new_task;
-        new_task.id = task_id;
-        new_task.contextId = params.message.contextId.value_or("");
+    // Update existing task or create new task
+    UpdateOrCreateTask(params, taskId, taskManager, existing_task, ctx);
 
-        TaskStatus status;
-        status.state = TaskState::SUBMITTED;
-        new_task.status = status;
+    if (queueManager_ && executor_) {
+        // Create RequestContext using helper method
+        RequestContext request_context = CreateRequestContext(
+            params, taskId, params.message.contextId, existing_task, ctx);
 
-        task_store_->Save(new_task, ctx);
+        // Execute agent and get result
+        auto result = ExecuteAgentAndGetResult(params, taskId, taskManager, request_context, ctx);
 
-        UpdatePushNotificationConfig(params, task_id);
-    }
+        // Send push notification if needed
+        SendPushNotificationIfNeeded(taskId, ctx);
 
-    if (queue_manager_ && executor_) {
-        // 1. Get or create an EventQueue
-        auto event_queue = queue_manager_->CreateOrTap(task_id);
-
-        // 2. Create RequestContext using builder
-        RequestContext request_context;
-        if (context_builder_) {
-            request_context = context_builder_->Build(params,
-                                                      task_id,
-                                                      params.message.contextId,
-                                                      existing_task,
-                                                      ctx);
-        } else {
-            // Fallback to manual construction if builder is not available
-            RequestContext request_context_manual(params, task_id, params.message.contextId, existing_task, {}, ctx);
-            request_context = std::move(request_context_manual);
-        }
-
-        // 3. Create ResultAggregator
-        ResultAggregator result_aggregator(task_manager);
-
-        // 4. Run agent execution in a separate thread
-        std::thread agent_thread(
-            [this, &request_context, event_queue]() { executor_->Execute(request_context, *event_queue); });
-
-        // 5. Create EventConsumer and consume events
-        EventConsumer consumer(event_queue);
-
-        // Handle blocking/non-blocking behavior
-        bool blocking = true; // Default to blocking behavior
-        if (params.configuration.has_value() && params.configuration.value().contains("blocking")) {
-            blocking = params.configuration.value().at("blocking").get<bool>();
-        }
-
-        // Prepare result storage
-        std::optional<std::variant<Task, Message>> result = std::nullopt;
-
-        // Use the new ConsumeAndBreakOnInterrupt method
-        try {
-            auto [interrupted, background_future] = result_aggregator.ConsumeAndBreakOnInterrupt(consumer, blocking);
-
-            // Get the result based on interrupt status and blocking mode
-            if (interrupted && !blocking) {
-                // For non-blocking interrupted calls, we should get the current result
-                result = result_aggregator.CurrentResult();
-            } else {
-                // For blocking or normal cases, get the final result
-                result = result_aggregator.ConsumeAll(consumer);
-            }
-
-            // If interrupted and we have a background future, we should handle it
-            if (interrupted && background_future.valid()) {
-                // In a real implementation, we might want to track this task
-                // For now, we let it run in the background
-            }
-        } catch (const std::exception& e) {
-            // Handle exception appropriately
-        }
-
-        // 6. Handle cleanup
-        if (agent_thread.joinable()) {
-            agent_thread.join();
-        }
-
-        // 7. Send push notification if needed
-        if (push_sender_ && !task_id.empty() && task_store_->Get(task_id, ctx).has_value()) {
-            // Note: This is a simplified implementation compared to Python
-            // In Python, it gets the latest task through result_aggregator
-            // Here, we'll just use the most recent saved task
-            auto task_opt = task_store_->Get(task_id, ctx);
-            try {
-                push_sender_->SendNotification(task_opt.value());
-            } catch (const std::exception& e) {
-                // Log error but don't fail the request
-            }
-        }
-
-        // 8. Return the result
+        // Return the result or fallback
         if (result.has_value()) {
             return result.value();
         }
 
         // Fallback - return a minimal task
         Task task;
-        task.id = task_id;
+        task.id = taskId;
         task.contextId = params.message.contextId.value_or("default-context");
 
         TaskStatus status;
@@ -159,13 +65,13 @@ std::variant<Task, Message> DefaultRequestHandler::OnSendMessage(const MessageSe
     }
 
     // If no queue manager or executor, fall back to simpler behavior
-    if (auto task_opt = task_store_->Get(task_id, ctx); task_opt.has_value()) {
-        return task_opt.value();
+    if (auto taskOpt = taskStore_->Get(taskId, ctx); taskOpt.has_value()) {
+        return taskOpt.value();
     }
 
     // Fallback - create a minimal task
     Task task;
-    task.id = task_id;
+    task.id = taskId;
     task.contextId = params.message.contextId.value_or("default-context");
 
     TaskStatus status;
@@ -175,14 +81,140 @@ std::variant<Task, Message> DefaultRequestHandler::OnSendMessage(const MessageSe
     return task;
 }
 
-Task DefaultRequestHandler::OnGetTask(const TaskQueryParams& params, const ServerCallContext* ctx)
+std::string DefaultRequestHandler::DetermineTaskId(const MessageSendParams& params,
+    const std::shared_ptr<ServerCallContext> ctx,
+    std::optional<Task>& existing_task) const
 {
-    const auto task_opt = task_store_->Get(params.id, ctx);
-    if (!task_opt.has_value()) {
+    std::string taskId;
+    if (params.message.taskId.has_value()) {
+        // This is an existing task
+        taskId = params.message.taskId.value();
+        if (auto taskOpt = taskStore_->Get(taskId, ctx); taskOpt.has_value()) {
+            existing_task = taskOpt.value();
+        }
+    } else {
+        // This is a new task
+        taskId = GenerateTaskId();
+    }
+    return taskId;
+}
+
+std::shared_ptr<TaskManager> DefaultRequestHandler::CreateTaskManager(const std::string& taskId,
+    const std::string& contextId,
+    const Message& message,
+    const std::shared_ptr<ServerCallContext> ctx) const
+{
+    return std::make_shared<TaskManager>(taskId, contextId, taskStore_, message, ctx);
+}
+
+void DefaultRequestHandler::UpdateOrCreateTask(const MessageSendParams& params,
+    const std::string& taskId,
+    const std::shared_ptr<TaskManager>& taskManager,
+    const std::optional<Task>& existing_task,
+    const std::shared_ptr<ServerCallContext> ctx) const
+{
+    if (existing_task.has_value()) {
+        const Task updated_task = taskManager->UpdateWithMessage(params.message, existing_task.value());
+        taskStore_->Save(updated_task, ctx);
+    } else {
+        // Create a new task
+        Task new_task;
+        new_task.id = taskId;
+        new_task.contextId = params.message.contextId.value_or("");
+
+        TaskStatus status;
+        status.state = TaskState::SUBMITTED;
+        new_task.status = status;
+
+        taskStore_->Save(new_task, ctx);
+
+        UpdatePushNotificationConfig(params, taskId);
+    }
+}
+
+std::optional<std::variant<Task, Message>> DefaultRequestHandler::ExecuteAgentAndGetResult(
+    const MessageSendParams& params,
+    const std::string& taskId,
+    const std::shared_ptr<TaskManager>& taskManager,
+    const RequestContext& request_context,
+    const std::shared_ptr<ServerCallContext> ctx) const
+{
+    // 1. Get or create an EventQueue
+    auto eventQueue = queueManager_->CreateOrTap(taskId);
+
+    // 2. Create ResultAggregator
+    ResultAggregator resultAggregator(taskManager);
+
+    // 3. Create TaskUpdater
+    auto artifactIdGenerator = std::make_shared<UUIDGenerator>();
+    auto messageIdGenerator = std::make_shared<UUIDGenerator>();
+    auto taskUpdater = std::make_shared<A2A::Server::TaskUpdater>(eventQueue, taskId,
+        params.message.contextId.value_or(""));
+
+    // 4. Create EventConsumer and consume events
+    std::shared_ptr<EventConsumer> consumer = std::make_shared<EventConsumer>(eventQueue);
+
+    // Handle blocking/non-blocking behavior
+    bool blocking = true; // Default to blocking behavior
+    if (params.configuration.has_value() && params.configuration.value().blocking) {
+        blocking = params.configuration.value().blocking.value_or(false);
+    }
+
+    // Prepare result storage
+    std::optional<std::variant<Task, Message>> result = std::nullopt;
+
+    // Execute the agent directly (without creating a thread)
+    executor_->Execute(request_context, taskUpdater);
+
+    // Use the new ConsumeAndBreakOnInterrupt method
+    try {
+        auto [interrupted, background_future] = resultAggregator.ConsumeAndBreakOnInterrupt(consumer, blocking);
+
+        // Get the result based on interrupt status and blocking mode
+        if (interrupted && !blocking) {
+            // For non-blocking interrupted calls, we should get the current result
+            result = resultAggregator.CurrentResult();
+        } else {
+            // For blocking or normal cases, get the final result
+            result = resultAggregator.ConsumeAll(consumer);
+        }
+
+        // If interrupted and we have a background future, we should handle it
+        if (interrupted && background_future.valid()) {
+            // In a real implementation, we might want to track this task
+            // For now, we let it run in the background
+        }
+    } catch (const std::exception& e) {
+        // Handle exception appropriately
+    }
+
+    return result;
+}
+
+void DefaultRequestHandler::SendPushNotificationIfNeeded(const std::string& taskId,
+    const std::shared_ptr<ServerCallContext> ctx) const
+{
+    if (pushSender_ && !taskId.empty() && taskStore_->Get(taskId, ctx).has_value()) {
+        // Note: This is a simplified implementation compared to Python
+        // In Python, it gets the latest task through resultAggregator
+        // Here, we'll just use the most recent saved task
+        auto taskOpt = taskStore_->Get(taskId, ctx);
+        try {
+            pushSender_->SendNotification(taskOpt.value());
+        } catch (const std::exception& e) {
+            // Log error but don't fail the request
+        }
+    }
+}
+
+Task DefaultRequestHandler::OnGetTask(const TaskQueryParams& params, const std::shared_ptr<ServerCallContext> ctx)
+{
+    const auto taskOpt = taskStore_->Get(params.id, ctx);
+    if (!taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
 
-    Task task = task_opt.value();
+    Task task = taskOpt.value();
     // Apply history length limit if specified
     if (params.historyLength.has_value() && params.historyLength.value() > 0 && task.history.has_value() &&
         task.history.value().size() > static_cast<size_t>(params.historyLength.value())) {
@@ -196,88 +228,82 @@ Task DefaultRequestHandler::OnGetTask(const TaskQueryParams& params, const Serve
     return task;
 }
 
-Task DefaultRequestHandler::OnCancelTask(const TaskIdParams& params, const ServerCallContext* context)
+Task DefaultRequestHandler::OnCancelTask(const TaskIdParams& params, const std::shared_ptr<ServerCallContext> context)
 {
-    const auto task_opt = task_store_->Get(params.id, context);
-    if (!task_opt.has_value()) {
+    const auto taskOpt = taskStore_->Get(params.id, context);
+    if (!taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
 
-    Task task = task_opt.value();
+    Task task = taskOpt.value();
     // Check if task is in a non-cancelable state
-    if (is_final_state(task.status.state)) {
+    if (IsFinalState(task.status.state)) {
         throw A2AServerError("Cancel task failed");
     }
 
-    if (queue_manager_ && executor_) {
+    if (queueManager_ && executor_) {
         // 1. Create a TaskManager
-        TaskManager task_manager(task.id, task.contextId, task_store_, Message{}); // Empty message for cancel
+        TaskManager taskManager(task.id, task.contextId, taskStore_, Message{}); // Empty message for cancel
 
         // 2. Get or create an EventQueue
-        auto event_queue = queue_manager_->CreateOrTap(task.id);
+        auto eventQueue = queueManager_->CreateOrTap(task.id);
 
-        // 3. Create RequestContext using builder
-        RequestContext request_context;
-        if (context_builder_) {
-            request_context = context_builder_->Build(std::nullopt, // params
-                                                      task.id,
-                                                      task.contextId,
-                                                      task,
-                                                      context);
-        } else {
-            // Fallback to manual construction if builder is not available
-            RequestContext request_context_manual(std::nullopt, task.id, task.contextId, task, {}, context);
-            request_context = std::move(request_context_manual);
-        }
+        // 3. Create RequestContext using new helper method
+        RequestContext requestContext = CreateRequestContext(std::nullopt, task.id, task.contextId, task, context);
 
-        // 4. Execute the cancel agent
-        executor_->Cancel(request_context, *event_queue);
+        // 4. Create TaskUpdater
+        auto artifactIdGenerator = std::make_shared<UUIDGenerator>();
+        auto messageIdGenerator = std::make_shared<UUIDGenerator>();
+        auto taskUpdater = std::make_shared<A2A::Server::TaskUpdater>(eventQueue, task.id, task.contextId);
+
+        // 5. Execute the cancel agent
+        executor_->Cancel(requestContext, taskUpdater);
 
         // 5. Consume events and close queue
-        event_queue->Close();
+        eventQueue->Close();
 
         // 6. Update task status
         task.status.state = TaskState::CANCELED;
-        task_store_->Save(task, context);
+        taskStore_->Save(task, context);
     } else {
         // For this simplified version, we'll just mark the task as canceled
         task.status.state = TaskState::CANCELED;
-        task_store_->Save(task, context);
+        taskStore_->Save(task, context);
     }
 
     return task;
 }
 
-TaskPushNotificationConfig DefaultRequestHandler::OnSetTaskPushNotificationConfig(const TaskPushNotificationConfig& cfg,
-                                                                                  const ServerCallContext* ctx)
+TaskPushNotificationConfig DefaultRequestHandler::OnSetTaskPushNotificationConfig(
+    const TaskPushNotificationConfig& cfg, const std::shared_ptr<ServerCallContext> ctx)
 {
-    if (!push_config_store_) {
+    if (!pushConfigStore_) {
         throw A2AServerError("Push notification config is not set");
     }
 
-    if (const auto task_opt = task_store_->Get(cfg.taskId, ctx); !task_opt.has_value()) {
+    if (const auto taskOpt = taskStore_->Get(cfg.taskId, ctx); !taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
 
-    if (push_config_store_) {
-        push_config_store_->SetInfo(cfg.taskId, cfg.pushNotificationConfig);
+    if (pushConfigStore_) {
+        pushConfigStore_->SetInfo(cfg.taskId, cfg.pushNotificationConfig);
     }
     return cfg;
 }
 
 TaskPushNotificationConfig DefaultRequestHandler::OnGetTaskPushNotificationConfig(
-    const GetTaskPushNotificationConfigParams& params, const ServerCallContext* ctx)
+    const GetTaskPushNotificationConfigParams& params, const std::shared_ptr<ServerCallContext> ctx)
 {
-    if (!push_config_store_) {
+    if (!pushConfigStore_) {
         throw A2AServerError("Push notification config is not set");
     }
 
-    if (const auto task_opt = task_store_->Get(params.id, ctx); !task_opt.has_value()) {
+    if (const auto taskOpt = taskStore_->Get(params.id, ctx); !taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
 
-    if (push_config_store_) {
-        auto configs = push_config_store_->GetInfo(params.id);
+    if (pushConfigStore_) {
+        auto configs = pushConfigStore_->GetInfo(params.id);
         if (!configs.empty()) {
             TaskPushNotificationConfig config;
             config.taskId = params.id;
@@ -298,17 +324,17 @@ TaskPushNotificationConfig DefaultRequestHandler::OnGetTaskPushNotificationConfi
 }
 
 std::vector<TaskPushNotificationConfig> DefaultRequestHandler::OnListTaskPushNotificationConfigs(
-    const ListTaskPushNotificationConfigParams& params, const ServerCallContext* ctx)
+    const ListTaskPushNotificationConfigParams& params, const std::shared_ptr<ServerCallContext> ctx)
 {
-    if (!push_config_store_) {
+    if (!pushConfigStore_) {
         throw A2AServerError("Push notification config is not set");
     }
 
-    if (const auto task_opt = task_store_->Get(params.id, ctx); !task_opt.has_value()) {
+    if (const auto taskOpt = taskStore_->Get(params.id, ctx); !taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
-    if (push_config_store_) {
-        auto configs = push_config_store_->GetInfo(params.id);
+    if (pushConfigStore_) {
+        auto configs = pushConfigStore_->GetInfo(params.id);
         std::vector<TaskPushNotificationConfig> result;
         for (const auto& config : configs) {
             TaskPushNotificationConfig task_config;
@@ -322,178 +348,142 @@ std::vector<TaskPushNotificationConfig> DefaultRequestHandler::OnListTaskPushNot
 }
 
 void DefaultRequestHandler::OnDeleteTaskPushNotificationConfig(const DeleteTaskPushNotificationConfigParams& params,
-                                                               const ServerCallContext* ctx)
+    const std::shared_ptr<ServerCallContext> ctx)
 {
-    if (!push_config_store_) {
+    if (!pushConfigStore_) {
         throw A2AServerError("Push notification config is not set");
     }
 
-    if (const auto task_opt = task_store_->Get(params.id, ctx); !task_opt.has_value()) {
+    if (const auto taskOpt = taskStore_->Get(params.id, ctx); !taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
-    if (push_config_store_) {
-        push_config_store_->DeleteInfo(params.id, params.pushNotificationConfigId);
+    if (pushConfigStore_) {
+        pushConfigStore_->DeleteInfo(params.id, params.pushNotificationConfigId);
     }
 }
 
-void DefaultRequestHandler::OnSendMessageStreaming(const MessageSendParams& params, const StreamEmitter& emit,
-                                                   const ServerCallContext* context)
+void DefaultRequestHandler::OnSendMessageStreaming(const MessageSendParams& params,
+    const StreamEmitter& emit,
+    const std::shared_ptr<ServerCallContext> context)
 {
-    if (!queue_manager_ || !executor_) {
+    if (!queueManager_ || !executor_) {
         // For this simplified version, we'll throw an exception as in the base class
         throw std::runtime_error("Streaming not supported");
     }
 
-    // 1. Initialize the message send (similar to send_message)
-    std::optional<Task> existing_task = std::nullopt;
-    std::string task_id;
+    // Initialize the streaming task
+    std::optional<Task> existingTask = std::nullopt;
+    std::string taskId;
+    std::shared_ptr<TaskManager> taskManager;
 
-    if (params.message.taskId.has_value()) {
-        // This is an existing task
-        task_id = params.message.taskId.value();
-        if (auto task_opt = task_store_->Get(task_id, context); task_opt.has_value()) {
-            existing_task = task_opt.value();
-        }
-    } else {
-        // This is a new task
-        task_id = generate_task_id();
-    }
+    InitializeStreamingTask(params, context, existingTask, taskId, taskManager);
 
-    // 2. Set up task manager and validate existing task
-    auto task_manager = std::make_shared<TaskManager>(task_id, params.message.contextId.value_or(""), task_store_,
-                                                      params.message, context);
+    RequestContext requestContext = CreateRequestContext(
+        params,
+        taskId,
+        params.message.contextId,
+        existingTask.has_value() ? std::make_optional(existingTask.value()) : std::nullopt,
+        context);
 
-    // If this is an existing task, update it with the new message
-    if (existing_task.has_value()) {
-        const Task updated_task = task_manager->UpdateWithMessage(params.message, existing_task.value());
-        task_store_->Save(updated_task, context);
-    } else {
-        // Create a new task
-        Task new_task;
-        new_task.id = task_id;
-        new_task.contextId = params.message.contextId.value_or("");
-
-        TaskStatus status;
-        status.state = TaskState::SUBMITTED;
-        new_task.status = status;
-
-        task_store_->Save(new_task, context);
-
-        UpdatePushNotificationConfig(params, task_id);
-    }
-
-    // 3. Set up event queues and consumers
-    auto event_queue = queue_manager_->CreateOrTap(task_id);
-
-    // 4. Create RequestContext using builder
-    RequestContext request_context;
-    if (context_builder_) {
-        request_context = context_builder_->Build(
-            params,
-            task_id,
-            params.message.contextId,
-            existing_task.has_value() ? std::make_optional(existing_task.value()) : std::nullopt,
-            context);
-    } else {
-        // Fallback to manual construction if builder is not available
-        RequestContext request_context_manual(
-            params, task_id, params.message.contextId,
-            existing_task.has_value() ? std::make_optional(existing_task.value()) : std::nullopt, {}, context);
-        request_context = std::move(request_context_manual);
-    }
-
-    // 5. Create ResultAggregator and EventConsumer
-    ResultAggregator result_aggregator(task_manager);
-    EventConsumer consumer(event_queue);
-
-    // 6. Execute the agent in a separate thread to allow streaming
-    std::thread agent_thread(
-        [this, &request_context, event_queue]() { executor_->Execute(request_context, *event_queue); });
-
-    // 7. Stream events back to the client via the emit callback
-    try {
-        // Create a thread that will handle the event consumption and forwarding
-        std::thread consumer_thread([this, &consumer, &result_aggregator, &emit, &task_id, &event_queue]() {
-            try {
-                // Handle the streaming events like in Python's on_message_send_stream
-                bool first_event = true;
-                while (!event_queue->IsClosed()) {
-                    try {
-                        auto event = event_queue->Dequeue();
-
-                        // Validate task ID match if needed
-                        if (first_event) {
-                            // This is where Python would do validation
-                            first_event = false;
-                        }
-
-                        // Send event to client
-                        result_aggregator.ConsumeAndEmit(consumer, emit);
-
-                        if (!push_sender_ || task_id.empty()) {
-                            continue;
-                        }
-                        try {
-                            auto current_result = result_aggregator.CurrentResult();
-                            if (current_result.has_value() && std::holds_alternative<Task>(current_result.value())) {
-                                push_sender_->SendNotification(std::get<Task>(current_result.value()));
-                            }
-                        } catch (const std::exception& e) {
-                            // Log error but don't fail the stream
-                        }
-                    } catch (const std::runtime_error&) {
-                        // Queue is empty and closed, break the loop
-                        break;
-                    }
-                }
-            } catch (const std::exception& e) {
-                // Handle any exceptions in the streaming process
-                // This would normally be logged
-            }
-        });
-
-        // Wait for the agent thread to finish
-        if (agent_thread.joinable()) {
-            agent_thread.join();
-        }
-
-        // Wait for the consumer thread to finish processing all events
-        if (consumer_thread.joinable()) {
-            consumer_thread.join();
-        }
-    } catch (...) {
-        // Ensure threads are properly joined even if an exception occurs
-        if (agent_thread.joinable()) {
-            agent_thread.join();
-        }
-        throw;
-    }
+    // Set up and execute the streaming agent
+    SetupAndExecuteStreamingAgent(params, taskId, requestContext, taskManager, emit);
 }
 
-void DefaultRequestHandler::OnResubscribeToTask(const TaskIdParams& params, const StreamEmitter& emit,
-                                                const ServerCallContext* context)
+void DefaultRequestHandler::InitializeStreamingTask(const MessageSendParams& params,
+    const std::shared_ptr<ServerCallContext> context,
+    std::optional<Task>& existingTask,
+    std::string& taskId,
+    std::shared_ptr<TaskManager>& taskManager) const
 {
-    if (!queue_manager_) {
+    // Determine task ID and check if it's an existing task
+    taskId = DetermineTaskId(params, context, existingTask);
+
+    // Set up task manager
+    taskManager = CreateTaskManager(taskId, params.message.contextId.value_or(""), params.message, context);
+
+    // Update existing task or create new task
+    UpdateOrCreateTask(params, taskId, taskManager, existingTask, context);
+}
+
+void DefaultRequestHandler::SetupAndExecuteStreamingAgent(const MessageSendParams& params,
+    const std::string& taskId,
+    const RequestContext& requestContext,
+    const std::shared_ptr<TaskManager>& taskManager,
+    const StreamEmitter& emit) const
+{
+    // 3. Set up event queues and consumers
+    auto eventQueue = queueManager_->CreateOrTap(taskId);
+
+    // 4. Create ResultAggregator and EventConsumer
+    ResultAggregator resultAggregator(taskManager);
+    auto consumer = std::make_shared<EventConsumer>(eventQueue);
+
+    // 5. Create TaskUpdater
+    auto artifactIdGenerator = std::make_shared<UUIDGenerator>();
+    auto messageIdGenerator = std::make_shared<UUIDGenerator>();
+    auto taskUpdater = std::make_shared<TaskUpdater>(eventQueue, taskId, params.message.contextId.value_or(""));
+
+    auto agentFuture = std::async(std::launch::async, [this, &requestContext, taskUpdater]() {
+        executor_->Execute(requestContext, taskUpdater);
+    });
+
+    // 6. Stream events back to the client via the emit callback
+    auto consumerFuture = std::async(std::launch::async,
+        [this, consumer, &resultAggregator, &emit, &taskId, &eventQueue]() {
+        while (!eventQueue->IsClosed()) {
+            try {
+                auto event = eventQueue->Dequeue();
+                // Validate task ID match if needed
+                // Then send event to client
+                resultAggregator.ConsumeAndEmit(consumer, emit);
+                if (!pushSender_ || taskId.empty()) {
+                    continue;
+                }
+                auto currentResult = resultAggregator.CurrentResult();
+                if (!currentResult.has_value() || !std::holds_alternative<Task>(currentResult.value())) {
+                    continue;
+                }
+                try {
+                    pushSender_->SendNotification(std::get<Task>(currentResult.value()));
+                } catch (const std::exception& e) {
+                    // Log error but don't fail the stream
+                }
+            } catch (const std::runtime_error&) {
+                // Queue is empty and closed, break the loop
+                break;
+            }
+        }
+    });
+
+    agentFuture.wait();
+    consumerFuture.wait();
+}
+
+void DefaultRequestHandler::OnResubscribeToTask(const TaskIdParams& params,
+    const StreamEmitter& emit,
+    const std::shared_ptr<ServerCallContext> context)
+{
+    if (!queueManager_) {
         // For this simplified version, we'll throw an exception as in the base class
         throw std::runtime_error("Streaming not supported");
     }
 
     // 1. Retrieve the existing task
-    const auto task_opt = task_store_->Get(params.id, context);
-    if (!task_opt.has_value()) {
+    const auto taskOpt = taskStore_->Get(params.id, context);
+    if (!taskOpt.has_value()) {
         throw A2AServerError("Task id not found");
     }
 
     // 2. Tap into the existing event queue
-    auto event_queue = queue_manager_->Tap(params.id);
-    if (!event_queue) {
+    auto eventQueue = queueManager_->Tap(params.id);
+    if (!eventQueue) {
         throw A2AServerError("Event queue not found for task");
     }
 
     // 3. Resume streaming events to the client via the emit callback
-    while (!event_queue->IsClosed()) {
+    while (!eventQueue->IsClosed()) {
         try {
-            auto event = event_queue->Dequeue();
+            auto event = eventQueue->Dequeue();
             emit(event);
         } catch (const std::runtime_error&) {
             // Queue is empty and closed, break the loop
@@ -502,40 +492,53 @@ void DefaultRequestHandler::OnResubscribeToTask(const TaskIdParams& params, cons
     }
 }
 
-bool DefaultRequestHandler::is_final_state(const TaskState state)
+bool DefaultRequestHandler::IsFinalState(const TaskState state)
 {
     return state == TaskState::COMPLETED || state == TaskState::CANCELED || state == TaskState::FAILED ||
            state == TaskState::REJECTED;
 }
 
-std::string DefaultRequestHandler::generate_task_id()
+std::string DefaultRequestHandler::GenerateTaskId()
 {
-    static int counter = 0;
+    static std::atomic<int> counter{0};
     return "task-" + std::to_string(++counter);
 }
 
 void DefaultRequestHandler::UpdatePushNotificationConfig(const MessageSendParams &params,
-    const std::string& task_id) const
+    const std::string& taskId) const
 {
     // Store push notification config if provided
-    if (push_config_store_ && params.configuration.has_value()) {
+    if (pushConfigStore_ && params.configuration.has_value()) {
         try {
-            const auto& config_json = params.configuration.value();
-            if (config_json.contains("pushNotificationConfig")) {
-                PushNotificationConfig push_config;
-                from_json(config_json.at("pushNotificationConfig"), push_config);
-                push_config_store_->SetInfo(task_id, push_config);
+            const auto& configJson = params.configuration.value();
+            if (configJson.pushNotificationConfig.has_value()) {
+                PushNotificationConfig pushConfig = configJson.pushNotificationConfig.value();
+                pushConfigStore_->SetInfo(taskId, pushConfig);
             }
         } catch (const std::exception& e) {
             // Log error but don't fail the request
-            // In a production implementation, we would use a proper logger
         }
     }
 }
 
-AgentCard DefaultRequestHandler::OnGetCard(const ServerCallContext* ctx)
+RequestContext DefaultRequestHandler::CreateRequestContext(
+    std::optional<MessageSendParams> params,
+    std::string taskId,
+    std::optional<std::string> contextId,
+    std::optional<Task> existingTask,
+    const std::shared_ptr<ServerCallContext>& ctx)
+{
+    auto taskIdOptional = std::make_optional(taskId);
+    std::vector<Task> relatedTasks = {};
+    auto buildParam = RequestContextParam{
+        params, taskIdOptional, contextId, existingTask, relatedTasks, ctx
+    };
+    return RequestContext(buildParam);
+}
+
+AgentCard DefaultRequestHandler::OnGetCard(const std::shared_ptr<ServerCallContext> ctx)
 {
     return *agentCard_;
 }
 
-} // namespace a2a::server
+} // namespace A2A::Server

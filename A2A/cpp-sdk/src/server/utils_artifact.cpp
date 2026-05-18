@@ -1,16 +1,16 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "utils/uuid.h"
+#include "uuid.h"
 #include "utils_artifact.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 Artifact NewArtifact(const std::vector<Part>& parts, const std::string& name, const std::string& description)
 {
     Artifact a;
-    a.artifactId = generateUuid();
+    a.artifactId = GenerateUuid();
     a.parts = parts;
     a.name = name;
     if (!description.empty()) {
@@ -33,4 +33,4 @@ Artifact NewDataArtifact(const std::string& name, const nlohmann::json& data, co
     return NewArtifact({p}, name, description);
 }
 
-} // namespace a2a::server
+} // namespace A2A::Server

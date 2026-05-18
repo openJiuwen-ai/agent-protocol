@@ -18,11 +18,17 @@ set -euo pipefail
 
 # Default options
 BUILD_TYPE="Release"
-WITH_EXAMPLES=0
 WITH_TESTS=0
 WITH_COVERAGE=0
+WITH_STDIO=0
+WITH_ASAN=0
+WITH_INSTALL=0
 BUILD_DIR="build"
 GENERATOR=""
+
+MCP_BUILD_CLIENT=1
+MCP_BUILD_SERVER=1
+MCP_WITH_HTTP=1
 
 print_help() {
   cat <<EOF
@@ -32,15 +38,27 @@ Options:
   -t, --type <Debug|Release>   CMake build type (default: Release)
   -u, --with-tests             Build unit tests target(s) if available
   -c, --coverage               Enable code coverage (implies --with-tests)
+  -s, --stdio                  Enable stdio-related unit tests
+  --asan                       Enable AddressSanitizer (GCC/Clang), debug type will be used
+  -i, --install                Install after build
   -b, --build-dir <dir>        Build directory (default: build)
   -g, --generator <name>       CMake generator (e.g. "Ninja", "NMake Makefiles")
+  --no-client                  Do not build client components
+  --no-server                  Do not build server components
+  --no-http                    Do not build HTTP client transport components
   -h, --help                   Show this help message
 
 Examples:
   $0
   $0 -t Debug
-  $0 --type Release --with-examples --with-tests
+  $0 --type Release --with-tests
   $0 --coverage                # Build tests with coverage
+  $0 -u                        # Unit tests; includes tests/ut/st when client+server+HTTP
+  $0 --no-http --no-client     # No-HTTP Server
+  $0 --no-http --no-server     # No-HTTP Client
+  $0 --no-client               # HTTP Server
+  $0 --no-server               # HTTP Client
+  $0 --no-http                 # No-HTTP Server and Client
 EOF
 }
 
@@ -60,6 +78,18 @@ while [[ $# -gt 0 ]]; do
       WITH_TESTS=1;
       shift;
       ;;
+    -s|--stdio)
+      WITH_STDIO=1;
+      shift;
+      ;;
+    --asan)
+      WITH_ASAN=1;
+      shift;
+      ;;
+    -i|--install)
+      WITH_INSTALL=1;
+      shift;
+      ;;
     -b|--build-dir)
       BUILD_DIR="$2";
       shift 2;
@@ -67,6 +97,18 @@ while [[ $# -gt 0 ]]; do
     -g|--generator)
       GENERATOR="$2";
       shift 2;
+      ;;
+    --no-client)
+      MCP_BUILD_CLIENT=0;
+      shift;
+      ;;
+    --no-server)
+      MCP_BUILD_SERVER=0;
+      shift;
+      ;;
+    --no-http)
+      MCP_WITH_HTTP=0;
+      shift;
       ;;
     -h|--help)
       print_help;
@@ -96,6 +138,12 @@ if [[ ${WITH_COVERAGE} -eq 1 && "${BUILD_TYPE}" != "Debug" ]]; then
   echo "[INFO] Continuing with ${BUILD_TYPE}..."
 fi
 
+# ASAN default build type is Debug
+if [[ ${WITH_ASAN} -eq 1 ]]; then
+  BUILD_TYPE="Debug"
+  CMAKE_ARGS+=("-DASAN=enable")
+fi
+
 # Determine optimal job count for Linux (CPU cores + 1, but max 8 to avoid memory issues)
 CPU_CORES=$(nproc)
 OPTIMAL_JOBS=$((CPU_CORES + 1))
@@ -105,12 +153,20 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="${SCRIPT_DIR}/.."
-BUILD_DIR_ABS="${SOURCE_DIR}/${BUILD_DIR}"
+
+if [[ "${BUILD_DIR}" = /* ]]; then
+  BUILD_DIR_ABS="${BUILD_DIR}"
+else
+  BUILD_DIR_ABS="${SOURCE_DIR}/${BUILD_DIR}"
+fi
 
 mkdir -p "${BUILD_DIR_ABS}"
-cd "${BUILD_DIR_ABS}"
 
-CMAKE_ARGS=("${SOURCE_DIR}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+CMAKE_ARGS+=("-S" "${SOURCE_DIR}" "-B" "${BUILD_DIR_ABS}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+
+CMAKE_ARGS+=("-DMCP_BUILD_CLIENT=$([[ ${MCP_BUILD_CLIENT} -eq 1 ]] && echo ON || echo OFF)")
+CMAKE_ARGS+=("-DMCP_BUILD_SERVER=$([[ ${MCP_BUILD_SERVER} -eq 1 ]] && echo ON || echo OFF)")
+CMAKE_ARGS+=("-DMCP_WITH_HTTP=$([[ ${MCP_WITH_HTTP} -eq 1 ]] && echo ON || echo OFF)")
 
 if [[ ${WITH_TESTS} -eq 1 ]]; then
   CMAKE_ARGS+=("-DMCP_ENABLE_TESTS=ON")
@@ -118,10 +174,27 @@ else
   CMAKE_ARGS+=("-DMCP_ENABLE_TESTS=OFF")
 fi
 
+# ST integration tests (client+server+HTTP); same gate as tests/ut/CMakeLists.txt
+if [[ ${WITH_TESTS} -eq 1 || ${WITH_COVERAGE} -eq 1 ]]; then
+  if [[ ${MCP_BUILD_CLIENT} -eq 1 && ${MCP_BUILD_SERVER} -eq 1 && ${MCP_WITH_HTTP} -eq 1 ]]; then
+    CMAKE_ARGS+=("-DMCP_ENABLE_ST_TESTS=ON")
+  else
+    CMAKE_ARGS+=("-DMCP_ENABLE_ST_TESTS=OFF")
+  fi
+else
+  CMAKE_ARGS+=("-DMCP_ENABLE_ST_TESTS=OFF")
+fi
+
 if [[ ${WITH_COVERAGE} -eq 1 ]]; then
   CMAKE_ARGS+=("-DMCP_ENABLE_COVERAGE=ON")
 else
   CMAKE_ARGS+=("-DMCP_ENABLE_COVERAGE=OFF")
+fi
+
+if [[ ${WITH_STDIO} -eq 1 ]]; then
+  CMAKE_ARGS+=("-DMCP_ENABLE_STDIO=ON")
+else
+  CMAKE_ARGS+=("-DMCP_ENABLE_STDIO=OFF")
 fi
 
 if [[ -n "${GENERATOR}" ]]; then
@@ -131,7 +204,13 @@ else
 fi
 
 echo "[INFO] Building with ${OPTIMAL_JOBS} parallel jobs (detected ${CPU_CORES} CPU cores)"
-cmake --build . -j${OPTIMAL_JOBS}
+cmake --build "${BUILD_DIR_ABS}" -j${OPTIMAL_JOBS}
+
+if [[ ${WITH_INSTALL} -eq 1 ]]; then
+  echo "[INFO] Installing (requires sudo)..."
+  sudo cmake --install "${BUILD_DIR_ABS}"
+  echo "[INFO] Installation completed."
+fi
 
 if [[ ${WITH_COVERAGE} -eq 1 ]]; then
   echo "[INFO] Coverage build finished."

@@ -8,11 +8,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(MCP_ENABLE_TESTS "Build unit tests" OFF)
 option(MCP_ENABLE_EXAMPLES "Build examples" OFF)
 option(MCP_ENABLE_COVERAGE "Enable code coverage" OFF)
+option(MCP_ENABLE_STDIO "Enable stdio UT" OFF)
+option(MCP_ENABLE_ST_TESTS "Build ST integration tests (tests/ut/st); requires client, server, and HTTP" OFF)
+
+option(MCP_BUILD_CLIENT "Build MCP client components" ON)
+option(MCP_BUILD_SERVER "Build MCP server components" ON)
+option(MCP_WITH_HTTP "Build HTTP client transport components" ON)
+
+add_compile_definitions(MCP_WITH_HTTP=$<BOOL:${MCP_WITH_HTTP}>)
 
 include(third_party/third_party.cmake)
 
 find_package(OpenSSL REQUIRED)
-find_package(CURL REQUIRED)
+
+if(MCP_BUILD_CLIENT AND MCP_WITH_HTTP)
+    find_package(CURL REQUIRED)
+endif()
 
 add_compile_options(-fPIC)
 add_compile_options(-ftrapv)
@@ -34,26 +45,61 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2 -D_FORTIFY_SOURCE=2")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -D_FORTIFY_SOURCE=2")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
+set(CMAKE_FLAGS_ASAN
+    -fsanitize=address
+    -fsanitize-recover=address
+    -fsanitize=leak
+    -fno-omit-frame-pointer
+)
+
 # Common compiler flags
 add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal -Wtrampolines -fno-strict-aliasing -fstack-protector-strong)
+
+if (ASAN STREQUAL "enable")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(${CMAKE_FLAGS_ASAN})
+        add_link_options(${CMAKE_FLAGS_ASAN})
+    else()
+        message(WARNING "ASAN not supported for compiler: ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
 
 # Linker flags for security hardening
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic -pie")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic")
 
-if( CMAKE_BUILD_TYPE STREQUAL "Release")
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
 endif()
 
 # Skip RPATH to avoid hardcoded paths in binaries
-set(CMAKE_SKIP_RPATH TRUE)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+	set(CMAKE_SKIP_RPATH TRUE)
+endif()
 
 # Ensure debug symbols are included
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Building in Debug mode with full debug symbols")
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     message(STATUS "Building in Release with Debug Info mode")
+endif()
+
+# Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
+set(_mcp_event_pthreads_target "")
+if(TARGET event_pthreads)
+    set(_mcp_event_pthreads_target event_pthreads)
+elseif(TARGET libevent_pthreads)
+    set(_mcp_event_pthreads_target libevent_pthreads)
+elseif(TARGET "libevent::pthread")
+    set(_mcp_event_pthreads_target libevent::pthread)
+else()
+    find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
+    if(_mcp_event_pthreads_lib)
+        set(_mcp_event_pthreads_target ${_mcp_event_pthreads_lib})
+    else()
+        message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
+    endif()
 endif()
 
 # Add all sources and target definition for mcp from src/
@@ -76,24 +122,15 @@ else()
 	set(_mcp_libevent_target event)
 endif()
 
-target_link_libraries(mcp PUBLIC ${_mcp_libevent_target} nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(mcp PUBLIC ${_mcp_libevent_target} nlohmann_json::nlohmann_json nlohmann_json_schema_validator)
 target_link_libraries(mcp PRIVATE http_parser)
 
-# Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
-if(TARGET event_pthreads)
-	target_link_libraries(mcp PUBLIC event_pthreads)
-elseif(TARGET libevent_pthreads)
-	target_link_libraries(mcp PUBLIC libevent_pthreads)
-elseif(TARGET "libevent::pthread")
-	target_link_libraries(mcp PUBLIC libevent::pthread)
-else()
-	find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
-	if(_mcp_event_pthreads_lib)
-		target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_lib})
-	else()
-		message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
-	endif()
+if(MCP_BUILD_CLIENT AND MCP_WITH_HTTP)
+	target_link_libraries(mcp PUBLIC CURL::libcurl)
 endif()
+
+target_link_libraries(mcp PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(mcp PUBLIC ${_mcp_event_pthreads_target})
 
 set_target_properties(mcp PROPERTIES
 	OUTPUT_NAME "mcp"
@@ -106,4 +143,38 @@ endif()
 
 if(MCP_ENABLE_EXAMPLES)
 	add_subdirectory(examples)
+endif()
+
+# Install rules
+include(GNUInstallDirs)
+
+install(TARGETS mcp
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	        PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ  # 644
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	        PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ  # 644
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE  # 755
+	                    GROUP_READ GROUP_EXECUTE
+	                    WORLD_READ WORLD_EXECUTE
+)
+
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/
+	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+	FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ  # 644
+	DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE  # 755
+	                      GROUP_READ GROUP_EXECUTE
+	                      WORLD_READ WORLD_EXECUTE
+	FILES_MATCHING PATTERN "*.h"
+)
+
+# Uninstall target
+if(NOT TARGET uninstall)
+	configure_file(
+		"${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake.in"
+		"${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+		IMMEDIATE @ONLY)
+
+	add_custom_target(uninstall
+		COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
 endif()

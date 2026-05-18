@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_DEFAULT_REQUEST_HANDLER
@@ -8,21 +8,17 @@
 #include <memory>
 #include <variant>
 
-#include "base_push_notification_sender.h"
-#include "events/event_consumer.h"
 #include "inmemory_push_notification_config_store.h"
 #include "inmemory_task_store.h"
-#include "request_context_builder.h"
+#include "queue_manager.h"
 #include "result_aggregator.h"
 #include "server/agent_executor.h"
-#include "server/queue_manager.h"
-#include "server/request_handler.h"
 #include "tasks/push_notification_config_store.h"
 #include "tasks/push_notification_sender.h"
-#include "tasks/task_store.h"
-#include "utils/types.h"
+#include "server/task_store.h"
+#include "types.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 // A simple default request handler that forwards to an inner Handler or throws if not set.
 class DefaultRequestHandler : public RequestHandler {
@@ -37,13 +33,13 @@ public:
                           std::shared_ptr<QueueManager> queueManager = nullptr)
         : executor_(std::move(executor)),
           agentCard_(std::move(agentCard)),
-          task_store_(std::make_shared<InMemoryTaskStore>()),
-          queue_manager_(std::move(queueManager)),
-          push_config_store_(std::make_shared<InMemoryPushNotificationConfigStore>()),
-          push_sender_(std::make_shared<BasePushNotificationSender>(push_config_store_)),
-          context_builder_(std::make_shared<SimpleRequestContextBuilder>(false, task_store_))
+          taskStore_(std::make_shared<InMemoryTaskStore>()),
+          queueManager_(std::move(queueManager)),
+          pushConfigStore_(std::make_shared<InMemoryPushNotificationConfigStore>())
     {
     }
+    
+    ~DefaultRequestHandler() override = default;
 
     /**
      * @brief handle the request reveiced
@@ -52,16 +48,17 @@ public:
      * @param[in] ctx server call context
      * @return task or message
      */
-    std::variant<Task, Message> OnSendMessage(const MessageSendParams& params, const ServerCallContext* ctx) override;
+    std::variant<Task, Message> OnSendMessage(
+        const MessageSendParams& params, std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
-     * @brief retrive a task by query params
+     * @brief retrieve a task by query params
      *
      * @param[in] params param containing the query information
      * @param[in] ctx server call context
      * @return task
      */
-    Task OnGetTask(const TaskQueryParams& params, const ServerCallContext* ctx) override;
+    Task OnGetTask(const TaskQueryParams& params, std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
      * @brief cancel a task by task id params
@@ -70,7 +67,7 @@ public:
      * @param[in] ctx server call context
      * @return task canceled
      */
-    Task OnCancelTask(const TaskIdParams& params, const ServerCallContext* ctx) override;
+    Task OnCancelTask(const TaskIdParams& params, std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
      * @brief set a task push notification configuration
@@ -80,27 +77,27 @@ public:
      * @return TaskPushNotificationConfig
      */
     TaskPushNotificationConfig OnSetTaskPushNotificationConfig(const TaskPushNotificationConfig& cfg,
-                                                               const ServerCallContext* ctx);
+                                                               std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
-     * @brief retrive a task push notification configuration of a task
+     * @brief retrieve a task push notification configuration of a task
      *
      * @param[in] params param containing the request information
      * @param[in] ctx server call context
      * @return TaskPushNotificationConfig
      */
     TaskPushNotificationConfig OnGetTaskPushNotificationConfig(const GetTaskPushNotificationConfigParams& params,
-                                                               const ServerCallContext* ctx);
+                                                               std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
-     * @brief retrive all task push notification configurations of a task
+     * @brief retrieve all task push notification configurations of a task
      *
      * @param[in] params param containing the id information
      * @param[in] ctx server call context
      * @return vector of TaskPushNotificationConfig
      */
     std::vector<TaskPushNotificationConfig> OnListTaskPushNotificationConfigs(
-        const ListTaskPushNotificationConfigParams& params, const ServerCallContext* ctx);
+        const ListTaskPushNotificationConfigParams& params, std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
      * @brief delete a task push notification configuration of a task
@@ -109,15 +106,15 @@ public:
      * @param[in] ctx server call context
      */
     void OnDeleteTaskPushNotificationConfig(const DeleteTaskPushNotificationConfigParams& params,
-                                            const ServerCallContext* ctx);
+                                            std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
-     * @brief retrive agent card
+     * @brief retrieve agent card
      *
      * @param[in] ctx server call context
      * @return AgentCard
      */
-    AgentCard OnGetCard(const ServerCallContext* ctx) override;
+    AgentCard OnGetCard(std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
      * @brief handle the stream request reveiced
@@ -127,7 +124,7 @@ public:
      * @param[in] ctx server call context
      */
     void OnSendMessageStreaming(const MessageSendParams& params, const StreamEmitter& emit,
-                                const ServerCallContext* ctx) override;
+                                std::shared_ptr<ServerCallContext> ctx) override;
 
     /**
      * @brief handle resubscribe to task request
@@ -137,26 +134,63 @@ public:
      * @param[in] ctx server call context
      */
     void OnResubscribeToTask(const TaskIdParams& params, const StreamEmitter& emit,
-                             const ServerCallContext* ctx) override;
+                             std::shared_ptr<ServerCallContext> ctx) override;
 
 private:
     std::shared_ptr<AgentExecutor> executor_;
     std::shared_ptr<AgentCard> agentCard_;
-    std::shared_ptr<TaskStore> task_store_;
-    std::shared_ptr<QueueManager> queue_manager_;
-    std::shared_ptr<PushNotificationConfigStore> push_config_store_;
-    std::shared_ptr<PushNotificationSender> push_sender_;
-    std::shared_ptr<RequestContextBuilder> context_builder_;
+    std::shared_ptr<TaskStore> taskStore_;
+    std::shared_ptr<QueueManager> queueManager_;
+    std::shared_ptr<PushNotificationConfigStore> pushConfigStore_;
+    std::shared_ptr<PushNotificationSender> pushSender_;
 
     // Helper methods
-    static bool is_final_state(TaskState state);
-    static std::string generate_task_id();
-    void UpdatePushNotificationConfig(const MessageSendParams &params, const std::string& task_id) const;
-    std::optional<Task> GetOrCreateTask(const MessageSendParams &params, const ServerCallContext *ctx,
-                                        std::string &task_id,
-                                        std::shared_ptr<TaskManager> &task_manager);
+    static bool IsFinalState(TaskState state);
+
+    static std::string GenerateTaskId();
+
+    void UpdatePushNotificationConfig(const MessageSendParams &params, const std::string& taskId) const;
+
+    // Private method to create RequestContext without using RequestContextBuilder
+    static RequestContext CreateRequestContext(std::optional<MessageSendParams> params,
+        std::string taskId,
+        std::optional<std::string> contextId,
+        std::optional<Task> existingTask,
+        const std::shared_ptr<ServerCallContext>& ctx);
+
+    // Private methods extracted from OnSendMessage
+    std::string DetermineTaskId(const MessageSendParams& params, std::shared_ptr<ServerCallContext> ctx,
+        std::optional<Task>& existing_task) const;
+
+    std::shared_ptr<TaskManager> CreateTaskManager(const std::string& taskId, const std::string& contextId,
+        const Message& message, std::shared_ptr<ServerCallContext> ctx) const;
+
+    void UpdateOrCreateTask(const MessageSendParams& params, const std::string& taskId,
+        const std::shared_ptr<TaskManager>& taskManager, const std::optional<Task>& existing_task,
+        std::shared_ptr<ServerCallContext> ctx) const;
+
+    std::optional<std::variant<Task, Message>> ExecuteAgentAndGetResult(const MessageSendParams& params,
+        const std::string& taskId,
+        const std::shared_ptr<TaskManager>& taskManager,
+        const RequestContext& request_context,
+        std::shared_ptr<ServerCallContext> ctx) const;
+
+    void SendPushNotificationIfNeeded(const std::string& taskId, std::shared_ptr<ServerCallContext> ctx) const;
+
+    // Private methods extracted from OnSendMessageStreaming
+    void InitializeStreamingTask(const MessageSendParams& params,
+        std::shared_ptr<ServerCallContext> context,
+        std::optional<Task>& existingTask,
+        std::string& taskId,
+        std::shared_ptr<TaskManager>& taskManager) const;
+
+    void SetupAndExecuteStreamingAgent(const MessageSendParams& params,
+        const std::string& taskId,
+        const RequestContext& requestContext,
+        const std::shared_ptr<TaskManager>& taskManager,
+        const StreamEmitter& emit) const;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

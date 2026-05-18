@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_CLIENT_TASK_MANAGER
@@ -8,13 +8,13 @@
 #include <optional>
 #include <string>
 
-#include "utils/types.h"
+#include "types.h"
 
-namespace a2a::client {
+namespace A2A::Client {
 
 class ClientTaskManager {
 public:
-    Task* GetTask();
+    ~ClientTaskManager() = default;
 
     Task& GetTaskOrRaise();
 
@@ -28,6 +28,6 @@ private:
     std::optional<Task> currentTask_;
 };
 
-} // namespace a2a::client
+} // namespace A2A::Client
 
 #endif

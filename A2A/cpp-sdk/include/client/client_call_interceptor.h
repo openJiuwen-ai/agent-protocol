@@ -1,17 +1,17 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_CLIENT_CALL_INTERCEPTOR
 #define A2A_CLIENT_CALL_INTERCEPTOR
 
-#include <map>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <map>
 
-#include "utils/types.h"
+#include "types.h"
 
-namespace a2a::client {
+namespace A2A::Client {
 
 // Client-side call interceptor interface (sync, header/payload mutation)
 class ClientCallInterceptor {
@@ -33,10 +33,10 @@ public:
      * @param[in] context client call context. may be null
      */
     virtual void Intercept(const std::string& methodName, nlohmann::json& payload,
-                           std::map<std::string, std::string>& headers, const a2a::AgentCard* agentCard,
-                           const ClientCallContext* context) = 0;
+        std::map<std::string, std::string>& headers, const A2A::AgentCard* agentCard,
+        const ClientCallContext* context) = 0;
 };
 
-} // namespace a2a::client
+} // namespace A2A::Client
 
 #endif

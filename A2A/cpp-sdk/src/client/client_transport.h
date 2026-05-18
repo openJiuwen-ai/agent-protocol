@@ -1,120 +1,146 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_CLIENT_TRANSPORT
 #define A2A_CLIENT_TRANSPORT
 
 #include <functional>
-#include <nlohmann/json.hpp>
-#include <optional>
 #include <vector>
+#include <future>
 
 #include "client/client.h"
-#include "utils/types.h"
+#include "types.h"
+#include "common_types.h"
+#include "client_conn.h"
 
-namespace a2a::client {
+namespace A2A::Client {
 
-using TransportEventCallback = std::function<void(const std::string&)>;
+struct TransportError {
+    int errorCode;
+    std::string errInfo;
+};
+
+using TransportEvent = std::variant<TransportError, Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent,
+    TaskPushNotificationConfig, std::vector<TaskPushNotificationConfig>, std::monostate, AgentCard>;
+using TransportEventCallback = std::function<void(const std::string&, const TransportEvent&)>;
 
 class ClientTransport {
 public:
-    virtual ~ClientTransport() = default;
+    ~ClientTransport() = default;
 
     /**
      * @brief send message to server and get response
      *
+     * @param[in] requestId requestId
      * @param[in] request request data info
      * @param[in] context client call context
-     * @return task or message
      */
-    virtual std::variant<Task, Message> SendMessage(const MessageSendParams& request,
-                                                    const ClientCallContext* context = nullptr) = 0;
+    virtual void SendMessage(const std::string& requestId, const MessageSendParams& request,
+        const ClientCallContext* context) = 0;
 
     /**
      * @brief send stream message to server and get response with callback
      *
+     * @param[in] requestId requestId
      * @param[in] request request data info
-     * @param[in] onEvent callback function to receive response
      * @param[in] context client call context
      */
-    virtual void SendMessageStreaming(const MessageSendParams& request, const TransportEventCallback& onEvent,
-                                      const ClientCallContext* context = nullptr) = 0;
+    virtual void SendMessageStreaming(const std::string& requestId, const MessageSendParams& request,
+        const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive task information from server
+     * @brief retrieve task information from server
      *
+     * @param[in] requestId requestId
      * @param[in] params query params
      * @param[in] context client call context
-     * @return Task get
      */
-    virtual Task GetTask(const TaskQueryParams& params, const ClientCallContext* context = nullptr) = 0;
+    virtual void GetTask(const std::string& requestId, const TaskQueryParams& params,
+        const ClientCallContext* context) = 0;
 
     /**
      * @brief call server to cancel task
      *
+     * @param[in] requestId requestId
      * @param[in] params task id params
      * @param[in] context client call context
-     * @return Task canceled
      */
-    virtual Task CancelTask(const TaskIdParams& params, const ClientCallContext* context = nullptr) = 0;
+    virtual void CancelTask(const std::string& requestId, const TaskIdParams& params,
+        const ClientCallContext* context) = 0;
 
     /**
      * @brief set push notification config for a specific task
      *
+     * @param[in] requestId requestId
      * @param[in] config push notification config
      * @param[in] context client call context
-     * @return TaskPushNotificationConfig
      */
-    virtual TaskPushNotificationConfig SetTaskPushNotificationConfig(const TaskPushNotificationConfig& config,
-                                                                     const ClientCallContext* context = nullptr) = 0;
+    virtual void SetTaskPushNotificationConfig(const std::string& requestId, const TaskPushNotificationConfig& config,
+        const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive push notification config for a specific task
+     * @brief retrieve push notification config for a specific task
      *
+     * @param[in] requestId requestId
      * @param[in] params task id and metadata information
      * @param[in] context client call context
-     * @return TaskPushNotificationConfig
      */
-    virtual TaskPushNotificationConfig GetTaskPushNotificationConfig(const GetTaskPushNotificationConfigParams& params,
-                                                                     const ClientCallContext* context = nullptr) = 0;
+    virtual void GetTaskPushNotificationConfig(const std::string& requestId,
+        const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive the list of push notification config for a specific task
+     * @brief retrieve the list of push notification config for a specific task
      *
+     * @param[in] requestId requestId
      * @param[in] params task id and metadata information
      * @param[in] context client call context
-     * @return vector of TaskPushNotificationConfig
      */
-    virtual std::vector<TaskPushNotificationConfig> ListTaskPushNotificationConfigs(
-        const ListTaskPushNotificationConfigParams& params, const ClientCallContext* context = nullptr) = 0;
+    virtual void ListTaskPushNotificationConfigs(const std::string& requestId,
+        const ListTaskPushNotificationConfigParams& params, const ClientCallContext* context) = 0;
 
     /**
      * @brief delete the list of push notification config for a specific task
      *
+     * @param[in] requestId requestId
      * @param[in] params task id and metadata information
      * @param[in] context client call context
      */
-    virtual void DeleteTaskPushNotificationConfig(const DeleteTaskPushNotificationConfigParams& params,
-                                                  const ClientCallContext* context = nullptr) = 0;
+    virtual void DeleteTaskPushNotificationConfig(const std::string& requestId,
+        const DeleteTaskPushNotificationConfigParams& params, const ClientCallContext* context) = 0;
 
     /**
      * @brief resubscribe to server
      *
+     * @param[in] requestId requestId
      * @param[in] params task id params
-     * @param[in] onEvent callback function to receive response
      * @param[in] context client call context
      */
-    virtual void Resubscribe(const TaskIdParams& params, const TransportEventCallback& onEvent,
-                             const ClientCallContext* context = nullptr) = 0;
+    virtual void Resubscribe(const std::string& requestId, const TaskIdParams& params,
+        const ClientCallContext* context) = 0;
 
     /**
-     * @brief retrive agent card from server
+     * @brief retrieve agent card from server
      *
+     * @param[in] requestId requestId
      * @param[in] context client call context
-     * @return AgentCard
      */
-    virtual a2a::AgentCard GetCard(const ClientCallContext* context = nullptr) = 0;
+    virtual void GetCard(const std::string& requestId, const ClientCallContext* context) = 0;
+
+    /**
+     * @brief set transport callback
+     *
+     * @param[in] callback callback function triggered when receive response data
+     */
+    virtual void SetTransportCallback(TransportEventCallback callback) = 0;
+
+    /**
+     * @brief transport callback fuction
+     *
+     * @param[in] message message payload
+     * @param[in] userData user data
+     */
+    virtual void OnTransportMessage(const ConnEventData& message, const UserData* userData) = 0;
 
     /**
      * @brief close client connection and release associated resources
@@ -124,6 +150,6 @@ public:
     virtual void Close() = 0;
 };
 
-} // namespace a2a::client
+} // namespace A2A::Client
 
 #endif

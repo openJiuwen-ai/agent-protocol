@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+* Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_A2A_SERVER_IMPL
@@ -9,33 +9,55 @@
 
 #include "http_server_transport.h"
 #include "jsonrpc_handler.h"
+#include "server/agent_executor.h"
+#include "server/ipc_server_builder.h"
 #include "server/server.h"
+#include "server/task_store.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
-class ServerImpl {
+using ServerConfig = std::variant<HttpConfig, IpcConfig>;
+using json = nlohmann::json;
+using StreamEvent = RequestHandler::StreamEvent;
+
+class ServerImpl : public Server {
 public:
-    ServerImpl(const std::string& transportType, std::shared_ptr<RequestHandler> handler,
-               std::shared_ptr<AgentCard> agentCard);
+    ServerImpl(std::shared_ptr<AgentCard> agentCard,
+        std::shared_ptr<AgentCard> extendedAgentCard,
+        const std::shared_ptr<AgentExecutor>& agent_executor,
+        ServerConfig config,
+        const std::shared_ptr<TaskStore>& taskStore);
 
-    ~ServerImpl();
+    ~ServerImpl() override;
 
-    int Start(const std::string& ip, int port);
+    int Start() override;
 
-    void Stop();
+    void Stop() override;
 
     AgentCard OnGetAuthenticatedExtendedCard(const ServerCallContext* context = nullptr);
 
     AgentCard OnGetCard(const ServerCallContext* context = nullptr);
 
 private:
-    std::string transportType_;
-    std::shared_ptr<RequestHandler> handler_;
     std::shared_ptr<AgentCard> agentCard_;
+    std::shared_ptr<AgentCard> extendedAgentCard_;
+    ServerConfig config_;
+    std::shared_ptr<RequestHandler> handler_;
     std::unique_ptr<JSONRPCHandler> jsonRpcHandler_;
-    std::unique_ptr<a2a::transport::HttpServerTransport> transport_;
+    std::unique_ptr<Transport::ServerTransport> transport_;
+
+    void HandleStreamingRequest(
+        const nlohmann::json& req, const std::string& method, Transport::TransportEmitter& emitter);
+
+    void HandleNonStreamingRequest(
+        const nlohmann::json& req, const std::string& reqBody, std::string& respBody, const std::string& method);
+
+    void CreateStreamEmitter(const nlohmann::json& req, std::function<void(const StreamEvent&)>& streamEmit,
+        Transport::TransportEmitter& emitter);
+
+    void ProcessStandardJsonRpc(const nlohmann::json& req, std::string& respBody, const std::string& method);
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

@@ -1,18 +1,18 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <functional>
 #include <future>
-#include <thread>
+#include <memory>
 
 #include "events/event_consumer.h"
+#include "types.h"
 #include "result_aggregator.h"
-#include "utils/types.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
-std::optional<std::variant<a2a::Task, a2a::Message>> ResultAggregator::CurrentResult()
+std::optional<std::variant<Task, Message>> ResultAggregator::CurrentResult()
 {
     if (message_) {
         return *message_;
@@ -24,15 +24,15 @@ std::optional<std::variant<a2a::Task, a2a::Message>> ResultAggregator::CurrentRe
     return std::nullopt;
 }
 
-void ResultAggregator::ConsumeAndEmit(a2a::server::EventConsumer& consumer,
-                                      const std::function<void(const a2a::server::RequestHandler::StreamEvent&)>& emit)
+void ResultAggregator::ConsumeAndEmit(std::shared_ptr<EventConsumer> consumer,
+                                      const std::function<void(const RequestHandler::StreamEvent&)>& emit)
 {
-    consumer.ConsumeAll([&](const a2a::server::RequestHandler::StreamEvent& ev) {
+    consumer->ConsumeAll([&](const RequestHandler::StreamEvent& ev) {
         // process and re-emit
         std::visit(
             [&](auto&& x) {
                 using T = std::decay_t<decltype(x)>;
-                if constexpr (std::is_same_v<T, a2a::Message>) {
+                if constexpr (std::is_same_v<T, Message>) {
                     message_ = x;
                 } else {
                     taskManager_->Process(ev);
@@ -43,14 +43,14 @@ void ResultAggregator::ConsumeAndEmit(a2a::server::EventConsumer& consumer,
     });
 }
 
-std::optional<std::variant<a2a::Task, a2a::Message>> ResultAggregator::ConsumeAll(a2a::server::EventConsumer& consumer)
+std::optional<std::variant<Task, Message>> ResultAggregator::ConsumeAll(std::shared_ptr<EventConsumer> consumer)
 {
-    std::optional<std::variant<a2a::Task, a2a::Message>> result;
-    consumer.ConsumeAll([&](const a2a::server::RequestHandler::StreamEvent& ev) {
+    std::optional<std::variant<Task, Message>> result;
+    consumer->ConsumeAll([&](const RequestHandler::StreamEvent& ev) {
         std::visit(
             [&](auto&& x) {
                 using T = std::decay_t<decltype(x)>;
-                if constexpr (std::is_same_v<T, a2a::Message>) {
+                if constexpr (std::is_same_v<T, Message>) {
                     message_ = x;
                     result = x;
                 } else {
@@ -58,7 +58,8 @@ std::optional<std::variant<a2a::Task, a2a::Message>> ResultAggregator::ConsumeAl
                 }
             },
             ev);
-    });
+    },
+        true);
     if (result) {
         return result;
     }
@@ -69,64 +70,98 @@ std::optional<std::variant<a2a::Task, a2a::Message>> ResultAggregator::ConsumeAl
     return std::nullopt;
 }
 
-std::tuple<bool, std::future<void>> ResultAggregator::ConsumeAndBreakOnInterrupt(a2a::server::EventConsumer& consumer,
-                                                                                 const bool blocking)
+bool ResultAggregator::ShouldInterruptOnTerminalState(const std::optional<std::variant<Task, Message>>& result)
 {
-    // We'll use a simple approach that mimics the Python behavior:
-    // - Process events until we hit a terminal state or interrupt condition
-    // - Return result and whether it was interrupted
+    if (!result.has_value()) {
+        return false;
+    }
 
-    std::optional<std::variant<a2a::Task, a2a::Message>> result;
+    if (std::holds_alternative<Task>(result.value())) {
+        auto& task = std::get<Task>(result.value());
+        return task.status.state == TaskState::COMPLETED ||
+               task.status.state == TaskState::CANCELED ||
+               task.status.state == TaskState::FAILED ||
+               task.status.state == TaskState::REJECTED;
+    }
+
+    return false;
+}
+
+void ResultAggregator::ProcessEvent(const RequestHandler::StreamEvent& event,
+                                    std::optional<std::variant<Task, Message>>& result,
+                                    bool& interrupted)
+{
+    std::visit(
+        [&](auto&& x) {
+            using T = std::decay_t<decltype(x)>;
+            if constexpr (std::is_same_v<T, Message>) {
+                message_ = x;
+                result = x;
+                return;
+            }
+            // Process the event with the task manager
+            taskManager_->Process(event);
+
+            // Check if we need to interrupt
+            if (std::holds_alternative<TaskStatusUpdateEvent>(event)) {
+                auto& status_update = std::get<TaskStatusUpdateEvent>(event);
+                if (status_update.status.state == TaskState::AUTH_REQUIRED) {
+                    // Interrupt on auth_required state
+                    interrupted = true;
+                }
+            } else if (std::holds_alternative<Task>(event)) {
+                auto& task = std::get<Task>(event);
+                if (task.status.state == TaskState::AUTH_REQUIRED) {
+                    // Interrupt on auth_required state
+                    interrupted = true;
+                }
+            }
+        },
+        event);
+}
+
+std::future<void> ResultAggregator::CreateBackgroundProcessingFuture(std::shared_ptr<EventConsumer> consumer)
+{
+    return std::async(std::launch::async, [this, consumer]() {
+        try {
+            // This is a simplified version - in reality we would need to keep
+            // a reference to the event stream, which isn't directly available
+            // from our current interface
+            while (!consumer->IsEmpty()) {
+                try {
+                    auto event = consumer->ConsumeOne();
+                    taskManager_->Process(event);
+                } catch (const std::runtime_error&) {
+                    // Queue is empty and closed, break the loop
+                    break;
+                }
+            }
+        } catch (...) {
+            // Handle any exceptions
+        }
+    });
+}
+
+std::tuple<bool, std::future<void>> ResultAggregator::ConsumeAndBreakOnInterrupt(
+    std::shared_ptr<EventConsumer> consumer, const bool blocking)
+{
+    std::optional<std::variant<Task, Message>> result;
     bool interrupted = false;
 
     // Process events one by one
     while (!interrupted) {
         try {
-            auto event = consumer.ConsumeOne();
-            std::visit(
-                [&](auto&& x) {
-                    using T = std::decay_t<decltype(x)>;
-                    if constexpr (std::is_same_v<T, a2a::Message>) {
-                        message_ = x;
-                        result = x;
-                    } else {
-                        // Process the event with the task manager
-                        taskManager_->Process(event);
-
-                        // Check if we need to interrupt
-                        if (std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)) {
-                            auto& status_update = std::get<a2a::TaskStatusUpdateEvent>(event);
-                            if (status_update.status.state == a2a::TaskState::AUTH_REQUIRED) {
-                                // Interrupt on auth_required state
-                                interrupted = true;
-                            }
-                        } else if (std::holds_alternative<a2a::Task>(event)) {
-                            auto& task = std::get<a2a::Task>(event);
-                            if (task.status.state == a2a::TaskState::AUTH_REQUIRED) {
-                                // Interrupt on auth_required state
-                                interrupted = true;
-                            }
-                        }
-                    }
-                },
-                event);
+            auto event = consumer->ConsumeOne();
+            ProcessEvent(event, result, interrupted);
 
             // For non-blocking, return immediately when we have a result
             if (!blocking && result.has_value()) {
                 interrupted = true;
             }
 
-            // If we've hit a terminal state, stop processing
-            if (result.has_value() && std::holds_alternative<a2a::Task>(result.value())) {
-                // Check if it's a terminal state that should stop processing
-                if (std::holds_alternative<a2a::Task>(result.value())) {
-                    auto& task = std::get<a2a::Task>(result.value());
-                    if (task.status.state == a2a::TaskState::COMPLETED ||
-                        task.status.state == a2a::TaskState::CANCELED || task.status.state == a2a::TaskState::FAILED ||
-                        task.status.state == a2a::TaskState::REJECTED) {
-                        interrupted = true;
-                    }
-                }
+            // Check if we've hit a terminal state that should stop processing
+            if (ShouldInterruptOnTerminalState(result)) {
+                interrupted = true;
             }
         } catch (const std::runtime_error&) {
             // Queue is empty and closed, break the loop
@@ -139,26 +174,8 @@ std::tuple<bool, std::future<void>> ResultAggregator::ConsumeAndBreakOnInterrupt
     }
 
     // If interrupted, continue processing in background
-    // Create a future that will handle the background processing
-    std::future<void> background_future = std::async(std::launch::async, [this, &consumer]() {
-        try {
-            // This is a simplified version - in reality we would need to keep
-            // a reference to the event stream, which isn't directly available
-            // from our current interface
-            while (true) {
-                try {
-                    auto event = consumer.ConsumeOne();
-                    taskManager_->Process(event);
-                } catch (const std::runtime_error&) {
-                    // Queue is empty and closed, break the loop
-                    break;
-                }
-            }
-        } catch (...) {
-            // Handle any exceptions
-        }
-    });
-    return std::make_tuple(true, std::move(background_future));
+    std::future<void> backgroundFuture = CreateBackgroundProcessingFuture(consumer);
+    return std::make_tuple(true, std::move(backgroundFuture));
 }
 
-} // namespace a2a::server
+} // namespace A2A::Server

@@ -7,9 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(ToolExample tool_example.cpp)
 
 target_include_directories(ToolExample PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/../../../output/mcp
+    ${CMAKE_CURRENT_LIST_DIR}/../../../include/mcp
 )
 
 target_link_libraries(ToolExample PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/../../../output/libmcp.so
+    ${CMAKE_CURRENT_LIST_DIR}/../../../output/lib/libmcp.so
 )

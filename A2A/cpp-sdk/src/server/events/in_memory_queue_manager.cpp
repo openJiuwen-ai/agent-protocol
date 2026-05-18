@@ -1,21 +1,20 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "event_queue_impl.h"
 #include "in_memory_queue_manager.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
 void InMemoryQueueManager::Add(const std::string& taskId, std::shared_ptr<EventQueue> q)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     queues_[taskId] = q;
 }
 
 std::shared_ptr<EventQueue> InMemoryQueueManager::Get(const std::string& taskId)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = queues_.find(taskId);
     if (it != queues_.end()) {
         return it->second;
@@ -25,7 +24,7 @@ std::shared_ptr<EventQueue> InMemoryQueueManager::Get(const std::string& taskId)
 
 std::shared_ptr<EventQueue> InMemoryQueueManager::Tap(const std::string& taskId)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = queues_.find(taskId);
     if (it != queues_.end()) {
         return it->second;
@@ -35,13 +34,13 @@ std::shared_ptr<EventQueue> InMemoryQueueManager::Tap(const std::string& taskId)
 
 void InMemoryQueueManager::Close(const std::string& taskId)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     queues_.erase(taskId);
 }
 
 std::shared_ptr<EventQueue> InMemoryQueueManager::CreateOrTap(const std::string& taskId)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = queues_.find(taskId);
     if (it != queues_.end()) {
         return it->second;
@@ -52,4 +51,4 @@ std::shared_ptr<EventQueue> InMemoryQueueManager::CreateOrTap(const std::string&
     return new_queue;
 }
 
-} // namespace a2a::server
+} // namespace A2A::Server

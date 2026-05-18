@@ -64,11 +64,14 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
         TrimInPlace(key);
         TrimInPlace(value);
 
+        // Convert header name to lowercase for consistent processing
+        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+
         headers[key] = value;
     }
 
     std::size_t contentLength = 0;
-    auto contentLengthIterator = headers.find("Content-Length");
+    auto contentLengthIterator = headers.find(CONTENT_LENGTH_HEADER);
     if (contentLengthIterator != headers.end()) {
         try {
             contentLength = static_cast<std::size_t>(std::stoul(contentLengthIterator->second));
@@ -84,6 +87,52 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     body = buffer.substr(bodyStart, contentLength);
     consumedBytes = bodyStart + contentLength;
     return true;
+}
+
+std::string getContentType(const HttpResponse& response)
+{
+    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
+    if (contentTypeIter == response.headers.end()) {
+        return "";
+    }
+    return contentTypeIter->second;
+}
+
+bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent)
+{
+    // check if end of event
+    if (line.empty()) {
+        if (sseEvent.event.empty() && sseEvent.id.empty() && sseEvent.data.empty() && sseEvent.retry == 0) {
+            return false;
+        }
+        return true;
+    }
+
+    // parse line to sseEvent
+    if (line.find("event:") == 0) {
+        sseEvent.event = line.substr(SSE_EVENT_PREFIX_LEN);
+        // Trim leading whitespace
+        size_t firstNonSpace = sseEvent.event.find_first_not_of(" \t");
+        if (firstNonSpace != std::string::npos) {
+            sseEvent.event = sseEvent.event.substr(firstNonSpace);
+        }
+    } else if (line.find("id:") == 0) {
+        sseEvent.id = line.substr(SSE_ID_PREFIX_LEN);
+        // Trim leading whitespace
+        size_t firstNonSpace = sseEvent.id.find_first_not_of(" \t");
+        if (firstNonSpace != std::string::npos) {
+            sseEvent.id = sseEvent.id.substr(firstNonSpace);
+        }
+    } else if (line.find("data:") == 0) {
+        sseEvent.data = line.substr(SSE_DATA_PREFIX_LEN);
+        // Trim leading whitespace
+        size_t firstNonSpace = sseEvent.data.find_first_not_of(" \t");
+        if (firstNonSpace != std::string::npos) {
+            sseEvent.data = sseEvent.data.substr(firstNonSpace);
+        }
+    }
+
+    return false;
 }
 
 } // namespace Mcp::Http

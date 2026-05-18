@@ -1,16 +1,14 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_UTILS_HELPER
 #define A2A_UTILS_HELPER
 
-#include <functional>
+#include "types.h"
+#include "error.h"
 
-#include "utils/errors.h"
-#include "utils/types.h"
-
-namespace a2a::server {
+namespace A2A::Server {
 
 Task CreateTaskObj(MessageSendParams& params);
 
@@ -23,8 +21,13 @@ bool AreModalitiesCompatible(const std::optional<std::vector<std::string>>& serv
 Artifact BuildTextArtifact(const std::string& text, const std::string& artifactId);
 
 // Validate helper: throws A2AServerError with message if expr is false
-inline void ValidateOrThrow(bool expr, const std::string& errorMessage);
+inline void ValidateOrThrow(const bool expr, const std::string& errorMessage)
+{
+    if (!expr) {
+        throw A2AServerError(errorMessage);
+    }
+}
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

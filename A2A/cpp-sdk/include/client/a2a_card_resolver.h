@@ -1,60 +1,43 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_CARD_RESOLVER
 #define A2A_CARD_RESOLVER
 
-#include <map>
-#include <memory>
 #include <optional>
 #include <string>
+#include <future>
 
-#include "utils/types.h"
+#include "types.h"
 
-namespace a2a::client {
-
-class A2ACardResolverImpl;
+namespace A2A::Client {
 
 class A2ACardResolver {
 public:
-    /**
-     * @brief constructor
-     *
-     * @param[in] baseUrl base url
-     * @param[in] agentCardPath agent card path
-     * @param[in] localPath local path
-     */
-    A2ACardResolver(std::string baseUrl, std::string agentCardPath = "/.well-known/agent-card.json",
-                    std::string localPath = "");
 
     /**
      * @brief destructor
      */
-    ~A2ACardResolver();
+    virtual ~A2ACardResolver() = default;
 
     /**
      * @brief get AgentCard from relative path
      *
      * @param[in] relativeCardPath relative card path
-     * @param[in] connectTimeoutMs connect timeout, defaults to 10000ms
-     * @param[in] readTimeoutMs read data timeout, defaults to 10000ms
-     * @return valid AgentCard if read successful
+     * @return future to valid AgentCard if read successful
      */
-    AgentCard GetAgentCard(const std::optional<std::string>& relativeCardPath = std::nullopt,
-                           long connectTimeoutMs = 10000, long readTimeoutMs = 10000) const;
+    virtual std::future<AgentCard> GetAgentCard(
+        const std::optional<std::string>& relativeCardPath = std::nullopt) const = 0;
 
     /**
      * @brief get all AgentCard from local path
      *
-     * @param[in] localPath local path
-     * @return vector of AgentCards
+     * @return future to vector of AgentCards
      */
-    std::vector<AgentCard> GetAllAgentCards(const std::optional<std::string>& localPath = std::nullopt) const;
-
-private:
-    std::unique_ptr<A2ACardResolverImpl> impl_;
+    virtual std::future<std::vector<AgentCard>> GetAllAgentCards() const = 0;
 };
 
-} // namespace a2a::client
+} // namespace A2A::Client
+
 #endif

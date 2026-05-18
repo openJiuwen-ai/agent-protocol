@@ -7,12 +7,14 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
 
+#include "mcp_error.h"
 #include "shared/common_type.h"
 #include "shared/http_common.h"
 #include "shared/jsonrpc.h"
@@ -21,6 +23,7 @@
 namespace Mcp {
 
 using Http::HttpResponse;
+using Http::HttpSendType;
 
 // Event message structure containing serialized JSON-RPC message and event ID
 struct EventMessage {
@@ -34,7 +37,8 @@ struct EventMessage {
 
 class StreamableHttpServerTransport : public ServerTransport {
 public:
-    StreamableHttpServerTransport(const std::string& mcpSessionId, bool isJsonResponseEnabled = false);
+    explicit StreamableHttpServerTransport(const std::string& mcpSessionId, bool isJsonResponseEnabled = false,
+                                           bool stateless = false);
     virtual ~StreamableHttpServerTransport() = default;
 
     // Set callback for handling transport events (used by ServerManager)
@@ -42,7 +46,7 @@ public:
 
     void HandleRequest(const HttpRequest& request, RequestContext& ctx) override;
 
-    void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) override;
+    void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override;
 
     void Listen() override;
 
@@ -69,9 +73,13 @@ private:
 
     std::string mcpSessionId_;
     bool isJsonResponseEnabled_;
+    bool stateless_;
     std::optional<RequestContext> getStreamRequestContext_;
     bool isTerminated_;
     std::shared_ptr<TransportCallback> callback_;
+
+    // Maps JSON-RPC request id -> request method so we can recover the method when parsing responses/errors
+    std::unordered_map<RequestId, std::string> pendingMethods_;
 };
 } // namespace Mcp
 

@@ -36,9 +36,8 @@ public:
 
     void OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx) override;
 
-    void OnDisconnected(const std::string& reason) override
+    void OnDisconnected([[maybe_unused]] const std::string& reason) override
     {
-        (void)reason;
     }
 
 private:
@@ -83,16 +82,19 @@ public:
      * Send a request with an optional completion callback for handling responses.
      *
      * - The caller supplies an optional completion callback invoked when the response arrives.
-     * - On success, the callback receives the result; on error or missing result, it receives nullptr.
+     * - On success, the callback receives the typed result.
+     * - On JSON-RPC error, the callback receives an ErrorResult carrying code/message/data.
+     * - On transport-level failures or missing result, it may receive nullptr.
      * - Progress updates (if provided) invoke `progressCallback`.
+     * - When progressCallback is set, progressToken is set to requestId and included in params._meta (MCP progress).
      *
      * @param request Request payload to send.
-     * @param completion Optional callback invoked with the response result (or nullptr on error).
+     * @param completion Optional callback invoked with the response result.
      * @param requestTimeout Optional timeout for this request (defaults to nullopt).
      * @param progressCallback Optional callback for progress notifications (defaults to nullopt).
      */
     void SendRequest(std::unique_ptr<Request> request, std::function<void(std::shared_ptr<Result>)> completion,
-                     std::optional<std::chrono::seconds> requestTimeout,
+                     [[maybe_unused]] std::optional<std::chrono::seconds> requestTimeout,
                      std::optional<ProgressCallback> progressCallback);
 
     // Convenience overload: only completion callback
@@ -107,8 +109,8 @@ public:
      * @param notification The notification to send
      * @param relatedRequestId Optional ID of the request this notification relates to
      */
-    virtual void SendNotification(const Notification& notification,
-                                  std::optional<int64_t> relatedRequestId = std::nullopt) = 0;
+    virtual void SendNotification(std::unique_ptr<Notification> notification,
+                                  std::optional<RequestId> relatedRequestId = std::nullopt) = 0;
 
     /**
      * Send a progress notification for a request being processed.
@@ -118,15 +120,15 @@ public:
      * @param total Optional total progress value
      * @param message Optional progress message
      */
-    virtual void SendProgressNotification(int64_t progressToken, double progress,
+    virtual void SendProgressNotification(ProgressToken progressToken, double progress,
                                           std::optional<double> total = std::nullopt,
-                                          const std::optional<std::string>& message = std::nullopt);
+                                          const std::optional<std::string>& message = std::nullopt) = 0;
 
     /**
      * Send a response to a request.
      */
-    void SendResponse(int64_t requestId, std::unique_ptr<Result> result, RequestContext& ctx);
-    void SendResponse(int64_t requestId, JSONRPCError error, RequestContext& ctx);
+    void SendResponse(const RequestId& requestId, std::shared_ptr<Result> result, RequestContext& ctx);
+    void SendResponse(const RequestId& requestId, JSONRPCError error, RequestContext& ctx);
 
     void OnTransportMessage(const JSONRPCMessage& message, RequestContext& ctx);
 
@@ -135,11 +137,17 @@ public:
         return sessionId_;
     }
 
+public:
+    // record requests
+    std::unordered_map<RequestId, RequestContext> sessionRequests;
+
+    std::mutex reqMtx;
+
 protected:
     /**
      * Called when a request is received.
      */
-    virtual void ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+    virtual void ReceivedRequest(const RequestId& requestId, const Request& request, RequestContext& ctx)
     {
     }
 
@@ -181,10 +189,10 @@ protected:
     std::mutex mutex_;
 
     // Progress callbacks for requests
-    std::unordered_map<int64_t, ProgressCallback> progressCallbacks_;
+    std::unordered_map<RequestId, ProgressCallback> progressCallbacks_;
 
     // Completion callbacks for requests
-    std::unordered_map<int64_t, std::function<void(std::shared_ptr<Result>)>> completionCallbacks_;
+    std::unordered_map<RequestId, std::function<void(std::shared_ptr<Result>)>> completionCallbacks_;
 };
 
 inline void SessionTransportCallback::OnMessageReceived(const JSONRPCMessage& message, RequestContext& ctx)

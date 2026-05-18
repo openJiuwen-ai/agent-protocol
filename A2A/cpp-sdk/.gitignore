@@ -1,6 +1,74 @@
+# 工程内生成或本地占位文件
 build/
 log.txt
 Makefile.win
 API.md
 docs/streamable_response_mode.md
 tests/test_streaming_auth_interceptor.cpp
+
+# C++/CMake 常见产物
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# 安装或导出目录
+output/
+
+# Test directories
+test_output/
+
+# third_party：FetchContent 等拉取的依赖目录
+third_party/googletest-*/
+third_party/libevent-*/
+third_party/nlohmann_json-*/
+third_party/nlohmann_json_schema_validator-*/
+third_party/http_parser-*/
+
+# FetchContent 辅助目录
+third_party/*-subbuild/
+third_party/*-build/
+
+# Temporary files
+*.txt
+*.log
+!CMakeLists.txt
+
+# IDE files
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db

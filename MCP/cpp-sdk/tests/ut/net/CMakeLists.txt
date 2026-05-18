@@ -11,28 +11,15 @@ target_include_directories(mcp_net_tests PRIVATE
 target_sources(mcp_net_tests PRIVATE $<TARGET_OBJECTS:mcp_net>)
 
 target_link_libraries(mcp_net_tests
-    PRIVATE
-        mcp_log
-        mcp_event
-        third_party_headers
-        event
-        pthread
-        GTest::gtest_main
+     PRIVATE
+         mcp_log
+         mcp_event
+         third_party_headers
+         event
+         pthread
+         GTest::gtest_main
+         ${_mcp_event_pthreads_target}
 )
-
-# Link libevent pthread support
-if(TARGET event_pthreads)
-    target_link_libraries(mcp_net_tests PRIVATE event_pthreads)
-elseif(TARGET libevent_pthreads)
-    target_link_libraries(mcp_net_tests PRIVATE libevent_pthreads)
-elseif(TARGET "libevent::pthread")
-    target_link_libraries(mcp_net_tests PRIVATE libevent::pthread)
-else()
-    find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
-    if(_mcp_event_pthreads_lib)
-        target_link_libraries(mcp_net_tests PRIVATE ${_mcp_event_pthreads_lib})
-    endif()
-endif()
 
 target_compile_features(mcp_net_tests PRIVATE cxx_std_17)
 

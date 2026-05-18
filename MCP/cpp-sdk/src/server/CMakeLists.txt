@@ -1,5 +1,11 @@
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} MCP_SERVER_SOURCES)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/transport MCP_SERVER_TRANSPORT_SOURCES)
+
+if(MCP_WITH_HTTP)
+    aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/transport MCP_SERVER_TRANSPORT_SOURCES)
+else()
+    list(FILTER MCP_SERVER_SOURCES EXCLUDE REGEX ".*http.*")
+    set(MCP_SERVER_TRANSPORT_SOURCES "")
+endif()
 
 add_library(mcp_server OBJECT ${MCP_SERVER_SOURCES} ${MCP_SERVER_TRANSPORT_SOURCES})
 target_link_libraries(mcp_server

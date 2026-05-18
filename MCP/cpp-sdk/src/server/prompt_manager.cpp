@@ -10,10 +10,10 @@ namespace Mcp {
 
 void PromptManager::AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (handler == nullptr) {
         throw std::invalid_argument("Prompt handler cannot be null");
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     if (prompt.name.empty()) {
         throw std::invalid_argument("Prompt name cannot be empty");
     }
@@ -39,7 +39,8 @@ ListPromptsResult PromptManager::ListPrompts()
     return result;
 }
 
-GetPromptResult PromptManager::GetPrompt(const std::string& name, const std::optional<JsonValue>& argument)
+std::optional<GetPromptResult> PromptManager::GetPrompt(const ServerContext& ctx, const std::string& name,
+    const std::optional<JsonValue>& argument)
 {
     RenderPromptFunc handler;
     {
@@ -51,7 +52,25 @@ GetPromptResult PromptManager::GetPrompt(const std::string& name, const std::opt
         handler = it->second.handler;
     }
 
-    return handler(name, argument);
+    // Convert JsonValue to string for the RenderPromptFunc interface
+    std::optional<std::string> argStr = std::nullopt;
+    if (argument.has_value()) {
+        argStr = argument.value().dump();
+    }
+
+    const ServerContext promptCtx{ctx.session,
+        handler.IsAsync() ? ctx.responseCallback : ResponseCallback{},
+        ctx.meta};
+    return handler(promptCtx, name, argStr);
+}
+
+GetPromptResult PromptManager::GetPrompt(const std::string& name, const std::optional<JsonValue>& argument)
+{
+    auto result = GetPrompt(ServerContext{}, name, argument);
+    if (!result.has_value()) {
+        throw std::runtime_error("Prompt handler did not return a result");
+    }
+    return std::move(result.value());
 }
 
 } // namespace Mcp

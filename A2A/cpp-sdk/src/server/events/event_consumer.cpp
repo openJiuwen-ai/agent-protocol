@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <stdexcept>
@@ -7,54 +7,62 @@
 
 #include "event_consumer.h"
 
-a2a::server::EventConsumer::EventConsumer(std::shared_ptr<EventQueue> q) : q_(std::move(q))
+A2A::Server::EventConsumer::EventConsumer(std::shared_ptr<EventQueue> q) : queue_(std::move(q))
 {
 }
 
-a2a::server::Event a2a::server::EventConsumer::ConsumeOne()
+A2A::Server::Event A2A::Server::EventConsumer::ConsumeOne()
 {
     try {
-        auto ev = q_->Dequeue(true); // no_wait
-        q_->TaskDone();
+        auto ev = queue_->Dequeue(true); // no_wait
+        queue_->TaskDone();
         return ev;
     } catch (...) {
         throw std::runtime_error("Agent did not return any response");
     }
 }
 
-void a2a::server::EventConsumer::ConsumeAll(const std::function<void(const Event&)>& on_event)
+void A2A::Server::EventConsumer::ConsumeAll(const std::function<void(const Event&)>& onEvent, const bool skipOnEmpty)
 {
-    while (true) {
+    if (skipOnEmpty && queue_->IsEmpty()) {
+        return;
+    }
+    bool isFinal = false;
+    while (!isFinal & !queue_->IsClosed()) {
         try {
-            auto ev = q_->Dequeue(false);
-            q_->TaskDone();
-            bool is_final = std::visit(
+            auto ev = queue_->Dequeue(false);
+            queue_->TaskDone();
+            isFinal = std::visit(
                 [](auto&& x) -> bool {
                     using T = std::decay_t<decltype(x)>;
-                    if constexpr (std::is_same_v<T, a2a::Task>) {
+                    if constexpr (std::is_same_v<T, A2A::Task>) {
                         auto st = x.status.state;
-                        return st == a2a::TaskState::COMPLETED || st == a2a::TaskState::CANCELED ||
-                               st == a2a::TaskState::FAILED || st == a2a::TaskState::REJECTED ||
-                               st == a2a::TaskState::UNKNOWN || st == a2a::TaskState::INPUT_REQUIRED;
-                    } else if constexpr (std::is_same_v<T, a2a::Message>) {
+                        return st == A2A::TaskState::COMPLETED || st == A2A::TaskState::CANCELED ||
+                               st == A2A::TaskState::FAILED || st == A2A::TaskState::REJECTED ||
+                               st == A2A::TaskState::UNKNOWN || st == A2A::TaskState::INPUT_REQUIRED;
+                    } else if constexpr (std::is_same_v<T, A2A::Message>) {
                         return true; // message regarded as final in Python helper
-                    } else if constexpr (std::is_same_v<T, a2a::TaskStatusUpdateEvent>) {
-                        return x.final;
+                    } else if constexpr (std::is_same_v<T, A2A::TaskStatusUpdateEvent>) {
+                        return x.final.has_value() ? x.final.value() : false;
                     } else { // TaskArtifactUpdateEvent
                         return false;
                     }
                 },
                 ev);
-            on_event(ev);
-            if (is_final) {
-                q_->Close(true);
+            onEvent(ev);
+            if (isFinal) {
+                queue_->Close(true);
                 break;
             }
         } catch (...) {
-            if (q_->IsClosed())
+            if (queue_->IsClosed()) {
                 break;
-            else
-                continue;
+            }
         }
     }
+}
+
+bool A2A::Server::EventConsumer::IsEmpty() const
+{
+    return queue_->IsEmpty();
 }

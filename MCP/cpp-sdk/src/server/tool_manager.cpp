@@ -3,10 +3,33 @@
  */
 
 #include "tool_manager.h"
+#include "mcp_log.h"
 
+#include <nlohmann/json.hpp>
+#include <nlohmann/json-schema.hpp>
 #include <stdexcept>
 
 namespace Mcp {
+
+CallToolResult NormalizeToolReturn(const ToolReturn& raw)
+{
+    if (std::holds_alternative<CallToolResult>(raw)) {
+        return std::get<CallToolResult>(raw);
+    } else if (std::holds_alternative<std::string>(raw)) {
+        CallToolResult result;
+        auto& structured = std::get<std::string>(raw);
+        result.structuredContent = structured;
+
+        TextContent textContent;
+        textContent.type = "text";
+        textContent.text = structured;
+        result.content.push_back(textContent);
+
+        return result;
+    }
+
+    return CallToolResult();
+}
 
 void ToolManager::AddTool(const ServerTool& tool)
 {
@@ -33,16 +56,47 @@ void ToolManager::RemoveTool(const std::string& name)
     tools_.erase(it);
 }
 
-ListToolsResult ToolManager::ListTools() const
+ListToolsResult ToolManager::ListTools(const std::optional<std::string>& cursor) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    ListToolsResult result;
-    result.tools.reserve(tools_.size());
+    // Build a stable ordering of tool names.
+    std::vector<std::string> names;
+    names.reserve(tools_.size());
+    for (const auto& entry : tools_) {
+        names.push_back(entry.first);
+    }
+    std::sort(names.begin(), names.end());
 
-    for (const auto& [_, item] : tools_) {
+    // Decode cursor as starting index; invalid values fall back to 0.
+    std::size_t startIndex = 0;
+    if (cursor.has_value()) {
+        try {
+            startIndex = static_cast<std::size_t>(std::stoll(cursor.value()));
+        } catch (...) {
+            startIndex = 0;
+        }
+        if (startIndex > names.size()) {
+            startIndex = names.size();
+        }
+    }
+
+    ListToolsResult result;
+
+    const std::size_t endIndex = std::min(startIndex + pageSize_, names.size());
+    result.tools.reserve(endIndex - startIndex);
+
+    for (std::size_t i = startIndex; i < endIndex; ++i) {
+        const auto& name = names[i];
+        const auto it = tools_.find(name);
+        if (it == tools_.end()) {
+            continue;
+        }
+        const auto& item = it->second;
+
         Tool tool;
         tool.name = item.name;
+        tool.title = item.title;
         tool.description = item.description;
         tool.inputSchema = item.inputSchema;
         tool.outputSchema = item.outputSchema;
@@ -51,27 +105,100 @@ ListToolsResult ToolManager::ListTools() const
         result.tools.push_back(std::move(tool));
     }
 
+    if (endIndex < names.size()) {
+        result.nextCursor = std::to_string(endIndex);
+    }
+
     return result;
 }
 
-CallToolResult ToolManager::CallTool(const std::string& name, const std::string& arguments) const
+std::optional<CallToolResult> ToolManager::CallTool(const ServerContext& ctx, const std::string& name,
+    const std::string& arguments) const
 {
-    ToolFunc func;
+    ServerTool tool;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = tools_.find(name);
         if (it == tools_.end()) {
             throw std::runtime_error("Tool not found: " + name);
         }
-        func = it->second.func;
+        tool = it->second;
     }
 
+    JsonValue args;
     try {
-        JsonValue args = JsonValue::parse(arguments);
-        return func(name, args, std::nullopt);
+        args = JsonValue::parse(arguments);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Tool execution failed: " + std::string(e.what()));
+        throw std::runtime_error("Failed to parse arguments: " + std::string(e.what()));
     }
+
+    if (tool.inputSchema.has_value()) {
+        try {
+            JsonValue schemaJson = JsonValue::parse(tool.inputSchema.value());
+
+            nlohmann::json_schema::json_validator validator;
+            validator.set_root_schema(schemaJson);
+            validator.validate(args);
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Input validation failed for tool '" + name + "': " + std::string(e.what()));
+        }
+    }
+    // Sync tools get ServerContext without responseCallback (same as upstream): avoids
+    // accidental double-response if the handler both returns and invokes the callback.
+    const ServerContext toolCtx{ctx.session,
+        tool.func.IsAsync() ? ctx.responseCallback : ResponseCallback{},
+        ctx.meta};
+
+    // Call the tool function. Returns nullopt for async functions.
+    std::optional<ToolReturn> rawResultOpt;
+    try {
+        rawResultOpt = tool.func(toolCtx, name, args.dump());
+    } catch (const std::exception& e) {
+        CallToolResult errorResult;
+        errorResult.isError = true;
+
+        TextContent textContent;
+        textContent.type = "text";
+        textContent.text = e.what();
+        errorResult.content.push_back(std::move(textContent));
+
+        rawResultOpt = std::move(errorResult);
+    }
+
+    // Async function: no result to return, response will be sent via callback
+    if (!rawResultOpt.has_value()) {
+        return std::nullopt;
+    }
+
+    CallToolResult result = NormalizeToolReturn(rawResultOpt.value());
+    if (tool.outputSchema.has_value() && result.isError == false) {
+        if (result.structuredContent.has_value() == false) {
+            return result;
+        }
+        try {
+            JsonValue outputJson = JsonValue::parse(result.structuredContent.value());
+            if (outputJson.is_object() == false) {
+                throw std::runtime_error("structuredContent must be a JSON object for tool '" + name + "'");
+            }
+            JsonValue schemaJson = JsonValue::parse(tool.outputSchema.value());
+            nlohmann::json_schema::json_validator validator;
+            validator.set_root_schema(schemaJson);
+            validator.validate(outputJson);
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Output validation failed for tool '" + name + "': " + std::string(e.what()));
+        }
+    }
+
+    return result;
+}
+
+CallToolResult ToolManager::CallTool(const std::string& name, const std::string& arguments) const
+{
+    auto result = CallTool(ServerContext{}, name, arguments);
+    if (!result.has_value()) {
+        throw std::runtime_error("Async tool called without ServerContext");
+    }
+    return std::move(result.value());
 }
 
 } // namespace Mcp

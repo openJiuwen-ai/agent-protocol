@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <optional>
@@ -7,14 +7,8 @@
 #include <string>
 
 #include "client_task_manager.h"
-#include "utils_helpers.h"
 
-namespace a2a::client {
-
-Task* ClientTaskManager::GetTask()
-{
-    return currentTask_.has_value() ? &*currentTask_ : nullptr;
-}
+namespace A2A::Client {
 
 Task& ClientTaskManager::GetTaskOrRaise()
 {
@@ -23,6 +17,34 @@ Task& ClientTaskManager::GetTaskOrRaise()
     }
 
     return *currentTask_;
+}
+
+
+static void AppendArtifactToTask(Task& task, const TaskArtifactUpdateEvent& event)
+{
+    if (!task.artifacts) {
+        task.artifacts = std::vector<Artifact>{};
+    }
+
+    const auto& newArtifact = event.artifact;
+    const auto& id = newArtifact.artifactId;
+    const bool appendParts = event.append.value_or(false);
+
+    auto& list = *task.artifacts;
+    auto it = std::find_if(list.begin(), list.end(), [&](const Artifact& a) { return a.artifactId == id; });
+
+    if (!appendParts) {
+        if (it != list.end()) {
+            *it = newArtifact;
+        } else {
+            list.push_back(newArtifact);
+        }
+        return;
+    }
+
+    if (it != list.end()) {
+        it->parts.insert(it->parts.end(), newArtifact.parts.begin(), newArtifact.parts.end());
+    }
 }
 
 void ClientTaskManager::SaveTaskEvent(const std::variant<Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& ev)
@@ -71,7 +93,7 @@ void ClientTaskManager::SaveTaskEvent(const std::variant<Task, TaskStatusUpdateE
         task.status = u.status;
     } else {
         const auto& u = std::get<TaskArtifactUpdateEvent>(ev);
-        a2a::server::AppendArtifactToTask(task, u);
+        AppendArtifactToTask(task, u);
     }
 }
 
@@ -100,4 +122,4 @@ void ClientTaskManager::SaveTask(const Task& task)
     currentTask_ = task;
 }
 
-} // namespace a2a::client
+} // namespace A2A::Client

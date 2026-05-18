@@ -11,6 +11,7 @@ target_include_directories(mcp_client_tests
 )
 
 target_sources(mcp_client_tests PRIVATE $<TARGET_OBJECTS:mcp_client>)
+target_sources(mcp_client_tests PRIVATE $<TARGET_OBJECTS:mcp_server>)
 
 target_link_libraries(mcp_client_tests
     PRIVATE
@@ -23,28 +24,17 @@ target_link_libraries(mcp_client_tests
         third_party_headers
         http_parser
         nlohmann_json::nlohmann_json
-        CURL::libcurl
         OpenSSL::SSL
         OpenSSL::Crypto
         event
         pthread
         GTest::gtest_main
+        ${_mcp_event_pthreads_target}
 )
 
-# Link libevent pthread support
-if(TARGET event_pthreads)
-    target_link_libraries(mcp_client_tests PRIVATE event_pthreads)
-elseif(TARGET libevent_pthreads)
-    target_link_libraries(mcp_client_tests PRIVATE libevent_pthreads)
-elseif(TARGET "libevent::pthread")
-    target_link_libraries(mcp_client_tests PRIVATE libevent::pthread)
-else()
-    find_library(_mcp_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
-    if(_mcp_event_pthreads_lib)
-        target_link_libraries(mcp_client_tests PRIVATE ${_mcp_event_pthreads_lib})
-    endif()
+if(MCP_WITH_HTTP)
+    target_link_libraries(mcp_client_tests PRIVATE CURL::libcurl)
 endif()
 
 target_compile_features(mcp_client_tests PRIVATE cxx_std_17)
-
 gtest_discover_tests(mcp_client_tests)

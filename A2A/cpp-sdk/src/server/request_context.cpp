@@ -1,86 +1,64 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include "request_context_impl.h"
 #include "server/request_context.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
-RequestContext::RequestContext(const std::optional<a2a::MessageSendParams>& request,
-                               const std::optional<std::string>& taskId, const std::optional<std::string>& contextId,
-                               const std::optional<a2a::Task>& task, const std::vector<a2a::Task>& relatedTasks,
-                               const a2a::server::ServerCallContext* callContext,
-                               std::shared_ptr<IDGenerator> taskIdGenerator,
-                               std::shared_ptr<IDGenerator> contextIdGenerator)
-    : impl_(std::make_unique<RequestContextImpl>(request, taskId, contextId, task, relatedTasks, callContext,
-                                                 taskIdGenerator, contextIdGenerator))
+RequestContext::RequestContext(const RequestContextParam& param)
+    : impl_(std::make_unique<RequestContextImpl>(param))
 {
 }
 
-std::string RequestContext::GetUserInput(const std::string& delimiter) const
-{
-    return impl_->GetUserInput(delimiter);
-}
-
-void RequestContext::AttachRelatedTask(const a2a::Task& task)
+void RequestContext::AttachRelatedTask(const Task& task)
 {
     impl_->AttachRelatedTask(task);
 }
 
-const a2a::Message* RequestContext::Message() const
+const A2A::Message* RequestContext::GetMessage() const
 {
-    return impl_->Message();
+    return impl_->GetMessage();
 }
 
-const std::vector<a2a::Task>& RequestContext::RelatedTasks() const
+const std::vector<Task>& RequestContext::GetRelatedTasks() const
 {
     return impl_->RelatedTasks();
 }
 
-const std::optional<a2a::Task>& RequestContext::CurrentTask() const
+const std::optional<Task>& RequestContext::GetCurrentTask() const
 {
     return impl_->CurrentTask();
 }
 
-void RequestContext::SetCurrentTask(const a2a::Task& t)
+void RequestContext::SetCurrentTask(const Task& t)
 {
     impl_->SetCurrentTask(t);
 }
 
-const std::optional<std::string>& RequestContext::TaskId() const
+const std::optional<std::string>& RequestContext::GetTaskId() const
 {
     return impl_->TaskId();
 }
 
-const std::optional<std::string>& RequestContext::ContextId() const
+const std::optional<std::string>& RequestContext::GetContextId() const
 {
     return impl_->ContextId();
 }
 
-const std::optional<nlohmann::json> RequestContext::Configuration() const
+std::shared_ptr<MessageSendConfiguration> RequestContext::GetConfiguration() const
 {
     return impl_->Configuration();
 }
 
-const a2a::server::ServerCallContext* RequestContext::CallContext() const
+std::shared_ptr<A2A::Server::ServerCallContext> RequestContext::GetCallContext() const
 {
     return impl_->CallContext();
 }
 
-nlohmann::json RequestContext::Metadata() const
+nlohmann::json RequestContext::GetMetadata() const
 {
     return impl_->Metadata();
 }
-
-void RequestContext::AddActivatedExtension(const std::string& uri)
-{
-    impl_->AddActivatedExtension(uri);
-}
-
-std::unordered_set<std::string> RequestContext::RequestedExtensions() const
-{
-    return impl_->RequestedExtensions();
-}
-
-} // namespace a2a::server
+} // namespace A2A::Server

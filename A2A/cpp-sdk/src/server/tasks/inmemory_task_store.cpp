@@ -1,32 +1,32 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include "inmemory_task_store.h"
-#include "task_store.h"
+#include "server/task_store.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
-void InMemoryTaskStore::Save(const Task& task, const ServerCallContext* context)
+void InMemoryTaskStore::Save(const Task& task, std::shared_ptr<ServerCallContext> context)
 {
-    std::lock_guard<std::mutex> lock(m_);
-    tasks_[task.id] = task;
+    std::lock_guard<std::mutex> lock(mutex_);
+    tasks_[task.id] = std::make_shared<Task>(task);
 }
 
-std::optional<Task> InMemoryTaskStore::Get(const std::string& taskId, const ServerCallContext* context)
+std::optional<Task> InMemoryTaskStore::Get(const std::string& taskId, std::shared_ptr<ServerCallContext> context)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = tasks_.find(taskId);
     if (it != tasks_.end()) {
-        return it->second;
+        return *(it->second);  // Dereference the shared_ptr to return the Task object
     }
     return std::nullopt;
 }
 
-void InMemoryTaskStore::Delete(const std::string& taskId, const ServerCallContext* context)
+void InMemoryTaskStore::Delete(const std::string& taskId, std::shared_ptr<ServerCallContext> context)
 {
-    std::lock_guard<std::mutex> lock(m_);
+    std::lock_guard<std::mutex> lock(mutex_);
     tasks_.erase(taskId);
 }
 
-} // namespace a2a::server
+} // namespace A2A::Server

@@ -8,22 +8,37 @@
 #include <chrono>
 #include <functional>
 #include <map>
-#include <nlohmann/json.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 #include <unordered_map>
 
+#include <nlohmann/json.hpp>
+
+#include "mcp_auth.h"
+
 namespace Mcp {
 
 using JsonValue = nlohmann::json;
+using MetaMap = std::unordered_map<std::string, std::string>;
+
+// MCP progress token: string or integer per spec (same representation as RequestId in jsonrpc.h)
+using ProgressToken = std::variant<int64_t, std::string>;
+
+/** Optional _meta that may exist on any request params (e.g. progressToken for MCP progress). */
+struct RequestParamsMeta {
+    std::optional<ProgressToken> progressToken;
+};
 
 // Constants
 constexpr char DEFAULT_SERVER_NAME[] = "MCP Server";
 constexpr char DEFAULT_CLIENT_NAME[] = "MCP Client";
 constexpr char DEFAULT_VERSION[] = "1.0.0";
 constexpr uint32_t DEFAULT_TIMEOUT = 30000; // 30s
+constexpr std::size_t DEFAULT_TOOLS_PAGE_SIZE = 50;
+constexpr std::size_t DEFAULT_RESOURCES_PAGE_SIZE = 50;
 
 struct StdioClientConfig {
     std::string command;
@@ -53,8 +68,12 @@ struct StreamableHttpClientConfig {
 struct StreamableHttpServerConfig {
     std::string endpoint;
     bool isJsonResponseEnabled{false};
+    // Stateless mode: each HTTP request is handled independently.
+    bool stateless{false};
     uint32_t ioThreads{1};
     TlsConfig tlsConfig;
+    std::shared_ptr<Authenticator> authenticator{nullptr};
+    std::shared_ptr<Authorizer> authorizer{nullptr};
 };
 
 struct ClientConfig {
@@ -62,10 +81,36 @@ struct ClientConfig {
     std::string version{DEFAULT_VERSION};
 };
 
+struct LoggingCapabilities {};
+
+struct PromptsCapabilities {
+    std::optional<bool> listChanged;
+};
+
+struct ResourcesCapabilities {
+    std::optional<bool> subscribe;
+    std::optional<bool> listChanged;
+};
+
+struct ToolsCapabilities {
+    std::optional<bool> listChanged;
+};
+
+struct ServerCapabilities {
+    std::optional<std::unordered_map<std::string, JsonValue>> experimental;
+    std::optional<LoggingCapabilities> logging;
+    std::optional<PromptsCapabilities> prompts;
+    std::optional<ResourcesCapabilities> resources;
+    std::optional<ToolsCapabilities> tools;
+};
+
 struct ServerConfig {
     std::string name = DEFAULT_SERVER_NAME;
     std::string version = DEFAULT_VERSION;
     uint32_t workerThreads{1};
+    std::size_t toolsPageSize{DEFAULT_TOOLS_PAGE_SIZE};
+    std::size_t resourcesPageSize{DEFAULT_RESOURCES_PAGE_SIZE};
+    ServerCapabilities capabilities{};
 };
 
 struct MCPBaseType {
@@ -73,16 +118,26 @@ struct MCPBaseType {
 };
 
 struct Result : public MCPBaseType {
-    std::optional<std::unordered_map<std::string, JsonValue>> meta;
-
+    // meta: second string is a JSON-formatted string
+    std::optional<MetaMap> meta;
     virtual ~Result() = default;
 };
 
-struct McpClientCapabilities {
-    struct RootsCapability {
-        std::optional<bool> listChanged;
-    } roots;
-    std::optional<bool> sampling;
+// Error result used to represent JSON-RPC/MCP errors in a Result-shaped form.
+// This is primarily useful for surfacing server-side JSON-RPC errors through
+// APIs that otherwise return `Result`.
+struct ErrorResult : public Result {
+    int code = 0;
+    std::string message;
+    std::optional<std::string> data;
+};
+
+// Base class for paginated results. List-style methods that support pagination
+// (e.g., tools/list, resources/list) should derive from this instead of Result.
+struct PaginatedResult : public Result {
+    // Optional pagination cursor used by list-style methods in responses.
+    // Non-paginated methods should not use this.
+    std::optional<std::string> nextCursor;
 };
 
 struct ClientInfo {
@@ -176,15 +231,66 @@ using ContentType = std::variant<TextContent, ImageContent, AudioContent, Resour
 
 struct CallToolResult : public Result {
     std::vector<ContentType> content;
+    std::optional<std::string> structuredContent;
     bool isError = false;
 };
 
-using ToolFunc = std::function<CallToolResult(const std::string& name, const JsonValue& arguments,
-                                              const std::optional<JsonValue>& ctx)>;
+// Content block representing a model-initiated tool call.
+struct ToolUseContent {
+    std::string type = "tool_use";
+    std::string id;
+    std::string name;
+    MetaMap input;
+    std::optional<MetaMap> meta;
+};
+
+// Content block representing the result of a tool call.
+struct ToolResultContent {
+    std::string type = "tool_result";
+    std::string toolUseId;
+    std::vector<ContentType> content;
+    std::optional<MetaMap> structuredContent;
+    std::optional<bool> isError;
+    std::optional<MetaMap> meta;
+};
+
+using SamplingMessageContentBlock =
+    std::variant<TextContent, ImageContent, AudioContent, ToolUseContent, ToolResultContent>;
+
+// A message sent to, or received from, an LLM provider.
+// Note: schema allows "content" as a single block or an array; we preserve that.
+struct SamplingMessage {
+    RoleType role;
+    std::variant<SamplingMessageContentBlock, std::vector<SamplingMessageContentBlock>> content;
+    std::optional<MetaMap> meta;
+};
+
+struct ModelHint {
+    std::optional<std::string> name;
+};
+
+struct ModelPreferences {
+    std::optional<std::vector<ModelHint>> hints;
+    std::optional<double> costPriority;
+    std::optional<double> speedPriority;
+    std::optional<double> intelligencePriority;
+};
+
+struct ToolChoice {
+    std::optional<std::string> mode; // "none" | "required" | "auto"
+};
+
+struct CreateMessageResult : public Result {
+    std::string model;
+    std::optional<std::string> stopReason;
+    RoleType role;
+    std::variant<SamplingMessageContentBlock, std::vector<SamplingMessageContentBlock>> content;
+};
 
 //Struct for list_tool result
 struct Tool {
     std::string name;
+    std::optional<std::string> title;
     std::optional<std::string> description;
     std::optional<std::string> inputSchema;
     std::optional<std::string> outputSchema;
@@ -192,7 +298,23 @@ struct Tool {
     std::optional<std::vector<Icon>> icons;
 };
 
-struct ListToolsResult : public Result {
+// Parameters for the server-initiated sampling request `sampling/createMessage`.
+// This mirrors the MCP Sampling specification (2025-11-25).
+struct CreateMessageParams {
+    std::vector<SamplingMessage> messages;
+    std::optional<ModelPreferences> modelPreferences;
+    std::optional<std::string> systemPrompt;
+    // "none" | "thisServer" | "allServers" (the latter two are soft-deprecated in the spec).
+    std::optional<std::string> includeContext;
+    std::optional<double> temperature;
+    int64_t maxTokens = 0;
+    std::optional<std::vector<std::string>> stopSequences;
+    std::optional<MetaMap> metadata;
+    std::optional<std::vector<Tool>> tools;
+    std::optional<ToolChoice> toolChoice;
+};
+
+struct ListToolsResult : public PaginatedResult {
     std::vector<Tool> tools;
 };
 
@@ -217,12 +339,6 @@ struct GetPromptResult : public Result {
     std::vector<PromptMessage> messages;
 };
 
-// Render function for a prompt definition.
-// The function should take the prompt name and optional arguments, then return a GetPromptResult
-// whose `messages_` are ready to be used as model context.
-using RenderPromptFunc =
-    std::function<GetPromptResult(const std::string& name, const std::optional<JsonValue>& argument)>;
-
 // Describes a reusable prompt.
 struct PromptInfo {
     std::string name;
@@ -232,18 +348,42 @@ struct PromptInfo {
     std::optional<std::vector<PromptArgument>> arguments;
 };
 
-struct SamplingCapability {};
+// Client sampling capability flags.
+// In the MCP schema, sampling capability is represented as:
+//   "sampling": { "context"?: {}, "tools"?: {} }
+struct SamplingCapability {
+    bool context = false;
+    bool tools = false;
+};
 
-struct ElicitationCapability {};
+struct FormElicitationCapability {
+};
+
+struct UrlElicitationCapability {
+};
+
+struct ElicitationCapability {
+    std::optional<FormElicitationCapability> form;
+    std::optional<UrlElicitationCapability> url;
+};
 
 struct RootsCapability {
     bool listChanged = false;
 };
 
-struct ClientTasksCapability {};
+// Client tasks capability flags.
+// The MCP schema has a nested shape, but we keep a flattened representation and
+// serialize/deserialize to the nested schema form.
+struct ClientTasksCapability {
+    bool list = false;
+    bool cancel = false;
+    bool samplingCreateMessage = false;
+    bool elicitationCreate = false;
+};
 
 struct ClientCapabilities {
-    std::optional<std::unordered_map<std::string, std::unordered_map<std::string, nlohmann::json>>> experimental;
+    // experimental: second string is a JSON-formatted string
+    std::optional<std::unordered_map<std::string, std::unordered_map<std::string, std::string>>> experimental;
     std::optional<SamplingCapability> sampling;
     std::optional<ElicitationCapability> elicitation;
     std::optional<RootsCapability> roots;
@@ -259,29 +399,6 @@ struct Implementation {
     std::optional<std::vector<Icon>> icons;
 };
 
-struct LoggingCapabilities {};
-
-struct PromptsCapabilities {
-    std::optional<bool> listChanged;
-};
-
-struct ResourcesCapabilities {
-    std::optional<bool> subscribe;
-    std::optional<bool> listChanged;
-};
-
-struct ToolsCapabilities {
-    std::optional<bool> listChanged;
-};
-
-struct ServerCapabilities {
-    std::optional<std::unordered_map<std::string, JsonValue>> experimental;
-    std::optional<LoggingCapabilities> logging;
-    std::optional<PromptsCapabilities> prompts;
-    std::optional<ResourcesCapabilities> resources;
-    std::optional<ToolsCapabilities> tools;
-};
-
 struct InitializeResult : public Result {
     std::string protocolVersion;
     ServerCapabilities capabilities;
@@ -295,6 +412,21 @@ struct InitializeResult : public Result {
 // Result type for listing available prompts.
 struct ListPromptsResult : public Result {
     std::vector<PromptInfo> prompts;
+};
+
+// Root entry for roots/list
+struct Root {
+    std::optional<std::string> name;
+    std::string uri;
+};
+
+struct ListRootsResult : public Result {
+    std::vector<Root> roots;
+};
+
+struct ElicitResult : public Result {
+    std::string action;
+    MetaMap content;
 };
 
 // A response that indicates success but carries no data.
@@ -322,7 +454,7 @@ struct ResourceTemplate {
 };
 
 // resources/list
-struct ListResourcesResult : public Result {
+struct ListResourcesResult : public PaginatedResult {
     std::vector<ResourceInfo> resources;
 };
 
@@ -331,12 +463,61 @@ struct ReadResourceResult : public Result {
     std::vector<ResourceContents> contents;
 };
 
-// Function type for reading a resource
-using ReadResourceFunc = std::function<ReadResourceResult(const std::string& uri)>;
-
 // resources/templates/list
-struct ListResourceTemplatesResult : public Result {
+struct ListResourceTemplatesResult : public PaginatedResult {
     std::vector<ResourceTemplate> resourceTemplates;
+};
+
+enum class LoggingLevel { Debug = 0, Info, Notice, Warning, Error, Critical, Alert, Emergency };
+
+// Callback indicating the client can serve roots/list.
+// If this is not set, the client must not advertise the `roots` capability in initialize.
+using ListRootsCallback = std::function<ListRootsResult()>;
+
+// Callback indicating the client can serve elicitation/create.
+using ElicitCallback = std::function<ElicitResult(const std::string&, const Mcp::MetaMap&)>;
+
+using ElicitUrlCallback = std::function<ElicitResult(const std::string&, const std::string&, const std::string&)>;
+
+// Register a callback that will be invoked when the server sends `notifications/message`.
+// The default callback is print in MCP_LOG.
+using LoggingCallback = std::function<void(const std::string& level,
+                                                 const std::string& data,
+                                                 const std::string& logger)>;
+
+// completion/complete references
+struct ResourceTemplateReference {
+    std::string type = "ref/resource";
+    std::string uri;
+};
+
+struct PromptReference {
+    std::string type = "ref/prompt";
+    std::string name;
+};
+
+using CompleteReference = std::variant<ResourceTemplateReference, PromptReference>;
+
+// completion/complete argument and context
+struct CompletionArgument {
+    std::string name;
+    std::string value;
+};
+
+struct CompletionContext {
+    std::optional<std::unordered_map<std::string, std::string>> arguments;
+};
+
+// Completion information
+struct Completion {
+    std::vector<std::string> values;
+    std::optional<int64_t> total;
+    std::optional<bool> hasMore;
+};
+
+// completion/complete request/response
+struct CompleteResult : public Result {
+    Completion completion;
 };
 
 } // namespace Mcp

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_TASK_MANAGER
@@ -9,42 +9,46 @@
 #include <optional>
 #include <string>
 
-#include "server/server_call_context.h"
-#include "task_store.h"
-#include "utils/types.h"
+#include "../../../include/server/server_call_context.h"
+#include "server/task_store.h"
+#include "types.h"
 
-namespace a2a::server {
+namespace A2A::Server {
+using EventType = std::variant<Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent>;
 
 class TaskManager {
 public:
     TaskManager(std::optional<std::string> taskId, std::optional<std::string> contextId,
-                std::shared_ptr<TaskStore> taskStore, std::optional<a2a::Message> initialMessage,
-                const a2a::server::ServerCallContext* context = nullptr);
+                std::shared_ptr<TaskStore> taskStore, std::optional<Message> initialMessage,
+                std::shared_ptr<ServerCallContext> context = nullptr);
 
-    std::optional<a2a::Task> GetTask();
+    ~TaskManager() = default;
 
-    a2a::Task SaveTaskEvent(
-        const std::variant<a2a::Task, a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>& event);
+    std::optional<Task> GetTask();
 
-    a2a::Task EnsureTask(const std::variant<a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>& event);
+    void SaveTaskEvent(const EventType& event);
 
-    std::variant<a2a::Task, a2a::Message, a2a::TaskArtifactUpdateEvent, a2a::TaskStatusUpdateEvent> Process(
-        const std::variant<a2a::Task, a2a::Message, a2a::TaskArtifactUpdateEvent, a2a::TaskStatusUpdateEvent>& event);
+    Task EnsureTask(const std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& event);
 
-    a2a::Task UpdateWithMessage(const a2a::Message& message, a2a::Task task);
+    std::variant<Task, Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent> Process(
+        const std::variant<Task, Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent>& event);
+
+    Task UpdateWithMessage(const Message& message, Task task);
 
 private:
-    a2a::Task InitTaskObj(const std::string& taskId, const std::string& contextId);
-    void SaveTask(const a2a::Task& task);
+    std::shared_ptr<Task> InitTaskObj(const std::string& taskId, const std::string& contextId);
+    void SaveTaskContextId(const EventType &event);
+    void SaveTask(const Task& task);
+    Task EnsureTaskForEvent(const EventType& event);
 
     std::optional<std::string> taskId_;
     std::optional<std::string> contextId_;
     std::shared_ptr<TaskStore> taskStore_;
-    std::optional<a2a::Message> initialMessage_;
-    std::optional<a2a::Task> currentTask_;
-    const a2a::server::ServerCallContext* callContext_;
+    std::optional<Message> initialMessage_;
+    std::shared_ptr<Task> currentTask_;
+    const std::shared_ptr<ServerCallContext> callContext_;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

@@ -21,13 +21,13 @@ std::string BuildRawHttpRequest(const HttpRequest& request, const std::string& h
     output << request.method << " " << path << " HTTP/1.1\r\n";
 
     // Host header
-    if (request.headers.find("Host") == request.headers.end()) {
-        output << "Host: " << host << "\r\n";
+    if (request.headers.find(HOST_HEADER) == request.headers.end()) {
+        output << HOST_HEADER << ": " << host << "\r\n";
     }
 
     // Content-Length
-    if (!request.body.empty() && request.headers.find("Content-Length") == request.headers.end()) {
-        output << "Content-Length: " << request.body.size() << "\r\n";
+    if (!request.body.empty() && request.headers.find(CONTENT_LENGTH_HEADER) == request.headers.end()) {
+        output << CONTENT_LENGTH_HEADER << ": " << request.body.size() << "\r\n";
     }
 
     // Other headers
@@ -36,7 +36,7 @@ std::string BuildRawHttpRequest(const HttpRequest& request, const std::string& h
     }
 
     // Default Connection: close for simple synchronous client
-    output << "Connection: close\r\n";
+    output << CONNECTION_HEADER << ": " << CONNECTION_CLOSE << "\r\n";
 
     output << "\r\n";
 
@@ -107,9 +107,11 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
     bool error = false;
     HttpResponse response;
 
-    connection->OnError([&](const Mcp::Net::SocketPtr& socket, int errorCode, const std::string& message) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] error fd=%d err=%d msg=%s", (socket ? socket->Fd() : -1), errorCode,
-                message.c_str());
+    connection->OnError([&](const Mcp::Net::SocketPtr& socket, int errorCode,
+                           const std::string& message) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] error fd=" +
+                std::to_string(socket ? socket->Fd() : -1) +
+                " err=" + std::to_string(errorCode) + " msg=" + message);
         error = true;
         done = true;
         eventSystem.Stop();
@@ -150,7 +152,9 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
             timeoutMs,
             [&](int /* fileDescriptor */, short /* events */, void* /* argument */) {
                 if (!done) {
-                    MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] request timeout after %d ms", timeoutMs);
+                    MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                            std::string("[http_client] request timeout after ") +
+                                std::to_string(timeoutMs) + " ms");
                     error = true;
                     done = true;
                     if (connection) {

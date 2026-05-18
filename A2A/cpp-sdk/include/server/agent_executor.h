@@ -1,14 +1,16 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_AGENT_EXECUTOR
 #define A2A_AGENT_EXECUTOR
 
-#include "server/event_queue.h"
-#include "server/request_context.h"
+#include <memory>
 
-namespace a2a::server {
+#include "task_updater.h"
+#include "request_context.h"
+
+namespace A2A::Server {
 
 class AgentExecutor {
 public:
@@ -20,20 +22,20 @@ public:
     /**
      * @brief execute a task in given request context
      *
-     * @param[in] context request context cintaining task information
-     * @param[in] eventQueue event queue used to publish events
+     * @param[in] context request context containing task information
+     * @param[in] taskUpdater updater used to update events
      */
-    virtual void Execute(RequestContext& context, EventQueue& eventQueue) = 0;
+    virtual void Execute(const RequestContext& context, std::shared_ptr<TaskUpdater> taskUpdater) = 0;
 
     /**
      * @brief cancel a task in given request context
      *
      * @param[in] context request context cintaining task information
-     * @param[in] eventQueue event queue used to publish events
+     * @param[in] taskUpdater updater used to update events
      */
-    virtual void Cancel(RequestContext& context, EventQueue& eventQueue) = 0;
+    virtual void Cancel(const RequestContext& context, std::shared_ptr<TaskUpdater> taskUpdater) = 0;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif
