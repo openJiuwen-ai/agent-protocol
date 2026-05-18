@@ -51,7 +51,7 @@ def create_demo_state() -> LocalRouterState:
 
     # 部署3: 不健康
     state.health_state["dep3"] = False
-    state.deployment_status["dep3"] = DeploymentStatus.FAILED
+    state.deployment_status["dep3"] = DeploymentStatus.COOLDOWN
 
     return state
 

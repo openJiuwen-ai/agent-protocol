@@ -1,7 +1,7 @@
 """
 SDK LLM Router - 可靠性路由
 
-ReliableRouter: 集成状态管理、策略选择，健庭检查
+ReliableRouter: 集成状态管理、策略选择、健康检查
 """
 from typing import Dict, List, Optional, Any, Union, Literal, AsyncIterator
 from dataclasses import dataclass, field
@@ -38,7 +38,6 @@ class ReliableRouter(BaseRouter):
         strategy: Union[StrategyType, RoutingStrategy] = "simple-shuffle",
         num_retries: int = 3,
         timeout: float = 30.0,
-        allowed_fails: int = 3,
         cooldown_time: float = 60.0,
         enable_health_check: bool = False,
         health_check_interval: float = 300,
@@ -58,11 +57,9 @@ class ReliableRouter(BaseRouter):
             self.strategy = create_strategy(strategy, state=self.state, **strategy_kwargs)
         else:
             self.strategy = strategy
-        # 可靠性参数
-        self.allowed_fails = allowed_fails
+        # cooldown 参数
         self.cooldown_time = cooldown_time
-        # 健康检查
-        self.enable_health_check = enable_health_check
+        # 健康检查（可选，用于加速恢复）
         self.health_checker: Optional[SDKHealthChecker] = None
         if enable_health_check:
             self.health_checker = SDKHealthChecker(
@@ -84,15 +81,17 @@ class ReliableRouter(BaseRouter):
         return False
 
     def _get_available_deployments(self, model: str) -> List[Deployment]:
-        """获取模型可用部署"""
+        """获取模型可用部署
+
+        COOLDOWN 超时后自动恢复为 HEALTHY。
+        没有 FAILED 状态——所有失败都是可自愈的。
+        """
         now = time.time()
         all_deployments = self.get_deployments_for_model(model)
         with self.state.lock:
             available = []
             for dep in all_deployments:
                 status = self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY)
-                if status == DeploymentStatus.FAILED:
-                    continue
                 if status == DeploymentStatus.COOLDOWN:
                     cooldown_until = self.state.cooldown_until.get(dep.id, 0)
                     if now < cooldown_until:

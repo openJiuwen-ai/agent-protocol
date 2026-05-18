@@ -55,8 +55,7 @@ Deployment(
 ```python
 class DeploymentStatus(Enum):
     HEALTHY = "healthy"    # 健康
-    COOLDOWN = "cooldown"  # 冷却中
-    FAILED = "failed"      # 失败
+    COOLDOWN = "cooldown"  # 冷却中（超时后自愈，时长 = cooldown_time × 连续失败次数）
 ```
 
 ---
@@ -72,8 +71,7 @@ ReliableRouter(
     strategy: Union[StrategyType, RoutingStrategy] = "simple-shuffle",  # 路由策略
     num_retries: int = 3,                       # 重试次数
     timeout: float = 30.0,                      # 请求超时
-    allowed_fails: int = 3,                     # 允许失败次数（触发冷却）
-    cooldown_time: float = 60.0,                # 冷却时间（秒）
+    cooldown_time: float = 60.0,                # 冷却时间基数（秒），实际时长 = cooldown_time × 连续失败次数
     enable_health_check: bool = False,          # 启用健康检查
     health_check_interval: float = 300,         # 健康检查间隔（秒）
     cache: Optional[LocalCache] = None,         # 缓存实例
@@ -340,8 +338,8 @@ def create_strategy(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `on_success` | `on_success(deployment_id: str, latency: float, tokens: int, allowed_fails: int = 3, cooldown_time: float = 60.0) -> None` | 成功回调 |
-| `on_failure` | `on_failure(deployment_id: str, error: Exception, allowed_fails: int = 3, cooldown_time: float = 60.0) -> None` | 失败回调 |
+| `on_success` | `on_success(deployment_id: str, latency: float, tokens: int) -> None` | 成功回调，重置失败计数并恢复为 HEALTHY |
+| `on_failure` | `on_failure(deployment_id: str, error: Exception, cooldown_time: float = 60.0) -> None` | 失败回调，进入 COOLDOWN（时长 = cooldown_time × 连续失败次数），超时后自愈 |
 | `get_average_latency` | `get_average_latency(deployment_id: str) -> float` | 获取平均延迟 |
 | `get_available_deployments` | `get_available_deployments(now: float) -> List[str]` | 获取可用部署ID列表 |
 | `get_token_remaining` | `get_token_remaining(deployment_id: str) -> int` | 获取剩余Token |

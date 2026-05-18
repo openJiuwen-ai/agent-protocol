@@ -135,22 +135,22 @@ class LocalRouterState:
             self.cooldown_until[deployment_id] = None
 
     def update_health(self, deployment_id: str, is_healthy: bool) -> None:
-        """原子性更新健康状态"""
+        """原子性更新健康状态
+
+        健康检查通过时加速恢复为 HEALTHY。
+        不健康时不降级——让真实的请求失败 on_failure 去触发 COOLDOWN。
+        """
         with self._lock:
             self.health_state[deployment_id] = is_healthy
             if is_healthy:
                 self.deployment_status[deployment_id] = DeploymentStatus.HEALTHY
-            else:
-                if self.deployment_status.get(deployment_id) != DeploymentStatus.COOLDOWN:
-                    self.deployment_status[deployment_id] = DeploymentStatus.FAILED
+                self.cooldown_until[deployment_id] = None
 
     def on_success(
         self,
         deployment_id: str,
         latency: float,
         tokens: int,
-        allowed_fails: int = 3,
-        cooldown_time: float = 60.0
     ) -> None:
         """成功回调 - 更新状态"""
         with self._lock:
@@ -195,21 +195,19 @@ class LocalRouterState:
         self,
         deployment_id: str,
         error: Exception,
-        allowed_fails: int = 3,
         cooldown_time: float = 60.0
     ) -> None:
-        """失败回调 - 更新状态"""
+        """失败回调 - 统一走 COOLDOWN + backoff
+
+        cooldown 时长按连续失败次数递增:
+          第1次: 60s, 第2次: 120s, 第3次: 180s ...
+        """
         with self._lock:
-            # 增加失败计数
             self.consecutive_failures[deployment_id] = self.consecutive_failures.get(deployment_id, 0) + 1
 
-            # 检查是否需冷却
-            if self.consecutive_failures[deployment_id] >= allowed_fails:
-                self.deployment_status[deployment_id] = DeploymentStatus.COOLDOWN
-                self.cooldown_until[deployment_id] = time.time() + cooldown_time
-            else:
-                self.deployment_status[deployment_id] = DeploymentStatus.FAILED
-            # 更新健庭状态
+            failures = self.consecutive_failures[deployment_id]
+            self.deployment_status[deployment_id] = DeploymentStatus.COOLDOWN
+            self.cooldown_until[deployment_id] = time.time() + cooldown_time * failures
             self.health_state[deployment_id] = False
 
     def get_average_latency(self, deployment_id: str) -> float:

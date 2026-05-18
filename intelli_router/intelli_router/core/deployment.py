@@ -14,7 +14,6 @@ class DeploymentStatus(Enum):
     """部署状态枚举"""
     HEALTHY = "healthy"
     COOLDOWN = "cooldown"
-    FAILED = "failed"
 
 @dataclass
 class Deployment:
@@ -78,8 +77,6 @@ class Deployment:
 
     def is_available(self, now: float) -> bool:
         """检查部署是否可用"""
-        if self.status == DeploymentStatus.FAILED:
-            return False
         if self.status == DeploymentStatus.COOLDOWN:
             if self.cooldown_until and now < self.cooldown_until:
                 return False
