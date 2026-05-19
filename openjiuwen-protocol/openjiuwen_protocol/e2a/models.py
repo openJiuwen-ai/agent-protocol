@@ -13,12 +13,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from openjiuwen_protocol.e2a.constants import (
+from jiuwenswarm.common.e2a.constants import (
     E2A_RESPONSE_STATUS_IN_PROGRESS,
     E2A_SOURCE_PROTOCOL_A2A,
     E2A_SOURCE_PROTOCOL_ACP,
     E2A_SOURCE_PROTOCOL_E2A,
-    E2A_WIRE_INTERNAL_METADATA_KEYS,
 )
 
 
@@ -103,10 +102,6 @@ class E2AEnvelope:
     通道与互操作：
     - channel_context：**可选溢出**；主路径上通道侧信息应在**网关入口**映射为规范化字段。
     - a2a_metadata / acp_meta：与 A2A/ACP 互操作时使用。
-
-    追踪：
-    - traceparent：可选 W3C Trace Context 父上下文；用于 Gateway 与 AgentServer
-      在同一请求内建立真实父子 span。未提供时保持旧行为。
     """
 
     # --- 基础 / 关联 ---
@@ -127,7 +122,6 @@ class E2AEnvelope:
     identity_origin: IdentityOrigin = IdentityOrigin.USER
     channel: str | None = None
     user_id: str | None = None
-    agent_ref: dict | None = None
     chat_id: str | None = None
     source_agent_id: str | None = None
 
@@ -149,9 +143,6 @@ class E2AEnvelope:
     a2a_metadata: dict[str, Any] = field(default_factory=dict)
     acp_meta: dict[str, Any] = field(default_factory=dict)
 
-    # --- 追踪：可选 W3C Trace Context 父上下文 ---
-    traceparent: str | None = None
-
     def ensure_timestamp(self) -> None:
         """若未设置 timestamp，则填当前 UTC ISO8601。"""
         if self.timestamp is None:
@@ -172,7 +163,7 @@ class E2AResponse:
     """
     E2A 统一响应：每条出站记录（含流式多帧）一条实例；与 ``E2AEnvelope`` 对称。
 
-    分层语义见 ``docs/zh/E2A-protocol.md`` / ``docs/en/E2A-protocol.md``；``response_kind`` 取值以
+    分层语义见 ``docs/zh/E2A-protocol.md`` / ``docs/en/E2A-protocol.md`` §12；``response_kind`` 取值以
     ``constants.E2A_RESPONSE_KINDS`` 为准。
 
     ``metadata``：通道/业务自定义键值；兼容旧版 ``AgentResponse.metadata``；协议转换失败时可临时写入兜底信息
@@ -200,7 +191,6 @@ class E2AResponse:
     identity_origin: IdentityOrigin = IdentityOrigin.AGENT
     channel: str | None = None
     user_id: str | None = None
-    agent_ref: dict | None = None
     source_agent_id: str | None = None
     method: str | None = None
 
@@ -359,18 +349,13 @@ def _envelope_from_dict(data: dict[str, Any]) -> E2AEnvelope:
             _meta=dict(auth_raw.get("_meta") or {}),
         )
 
-    # channel_context：合并 wire 顶层 metadata + app_id 中尚未出现的键。
+    # channel_context：合并 wire 顶层 metadata 中尚未出现的键。
     channel_context = dict(data.get("channel_context") or {})
     meta_top = data.get("metadata")
     if isinstance(meta_top, dict) and meta_top:
         for k, v in meta_top.items():
-            if k in E2A_WIRE_INTERNAL_METADATA_KEYS:
-                continue
             if k not in channel_context:
                 channel_context[k] = v
-    app_id = data.get("app_id")
-    if app_id and "app_id" not in channel_context:
-        channel_context["app_id"] = app_id
 
     ch = data.get("channel")
     if ch is None:
@@ -398,10 +383,6 @@ def _envelope_from_dict(data: dict[str, Any]) -> E2AEnvelope:
         identity_origin=origin,
         channel=ch,
         user_id=data.get("user_id"),
-        # agent_ref 全链路透传——入站反序列化须补读，否则 message_to_e2a
-        # 写入 d["agent_ref"] 后被 from_dict 丢弃，AgentServer 永远收不到
-        # （agent_ref 全程携带；同人多窗场景依赖它路由）。
-        agent_ref=data.get("agent_ref"),
         chat_id=data.get("chat_id"),
         source_agent_id=data.get("source_agent_id"),
         method=raw_method,
@@ -414,7 +395,6 @@ def _envelope_from_dict(data: dict[str, Any]) -> E2AEnvelope:
         channel_context=channel_context,
         a2a_metadata=dict(data.get("a2a_metadata") or {}),
         acp_meta=dict(data.get("acp_meta") or {}),
-        traceparent=data.get("traceparent"),
     )
 
 
@@ -456,7 +436,6 @@ def _e2a_response_from_dict(data: dict[str, Any]) -> E2AResponse:
         identity_origin=origin,
         channel=ch,
         user_id=data.get("user_id"),
-        agent_ref=data.get("agent_ref"),
         source_agent_id=data.get("source_agent_id"),
         method=data.get("method"),
         projections=dict(data.get("projections") or {}),

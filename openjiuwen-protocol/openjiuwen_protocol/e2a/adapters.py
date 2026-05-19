@@ -7,7 +7,7 @@
 与网关通道上的 ``metadata`` / ``channel_context`` 无关。
 
 ``e2a_response_to_acp_jsonrpc_response`` / ``e2a_response_to_a2a_stream_payload`` 将 ``E2AResponse`` 投影为
-外协议形状；不适用时返回 ``None``（详见 ``docs/zh/E2A-protocol.md``）。
+外协议形状；不适用时返回 ``None``（见 ``docs/zh/E2A-protocol.md`` §8、§12）。
 """
 
 
@@ -17,7 +17,7 @@ import time
 import uuid as uuid_module
 from typing import Any
 
-from openjiuwen_protocol.e2a.constants import (
+from jiuwenswarm.common.e2a.constants import (
     E2A_A2A_STREAM_BRANCHES,
     E2A_RESPONSE_KIND_ACP_JSONRPC_ERROR,
     E2A_RESPONSE_KIND_ACP_PROMPT_RESULT,
@@ -26,7 +26,7 @@ from openjiuwen_protocol.e2a.constants import (
     E2A_SOURCE_PROTOCOL_ACP,
     E2A_SOURCE_PROTOCOL_A2A,
 )
-from openjiuwen_protocol.e2a.models import (
+from jiuwenswarm.common.e2a.models import (
     E2AEnvelope,
     E2AProvenance,
     E2AResponse,
@@ -35,8 +35,8 @@ from openjiuwen_protocol.e2a.models import (
     utc_now_iso,
 )
 
-_CONVERTER_ACP = "openjiuwen_protocol.e2a.adapters:envelope_from_acp_jsonrpc"
-_CONVERTER_A2A = "openjiuwen_protocol.e2a.adapters:envelope_from_a2a_send_message"
+_CONVERTER_ACP = "jiuwenswarm.common.e2a.adapters:envelope_from_acp_jsonrpc"
+_CONVERTER_A2A = "jiuwenswarm.common.e2a.adapters:envelope_from_a2a_send_message"
 
 
 def envelope_from_acp_jsonrpc(
@@ -231,45 +231,27 @@ def build_acp_tool_response_message(
     response_data: dict[str, Any],
     session_id: str | None,
     channel_id: str = "acp",
-    *,
-    message_factory: Any = None,
 ) -> Any:
     """Build an internal Message for an ACP tool response (JSON-RPC response from client).
 
     Shared by AcpRouteHandler (WebSocket gateway mode) and AcpChannel (stdio mode)
     to avoid duplicated Message construction logic.
-
-    ``message_factory``: ``(channel_id, session_id, params, req_method_value) -> Message``
-    由调用方注入（jiuwenswarm 侧用 ``common.schema.message.Message`` +
-    ``ReqMethod.ACP_TOOL_RESPONSE`` 构造），避免协议包反向依赖实现侧类型；
-    返回对象的字段形状与原 Message 构造一致，消费方按鸭子类型使用。
     """
-    params = {
-        "jsonrpc_id": jsonrpc_id,
-        "response": dict(response_data),
-        "session_id": session_id,
-    }
-    metadata = {"acp": {"jsonrpc_id": jsonrpc_id, "kind": "tool_response"}}
-    if message_factory is not None:
-        return message_factory(
-            channel_id=channel_id,
-            session_id=session_id,
-            params=params,
-            metadata=metadata,
-            jsonrpc_id=jsonrpc_id,
-        )
+    from jiuwenswarm.common.schema.message import Message, ReqMethod
 
-    # 协议包内兜底：等价 dict（字段名与 Message 一致），供未注入 factory 的
-    # 调用方（如测试/独立工具）使用。
-    return {
-        "id": f"acp_tool_resp_{uuid_module.uuid4().hex[:12]}",
-        "type": "req",
-        "channel_id": channel_id,
-        "session_id": session_id,
-        "params": params,
-        "timestamp": time.time(),
-        "ok": True,
-        "req_method": "acp.tool_response",
-        "is_stream": False,
-        "metadata": metadata,
-    }
+    return Message(
+        id=f"acp_tool_resp_{uuid_module.uuid4().hex[:12]}",
+        type="req",
+        channel_id=channel_id,
+        session_id=session_id,
+        params={
+            "jsonrpc_id": jsonrpc_id,
+            "response": dict(response_data),
+            "session_id": session_id,
+        },
+        timestamp=time.time(),
+        ok=True,
+        req_method=ReqMethod.ACP_TOOL_RESPONSE,
+        is_stream=False,
+        metadata={"acp": {"jsonrpc_id": jsonrpc_id, "kind": "tool_response"}},
+    )
