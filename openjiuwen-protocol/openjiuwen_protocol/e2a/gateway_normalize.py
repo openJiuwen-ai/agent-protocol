@@ -8,11 +8,9 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from openjiuwen_protocol.message import ReqMethod
-from openjiuwen_protocol.e2a.constants import (
+from jiuwenswarm.common.e2a.constants import (
     E2A_RESPONSE_KIND_ACP_OUTPUT_REQUEST,
     E2A_RESPONSE_KIND_CRON,
-    E2A_RESPONSE_KIND_PLAN_APPROVAL_REQUIRED,
     E2A_RESPONSE_KIND_E2A_CHUNK,
     E2A_RESPONSE_KIND_E2A_COMPLETE,
     E2A_RESPONSE_KIND_E2A_ERROR,
@@ -21,7 +19,7 @@ from openjiuwen_protocol.e2a.constants import (
     E2A_RESPONSE_STATUS_SUCCEEDED,
     E2A_SOURCE_PROTOCOL_E2A,
 )
-from openjiuwen_protocol.e2a.models import (
+from jiuwenswarm.common.e2a.models import (
     E2AEnvelope,
     E2A_PROTOCOL_VERSION,
     E2AProvenance,
@@ -31,65 +29,12 @@ from openjiuwen_protocol.e2a.models import (
 )
 
 if TYPE_CHECKING:
-    from openjiuwen_protocol.e2a.agent_models import AgentResponse, AgentResponseChunk
-    # Message is only needed for type annotations in this module.
-    Message = Any
+    from jiuwenswarm.common.schema.agent import AgentResponse, AgentResponseChunk
+    from jiuwenswarm.common.schema.message import Message, ReqMethod
 
 logger = logging.getLogger(__name__)
 
-
-def method_value(method: ReqMethod | str) -> str:
-    """Return a non-empty method name. Callers handle absent methods.
-
-    Raises:
-        TypeError: The method is neither a ReqMethod nor a string.
-        ValueError: A supplied method name is empty or whitespace-only.
-    """
-    value = method.value if isinstance(method, ReqMethod) else method
-    if not isinstance(value, str):
-        raise TypeError("method must be ReqMethod or str")
-    if not value.strip():
-        raise ValueError("method must be a non-empty string")
-    return value
-
-
-# chat.delta 在线上被拆成 delta + 白名单字段，再在网关侧按同一份名单还原。
-# chat.final 走整包透传，不经过这份名单。主动推荐标记若只留在 final 上，
-# 流式增量会被前端当成上一轮普通回复，卡片正文出现两遍，上一轮结束时间也被藏掉。
-_CHAT_DELTA_PASSTHROUGH_KEYS = (
-    "rid",
-    "role",
-    "member_name",
-    "agent_template_name",
-    "execution_id",
-    "output_phase_id",
-    "output_suppressed",
-    "output_order",
-    "timestamp",
-    "turn_request_id",
-    "message_origin",
-    "session_message_id",
-    "cross_session",
-    "source",
-    "proactive_type",
-    "proactive_target",
-    "proactive_rec_id",
-)
-
-# Team Organization delta 身份键：chat.delta 线上往返需保留团队路由标识。
-_TEAM_DELTA_IDENTITY_KEYS = ("team_name", "team_id")
-
-
-def _copy_team_delta_identity(source: dict[str, Any], target: dict[str, Any]) -> None:
-    """Preserve Team routing and the shared organization reply ID on text deltas."""
-    for key in _TEAM_DELTA_IDENTITY_KEYS:
-        value = source.get(key)
-        if value is not None:
-            target[key] = value
-    if str(source.get("source", "")).startswith("org_") and "request_id" in source:
-        target["request_id"] = source["request_id"]
-
-# 通道业务勿占用此前缀。
+# 与 E2A-AgentRequest-log-migration.md §7.4 一致；通道业务勿占用此前缀。
 E2A_INTERNAL_CONTEXT_KEY = "_jiuwenswarm"
 E2A_FALLBACK_FAILED_KEY = "normalize_failed"
 E2A_LEGACY_AGENT_REQUEST_KEY = "legacy_agent_request"
@@ -98,12 +43,18 @@ MAX_LEGACY_AGENT_REQUEST_JSON_BYTES = 512_000
 
 def message_to_legacy_agent_dict(msg: "Message") -> dict[str, Any]:
     """从 Message 生成与历史 WebSocket 一致的 dict（用于兜底 legacy_agent_request）。"""
-    rm_val = None if msg.req_method is None else method_value(msg.req_method)
+    rm = msg.req_method
+    rm_val: str | None
+    if rm is None:
+        rm_val = None
+    elif hasattr(rm, "value"):
+        rm_val = str(rm.value)
+    else:
+        rm_val = str(rm)
     out: dict[str, Any] = {
         "request_id": msg.id,
         "channel_id": msg.channel_id,
         "session_id": msg.session_id,
-        "user_id": msg.user_id,
         "req_method": rm_val,
         "params": dict(msg.params or {}),
         "is_stream": bool(msg.is_stream),
@@ -151,7 +102,6 @@ def build_fallback_e2a(legacy: dict[str, Any]) -> E2AEnvelope:
         request_id=rid or None,
         channel=str(legacy.get("channel_id") or "") or None,
         session_id=legacy.get("session_id"),
-        user_id=legacy.get("user_id"),
         method=None,
         params={},
         is_stream=bool(legacy.get("is_stream", False)),
@@ -165,14 +115,13 @@ def message_to_e2a(msg: "Message") -> E2AEnvelope:
         "request_id": msg.id,
         "channel_id": msg.channel_id,
         "session_id": msg.session_id,
-        "user_id": msg.user_id,
         "chat_id": msg.chat_id,
         "params": dict(msg.params or {}),
         "is_stream": bool(msg.is_stream),
         "timestamp": msg.timestamp,
     }
     if msg.req_method is not None:
-        d["method"] = method_value(msg.req_method)
+        d["method"] = msg.req_method.value
     # 合并 metadata 和独立字段（enable_memory, group_digital_avatar 等）
     metadata: dict[str, Any] = dict(msg.metadata or {})
 
@@ -200,13 +149,6 @@ def message_to_e2a(msg: "Message") -> E2AEnvelope:
         metadata["group_digital_avatar"] = msg.group_digital_avatar
     if metadata:
         d["metadata"] = metadata
-
-    # ── 传递 agent_ref / app_id 到 E2A 线协议 ──
-    if getattr(msg, "agent_ref", None):
-        d["agent_ref"] = msg.agent_ref
-    if getattr(msg, "app_id", None):
-        d["app_id"] = msg.app_id
-
     return E2AEnvelope.from_dict(d)
 
 
@@ -247,20 +189,21 @@ def e2a_from_agent_fields(
     is_stream: bool = False,
     timestamp: float = 0.0,
     metadata: dict[str, Any] | None = None,
-    user_id: str | None = None,
 ) -> E2AEnvelope:
     """由与 AgentRequest 相同的字段构造 E2A（heartbeat / cron / app 管理请求等）。"""
     d: dict[str, Any] = {
         "request_id": request_id,
         "channel_id": channel_id,
         "session_id": session_id,
-        "user_id": user_id,
         "params": dict(params or {}),
         "is_stream": is_stream,
         "timestamp": timestamp,
     }
     if req_method is not None:
-        d["method"] = method_value(req_method)
+        if hasattr(req_method, "value"):
+            d["method"] = req_method.value
+        else:
+            d["method"] = str(req_method)
     if metadata:
         d["metadata"] = dict(metadata)
     return E2AEnvelope.from_dict(d)
@@ -285,7 +228,7 @@ def e2a_response_from_agent_response(
 
     非流式完整响应恒为 ``is_final=True``、``sequence`` 默认 0。
     """
-    from openjiuwen_protocol.e2a.agent_models import AgentResponse as AgentResponseCls
+    from jiuwenswarm.common.schema.agent import AgentResponse as AgentResponseCls
 
     if not isinstance(resp, AgentResponseCls):
         raise TypeError("resp must be AgentResponse")
@@ -293,7 +236,7 @@ def e2a_response_from_agent_response(
     ts = timestamp or utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="openjiuwen_protocol.e2a.gateway_normalize:e2a_response_from_agent_response",
+        converter="jiuwenswarm.common.e2a.gateway_normalize:e2a_response_from_agent_response",
         converted_at=ts,
         details={"kind": "legacy_agent_response", "ok": bool(resp.ok)},
     )
@@ -329,8 +272,6 @@ def e2a_response_from_agent_response(
         metadata=meta,
         identity_origin=IdentityOrigin.AGENT,
         is_stream=False,
-        # 非流式响应回带 agent_ref，与流式 chunk 对称。
-        agent_ref=getattr(resp, "agent_ref", None),
     )
 
 
@@ -349,7 +290,7 @@ def e2a_response_from_agent_chunk(
     - 终止帧（如 ``payload == {\"is_complete\": true}``）：``e2a.complete``。
     - ``chat.delta``：按 ``source_chunk_type`` 映射 ``body.delta_kind``（``llm_reasoning`` → ``reasoning``）。
     """
-    from openjiuwen_protocol.e2a.agent_models import AgentResponseChunk as AgentResponseChunkCls
+    from jiuwenswarm.common.schema.agent import AgentResponseChunk as AgentResponseChunkCls
 
     if not isinstance(chunk, AgentResponseChunkCls):
         raise TypeError("chunk must be AgentResponseChunk")
@@ -357,15 +298,11 @@ def e2a_response_from_agent_chunk(
     ts = timestamp or utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="openjiuwen_protocol.e2a.gateway_normalize:e2a_response_from_agent_chunk",
+        converter="jiuwenswarm.common.e2a.gateway_normalize:e2a_response_from_agent_chunk",
         converted_at=ts,
         details={"kind": "legacy_agent_response_chunk", "is_complete": chunk.is_complete},
     )
     pl = dict(chunk.payload) if chunk.payload else {}
-
-    # ── 从 chunk 提取 agent_ref / metadata（路由用）──
-    _chunk_agent_ref: dict | None = getattr(chunk, "agent_ref", None)
-    _chunk_metadata: dict = getattr(chunk, "metadata", None) or {}
 
     if chunk.is_complete and pl == {"is_complete": True}:
         return E2AResponse(
@@ -382,8 +319,6 @@ def e2a_response_from_agent_chunk(
             channel=chunk.channel_id or None,
             identity_origin=IdentityOrigin.AGENT,
             is_stream=is_stream,
-            agent_ref=_chunk_agent_ref,
-            metadata=_chunk_metadata,
         )
 
     if chunk.is_complete and pl.get("event_type") == "chat.error":
@@ -405,8 +340,6 @@ def e2a_response_from_agent_chunk(
             channel=chunk.channel_id or None,
             identity_origin=IdentityOrigin.AGENT,
             is_stream=is_stream,
-            agent_ref=_chunk_agent_ref,
-            metadata=_chunk_metadata,
         )
 
     if chunk.is_complete:
@@ -424,8 +357,6 @@ def e2a_response_from_agent_chunk(
             channel=chunk.channel_id or None,
             identity_origin=IdentityOrigin.AGENT,
             is_stream=is_stream,
-            agent_ref=_chunk_agent_ref,
-            metadata=_chunk_metadata,
         )
 
     event_type = pl.get("event_type")
@@ -438,14 +369,6 @@ def e2a_response_from_agent_chunk(
             "event_type": event_type,
             "source_chunk_type": sct,
         }
-        # Preserve round, cross-session, team-member, and proactive identity.
-        # ``rid`` must survive so Team delta and final share one key.
-        for _key in _CHAT_DELTA_PASSTHROUGH_KEYS:
-            _val = pl.get(_key)
-            if _val is not None:
-                body_chunk[_key] = _val
-        # Team Organization delta 身份：线上保留团队路由与组织回复关联。
-        _copy_team_delta_identity(pl, body_chunk)
     else:
         body_chunk = {
             "delta_kind": "custom",
@@ -467,8 +390,6 @@ def e2a_response_from_agent_chunk(
         channel=chunk.channel_id or None,
         identity_origin=IdentityOrigin.AGENT,
         is_stream=is_stream,
-        agent_ref=_chunk_agent_ref,
-        metadata=_chunk_metadata,
     )
 
 
@@ -478,7 +399,7 @@ def e2a_response_to_agent_response(e2a: E2AResponse) -> "AgentResponse":
 
     仅处理网关 unary 常见 ``response_kind``：``e2a.complete``、``e2a.error``；其它 kind 抛 ``ValueError``。
     """
-    from openjiuwen_protocol.e2a.agent_models import AgentResponse
+    from jiuwenswarm.common.schema.agent import AgentResponse
 
     rid = str(e2a.request_id or "")
     ch = str(e2a.channel or "")
@@ -527,16 +448,12 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
 
     覆盖：流式 ``e2a.chunk``、终止 ``e2a.complete`` / ``e2a.error``（含 ``chat.error`` 形 ``details``）。
     """
-    from openjiuwen_protocol.e2a.agent_models import AgentResponseChunk
+    from jiuwenswarm.common.schema.agent import AgentResponseChunk
 
     rid = str(e2a.request_id or "")
     ch = str(e2a.channel or "")
     body = dict(e2a.body or {})
     kind = e2a.response_kind
-
-    # ── 从 E2A 响应提取 agent_ref / metadata ──
-    _agent_ref: dict | None = getattr(e2a, "agent_ref", None) or None
-    _meta: dict | None = dict(e2a.metadata) if e2a.metadata else None
 
     if kind == E2A_RESPONSE_KIND_E2A_COMPLETE and e2a.is_final:
         res = body.get("result")
@@ -549,14 +466,14 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
             return list(b.keys()) == ["result"]
 
         if _empty_complete_marker(body, res):
-            return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+            return AgentResponseChunk(
                 request_id=rid,
                 channel_id=ch,
                 payload={"is_complete": True},
                 is_complete=True,
             )
         pl = dict(res) if isinstance(res, dict) else {}
-        return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+        return AgentResponseChunk(
             request_id=rid,
             channel_id=ch,
             payload=pl,
@@ -566,7 +483,7 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
     if kind == E2A_RESPONSE_KIND_E2A_ERROR and e2a.is_final:
         det = body.get("details")
         pl = dict(det) if isinstance(det, dict) else dict(body)
-        return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+        return AgentResponseChunk(
             request_id=rid,
             channel_id=ch,
             payload=pl,
@@ -587,14 +504,7 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
             }
             if sct is not None:
                 pl["source_chunk_type"] = sct
-            # Restore the same passthrough set written by e2a_response_from_agent_chunk.
-            for _key in _CHAT_DELTA_PASSTHROUGH_KEYS:
-                _val = body.get(_key)
-                if _val is not None:
-                    pl[_key] = _val
-            # Team Organization delta 身份：从 body 恢复团队路由与组织回复关联。
-            _copy_team_delta_identity(body, pl)
-            return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+            return AgentResponseChunk(
                 request_id=rid,
                 channel_id=ch,
                 payload=pl,
@@ -611,7 +521,7 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
                 pl2["content"] = delta
         if et is not None and "event_type" not in pl2:
             pl2["event_type"] = et
-        return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+        return AgentResponseChunk(
             request_id=rid,
             channel_id=ch,
             payload=pl2,
@@ -621,16 +531,12 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
     if kind == E2A_RESPONSE_KIND_CRON:
         body_payload = {
             "event_type": "cron.response",
-            # Gateway uses this correlation id to return the authoritative
-            # CronController result to the Agent tool.  Do not drop it while
-            # projecting the typed E2A response into a legacy chunk payload.
-            "command_id": body.get("command_id"),
             "action": body.get("action"),
             "status": body.get("status"),
             "data": body.get("data"),
             "message": body.get("message"),
         }
-        return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+        return AgentResponseChunk(
             request_id=rid,
             channel_id=ch,
             payload=body_payload,
@@ -638,7 +544,7 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
         )
 
     if kind == E2A_RESPONSE_KIND_ACP_OUTPUT_REQUEST:
-        return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+        return AgentResponseChunk(
             request_id=rid,
             channel_id=ch,
             payload={
@@ -646,20 +552,6 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
                 "jsonrpc": dict(body),
             },
             is_complete=False,
-        )
-
-    if kind == E2A_RESPONSE_KIND_PLAN_APPROVAL_REQUIRED:
-        return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
-            request_id=rid,
-            channel_id=ch,
-            payload={
-                "event_type": "plan.approval_required",
-                "plan_content": body.get("plan_content", ""),
-                "plan_slug": body.get("plan_slug", ""),
-                "plan_path": body.get("plan_path", ""),
-                "session_id": e2a.session_id or "",
-            },
-            is_complete=True,
         )
 
     raise ValueError(

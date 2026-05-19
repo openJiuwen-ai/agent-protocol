@@ -6,56 +6,31 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from datetime import date, datetime
-from enum import Enum
 from typing import Any
 
-from openjiuwen_protocol.e2a.constants import (
+from jiuwenswarm.common.e2a.constants import (
     E2A_RESPONSE_KIND_E2A_ERROR,
     E2A_RESPONSE_STATUS_FAILED,
     E2A_WIRE_LEGACY_AGENT_CHUNK_KEY,
     E2A_WIRE_LEGACY_AGENT_RESPONSE_KEY,
 )
-from openjiuwen_protocol.e2a.gateway_normalize import (
+from jiuwenswarm.common.e2a.gateway_normalize import (
     e2a_response_from_agent_chunk,
     e2a_response_from_agent_response,
     e2a_response_to_agent_chunk,
     e2a_response_to_agent_response,
 )
-from openjiuwen_protocol.e2a.constants import E2A_SOURCE_PROTOCOL_E2A
-from openjiuwen_protocol.e2a.models import (
+from jiuwenswarm.common.e2a.constants import E2A_SOURCE_PROTOCOL_E2A
+from jiuwenswarm.common.e2a.models import (
     E2A_PROTOCOL_VERSION,
     E2AProvenance,
     E2AResponse,
     IdentityOrigin,
     utc_now_iso,
 )
-from openjiuwen_protocol.e2a.agent_models import AgentResponse, AgentResponseChunk
+from jiuwenswarm.common.schema.agent import AgentResponse, AgentResponseChunk
 
 logger = logging.getLogger(__name__)
-
-
-def _json_safe(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(v) for v in value]
-    if hasattr(value, "model_dump"):
-        try:
-            return _json_safe(value.model_dump(mode="json"))
-        except Exception:
-            return _json_safe(value.model_dump())
-    if hasattr(value, "dict"):
-        return _json_safe(value.dict())
-    if hasattr(value, "__dict__"):
-        return _json_safe(vars(value))
-    return str(value)
 
 
 def _raw_dict_to_agent_response(data: dict[str, Any]) -> AgentResponse:
@@ -168,20 +143,6 @@ def parse_agent_server_wire_unary(data: dict[str, Any]) -> AgentResponse:
     raise ValueError(f"parse_agent_server_wire_unary: unrecognized wire shape keys={list(data.keys())[:32]}")
 
 
-def _mark_terminal_error_payload(
-    chunk: AgentResponseChunk, e2a: E2AResponse
-) -> AgentResponseChunk:
-    """无 legacy blob 的终态 ``e2a.error`` 也必须还原出 ``chat.error`` 语义。"""
-    payload = dict(chunk.payload or {})
-    if "error" in payload:
-        return chunk
-    body = dict(e2a.body or {})
-    payload["event_type"] = "chat.error"
-    payload.setdefault("error", payload.get("message") or body.get("message") or "")
-    chunk.payload = payload
-    return chunk
-
-
 def parse_agent_server_wire_chunk(data: dict[str, Any]) -> AgentResponseChunk:
     """将一条流式 WebSocket JSON 解析为 ``AgentResponseChunk``。"""
     rid = str(data.get("request_id", ""))
@@ -214,8 +175,6 @@ def parse_agent_server_wire_chunk(data: dict[str, Any]) -> AgentResponseChunk:
                 e2a.response_kind,
                 e2a.is_final,
             )
-            if e2a.response_kind == E2A_RESPONSE_KIND_E2A_ERROR and e2a.is_final:
-                out = _mark_terminal_error_payload(out, e2a)
             return out
         except Exception as e:
             logger.exception(
@@ -267,10 +226,7 @@ def encode_agent_response_for_wire(
                 te,
             )
             return _fallback_wire_unary_from_legacy(
-                _json_safe(asdict(resp)),
-                response_id=response_id,
-                sequence=sequence,
-                exc=te,
+                asdict(resp), response_id=response_id, sequence=sequence, exc=te
             )
         logger.info(
             "[E2A][wire][out] unary request_id=%s response_id=%s response_kind=%s legacy_stashed=false",
@@ -278,7 +234,7 @@ def encode_agent_response_for_wire(
             response_id,
             e2a.response_kind,
         )
-        return _json_safe(wire)
+        return wire
     except Exception as e:
         logger.exception(
             "[E2A][wire][out][FAIL] stage=encode unary request_id=%s response_id=%s err=%s legacy_stashed=true",
@@ -287,17 +243,8 @@ def encode_agent_response_for_wire(
             e,
         )
         return _fallback_wire_unary_from_legacy(
-            _json_safe(asdict(resp)),
-            response_id=response_id,
-            sequence=sequence,
-            exc=e,
+            asdict(resp), response_id=response_id, sequence=sequence, exc=e
         )
-
-
-def _legacy_chunk_dict(chunk: AgentResponseChunk) -> dict[str, Any]:
-    legacy = asdict(chunk)
-    legacy.pop("runtime_completion", None)
-    return legacy
 
 
 def encode_agent_chunk_for_wire(
@@ -330,13 +277,13 @@ def encode_agent_chunk_for_wire(
                 te,
             )
             return _fallback_wire_chunk_from_legacy(
-                _json_safe(_legacy_chunk_dict(chunk)),
+                asdict(chunk),
                 response_id=response_id,
                 sequence=sequence,
                 exc=te,
                 is_stream=is_stream,
             )
-        return _json_safe(wire)
+        return wire
     except Exception as e:
         logger.exception(
             "[E2A][wire][out][FAIL] stage=encode chunk request_id=%s response_id=%s seq=%s err=%s legacy_stashed=true",
@@ -346,7 +293,7 @@ def encode_agent_chunk_for_wire(
             e,
         )
         return _fallback_wire_chunk_from_legacy(
-            _json_safe(_legacy_chunk_dict(chunk)),
+            asdict(chunk),
             response_id=response_id,
             sequence=sequence,
             exc=e,
@@ -364,7 +311,7 @@ def _fallback_wire_unary_from_legacy(
     ts = utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="openjiuwen_protocol.e2a.wire_codec:_fallback_wire_unary_from_legacy",
+        converter="jiuwenswarm.common.e2a.wire_codec:_fallback_wire_unary_from_legacy",
         converted_at=ts,
         details={"error": str(exc), "kind": "wire_encode_fallback"},
     )
@@ -402,7 +349,7 @@ def _fallback_wire_chunk_from_legacy(
     ts = utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="openjiuwen_protocol.e2a.wire_codec:_fallback_wire_chunk_from_legacy",
+        converter="jiuwenswarm.common.e2a.wire_codec:_fallback_wire_chunk_from_legacy",
         converted_at=ts,
         details={"error": str(exc), "kind": "wire_encode_chunk_fallback"},
     )
@@ -450,7 +397,7 @@ def encode_json_parse_error_wire(
         timestamp=ts,
         provenance=E2AProvenance(
             source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-            converter="openjiuwen_protocol.e2a.wire_codec:encode_json_parse_error_wire",
+            converter="jiuwenswarm.common.e2a.wire_codec:encode_json_parse_error_wire",
             converted_at=ts,
             details={"kind": "json_parse_error"},
         ),
