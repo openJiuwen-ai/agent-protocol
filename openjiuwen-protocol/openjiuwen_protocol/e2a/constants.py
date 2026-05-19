@@ -1,13 +1,13 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-"""E2A 出处常量与 ACP 方法名 / SessionUpdate 判别式（协议说明见 ``docs/{zh,en}/E2A-protocol.md``）。"""
+"""E2A 出处常量与 ACP 方法名 / SessionUpdate 判别式（与 `ACP-reference.md` 一致）。"""
 
 # E2A provenance.source_protocol 约定（可扩展）
 E2A_SOURCE_PROTOCOL_E2A = "e2a"
 E2A_SOURCE_PROTOCOL_ACP = "acp"
 E2A_SOURCE_PROTOCOL_A2A = "a2a"
 
-# E2AResponse.status（协议说明见 docs/zh/E2A-protocol.md）
+# E2AResponse.status（与 docs/zh/E2A-protocol.md §12 一致）
 E2A_RESPONSE_STATUS_SUCCEEDED = "succeeded"
 E2A_RESPONSE_STATUS_FAILED = "failed"
 E2A_RESPONSE_STATUS_IN_PROGRESS = "in_progress"
@@ -24,10 +24,9 @@ E2A_RESPONSE_KIND_A2A_TASK = "a2a.task"
 E2A_RESPONSE_KIND_A2A_MESSAGE = "a2a.message"
 E2A_RESPONSE_KIND_A2A_STREAM_EVENT = "a2a.stream_event"
 E2A_RESPONSE_KIND_CRON = "cron"
-E2A_RESPONSE_KIND_PLAN_APPROVAL_REQUIRED = "plan.approval_required"
 E2A_RESPONSE_KIND_EXT = "ext"
 
-# 运行时以本元组为准（协议说明见 docs/zh/E2A-protocol.md）
+# 运行时以本元组为准（与 docs §12 一致）
 E2A_RESPONSE_KINDS: tuple[str, ...] = (
     E2A_RESPONSE_KIND_E2A_COMPLETE,
     E2A_RESPONSE_KIND_E2A_CHUNK,
@@ -40,7 +39,6 @@ E2A_RESPONSE_KINDS: tuple[str, ...] = (
     E2A_RESPONSE_KIND_A2A_MESSAGE,
     E2A_RESPONSE_KIND_A2A_STREAM_EVENT,
     E2A_RESPONSE_KIND_CRON,
-    E2A_RESPONSE_KIND_PLAN_APPROVAL_REQUIRED,
     E2A_RESPONSE_KIND_EXT,
 )
 
@@ -95,24 +93,10 @@ E2A_WIRE_LEGACY_AGENT_RESPONSE_KEY = "_e2a_wire_legacy_agent_response"
 E2A_WIRE_LEGACY_AGENT_CHUNK_KEY = "_e2a_wire_legacy_agent_chunk"
 # AgentServer send_push：与 RPC 响应共用 WebSocket，须标出以免抢占 unary/stream 等待队列
 E2A_WIRE_SERVER_PUSH_KEY = "_jiuwenswarm_server_push"
-# Gateway 内部断连 cancel 来源；不得由 channel/user metadata 透传生成。
-E2A_INTERNAL_CANCEL_SOURCE_KEY = "_jiuwenswarm_cancel_source"
-E2A_CANCEL_SOURCE_CLIENT_DISCONNECT = "client_disconnect"
-
-# Gateway → AgentServer：登录模型的请求级凭据
-E2A_MODEL_AUTH_PARAM_KEY = "_model_auth"
-#: 登录会话 id 的请求参数键（models.list 等读模型清单的 RPC 用）。Gateway 从
-#: 受认证的 WS 连接属性写入、AgentServer 侧 ConfigAdapter 消费后构造 ws 上下文；
-#: 客户端传来的该键一律由 Gateway 先删（与 ``_model_auth`` 同款硬规则）。
-E2A_AUTH_SESSION_PARAM_KEY = "_jiuwen_auth_session"
-# Gateway → AgentServer：没有登录会话的通道（飞书等）拿不到登录模型凭据时的具体原因提示，
-# AgentServer 报 login_required 时用它替换通用文案。只由 Gateway 写。
-E2A_LOGIN_REQUIRED_HINT_PARAM_KEY = "_login_required_hint"
 
 # 仅用于编解码 / 队列语义，不得随业务 channel metadata 下发给 Message.metadata
 E2A_WIRE_INTERNAL_METADATA_KEYS: frozenset[str] = frozenset(
     {
-        E2A_INTERNAL_CANCEL_SOURCE_KEY,
         E2A_WIRE_SERVER_PUSH_KEY,
         E2A_WIRE_LEGACY_AGENT_CHUNK_KEY,
         E2A_WIRE_LEGACY_AGENT_RESPONSE_KEY,

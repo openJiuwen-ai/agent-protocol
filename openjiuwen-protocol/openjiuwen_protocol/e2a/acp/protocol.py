@@ -2,23 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-# agentInfo.version 由调用方注入（jiuwenswarm 侧传 common.version.__version__），
-# 协议包不依赖实现侧版本定义；未注入时以包自身版本占位。
-_GATEWAY_PROTOCOL_FALLBACK_VERSION = "0.0.0"
+from jiuwenswarm.common.version import __version__
 
 
-def build_acp_initialize_result(
-    *,
-    agent_version: str = _GATEWAY_PROTOCOL_FALLBACK_VERSION,
-    agent_name: str = "jiuwenswarm",
-    agent_title: str = "JiuwenSwarm",
-) -> dict[str, Any]:
+def build_acp_initialize_result() -> dict[str, Any]:
     return {
         "protocolVersion": 1,
         "agentInfo": {
-            "name": agent_name,
-            "title": agent_title,
-            "version": agent_version,
+            "name": "jiuwenswarm",
+            "title": "JiuwenSwarm",
+            "version": __version__,
         },
         "agentCapabilities": {
             "loadSession": False,
