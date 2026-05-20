@@ -41,6 +41,7 @@ class ReqMethod(Enum):
     SESSION_FORK = "session.fork"
     SESSION_REWIND = "session.rewind"
     SESSION_REWIND_AND_RESTORE = "session.rewind_and_restore"
+    SESSION_REWIND_CONTEXT = "session.rewind_context"
     SESSION_RESTORE_FILES = "session.restore_files"
     HISTORY_LIST_TURNS = "history.list_turns"
     TEAM_DELETE = "team.delete"
