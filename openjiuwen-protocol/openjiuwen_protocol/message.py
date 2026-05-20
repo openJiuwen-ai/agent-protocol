@@ -25,6 +25,7 @@ class ReqMethod(Enum):
     COMMAND_MCP = "command.mcp"
     COMMAND_MODEL = "command.model"
     COMMAND_RESUME = "command.resume"
+    COMMAND_SANDBOX = "command.sandbox"
     COMMAND_SESSION = "command.session"
     COMMAND_STATUS = "command.status"
 
