@@ -65,6 +65,7 @@ class ReqMethod(Enum):
     SKILLS_LIST = "skills.list"
     SKILLS_INSTALLED = "skills.installed"
     SKILLS_GET = "skills.get"
+    SKILLS_TOGGLE = "skills.toggle"
     SKILLS_INSTALL = "skills.install"
     SKILLS_IMPORT_LOCAL = "skills.import_local"
     SKILLS_MARKETPLACE_ADD = "skills.marketplace.add"
