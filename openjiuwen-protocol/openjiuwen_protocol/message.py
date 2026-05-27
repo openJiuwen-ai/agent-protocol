@@ -61,6 +61,15 @@ class ReqMethod(Enum):
     FILES_GET = "files.get"
     TTS_SYNTHESIZE = "tts.synthesize"
 
+    AGENTS_LIST = "agents.list"
+    AGENTS_GET = "agents.get"
+    AGENTS_CREATE = "agents.create"
+    AGENTS_UPDATE = "agents.update"
+    AGENTS_DELETE = "agents.delete"
+    AGENTS_ENABLE = "agents.enable"
+    AGENTS_DISABLE = "agents.disable"
+    AGENTS_TOOLS_LIST = "agents.tools_list"
+
     SKILLS_MARKETPLACE_LIST = "skills.marketplace.list"
     SKILLS_LIST = "skills.list"
     SKILLS_INSTALLED = "skills.installed"
