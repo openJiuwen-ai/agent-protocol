@@ -101,6 +101,14 @@ class ReqMethod(Enum):
     SKILLS_EVOLUTION_GET = "skills.evolution.get"
     SKILLS_EVOLUTION_SAVE = "skills.evolution.save"
 
+    # Plugin management (reuses skills marketplace infrastructure)
+    PLUGINS_LIST = "plugins.list"
+    PLUGINS_INSTALL = "plugins.install"
+    PLUGINS_UNINSTALL = "plugins.uninstall"
+    PLUGINS_ENABLE = "plugins.enable"
+    PLUGINS_DISABLE = "plugins.disable"
+    PLUGINS_RELOAD = "plugins.reload"
+
     EXTENSIONS_LIST = "extensions.list"
     EXTENSIONS_IMPORT = "extensions.import"
     EXTENSIONS_DELETE = "extensions.delete"
