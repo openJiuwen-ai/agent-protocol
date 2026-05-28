@@ -114,6 +114,8 @@ class ReqMethod(Enum):
     EXTENSIONS_DELETE = "extensions.delete"
     EXTENSIONS_TOGGLE = "extensions.toggle"
 
+    HOOKS_LIST = "hooks.list"
+
     HEARTBEAT_GET_CONF = "heartbeat.get_conf"
     HEARTBEAT_SET_CONF = "heartbeat.set_conf"
 
