@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from a2x_registry.common.auth_context import AuthContext
+
 from .agent_card import build_description, fetch_agent_card
 from .errors import RegistryNotFoundError
 from .models import (
@@ -98,6 +100,13 @@ class RegistryService:
         self._taxonomy_states: Dict[str, TaxonomyState] = {}
         # dataset -> {type: min_version}; populated lazily from register_config.json
         self._format_configs: Dict[str, Dict[str, str]] = {}
+        # dataset -> bool; populated lazily from auth_config.json.
+        # File-missing default is False so pre-auth datasets stay anonymous.
+        self._auth_required_cache: Dict[str, bool] = {}
+        # dataset -> dict; populated lazily from lease_config.json. Default
+        # is {"enabled": False, ...} so pre-heartbeat datasets stay permanent.
+        # See docs/heartbeat_design.md.
+        self._lease_config_cache: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         # Reservation leases — protected by _lock, lazy-swept on access.
         # No background daemon, no disk persistence. Restart clears them.
@@ -105,6 +114,12 @@ class RegistryService:
         # Optional callback: called with dataset name whenever service.json content changes.
         # Used by SearchService to keep the vector index in sync.
         self._on_service_changed = None
+        # Heartbeat: optional callback (dataset, service_id) -> bool that the
+        # heartbeat module installs at startup. Default no-op so the registry
+        # behaves identically to pre-heartbeat when the module isn't loaded
+        # (lite mode, no heartbeat init, etc.). Affects list_services /
+        # list_entries / reserve_services filtering.
+        self._unhealthy_check = lambda dataset, service_id: False
 
     # -----------------------------------------------------------------------
     # Startup
@@ -216,8 +231,18 @@ class RegistryService:
         )
         logger.info("Auto-initialized dataset '%s' with defaults", dataset)
 
-    def register_generic(self, req: RegisterGenericRequest) -> RegisterResponse:
-        """Register a generic service."""
+    def register_generic(
+        self,
+        req: RegisterGenericRequest,
+        caller: Optional[AuthContext] = None,
+    ) -> RegisterResponse:
+        """Register a generic service.
+
+        ``caller`` is set by the FastAPI dependency when the target namespace
+        requires auth; ``None`` (default) preserves the legacy anonymous
+        path so call sites that don't yet thread auth keep compiling.
+        """
+        self._assert_can_register(caller)
         dataset = req.dataset
         payload = {
             "name": req.name, "description": req.description,
@@ -229,6 +254,10 @@ class RegistryService:
         entry = RegistryEntry(
             service_id=service_id, type="generic",
             source="api_config" if req.persistent else "ephemeral",
+            owner_id=(caller.principal_id if caller is not None else None),
+            # lease_ttl is pre-validated by the router's 4-corner matrix
+            # check; None means permanent (no heartbeat tracking).
+            lease_ttl=req.lease_ttl,
             service_data=GenericServiceData(
                 name=req.name, description=req.description,
                 inputSchema=req.inputSchema, url=req.url,
@@ -236,8 +265,13 @@ class RegistryService:
         )
         return self._do_register(dataset, entry, req.persistent)
 
-    def register_a2a(self, req: RegisterA2ARequest) -> RegisterResponse:
+    def register_a2a(
+        self,
+        req: RegisterA2ARequest,
+        caller: Optional[AuthContext] = None,
+    ) -> RegisterResponse:
         """Register an A2A agent (full card or URL)."""
+        self._assert_can_register(caller)
         if req.agent_card:
             agent_card = req.agent_card
             agent_card_url = None
@@ -254,6 +288,8 @@ class RegistryService:
         entry = RegistryEntry(
             service_id=service_id, type="a2a",
             source="api_config" if req.persistent else "ephemeral",
+            owner_id=(caller.principal_id if caller is not None else None),
+            lease_ttl=req.lease_ttl,  # pre-validated by router
             agent_card=agent_card, agent_card_url=agent_card_url,
         )
         return self._do_register(dataset, entry, req.persistent)
@@ -274,12 +310,18 @@ class RegistryService:
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
 
-    def register_skill(self, dataset: str, zip_bytes: bytes) -> SkillResponse:
+    def register_skill(
+        self,
+        dataset: str,
+        zip_bytes: bytes,
+        caller: Optional[AuthContext] = None,
+    ) -> SkillResponse:
         """Upload a skill ZIP, extract to skills/{name}/, register entry.
 
         Auto-initializes the dataset with defaults if it doesn't exist
         (same behavior as register_a2a / register_generic).
         """
+        self._assert_can_register(caller)
         self._ensure_dataset_initialized(dataset)
         # Enforce skill allow-list before touching disk — avoids saving a ZIP
         # the dataset will never accept.
@@ -298,11 +340,17 @@ class RegistryService:
             service_id=service_id,
             type="skill",
             source="skill_folder",
+            owner_id=(caller.principal_id if caller is not None else None),
             skill_data=skill_data,
         )
 
         with self._lock:
             ds = self._entries.setdefault(dataset, {})
+            # On replace, perform the same owner check as update_service so
+            # provider X can't re-upload over provider Y's skill folder.
+            existing = ds.get(service_id)
+            if existing is not None and caller is not None:
+                self._assert_owner(existing, caller)
             status = "updated" if service_id in ds else "registered"
             ds[service_id] = entry
 
@@ -311,7 +359,12 @@ class RegistryService:
         return SkillResponse(name=skill_data.name, dataset=dataset,
                              status=status, service_id=service_id)
 
-    def deregister_skill(self, dataset: str, name: str) -> SkillResponse:
+    def deregister_skill(
+        self,
+        dataset: str,
+        name: str,
+        caller: Optional[AuthContext] = None,
+    ) -> SkillResponse:
         """Remove a skill folder and its registry entry."""
         service_id = generate_service_id("skill", name)
 
@@ -319,6 +372,8 @@ class RegistryService:
             ds = self._entries.get(dataset, {})
             if service_id not in ds:
                 return SkillResponse(name=name, dataset=dataset, status="not_found")
+            if caller is not None:
+                self._assert_owner(ds[service_id], caller)
             del ds[service_id]
 
         store = self._get_store(dataset)
@@ -343,7 +398,8 @@ class RegistryService:
     _SKILL_UPDATE_FIELDS   = {"name", "description", "license"}
 
     def update_service(self, dataset: str, service_id: str,
-                       updates: Dict[str, Any]) -> UpdateResponse:
+                       updates: Dict[str, Any],
+                       caller: Optional[AuthContext] = None) -> UpdateResponse:
         """Partially update a service by top-level field upsert.
 
         Semantics:
@@ -357,10 +413,13 @@ class RegistryService:
           - Rejects updates to ``user_config`` entries (edit the file instead).
           - For skill entries, persists to ``SKILL.md`` on disk; a name change
             also renames the ``skills/{name}/`` folder.
+          - When ``caller`` is provided, enforces owner / admin authorization
+            against ``entry.owner_id``.
 
         Raises:
           RegistryNotFoundError — service_id not found in dataset
           ValueError            — user_config source / unknown fields / rename collision
+          PermissionError       — ``caller`` provided and lacks owner / admin rights
         """
         if not isinstance(updates, dict):
             raise ValueError("updates must be a dict of {field: value}")
@@ -376,6 +435,8 @@ class RegistryService:
                 raise ValueError(
                     "Cannot update user_config entries via API. "
                     "Edit user_config.json directly and restart.")
+            if caller is not None:
+                self._assert_owner(entry, caller)
 
         # Apply the merge outside the lock — disk writes happen here.
         if entry.type == "generic":
@@ -495,12 +556,14 @@ class RegistryService:
     # Deregister
     # -----------------------------------------------------------------------
 
-    def deregister(self, dataset: str, service_id: str) -> DeregisterResponse:
+    def deregister(self, dataset: str, service_id: str,
+                   caller: Optional[AuthContext] = None) -> DeregisterResponse:
         """Deregister a service.
 
         Raises:
           RegistryNotFoundError — service_id not found in dataset
           ValueError            — entry source is user_config / skill_folder
+          PermissionError       — ``caller`` provided and lacks owner / admin rights
         """
         with self._lock:
             ds = self._entries.get(dataset, {})
@@ -514,6 +577,8 @@ class RegistryService:
                 raise ValueError("Cannot deregister user_config entries via API. Edit user_config.json instead.")
             if entry.source == "skill_folder":
                 raise ValueError("Cannot deregister skill entries via generic API. Use DELETE /skills/{name} instead.")
+            if caller is not None:
+                self._assert_owner(entry, caller)
 
             source = entry.source
             del ds[service_id]
@@ -523,6 +588,48 @@ class RegistryService:
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
         return DeregisterResponse(service_id=service_id, status="deregistered")
+
+    # ----- Authorization helpers (used by all mutating service methods) ----
+
+    @staticmethod
+    def _assert_can_register(caller: Optional[AuthContext]) -> None:
+        """Reject registration by ``user`` role principals.
+
+        Only ``admin`` and ``provider`` can introduce new services into
+        an auth-required namespace. The namespace-access check already
+        happened upstream in the FastAPI dep. ``caller is None`` means
+        we're on the legacy anonymous path — no role check applies.
+        """
+        if caller is None or caller.is_admin:
+            return
+        if caller.role != "provider":
+            raise PermissionError(
+                f"Role {caller.role!r} cannot register services; "
+                f"need admin or provider"
+            )
+
+    @staticmethod
+    def _assert_owner(entry: RegistryEntry, caller: AuthContext) -> None:
+        """Raise ``PermissionError`` if ``caller`` may not mutate ``entry``.
+
+        Rules:
+          - admin short-circuits everything
+          - entries with ``owner_id=None`` (legacy / pre-auth / unclaimed)
+            are admin-only — provider/user get 403
+          - otherwise owner_id must equal caller.principal_id
+
+        Router layer maps ``PermissionError → 403`` via the ``_run`` helper.
+        """
+        if caller.is_admin:
+            return
+        if entry.owner_id is None:
+            raise PermissionError(
+                "System / unclaimed service: admin role required to mutate"
+            )
+        if entry.owner_id != caller.principal_id:
+            raise PermissionError(
+                f"Service {entry.service_id!r} is owned by another principal"
+            )
 
     # -----------------------------------------------------------------------
     # Taxonomy state
@@ -557,14 +664,39 @@ class RegistryService:
     # -----------------------------------------------------------------------
 
     def list_services(self, dataset: str) -> List[dict]:
-        """Return cached output for a dataset."""
+        """Return cached output for a dataset (raw, no liveness filtering)."""
         with self._lock:
             return list(self._output_cache.get(dataset, []))
 
     def list_entries(self, dataset: str) -> List[RegistryEntry]:
-        """Return all RegistryEntry objects for a dataset (includes source info)."""
+        """Return all RegistryEntry objects for a dataset (includes source info, no filter)."""
         with self._lock:
             return list(self._entries.get(dataset, {}).values())
+
+    def is_unhealthy(self, dataset: str, service_id: str) -> bool:
+        """Return True if heartbeat module marked this service unhealthy.
+
+        Default (no heartbeat module loaded) → always False. The router calls
+        this during list/get to apply ``include_unhealthy=false`` filtering;
+        ``reserve_services`` calls it internally to skip unhealthy candidates.
+        Cheap dict lookup in the heartbeat store; no I/O.
+        """
+        try:
+            return bool(self._unhealthy_check(dataset, service_id))
+        except Exception:
+            # Defensive: a buggy heartbeat module must not break list_services.
+            logger.exception("unhealthy_check raised for (%s, %s)", dataset, service_id)
+            return False
+
+    def set_unhealthy_check(self, callback) -> None:
+        """Install the heartbeat unhealthy predicate (called once at startup).
+
+        ``callback(dataset, service_id) -> bool``. Mirrors the
+        ``set_on_service_changed`` pattern — single injection point, default
+        no-op so the registry runs identically when no heartbeat module is
+        loaded (lite mode, no startup init, etc.).
+        """
+        self._unhealthy_check = callback or (lambda d, s: False)
 
     def get_entry(self, dataset: str, service_id: str) -> Optional[RegistryEntry]:
         """Get a single registry entry."""
@@ -623,6 +755,26 @@ class RegistryService:
     def chroma_dir(self) -> Path:
         """Shared ChromaDB directory (one per database root, not per dataset)."""
         return self._database_dir / "chroma"
+
+    def dataset_exists(self, name: str) -> bool:
+        """True if ``<database_dir>/<name>`` is a directory.
+
+        Lighter-weight than ``list_datasets_with_counts``: doesn't require
+        a ``service.json``, so empty datasets (just created, no entries)
+        are detected. Used by the auth router to validate namespace lists
+        when admin creates a non-admin principal.
+        """
+        if not self._database_dir.exists():
+            return False
+        return (self._database_dir / name).is_dir()
+
+    def list_datasets(self) -> List[str]:
+        """Return all dataset directory names. Order: alphabetical."""
+        if not self._database_dir.exists():
+            return []
+        return sorted(
+            d.name for d in self._database_dir.iterdir() if d.is_dir()
+        )
 
     def list_datasets_with_counts(self) -> List[Dict[str, Any]]:
         """List all datasets on disk with their service + query counts.
@@ -695,11 +847,21 @@ class RegistryService:
         n: int,
         ttl_seconds: int,
         holder_id: Optional[str],
+        caller: Optional[AuthContext] = None,
     ) -> Tuple[str, float, List[dict]]:
         """Atomically filter-AND-claim up to n unleased matching services.
 
         Returns (holder_id, expires_at_unix, reservations) where reservations
         is a list of wrapped service entries (same shape as list_services).
+
+        Authorization:
+          - When ``caller`` is provided, ``holder_id`` is forcibly set to
+            ``caller.principal_id``; any caller-supplied value is logged
+            and discarded. This prevents lease forgery (T2 in the threat
+            model).
+          - When ``caller`` is None (anon namespace path), the existing
+            behavior is preserved: caller-supplied ``holder_id`` is kept,
+            or a UUID is generated.
 
         TOCTOU-safe: filter+claim happens under _lock. ``ttl_seconds`` is
         clamped to >= 1.
@@ -708,7 +870,12 @@ class RegistryService:
             raise ValueError(f"n must be >= 0, got {n}")
         if ttl_seconds < 1:
             raise ValueError(f"ttl_seconds must be >= 1, got {ttl_seconds}")
-        if holder_id is None:
+        if caller is not None:
+            # Coerce: client-provided holder_id is ignored in auth-required
+            # namespaces. The auth dependency already enforced that caller
+            # has access to ``dataset`` before we get here.
+            holder_id = caller.principal_id
+        elif holder_id is None:
             holder_id = f"holder_{uuid.uuid4().hex}"
 
         now_mono = time.monotonic()
@@ -728,6 +895,11 @@ class RegistryService:
                 key=lambda e: e.service_id,
             ):
                 if (dataset, entry.service_id) in self._leases:
+                    continue
+                # Skip entries that heartbeat marked unhealthy — don't lease
+                # what we'd never want callers to talk to. No-op when the
+                # heartbeat module isn't loaded (default callback is False).
+                if self.is_unhealthy(dataset, entry.service_id):
                     continue
                 if not self._entry_matches_filters(entry, filters):
                     continue
@@ -771,6 +943,7 @@ class RegistryService:
         dataset: str,
         holder_id: str,
         service_ids: Optional[List[str]] = None,
+        caller: Optional[AuthContext] = None,
     ) -> List[str]:
         """Release leases held by ``holder_id``.
 
@@ -780,9 +953,18 @@ class RegistryService:
 
         Returns the list of sids actually released.
 
+        Authorization (when ``caller`` is provided):
+          - admin can release any holder's leases
+          - any other role can only release their own (holder_id ==
+            caller.principal_id); else ``PermissionError``
+
         Raises PermissionError if a requested sid IS leased but under a
         different holder (caller is trying to release someone else's lease).
         """
+        if caller is not None and not caller.is_admin and holder_id != caller.principal_id:
+            raise PermissionError(
+                f"Cannot release leases of another holder ({holder_id!r})"
+            )
         with self._lock:
             self._sweep_expired_leases_locked(time.monotonic())
             released: List[str] = []
@@ -809,15 +991,28 @@ class RegistryService:
         self,
         dataset: str,
         service_id: str,
+        caller: Optional[AuthContext] = None,
     ) -> Tuple[bool, Optional[str]]:
         """Release ANY lease on (dataset, service_id) regardless of holder.
 
         Used by the teammate-self path: the agent itself doesn't know who
-        leased it. SDK-level _owned check is the authorization gate.
+        leased it. In the legacy anonymous flow the SDK-level _owned check
+        is the authorization gate.
+
+        When ``caller`` is provided (auth-required namespace), the caller
+        must either be the entry owner OR be admin — otherwise we'd let
+        any authenticated principal evict any other principal's lease.
 
         Returns (released, prev_holder_id). Idempotent: if no lease exists,
         returns (False, None).
         """
+        if caller is not None:
+            with self._lock:
+                entry = self._entries.get(dataset, {}).get(service_id)
+            if entry is not None:
+                # If the entry is unclaimed (owner_id=None) admin-only;
+                # if owned, owner-only. Admin short-circuits both.
+                self._assert_owner(entry, caller)
         with self._lock:
             self._sweep_expired_leases_locked(time.monotonic())
             key = (dataset, service_id)
@@ -831,15 +1026,23 @@ class RegistryService:
         dataset: str,
         holder_id: str,
         ttl_seconds: int,
+        caller: Optional[AuthContext] = None,
     ) -> float:
         """Extend all of holder_id's leases in `dataset` by ttl_seconds.
 
         Returns the new expires_at_unix (wall-clock, for client display).
         Raises RegistryNotFoundError if holder_id has no live leases (to
         force callers to face the lost-work case explicitly).
+
+        When ``caller`` is provided, only the holder themselves (or admin)
+        may extend.
         """
         if ttl_seconds < 1:
             raise ValueError(f"ttl_seconds must be >= 1, got {ttl_seconds}")
+        if caller is not None and not caller.is_admin and holder_id != caller.principal_id:
+            raise PermissionError(
+                f"Cannot extend leases of another holder ({holder_id!r})"
+            )
         now_mono = time.monotonic()
         now_wall = time.time()
         new_mono = now_mono + ttl_seconds
@@ -885,13 +1088,17 @@ class RegistryService:
     def _entry_to_output(self, entry: RegistryEntry) -> dict:
         """Convert a RegistryEntry to service.json output format.
 
-        Output schema: {id, type, name, description, metadata}
+        Output schema: {id, type, name, description, metadata, owner_id?}
           - description: system-generated; used by taxonomy build (LLM text input)
           - metadata:    for A2A = full agent card; for generic = {url?, inputSchema?}
+          - owner_id:    present iff the entry has one (auth-required namespace);
+                         absent for legacy / anonymous / user_config entries —
+                         keeps the on-disk JSON byte-equal to pre-auth output
+                         when no auth has happened yet.
         """
         if entry.type == "skill" and entry.skill_data:
             sd = entry.skill_data
-            return {
+            out = {
                 "id": entry.service_id,
                 "type": "skill",
                 "name": sd.name,
@@ -902,40 +1109,46 @@ class RegistryService:
                     "files": sd.files,
                 },
             }
-
-        if entry.type == "generic" and entry.service_data:
+        elif entry.type == "generic" and entry.service_data:
             sd = entry.service_data
             metadata: dict = {}
             if sd.inputSchema:
                 metadata["inputSchema"] = sd.inputSchema
             if sd.url:
                 metadata["url"] = sd.url
-            return {
+            out = {
                 "id": entry.service_id,
                 "type": "generic",
                 "name": sd.name,
                 "description": sd.description,
                 "metadata": metadata,
             }
-
-        if entry.type == "a2a" and entry.agent_card:
+        elif entry.type == "a2a" and entry.agent_card:
             card = entry.agent_card
-            return {
+            out = {
                 "id": entry.service_id,
                 "type": "a2a",
                 "name": card.name,
                 "description": build_description(card),   # agent desc + skills (for taxonomy build)
                 "metadata": card.model_dump(exclude_none=True),
             }
-
-        # a2a with unresolved card (URL fetch failed)
-        return {
-            "id": entry.service_id,
-            "type": "a2a",
-            "name": entry.service_id,
-            "description": f"Unresolved agent card: {entry.agent_card_url or 'unknown'}",
-            "metadata": {},
-        }
+        else:
+            # a2a with unresolved card (URL fetch failed)
+            out = {
+                "id": entry.service_id,
+                "type": "a2a",
+                "name": entry.service_id,
+                "description": f"Unresolved agent card: {entry.agent_card_url or 'unknown'}",
+                "metadata": {},
+            }
+        # Expose owner_id at the wrapper top level ONLY when present, so:
+        #  (a) the backward-compat lockfile test against pre-auth output
+        #      still passes (anon entries stay byte-equal), and
+        #  (b) auth-required entries surface their owner to clients (the
+        #      SDK can use this to render "owned by me" UI hints).
+        if entry.owner_id:
+            out["owner_id"] = entry.owner_id
+        return out
 
     # -----------------------------------------------------------------------
     # Internal — taxonomy state
@@ -981,6 +1194,7 @@ class RegistryService:
         name: str,
         embedding_model: Optional[str] = None,
         formats: Optional[Dict[str, Any]] = None,
+        auth_required: bool = False,
     ) -> Path:
         """Create a new empty dataset directory with vector + register configs.
 
@@ -990,6 +1204,13 @@ class RegistryService:
                 to ``vector.utils.embedding.DEFAULT_EMBEDDING_MODEL``.
             formats: Per-type min_version map. Defaults to all three types
                 at ``v0.0``. Unknown types / versions are silently dropped.
+            auth_required: When ``True``, mutations on this dataset will
+                require a valid API key with namespace access (enforced at
+                the router/dependency layer). Default ``False`` preserves
+                the legacy anonymous behavior for back-compat — every
+                dataset created before this parameter existed reads back
+                as ``required: false`` (from ``RegistryStore.load_auth_config``
+                missing-file default).
 
         Returns the dataset directory path.
         Raises ValueError if the dataset already exists, or if a non-default
@@ -1003,9 +1224,9 @@ class RegistryService:
             embedding_model = DEFAULT_EMBEDDING_MODEL
         # Validate formats first so we fail fast before touching disk.
         normalized = self._normalize_or_default_formats(formats)
-        self._init_dataset_files(name, embedding_model, normalized)
-        logger.info("Created dataset '%s' (embedding: %s, formats: %s)",
-                    name, embedding_model, normalized)
+        self._init_dataset_files(name, embedding_model, normalized, auth_required)
+        logger.info("Created dataset '%s' (embedding: %s, formats: %s, auth_required: %s)",
+                    name, embedding_model, normalized, auth_required)
         return ds_dir
 
     def _normalize_or_default_formats(
@@ -1031,18 +1252,24 @@ class RegistryService:
         name: str,
         embedding_model: str,
         formats: Dict[str, str],
+        auth_required: bool = False,
     ) -> None:
-        """Idempotent: create the dataset dir + write both config files.
+        """Idempotent: create the dataset dir + write the per-dataset configs.
 
         Single source of truth for "what files make a dataset valid"
         (used by both ``create_dataset`` happy-path and
         ``_ensure_dataset_initialized``'s reconcile fallback). Never
-        clobbers either config file if it's already present, so:
+        clobbers an existing config file, so:
 
         - manually-set embedding models survive an auto-init (e.g. user
           ran ``POST /vector-config`` before the first register)
         - manually-restricted formats survive an auto-init (e.g. user
           ran ``POST /register-config`` before the first register)
+        - the ``auth_config.json`` file is only written here when the
+          caller explicitly requested ``auth_required=True``. If they
+          didn't (the default), we leave the file absent — which the
+          loader interprets as ``required: false`` — preserving the
+          backward-compat invariant for every legacy dataset on disk.
         """
         ds_dir = self._database_dir / name
         ds_dir.mkdir(parents=True, exist_ok=True)
@@ -1051,6 +1278,9 @@ class RegistryService:
             self.set_vector_config(name, embedding_model)
         if not (ds_dir / "register_config.json").exists():
             self.set_register_config(name, formats)
+        if auth_required and not (ds_dir / "auth_config.json").exists():
+            self._get_store(name).write_auth_config(required=True)
+            self._auth_required_cache[name] = True
 
     def delete_dataset(self, name: str) -> None:
         """Delete a dataset directory and all internal caches.
@@ -1067,8 +1297,103 @@ class RegistryService:
             self._taxonomy_states.pop(name, None)
             self._stores.pop(name, None)
             self._format_configs.pop(name, None)
+            self._auth_required_cache.pop(name, None)
+            self._lease_config_cache.pop(name, None)
         shutil.rmtree(ds_dir)
         logger.info("Deleted dataset '%s'", name)
+
+    # -----------------------------------------------------------------------
+    # Per-namespace auth gating (Phase A: storage + read; enforcement in Phase D)
+    # -----------------------------------------------------------------------
+
+    def is_auth_required(self, dataset: str) -> bool:
+        """Return whether mutations on ``dataset`` require an authenticated caller.
+
+        Lazy: reads ``auth_config.json`` once per dataset and caches the
+        boolean. Missing file → ``False`` (backward-compat default — every
+        dataset created before this code shipped reads as anonymous).
+        Cache is invalidated by :meth:`set_auth_config` and
+        :meth:`delete_dataset`. Pre-Phase D, no caller actually enforces
+        this; the helper is wired in here so storage + service stay in
+        sync regardless of router timing.
+        """
+        cached = self._auth_required_cache.get(dataset)
+        if cached is not None:
+            return cached
+        # Don't bother reading disk if the dataset isn't even there — treat
+        # as anonymous; the caller will get a 404 elsewhere.
+        if not (self._database_dir / dataset).exists():
+            return False
+        cfg = self._get_store(dataset).load_auth_config()
+        required = bool(cfg.get("required", False))
+        self._auth_required_cache[dataset] = required
+        return required
+
+    def set_auth_config(self, dataset: str, required: bool) -> Dict[str, Any]:
+        """Toggle the ``auth_required`` flag on an existing dataset.
+
+        Admin-only at the router layer. Writes ``auth_config.json`` and
+        invalidates the in-memory cache so the next request reads the new
+        value. Returns the persisted config dict.
+        """
+        if not (self._database_dir / dataset).exists():
+            raise ValueError(f"Dataset '{dataset}' does not exist")
+        self._get_store(dataset).write_auth_config(required=required)
+        self._auth_required_cache[dataset] = bool(required)
+        return {"required": bool(required), "schema_version": 1}
+
+    # -----------------------------------------------------------------------
+    # Per-namespace heartbeat / lease gating (storage + read; enforcement in
+    # heartbeat module + router layer)
+    # -----------------------------------------------------------------------
+
+    def get_lease_config(self, dataset: str) -> Dict[str, Any]:
+        """Return the heartbeat lease config for ``dataset``.
+
+        Lazy: reads ``lease_config.json`` once per dataset and caches.
+        Missing file → ``{"enabled": False, ...}`` (backward-compat default —
+        every dataset created before this code shipped reads as
+        no-heartbeat-supported). Cache invalidated by ``set_lease_config``
+        and ``delete_dataset``. Identical shape to ``is_auth_required``
+        cache pattern.
+        """
+        cached = self._lease_config_cache.get(dataset)
+        if cached is not None:
+            return cached
+        # Don't read disk for nonexistent datasets — caller hits 404 elsewhere.
+        if not (self._database_dir / dataset).exists():
+            from .store import LEASE_CONFIG_DEFAULT
+            return dict(LEASE_CONFIG_DEFAULT)
+        cfg = self._get_store(dataset).load_lease_config()
+        self._lease_config_cache[dataset] = cfg
+        return cfg
+
+    def set_lease_config(
+        self, dataset: str, *,
+        enabled: bool, min_ttl: int, max_ttl: int, grace_period: int,
+    ) -> Dict[str, Any]:
+        """Toggle / configure the heartbeat lease policy on a dataset.
+
+        Admin-only at the router layer. Writes ``lease_config.json`` (with
+        bound sanity in store layer), invalidates the cache, returns the
+        persisted config. Bound validation errors propagate as ``ValueError``
+        → 400 via the existing ``_run`` mapper.
+        """
+        if not (self._database_dir / dataset).exists():
+            raise ValueError(f"Dataset '{dataset}' does not exist")
+        self._get_store(dataset).write_lease_config(
+            enabled=enabled, min_ttl=min_ttl, max_ttl=max_ttl,
+            grace_period=grace_period,
+        )
+        cfg = {
+            "enabled": bool(enabled),
+            "min_ttl": int(min_ttl),
+            "max_ttl": int(max_ttl),
+            "grace_period": int(grace_period),
+            "schema_version": 1,
+        }
+        self._lease_config_cache[dataset] = cfg
+        return cfg
 
     # -----------------------------------------------------------------------
     # Internal — unified format validation

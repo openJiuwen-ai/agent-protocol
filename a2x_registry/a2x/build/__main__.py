@@ -1,25 +1,17 @@
-"""CLI entry point: python -m a2x_registry.a2x.build"""
+"""CLI entry point: python -m a2x_registry.a2x.build
+
+A2X taxonomy build is pure LLM — no extras gating; runs on the lite
+install as long as ``llm_apikey.json`` is configured.
+"""
 
 import argparse
 import logging
-import sys
 
-from a2x_registry.common import feature_flags
-from a2x_registry.common.errors import FeatureNotInstalledError
+from a2x_registry.a2x.build.config import AutoHierarchicalConfig
+from a2x_registry.a2x.build.taxonomy_builder import TaxonomyBuilder
 
 
 def main():
-    try:
-        feature_flags.require("vector")
-    except FeatureNotInstalledError as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(2)
-
-    # Heavy imports deferred until after the feature gate so lite installs
-    # see the friendly hint rather than a raw ImportError trace.
-    from a2x_registry.a2x.build.config import AutoHierarchicalConfig
-    from a2x_registry.a2x.build.taxonomy_builder import TaxonomyBuilder
-
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     parser = argparse.ArgumentParser(

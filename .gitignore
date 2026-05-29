@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# pip / setuptools editable-install metadata
+*.egg-info/
+*.egg
+.eggs/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Auth module runtime data — credential hashes + audit log live alongside
+# the code in a2x_registry/auth/ but must never enter git or wheels.
+# Override path via $A2X_REGISTRY_AUTH_DATA if you store these elsewhere.
+a2x_registry/auth/auth_data/
+*.token
+
+# LLM API key config (user-supplied secrets)
+llm_apikey.json

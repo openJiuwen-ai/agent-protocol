@@ -13,7 +13,9 @@ from fastapi.staticfiles import StaticFiles
 
 from a2x_registry.backend.routers import search, dataset, build, provider
 from a2x_registry.backend.startup import warmup_state, run_warmup
-from a2x_registry.common.errors import FeatureNotInstalledError
+from a2x_registry.common.errors import FeatureNotInstalledError, LLMNotConfiguredError
+from a2x_registry.auth.router import router as auth_router
+from a2x_registry.heartbeat.router import router as heartbeat_router
 
 app = FastAPI(
     title="A2X Registry Demo",
@@ -33,6 +35,12 @@ app.include_router(search.router)
 app.include_router(dataset.router)
 app.include_router(build.router)
 app.include_router(provider.router)
+# /api/auth/* — the router itself returns 404 when auth is not initialized,
+# so mounting it unconditionally is safe and keeps the app graph simple.
+app.include_router(auth_router)
+# Heartbeat endpoints. Same 404 fallback semantics when the heartbeat
+# module isn't initialized (e.g. lite mode without startup hook).
+app.include_router(heartbeat_router)
 
 
 @app.exception_handler(FeatureNotInstalledError)
@@ -49,6 +57,24 @@ async def _feature_not_installed_handler(_request: Request, exc: FeatureNotInsta
         content={
             "feature": exc.feature,
             "extras": exc.extras,
+            "detail": str(exc),
+        },
+    )
+
+
+@app.exception_handler(LLMNotConfiguredError)
+async def _llm_not_configured_handler(_request: Request, exc: LLMNotConfiguredError):
+    """Render missing LLM-config failures as 503 with a structured setup hint.
+
+    Routes that need the shared LLM client (``/api/search``, ``/api/search/judge``,
+    background build tasks) raise this when ``llm_apikey.json`` is absent or
+    unparseable. ``str(exc)`` already contains the copy-pasteable setup
+    instructions; surface them raw.
+    """
+    return JSONResponse(
+        status_code=503,
+        content={
+            "reason": "llm_not_configured",
             "detail": str(exc),
         },
     )

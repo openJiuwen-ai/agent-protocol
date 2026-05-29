@@ -50,6 +50,70 @@ def run_warmup() -> None:
             logger.info("  Registry %s: %d services, taxonomy=%s", ds, count, state.value)
 
         set_registry(registry_svc)
+
+        # 1b. Auth store — load if bootstrapped, else leave global at None
+        # so every request flows through the anonymous fast-path. Loading
+        # is synchronous and cheap (one or two small JSON files); never
+        # fails the warmup — auth corruption is logged but the server
+        # still starts so operators can investigate via /api/warmup-status.
+        try:
+            from a2x_registry.auth.store import AuthStore
+            from a2x_registry.auth.deps import set_auth_store
+            auth_store = AuthStore.load_or_none()
+            set_auth_store(auth_store)
+            if auth_store is not None:
+                logger.info(
+                    "  Auth store loaded (%d principals, %d keys) at %s",
+                    len(auth_store.list_principals()),
+                    len(auth_store.list_keys()),
+                    auth_store.data_dir,
+                )
+            else:
+                logger.info("  Auth not initialized — registry runs in anonymous mode")
+        except Exception as exc:
+            logger.error("  Auth store load failed: %s", exc, exc_info=True)
+            from a2x_registry.auth.deps import set_auth_store
+            set_auth_store(None)
+
+        # 1c. Heartbeat module — always loaded (the per-namespace
+        # lease_config.json is the actual opt-in switch; loading the
+        # store / sweeper here just makes the machinery available).
+        # Failure is non-fatal: backward compat is preserved (services
+        # without lease_ttl stay permanent; sweep just doesn't fire).
+        try:
+            from a2x_registry.heartbeat.store import HeartbeatStore
+            from a2x_registry.heartbeat.sweeper import HeartbeatSweeper
+            from a2x_registry.heartbeat.deps import set_heartbeat_store
+            hb_store = HeartbeatStore(
+                config_provider=registry_svc.get_lease_config,
+            )
+            registry_svc.set_unhealthy_check(hb_store.is_unhealthy)
+            # Recover any entries persisted with lease_ttl into a grace
+            # window so they get one chance to re-heartbeat after restart.
+            recovered = [
+                (ds, e.service_id, e.lease_ttl)
+                for ds in registry_svc.list_datasets()
+                for e in registry_svc.list_entries(ds)
+                if e.lease_ttl is not None
+            ]
+            if recovered:
+                hb_store.recover_from_persisted(recovered)
+            set_heartbeat_store(hb_store)
+            # Sweeper period 5s — see docs/heartbeat_design.md. Daemon
+            # thread so it doesn't block server shutdown.
+            sweeper = HeartbeatSweeper(registry_svc, hb_store, period=5.0)
+            sweeper.start()
+            # Stash on warmup_state so tests / shutdown logic can access.
+            warmup_state["_heartbeat_sweeper"] = sweeper
+            logger.info(
+                "  Heartbeat store loaded (recovered %d leases into grace window)",
+                len(recovered),
+            )
+        except Exception as exc:
+            logger.error("  Heartbeat init failed: %s", exc, exc_info=True)
+            from a2x_registry.heartbeat.deps import set_heartbeat_store
+            set_heartbeat_store(None)
+
         # Only wire vector-sync side effects when the [vector] extras are
         # installed; otherwise every SDK register/deregister would spawn a
         # daemon thread that immediately ImportErrors on chromadb.
@@ -70,24 +134,23 @@ def run_warmup() -> None:
                 logger.warning("  Taxonomy failed for %s: %s", ds, e)
         logger.info("Warmup: taxonomy done (%.1fs)", time.time() - t0)
 
-        # Stages 3-6 all need the [vector] extras (numpy / sentence_transformers
-        # / chromadb). In lite installs we skip them cleanly so warmup still
-        # completes — the registry/dataset routes are already serving by now.
-        if feature_flags.has("vector"):
-            # 3. A2X engines
-            _stage("加载 A2X 搜索引擎...", 35)
-            for ds in discover_datasets():
-                paths = resolve_dataset_paths(ds)
-                if paths["taxonomy_path"].exists():
-                    for mode in ("get_one", "get_all", "get_important"):
-                        _stage(f"加载 A2X {mode} ({ds})...", 35)
-                        try:
-                            search_service._get_a2x(ds, mode)
-                            logger.info("  A2X %s ready: %s", mode, ds)
-                        except Exception as e:
-                            logger.warning("  A2X %s failed for %s: %s", mode, ds, e)
-            logger.info("Warmup: A2X done (%.1fs)", time.time() - t0)
+        # 3. A2X engines — pure LLM, runs on the lite install too.
+        _stage("加载 A2X 搜索引擎...", 35)
+        for ds in discover_datasets():
+            paths = resolve_dataset_paths(ds)
+            if paths["taxonomy_path"].exists():
+                for mode in ("get_one", "get_all", "get_important"):
+                    _stage(f"加载 A2X {mode} ({ds})...", 35)
+                    try:
+                        search_service._get_a2x(ds, mode)
+                        logger.info("  A2X %s ready: %s", mode, ds)
+                    except Exception as e:
+                        logger.warning("  A2X %s failed for %s: %s", mode, ds, e)
+        logger.info("Warmup: A2X done (%.1fs)", time.time() - t0)
 
+        # Stages 4-6 truly need the [vector] extras (numpy / chromadb /
+        # sentence_transformers). On lite installs we skip them cleanly.
+        if feature_flags.has("vector"):
             # 4. Clean stale ChromaDB collections
             _stage("清理向量数据库...", 58)
             try:
@@ -139,7 +202,7 @@ def run_warmup() -> None:
                     except Exception as e:
                         logger.warning("  Embedding warmup failed for %s: %s", model_name, e)
         else:
-            logger.info("Warmup: lite install detected — skipping A2X / vector / chroma stages")
+            logger.info("Warmup: lite install detected — skipping vector / chroma stages")
 
         warmup_state["stage"] = "完成"
         warmup_state["progress"] = 100

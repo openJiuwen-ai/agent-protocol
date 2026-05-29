@@ -24,9 +24,28 @@ USER_CONFIG_FILE = "user_config.json"
 API_CONFIG_FILE = "api_config.json"
 REGISTER_CONFIG_FILE = "register_config.json"
 VECTOR_CONFIG_FILE = "vector_config.json"
+AUTH_CONFIG_FILE = "auth_config.json"
+LEASE_CONFIG_FILE = "lease_config.json"
 SERVICE_JSON_FILE = "service.json"
 SKILLS_DIR = "skills"
 REMOVED_SKILLS_DIR = "removed_skills"
+
+# Default behavior when ``auth_config.json`` is missing: the namespace is
+# anonymous (backward-compat with every dataset created before this module
+# existed). Setting ``required: true`` is opt-in per dataset.
+AUTH_CONFIG_DEFAULT: Dict[str, Any] = {"required": False, "schema_version": 1}
+
+# Default when ``lease_config.json`` is missing: heartbeat unsupported on
+# this namespace — every registration is permanent (legacy behavior). Admin
+# opts in by writing ``{"enabled": true, "min_ttl": ..., "max_ttl": ...,
+# "grace_period": ...}``. See docs/heartbeat_design.md.
+LEASE_CONFIG_DEFAULT: Dict[str, Any] = {
+    "enabled": False,
+    "min_ttl": 10,
+    "max_ttl": 3600,
+    "grace_period": 300,
+    "schema_version": 1,
+}
 
 
 class RegistryStore:
@@ -313,6 +332,100 @@ class RegistryStore:
             {"embedding_model": embedding_model, "embedding_dim": embedding_dim},
         )
 
+    # --- Auth config (per-namespace opt-in) ---
+
+    def load_auth_config(self) -> Dict[str, Any]:
+        """Read ``auth_config.json``; missing file → backward-compat default.
+
+        Returns a dict at least containing ``required: bool``. The default
+        when the file is absent is ``{"required": False, ...}`` so existing
+        datasets (created before this field existed) behave as anonymous.
+        Malformed file → log + default; never raises, never blocks startup.
+        """
+        path = self._dir / AUTH_CONFIG_FILE
+        if not path.exists():
+            return dict(AUTH_CONFIG_DEFAULT)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                logger.warning("Malformed %s (not a dict); falling back to default", path)
+                return dict(AUTH_CONFIG_DEFAULT)
+            required = bool(data.get("required", False))
+            return {
+                "required": required,
+                "schema_version": int(data.get("schema_version", 1)),
+            }
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning("Failed to load %s: %s; falling back to default", path, exc)
+            return dict(AUTH_CONFIG_DEFAULT)
+
+    def write_auth_config(self, required: bool) -> None:
+        """Persist ``auth_config.json`` with ``{"required": bool, ...}``."""
+        _atomic_write(
+            self._dir / AUTH_CONFIG_FILE,
+            {"required": bool(required), "schema_version": 1},
+        )
+
+    # --- Lease (heartbeat) config (per-namespace opt-in) ---
+
+    def load_lease_config(self) -> Dict[str, Any]:
+        """Read ``lease_config.json``; missing file → backward-compat default.
+
+        Returns a dict with at least ``enabled: bool``. The default when the
+        file is absent is ``{"enabled": False, ...}`` so existing datasets
+        keep registering permanent services (no heartbeat). Malformed file
+        → log + default; never raises (mirrors load_auth_config behavior).
+        Loaded values are normalized: ints coerced, bounds clamped to >=1.
+        """
+        path = self._dir / LEASE_CONFIG_FILE
+        if not path.exists():
+            return dict(LEASE_CONFIG_DEFAULT)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                logger.warning("Malformed %s (not a dict); falling back to default", path)
+                return dict(LEASE_CONFIG_DEFAULT)
+            enabled = bool(data.get("enabled", False))
+            # Coerce + clamp; reject silly values rather than letting them
+            # poison the heartbeat store at registration time.
+            min_ttl = max(1, int(data.get("min_ttl", LEASE_CONFIG_DEFAULT["min_ttl"])))
+            max_ttl = max(min_ttl, int(data.get("max_ttl", LEASE_CONFIG_DEFAULT["max_ttl"])))
+            grace = max(0, int(data.get("grace_period", LEASE_CONFIG_DEFAULT["grace_period"])))
+            return {
+                "enabled": enabled,
+                "min_ttl": min_ttl,
+                "max_ttl": max_ttl,
+                "grace_period": grace,
+                "schema_version": int(data.get("schema_version", 1)),
+            }
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning("Failed to load %s: %s; falling back to default", path, exc)
+            return dict(LEASE_CONFIG_DEFAULT)
+
+    def write_lease_config(
+        self, enabled: bool, min_ttl: int, max_ttl: int, grace_period: int,
+    ) -> None:
+        """Persist ``lease_config.json``. Caller is responsible for bound sanity;
+        load_lease_config will silently coerce, but writes assume validated input."""
+        if min_ttl < 1:
+            raise ValueError(f"min_ttl must be >= 1, got {min_ttl}")
+        if max_ttl < min_ttl:
+            raise ValueError(f"max_ttl ({max_ttl}) must be >= min_ttl ({min_ttl})")
+        if grace_period < 0:
+            raise ValueError(f"grace_period must be >= 0, got {grace_period}")
+        _atomic_write(
+            self._dir / LEASE_CONFIG_FILE,
+            {
+                "enabled": bool(enabled),
+                "min_ttl": int(min_ttl),
+                "max_ttl": int(max_ttl),
+                "grace_period": int(grace_period),
+                "schema_version": 1,
+            },
+        )
+
 
 # ---------------------------------------------------------------------------
 # Module-level utilities (no instance state, reusable)
@@ -353,6 +466,12 @@ def _parse_service_entry(svc: dict, source: str) -> Optional[RegistryEntry]:
     """Parse a single service dict from config into a RegistryEntry."""
     svc_type = svc.get("type", "generic")
     service_id = svc.get("service_id", "")
+    owner_id = svc.get("owner_id") or None  # missing field → unclaimed/legacy
+    # lease_ttl is persisted as int when the entry was registered with a
+    # heartbeat lease; absent for permanent services (legacy + namespaces
+    # without lease_config). Coerce defensively.
+    raw_ttl = svc.get("lease_ttl")
+    lease_ttl: Optional[int] = int(raw_ttl) if isinstance(raw_ttl, (int, float)) and int(raw_ttl) > 0 else None
 
     if svc_type == "generic":
         name = (svc.get("name") or "").strip()
@@ -365,6 +484,8 @@ def _parse_service_entry(svc: dict, source: str) -> Optional[RegistryEntry]:
             service_id=service_id,
             type="generic",
             source=source,
+            owner_id=owner_id,
+            lease_ttl=lease_ttl,
             service_data=GenericServiceData(
                 name=name, description=desc,
                 inputSchema=svc.get("inputSchema", {}),
@@ -380,13 +501,20 @@ def _parse_service_entry(svc: dict, source: str) -> Optional[RegistryEntry]:
             service_id = generate_service_id("agent", name)
         return RegistryEntry(
             service_id=service_id, type="a2a", source=source,
+            owner_id=owner_id,
+            lease_ttl=lease_ttl,
             agent_card=agent_card, agent_card_url=card_url,
         )
     return None
 
 
 def _entry_to_config_dict(entry: RegistryEntry) -> dict:
-    """Convert a RegistryEntry back to the config file dict format."""
+    """Convert a RegistryEntry back to the config file dict format.
+
+    ``owner_id`` and ``lease_ttl`` are omit-when-None so pre-auth /
+    pre-heartbeat ``api_config.json`` files stay byte-equal after a round-
+    trip (the backward-compat lockfile tests rely on this).
+    """
     d: dict = {"type": entry.type, "service_id": entry.service_id}
     if entry.type == "generic" and entry.service_data:
         d["name"] = entry.service_data.name
@@ -400,6 +528,10 @@ def _entry_to_config_dict(entry: RegistryEntry) -> dict:
             d["agent_card_url"] = entry.agent_card_url
         if entry.agent_card:
             d["agent_card"] = entry.agent_card.model_dump(exclude_defaults=True)
+    if entry.owner_id:
+        d["owner_id"] = entry.owner_id
+    if entry.lease_ttl:
+        d["lease_ttl"] = int(entry.lease_ttl)
     return d
 
 

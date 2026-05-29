@@ -26,10 +26,13 @@ Content-Type: application/json
 | 路由组 | 精简（默认）`pip install` | `[full]` extras |
 |---|---|---|
 | 数据集 CRUD、注册/注销/更新、预订锁、Skill 上传/下载、`/embedding-models`、`/vector-config`、`/register-config`、`/default-queries`、`/taxonomy`（只读） | ✅ | ✅ |
-| `POST /api/datasets/{ds}/build`（触发构建） | 503 | ✅ |
+| `POST /api/datasets/{ds}/build`（A2X 分类构建，纯 LLM） | ✅（需配 LLM） | ✅ |
 | `GET /api/datasets/{ds}/build/status` / `DELETE /build` / SSE 流 | ✅（纯字典读写） | ✅ |
-| `POST /api/search`、`POST /api/search/judge`、`/api/search/ws` | 503（WS 握手后发 `{"type":"error","message":"… pip install …"}` 再关闭） | ✅ |
-| `/api/providers/*` | ✅（仅读 `llm_apikey.json`，需 LLM 配置） | ✅ |
+| `POST /api/search` 的 `method=a2x_*` / `method=traditional`（纯 LLM） | ✅（需配 LLM） | ✅ |
+| `POST /api/search` 的 `method=vector`（向量检索） | **503** | ✅ |
+| `POST /api/search/judge`（LLM 判定相关性） | ✅（需配 LLM） | ✅ |
+| `/api/search/ws`（WebSocket，按 method 分发；`method=vector` 时握手后发 `{"type":"error",...}` 再关闭） | a2x/traditional ✅；vector 503 | ✅ |
+| `/api/providers/*` | ✅（仅读 `llm_apikey.json`） | ✅ |
 
 **复原**：在同一 venv 里运行 `pip install 'a2x-registry[full]'`（或 `[vector]` / `[evaluation]`）后**重启 `a2x-registry`** 即可，无需改代码或配置。检测使用 `importlib.util.find_spec`，重启时即时生效。
 

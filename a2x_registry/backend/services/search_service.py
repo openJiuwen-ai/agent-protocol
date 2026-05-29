@@ -129,7 +129,7 @@ class SearchService:
             return self._llm_client
 
     def _get_a2x(self, dataset: str, mode: str):
-        feature_flags.require("vector")
+        # A2X is pure LLM (no embeddings); runs on the lite install.
         key = f"{dataset}_{mode}"
         with self._lock:
             if key not in self._a2x_instances:
@@ -146,7 +146,7 @@ class SearchService:
             return self._a2x_instances[key]
 
     def _get_traditional(self, dataset: str):
-        feature_flags.require("vector")
+        # Traditional (MCP-style full-context) is pure LLM; runs on lite.
         with self._lock:
             if dataset not in self._traditional_instances:
                 from a2x_registry.traditional.search.traditional_search import TraditionalSearch

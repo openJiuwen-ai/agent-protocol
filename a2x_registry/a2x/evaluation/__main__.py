@@ -18,12 +18,14 @@ from a2x_registry.common.naming import generate_output_dir
 
 
 def main():
-    for f in ("vector", "evaluation"):
-        try:
-            feature_flags.require(f)
-        except FeatureNotInstalledError as exc:
-            print(str(exc), file=sys.stderr)
-            sys.exit(2)
+    # A2X evaluator is pure LLM (calls A2XSearch in batch); the only
+    # third-party dep is tqdm for the progress bar — bundled in
+    # ``[evaluation]``. No ``[vector]`` required.
+    try:
+        feature_flags.require("evaluation")
+    except FeatureNotInstalledError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
 
     from a2x_registry.a2x.evaluation.a2x_evaluator import A2XEvaluator
 

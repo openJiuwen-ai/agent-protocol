@@ -16,12 +16,13 @@ from a2x_registry.common.naming import generate_output_dir
 
 
 def main():
-    for f in ("vector", "evaluation"):
-        try:
-            feature_flags.require(f)
-        except FeatureNotInstalledError as exc:
-            print(str(exc), file=sys.stderr)
-            sys.exit(2)
+    # Traditional (MCP-style full-context) evaluator is pure LLM; the
+    # only third-party dep is tqdm — bundled in ``[evaluation]``.
+    try:
+        feature_flags.require("evaluation")
+    except FeatureNotInstalledError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
 
     from a2x_registry.traditional.evaluation.traditional_evaluator import TraditionalEvaluator
 

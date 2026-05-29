@@ -88,6 +88,20 @@ class RegistryEntry(BaseModel):
     agent_card: Optional[AgentCard] = None
     agent_card_url: Optional[str] = None
     skill_data: Optional[SkillData] = None
+    # Auth-aware ownership. ``None`` for legacy entries, entries from
+    # ``user_config.json``, and any entry registered against an
+    # ``auth_required=false`` namespace. Set to the caller principal_id when
+    # an authenticated registration lands on an auth-required namespace.
+    # Entries with ``owner_id=None`` in an auth-required namespace are
+    # "unclaimed" and only admin can mutate them.
+    owner_id: Optional[str] = None
+    # Heartbeat lease TTL (seconds) the client requested at registration.
+    # ``None`` → permanent service (legacy / namespace doesn't enable
+    # heartbeat / client didn't request one). Presence signals "this entry
+    # expects periodic heartbeats; sweeper will mark it unhealthy if absent".
+    # Persisted so the registry knows the renewal TTL after restart; the
+    # actual ``expires_at`` countdown stays in HeartbeatStore in-memory.
+    lease_ttl: Optional[int] = None
 
 
 # --- HTTP request models ---
@@ -100,6 +114,11 @@ class RegisterGenericRequest(BaseModel):
     inputSchema: dict = {}
     url: str = ""
     persistent: bool = True
+    # Optional heartbeat lease request. When present, the namespace must have
+    # ``lease_config.enabled=true`` AND the value must satisfy ``[min_ttl,
+    # max_ttl]`` from that config — otherwise 400. When absent, the service
+    # is permanent (legacy behavior). See docs/heartbeat_design.md.
+    lease_ttl: Optional[int] = None
 
 
 class RegisterA2ARequest(BaseModel):
@@ -108,6 +127,7 @@ class RegisterA2ARequest(BaseModel):
     agent_card: Optional[AgentCard] = None
     agent_card_url: Optional[str] = None
     persistent: bool = True
+    lease_ttl: Optional[int] = None   # same semantics as RegisterGenericRequest
 
 
 # --- HTTP response models ---
@@ -116,6 +136,11 @@ class RegisterResponse(BaseModel):
     service_id: str
     dataset: str
     status: str  # "registered" | "updated"
+    # Populated when registration was granted a heartbeat lease. Absent
+    # (None) for permanent services so the JSON shape stays byte-equal to
+    # pre-heartbeat output (Pydantic's exclude_none on the model_dump).
+    lease_ttl: Optional[int] = None         # echoed from request, post-validation
+    lease_expires_at: Optional[float] = None  # unix wall-clock (for client display)
 
 
 class DeregisterResponse(BaseModel):

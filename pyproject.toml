@@ -68,7 +68,14 @@ version = { attr = "a2x_registry.__version__" }
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["a2x_registry*"]
-exclude = ["reference*", "examples*", "tests*"]
+# auth_data is a runtime directory created on first ``a2x-registry auth
+# init`` — never package it into the wheel. ``packages.find`` is for code
+# packages anyway; this is belt-and-suspenders against an accidental ``pip
+# install .`` from a dev tree where the dir already exists.
+exclude = [
+    "reference*", "examples*", "tests*", "database*",
+    "a2x_registry.auth.auth_data*",
+]
 
 [tool.setuptools.package-data]
 a2x_registry = ["llm_apikey.example.json"]

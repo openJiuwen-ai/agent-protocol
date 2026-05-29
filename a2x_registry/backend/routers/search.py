@@ -21,8 +21,16 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 @router.post("", response_model=SearchResponse)
 async def search(req: SearchRequest):
-    """Synchronous search — returns the full result at once."""
-    feature_flags.require("vector")
+    """Synchronous search — returns the full result at once.
+
+    Per-method gating: only the ``vector`` method needs the heavy ML
+    extras (numpy / sentence-transformers / chromadb). A2X and
+    Traditional are pure-LLM and run on the lite install as long as the
+    user has configured ``llm_apikey.json`` and the relevant data
+    (taxonomy.json for A2X, service.json for Traditional).
+    """
+    if req.method == "vector":
+        feature_flags.require("vector")
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         _executor,
@@ -38,8 +46,10 @@ async def search(req: SearchRequest):
 
 @router.post("/judge", response_model=JudgeResponse)
 async def judge_relevance(req: JudgeRequest):
-    """Use shared LLM to judge whether each service is relevant to the query."""
-    feature_flags.require("vector")
+    """Use shared LLM to judge whether each service is relevant to the query.
+
+    Pure LLM call — no extras gating. Available on the lite install.
+    """
     loop = asyncio.get_event_loop()
     raw = await loop.run_in_executor(
         _executor,
@@ -61,11 +71,6 @@ async def search_ws(websocket: WebSocket):
     """
     await websocket.accept()
     try:
-        # Gate before reading the request — same require() that the HTTP
-        # routes use; the existing `except Exception` below renders the
-        # FeatureNotInstalledError's str() (the install hint) as a WS
-        # error message, then closes the socket.
-        feature_flags.require("vector")
         raw = await websocket.receive_text()
         req = json.loads(raw)
 
@@ -73,6 +78,14 @@ async def search_ws(websocket: WebSocket):
         method = req.get("method", "a2x_get_all")
         dataset = req.get("dataset", "ToolRet_clean")
         top_k = req.get("top_k", 10)
+
+        # Per-method gating, mirrors the HTTP route. Only the vector method
+        # truly needs the [vector] extras; A2X and Traditional are pure
+        # LLM. ``FeatureNotInstalledError`` propagates to the existing
+        # ``except Exception`` below, which renders ``str(exc)`` (the
+        # copy-pasteable install hint) as a WS error message before close.
+        if method == "vector":
+            feature_flags.require("vector")
 
         loop = asyncio.get_event_loop()
 

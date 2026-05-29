@@ -2,10 +2,13 @@
 
 import json
 import logging
+from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from a2x_registry.auth.deps import require_admin_or_anon
 from a2x_registry.backend.services.search_service import search_service
+from a2x_registry.common.auth_context import AuthContext
 from a2x_registry.common.paths import llm_apikey_path
 
 logger = logging.getLogger(__name__)
@@ -32,11 +35,17 @@ async def list_providers():
 
 
 @router.post("/{name}")
-async def switch_provider(name: str):
+async def switch_provider(
+    name: str,
+    _ctx: Optional[AuthContext] = Depends(require_admin_or_anon),
+):
     """Switch all LLM clients to use a different provider.
 
     Reorders providers in llm_apikey.json (so LLMClient picks up the new default)
     and resets all cached A2X engine instances.
+
+    Admin-only when the auth module is initialized; anon-OK on legacy
+    (pre-bootstrap) registries.
     """
     config = _load_llm_config()
     providers = config.get("providers", [])

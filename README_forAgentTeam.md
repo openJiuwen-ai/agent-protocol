@@ -1,6 +1,6 @@
 # A2X Registry — Agent Team 场景快速启动
 
-**v0.1.6**
+**v0.2.0**
 
 本文档是针对 **Agent Team 动态组队** 场景的简化版本，仅包含启动一个空白后端所需的最少步骤。后续所有服务注册、查询、预订锁等操作均通过客户端SDK完成，服务端无需任何预置数据或 LLM 配置。
 
@@ -8,7 +8,7 @@
 
 ### 精简安装（默认）
 
-0.1.6 起 `pip install` **默认就是 Agent Team 精简版**——只装 SDK 必需的 5 个轻量包（`requests` / `fastapi` / `pydantic` / `python-multipart` / `uvicorn[standard]`），不再附带 `numpy` / `sentence-transformers` / `chromadb` 等数百 MB 的搜索/索引依赖。
+`pip install` **默认就是 Agent Team 精简版**——只装 SDK 必需的 5 个轻量包（`requests` / `fastapi` / `pydantic` / `python-multipart` / `uvicorn[standard]`），不附带 `numpy` / `sentence-transformers` / `chromadb` 等数百 MB 的搜索/索引依赖。
 
 从 GitCode 克隆 `agent-protocol` 的 `feature/Agentregistry` 分支安装：
 
@@ -23,8 +23,10 @@ pip install -e .
 ### 精简版能力范围
 
 - ✅ **可用**：所有 SDK 接口（数据集 CRUD、agent 注册/注销/更新/状态、按字段查询、整卡覆盖、预订锁 reservation lease、`/embedding-models` 元数据、`/build/status` 状态查询）。
+- ✅ **可用（需配 LLM）**：A2X 搜索 / Traditional（MCP）搜索 / `POST /build`（A2X 分类构建）—— 都是纯 LLM 工作流，不需要 ML 栈，只要在 `~/.a2x_registry/llm_apikey.json` 配好 API key 就能跑。
+- ❌ **不可用（需 `[vector]`）**：`POST /api/search` 的 `method=vector` 向量检索、向量索引同步、`a2x-evaluate-vector` 评估 CLI —— 这些功能依赖 `numpy` / `sentence-transformers` / `chromadb`（数百 MB ML 栈）。调用时返回 503，body 里给出 `pip install 'a2x-registry[vector]' and restart` 的可执行提示。
 
-如果同一环境之后想启用全量功能，运行 `pip install -e '.[full]'` 安装额外依赖然后**重启 `a2x-registry`** 即可，无需改任何代码。
+如果同一环境之后想启用向量功能，运行 `pip install -e '.[vector]'`（或 `[full]`）安装额外依赖然后**重启 `a2x-registry`** 即可，无需改任何代码。
 
 ## 启动后端
 
@@ -53,3 +55,40 @@ a2x-registry --host 0.0.0.0 --port 8080  # 指定端口
 4. **生产环境**（可选）：建议前面挂 nginx 反向代理 + HTTPS，客户端使用 `https://registry.yourdomain.com`
 
 后端启动后，即可使用注册中心客户端 SDK 进行相关操作。
+
+## 鉴权（可选）
+
+精简版默认完全开放 —— Agent Team 内部场景通常不需要鉴权。
+
+如果要把注册中心暴露到公网或多团队共享（一台注册中心服务多个互不信任的 Agent Team），可启用静态 API Key 鉴权：
+
+```bash
+a2x-registry auth init                          # 一次性 bootstrap，stderr 打印 admin token
+```
+
+之后管理员可以：① 为整个 Agent Team 池创建 `auth_required=true` 的 namespace；② 为每个 Agent 进程 / teammate 颁发 `provider` 角色的 token，scope 到该 namespace；③ 为协调方颁发 `user` 角色 token，只读 + 预约。token 通过 `cli_token.json` 配置文件分发，详见 [docs/auth_design.md](docs/auth_design.md)。
+
+未跑 `auth init` 的部署 + 未声明 `auth_required` 的 namespace 走匿名通道，无需 token。
+
+## 心跳保活（推荐用于 teammate 生命周期）
+
+Agent Team 场景下 teammate 进出频繁，crash / OOM / 网络断会让"幽灵 teammate"留在空闲池。内置心跳模块可自动清理失联 teammate。
+
+为 Agent Team 池启用心跳：
+
+```bash
+curl -X POST http://localhost:8000/api/datasets/team_pool/lease-config \
+     -H "Content-Type: application/json" \
+     -d '{"enabled": true, "min_ttl": 10, "max_ttl": 120, "grace_period": 30}'
+```
+
+之后 teammate 注册时声明 TTL 并启用 auto-renew，SDK 会自动维护后台续约线程：
+
+```python
+client.register_blank_agent("team_pool", endpoint="http://teammate-1:8080",
+                             lease_ttl=30, auto_renew=True)
+```
+
+Teammate 崩溃 → 30s 后被标记为不健康 → leader 的 `reserve_blank_agents` 不再选中 → grace_period 之后从注册表彻底清理。详见 [docs/heartbeat_design.md](docs/heartbeat_design.md)。
+
+未启用 `lease_config` 的 namespace 不需要心跳，注册的服务永久存在。
