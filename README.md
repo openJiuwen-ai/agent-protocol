@@ -3,9 +3,10 @@
 ## 简介
 
 **Agent Protocol** 是一套智能体互操作协议的软件开发工具包（SDK）集合，帮助开发者在不同运行环境中快速集成智能体与工具/智能体之间的互操作能力。
-当前，仓库包含两个软件开发工具包：
+当前，仓库包含三个软件开发工具包：
 - Model Context Protocol (MCP) CPP SDK
 - Agent2Agent Protocol (A2A) CPP SDK
+- [A2X registry](https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry)
 
 ## 参与贡献
 
