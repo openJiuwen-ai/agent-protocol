@@ -79,7 +79,7 @@ run_helloworld_example() {
         "helloworld message/send"
 
     echo "Running helloworld_client against 127.0.0.1:${PORT}..."
-    printf '\n' | "${EXAMPLE_BIN}/helloworld_client" -i 127.0.0.1 -p "${PORT}"
+    (sleep 1 && printf '\n') | "${EXAMPLE_BIN}/helloworld_client" -i 127.0.0.1 -p "${PORT}"
 
     check_example_process "helloworld_server"
     clear_example_process "helloworld_server"
@@ -96,7 +96,7 @@ run_streaming_example() {
         "streaming message/send"
 
     echo "Running streaming_client against 127.0.0.1:${PORT}..."
-    printf '\n' | "${EXAMPLE_BIN}/streaming_client" -i 127.0.0.1 -p "${PORT}"
+    (sleep 1 && printf '\n') | "${EXAMPLE_BIN}/streaming_client" -i 127.0.0.1 -p "${PORT}"
 
     check_example_process "streaming_server"
     clear_example_process "streaming_server"
