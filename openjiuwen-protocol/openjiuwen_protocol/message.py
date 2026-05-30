@@ -156,6 +156,7 @@ class ReqMethod(Enum):
     UPDATER_SET_CONF = "updater.set_conf"
 
     TEAM_SNAPSHOT = "team.snapshot"
+    TEAM_HISTORY_GET = "team.history.get"
 
     # Harness package management
     HARNESS_PACKAGES_GET = "harness.packages.get"
