@@ -17,7 +17,7 @@ from ..strategy.base_strategy import RoutingStrategy
 from ..strategy import create_strategy, StrategyType
 from ..health.checker import SDKHealthChecker
 from ..cache.local_cache import LocalCache
-from ..utils.exceptions import RouterError, NoDeploymentAvailable
+from ..utils.exceptions import RouterError, NoDeploymentAvailable, AllDeploymentsFailed
 
 class ReliableRouter(BaseRouter):
     """
@@ -158,7 +158,75 @@ class ReliableRouter(BaseRouter):
                 available = [d for d in available if d.id != selected.id]
                 if not available:
                     break
-        raise RouterError(f"All deployments failed after {self.num_retries + 1} attempts: {errors}")
+        raise AllDeploymentsFailed(model=model, errors=errors)
+
+    async def stream_completion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        **kwargs
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        可靠性流式completion - 自动路由选择和重试
+
+        Retry only happens before the first chunk is received.
+        Once streaming starts, mid-stream errors are raised directly.
+        """
+        available = self._get_available_deployments(model)
+        if not available:
+            raise NoDeploymentAvailable(f"No available deployment for model: {model}")
+
+        context = RoutingContext(
+            model=model,
+            messages=messages,
+            kwargs=kwargs
+        )
+
+        request_body = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            **kwargs,
+        }
+
+        errors = []
+        for attempt in range(self.num_retries + 1):
+            selected = await self.strategy.select_deployment(available, context)
+            if selected is None:
+                if available:
+                    selected = available[0]
+                else:
+                    break
+
+            context.mark_attempt(selected)
+            first_chunk_received = False
+            ttfb = 0.0
+
+            try:
+                start_time = time.time()
+                async for chunk in self._make_stream_request(selected, request_body):
+                    if not first_chunk_received:
+                        first_chunk_received = True
+                        ttfb = time.time() - start_time
+                    yield chunk
+
+                self.strategy.on_success(selected, ttfb, 0)
+                context.set_success(selected, None)
+                return
+
+            except Exception as e:
+                if first_chunk_received:
+                    self.strategy.on_failure(selected, e)
+                    raise
+
+                self.strategy.on_failure(selected, e)
+                context.set_failure(e)
+                errors.append((selected.id, str(e)))
+                available = [d for d in available if d.id != selected.id]
+                if not available:
+                    break
+
+        raise AllDeploymentsFailed(model=model, errors=errors)
 
     async def batch_completion(
         self,
