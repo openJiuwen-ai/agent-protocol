@@ -27,6 +27,7 @@ class ReqMethod(Enum):
     COMMAND_RESUME = "command.resume"
     COMMAND_SANDBOX = "command.sandbox"
     COMMAND_SESSION = "command.session"
+    COMMAND_WORKFLOWS = "command.workflows"
     COMMAND_STATUS = "command.status"
 
     CONFIG_GET = "config.get"
@@ -205,6 +206,7 @@ class EventType(Enum):
     TEAM_MEMBER = "team.member"
     TEAM_TASK = "team.task"
     TEAM_MESSAGE = "team.message"
+    WORKFLOW_UPDATED = "workflow.updated"
     HEARTBEAT_RELAY = "heartbeat.relay"
     HISTORY_GET = "history.message"
 
