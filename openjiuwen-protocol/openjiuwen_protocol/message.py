@@ -202,6 +202,7 @@ class EventType(Enum):
     CHAT_EVOLUTION_STATUS = "chat.evolution_status"
     CHAT_SUBTASK_UPDATE = "chat.subtask_update"
     CHAT_ASK_USER_QUESTION = "chat.ask_user_question"
+    PLAN_APPROVAL_REQUIRED = "plan.approval_required"
     CHAT_SESSION_RESULT = "chat.session_result"
     TEAM_MEMBER = "team.member"
     TEAM_TASK = "team.task"
