@@ -106,6 +106,11 @@ class ReqMethod(Enum):
     SKILLS_EVOLUTION_GET = "skills.evolution.get"
     SKILLS_EVOLUTION_SAVE = "skills.evolution.save"
 
+    SYMPHONY_BUILD_SCORE = "symphony.build_score"
+    SYMPHONY_SCORE_STATUS = "symphony.score_status"
+    SYMPHONY_GRAPH = "symphony.graph"
+    SYMPHONY_PLAN = "symphony.plan"
+
     # Plugin management (reuses skills marketplace infrastructure)
     PLUGINS_LIST = "plugins.list"
     PLUGINS_INSTALL = "plugins.install"
@@ -198,6 +203,7 @@ class EventType(Enum):
     CHAT_TOOL_CALL = "chat.tool_call"
     CHAT_TOOL_UPDATE = "chat.tool_update"
     CHAT_TOOL_RESULT = "chat.tool_result"
+    CHAT_SYMPHONY_STATUS = "chat.symphony_status"
     CONTEXT_USAGE = "context.usage"
     TODO_UPDATED = "todo.updated"
     CHAT_PROCESSING_STATUS = "chat.processing_status"
