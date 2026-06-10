@@ -24,37 +24,17 @@ struct ClientCallContext {
     nlohmann::json headers;
 };
 
-struct FileWithBytes {
-    std::string bytes; // base64
-    std::optional<std::string> mimeType;
-    std::optional<std::string> name;
-};
+struct Part {
+    // oneof
+    std::optional<std::string> text;
+    std::optional<std::string> raw;
+    std::optional<std::string> url;
+    std::optional<std::string> data; // map-like JSON
 
-struct FileWithUri {
-    std::optional<std::string> mimeType;
-    std::optional<std::string> name;
-    std::string uri;
+    std::optional<std::string> metadata;
+    std::optional<std::string> filename;
+    std::optional<std::string> mediaType;
 };
-
-struct TextPart {
-    std::string kind = "text";
-    std::optional<nlohmann::json> metadata;
-    std::string text;
-};
-
-struct DataPart {
-    std::string kind = "data";
-    std::optional<nlohmann::json> metadata;
-    nlohmann::json data; // map-like JSON
-};
-
-struct FilePart {
-    std::string kind = "file";
-    std::optional<nlohmann::json> metadata;
-    std::variant<FileWithBytes, FileWithUri> file;
-};
-
-using Part = std::variant<TextPart, DataPart, FilePart>;
 
 struct Artifact {
     std::string artifactId;

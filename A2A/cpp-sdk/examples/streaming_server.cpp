@@ -41,10 +41,11 @@ public:
         std::string destination = "Unknown";
         std::string date = "anytime";
         for (const auto& part : req->parts) {
-            if (auto* data_part = std::get_if<A2A::DataPart>(&part)) {
-                const auto& data = data_part->data;
-                destination = data.value("destination", destination);
-                date = data.value("date", date);
+            if (part.data.has_value()) {
+                const auto& d = part.data.value();
+                nlohmann::json j = nlohmann::json::parse(d);
+                destination = j.value("destination", destination);
+                date = j.value("date", date);
             }
         }
 
@@ -58,7 +59,10 @@ public:
         const json flight_data{
             {"action", "flights/info"}, {"airline", "Air France"}, {"destination", destination}, {"price", "750 USD"}};
         std::vector<A2A::Part> flight_artifact_parts;
-        flight_artifact_parts.emplace_back(A2A::TextPart{"text", std::nullopt, flight_data.dump()});
+        A2A::Part flight_data_part;
+        flight_data_part.text = flight_data.dump();
+        flight_data_part.mediaType = "text/plain";
+        flight_artifact_parts.emplace_back(flight_data_part);
 
         A2A::Server::TaskArtifactParam flight_artifact_param;
         flight_artifact_param.parts = flight_artifact_parts;
@@ -72,7 +76,10 @@ public:
         json weather_data{
             {"action", "weather/forecast"}, {"city", destination}, {"temperature", "-2°C"}, {"conditions", "Snowy"}};
         std::vector<A2A::Part> weather_artifact_parts;
-        weather_artifact_parts.emplace_back(A2A::TextPart{"text", std::nullopt, weather_data.dump()});
+        A2A::Part weather_data_part;
+        weather_data_part.text = weather_data.dump();
+        weather_data_part.mediaType = "text/plain";
+        weather_artifact_parts.emplace_back(weather_data_part);
 
         A2A::Server::TaskArtifactParam weather_artifact_param;
         weather_artifact_param.parts = weather_artifact_parts;
@@ -97,15 +104,17 @@ public:
 private:
     std::optional<A2A::Message> makeCombinedPart(const std::string& tag, const json& payload)
     {
-        A2A::DataPart dp;
-        dp.data = {{"tag", tag}, {"payload", payload}};
+        A2A::Part dp;
+        dp.data = nlohmann::json({{"tag", tag}, {"payload", payload}}).dump();
+        dp.mediaType = "application/json";
         return A2A::NewAgentPartsMessage({dp});
     }
 
     std::optional<A2A::Message> makeErrorPart(const std::string& msg)
     {
-        A2A::DataPart dp;
-        dp.data = {{"error", msg}};
+        A2A::Part dp;
+        dp.data = nlohmann::json({{"error", msg}}).dump();
+        dp.mediaType = "application/json";
         return A2A::NewAgentPartsMessage({dp});
     }
 
@@ -114,18 +123,20 @@ private:
         std::string destination = "Unknown";
         std::string date = "anytime";
         for (const auto& part : input.parts) {
-            if (auto* data_part = std::get_if<A2A::DataPart>(&part)) {
-                const auto& d = data_part->data;
-                destination = d.value("destination", destination);
-                date = d.value("date", date);
+            if (part.data.has_value()) {
+                const auto& d = part.data.value();
+                nlohmann::json j = nlohmann::json::parse(d);
+                destination = j.value("destination", destination);
+                date = j.value("date", date);
             }
         }
 
         json combined{
             {"action", "tripPlan"}, {"destination", destination}, {"date", date}, {"summary", "Trip planned."}};
 
-        A2A::DataPart dp;
-        dp.data = combined;
+        A2A::Part dp;
+        dp.data = combined.dump();
+        dp.mediaType = "application/json";
         return A2A::NewAgentPartsMessage({dp});
     }
 };

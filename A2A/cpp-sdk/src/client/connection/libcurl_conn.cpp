@@ -93,9 +93,27 @@ void LibcurlConn::SendSessionTerminatedError(const HttpResponse& response)
     }
 }
 
+void LibcurlConn::SendError(const std::string& errorMsg, const int errorCode, const UserData& userData) const
+{
+    ConnEventData event;
+    event.errCode = errorCode;
+    event.data = errorMsg;
+    A2A_LOG(A2A_LOG_LEVEL_WARN, "Error msg: " + errorMsg + ", error code: " + std::to_string(errorCode));
+    try {
+        callback_->OnMessageReceived(event, &userData);
+    } catch (const std::exception& e) {
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, e.what());
+    }
+}
+
 LibcurlConn::~LibcurlConn()
 {
-    Terminate();
+    DoTerminate();
+
+    sessionId_.clear();
+    protocolVersion_.clear();
+    sseConnectionId_ = 0;
+    callback_ = nullptr;
 }
 
 void LibcurlConn::SetCallback(std::shared_ptr<ConnCallback> callback)
@@ -136,8 +154,13 @@ void LibcurlConn::SendMessage(const std::string& message, const std::map<std::st
         throw std::runtime_error("LibcurlConn is not running");
     }
 
-    // Bind response callback to HandleResponse
-    HttpCallback callback = [this](const HttpResponse& response) { HandleResponse(response); };
+    HttpCallback callback = [this](const HttpResponse& response) {
+        try {
+            HandleResponse(response);
+        } catch (const std::exception& e) {
+            SendError(std::string("Handle response failed: ") + e.what(), HTTP_PARSE_ERROR, response.userData);
+        }
+    };
 
     this->Send(httpRequest, userData, sseReadTimeout_, nullptr, callback);
 }
@@ -192,18 +215,16 @@ void LibcurlConn::HandleResponse(const HttpResponse& response)
 
 void LibcurlConn::Terminate()
 {
-    // Stop HTTP client service if running
+    DoTerminate();
+}
+
+void LibcurlConn::DoTerminate()
+{
     try {
         this->Stop();
     } catch (const std::exception& e) {
         A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Exception caught in terminate: ") + e.what());
     }
-
-    // Clear session state
-    sessionId_.clear();
-    protocolVersion_.clear();
-    sseConnectionId_ = 0;
-    callback_ = nullptr;
 }
 
 void LibcurlConn::HandleJsonResponse(const HttpResponse& response)
@@ -397,25 +418,29 @@ void LibcurlConn::HandleErrorResponse(const std::shared_ptr<RequestContext>& req
     errorResponse.userData = request->userData;
     errorResponse.statusCode = 0;
     errorResponse.errorMessage = errorMessage;
-    ExecuteCallback(request, errorResponse);
+    if (request->responseHeaderCallback != nullptr) {
+        request->responseHeaderCallback(errorResponse);
+    }
+    request->responseBodyCallback(errorResponse);
 }
 
 void LibcurlConn::HandleFinishedResponse(const std::shared_ptr<RequestContext>& request)
 {
     HttpResponse &response = request->response;
     if (request->responseData.empty()) {
+        SendError("Empty response", HTTP_PARSE_ERROR, request->userData);
         return;
     }
     response.body = request->responseData;
+    if (response.userData.requestId != request->userData.requestId) {
+        SendError("RequestId in response data does not match with requestId in request",
+            HTTP_PARSE_ERROR, request->userData);
+        return;
+    }
 
     A2A_LOG(A2A_LOG_LEVEL_INFO, "Request " + request->userData.requestId + " completed with status: " +
         std::to_string(response.statusCode) + ", headers_count=" + std::to_string(response.headers.size()));
-
-    try {
-        request->responseBodyCallback(response);
-    } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Callback execution failed: ") + e.what());
-    }
+    request->responseBodyCallback(response);
 }
 
 void LibcurlConn::HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request)
@@ -844,14 +869,10 @@ void LibcurlConn::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<Reques
 
 void LibcurlConn::ExecuteCallback(const std::shared_ptr<RequestContext>& request, const HttpResponse& response)
 {
-    try {
-        if (request->responseHeaderCallback != nullptr) {
-            request->responseHeaderCallback(response);
-        }
-        request->responseBodyCallback(response);
-    } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Callback execution failed: " + std::string(e.what()));
+    if (request->responseHeaderCallback != nullptr) {
+        request->responseHeaderCallback(response);
     }
+    request->responseBodyCallback(response);
 }
 
 // Static libcurl callback functions
@@ -888,11 +909,7 @@ size_t LibcurlConn::WriteCallback(char* contents, size_t size, size_t nmemb, voi
         // end of event, callback
         if (isSseEnd) {
             A2A_LOG(A2A_LOG_LEVEL_DEBUG, "SSE event end,event data:" + request->response.sseEvent.data);
-            try {
-                request->responseBodyCallback(request->response);
-            } catch (const std::exception& e) {
-                A2A_LOG(A2A_LOG_LEVEL_ERROR, "responseBodyCallback failed: " + std::string(e.what()));
-            }
+            request->responseBodyCallback(request->response);
             request->response.sseEvent = ServerSentEvent();
             continue;
         }
@@ -925,12 +942,8 @@ size_t LibcurlConn::HeaderCallback(char* contents, size_t size, size_t nmemb, vo
         curl_easy_getinfo(request->easyHandle, CURLINFO_RESPONSE_CODE, &statusCode);
         request->response.statusCode = statusCode;
 
-        try {
-            if (request->responseHeaderCallback != nullptr) {
-                request->responseHeaderCallback(request->response);
-            }
-        } catch (const std::exception& e) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "responseHeaderCallback failed: " + std::string(e.what()));
+        if (request->responseHeaderCallback != nullptr) {
+            request->responseHeaderCallback(request->response);
         }
     }
     return totalSize;

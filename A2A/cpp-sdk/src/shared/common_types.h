@@ -37,6 +37,8 @@ constexpr const char* STREAM_RESPONSE_TYPE_TASK = "task";
 constexpr const char* STREAM_RESPONSE_TYPE_STATUS_UPDATE = "status-update";
 constexpr const char* STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE = "artifact-update";
 
+constexpr const char* DEFAULT_PROTOCOL_VERSION = "1.0";
+
 struct UserData {
     std::string requestId = "";
     std::string method;

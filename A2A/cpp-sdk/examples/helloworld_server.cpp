@@ -64,16 +64,17 @@ public:
             response_msg.messageId = msg->messageId;
             response_msg.contextId = msg->contextId.value_or("");
             for (const auto& part : msg->parts) {
-                if (auto* text_part = std::get_if<A2A::TextPart>(&part)) {
-                    user_input = text_part->text;
+                if (part.text.has_value()) {
+                    user_input = part.text.value();
                     break;
                 }
             }
         }
 
-        A2A::TextPart response_part;
-        response_part.text = "Processed: " + user_input;
-        response_msg.parts.push_back(response_part);
+        A2A::Part text_part;
+        text_part.text = "Processed: " + user_input;
+        text_part.mediaType = "text/plain";
+        response_msg.parts.push_back(text_part);
 
         // 发送完成状态
         taskUpdater->Complete(response_msg);

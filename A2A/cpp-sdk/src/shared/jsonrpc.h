@@ -35,215 +35,79 @@ namespace nlohmann {
         }
     };
 
-    // FileWithBytes serializers
-    template<>
-    struct adl_serializer<A2A::FileWithBytes> {
-        static void to_json(nlohmann::json& j, const A2A::FileWithBytes& f)
-        {
-            j = nlohmann::json{{"bytes", f.bytes}};
-            if (f.mimeType) {
-                j["mimeType"] = *f.mimeType;
-            }
-
-            if (f.name) {
-                j["name"] = *f.name;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::FileWithBytes& f)
-        {
-            if (!j.contains("bytes")) {
-                throw std::runtime_error("FileWithBytes must contain 'bytes' field");
-            }
-            j.at("bytes").get_to(f.bytes);
-
-            if (j.contains("mimeType")) {
-                f.mimeType = j.at("mimeType").get<std::string>();
-            }
-
-            if (j.contains("name")) {
-                f.name = j.at("name").get<std::string>();
-            }
-        }
-    };
-
-    // FileWithUri serializers
-    template<>
-    struct adl_serializer<A2A::FileWithUri> {
-        static void to_json(nlohmann::json& j, const A2A::FileWithUri& f)
-        {
-            j = nlohmann::json{{"uri", f.uri}};
-            if (f.mimeType) {
-                j["mimeType"] = *f.mimeType;
-            }
-
-            if (f.name) {
-                j["name"] = *f.name;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::FileWithUri& f)
-        {
-            if (!j.contains("uri")) {
-                throw std::runtime_error("FileWithUri must contain 'uri' field");
-            }
-            j.at("uri").get_to(f.uri);
-
-            if (j.contains("mimeType")) {
-                f.mimeType = j.at("mimeType").get<std::string>();
-            }
-
-            if (j.contains("name")) {
-                f.name = j.at("name").get<std::string>();
-            }
-        }
-    };
-
-    // TextPart serializers
-    template<>
-    struct adl_serializer<A2A::TextPart> {
-        static void to_json(nlohmann::json& j, const A2A::TextPart& p)
-        {
-            if (p.kind != "text") {
-                throw std::runtime_error("TextPart.kind must be 'text'");
-            }
-            j = nlohmann::json{{"kind", p.kind}, {"text", p.text}};
-            if (p.metadata) {
-                j["metadata"] = *p.metadata;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::TextPart& p)
-        {
-            if (!j.contains("text")) {
-                throw std::runtime_error("TextPart must contain 'text' field");
-            }
-            j.at("text").get_to(p.text);
-
-            if (j.contains("kind")) {
-                p.kind = j.at("kind").get<std::string>();
-                if (p.kind != "text") {
-                    throw std::runtime_error("TextPart.kind must be 'text'");
-                }
-            }
-
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
-            }
-        }
-    };
-
-    // DataPart serializers
-    template<>
-    struct adl_serializer<A2A::DataPart> {
-        static void to_json(nlohmann::json& j, const A2A::DataPart& p)
-        {
-            if (p.kind != "data") {
-                throw std::runtime_error("DataPart.kind must be 'data'");
-            }
-            j = nlohmann::json{{"kind", p.kind}, {"data", p.data}};
-
-            if (p.metadata) {
-                j["metadata"] = *p.metadata;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::DataPart& p)
-        {
-            if (!j.contains("data")) {
-                throw std::runtime_error("DataPart must contain 'data' field");
-            }
-            j.at("data").get_to(p.data);
-
-            if (j.contains("kind")) {
-                p.kind = j.at("kind").get<std::string>();
-                if (p.kind != "data") {
-                    throw std::runtime_error("DataPart.kind must be 'data'");
-                }
-            }
-
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
-            }
-        }
-    };
-
-    // FilePart serializers
-    template<>
-    struct adl_serializer<A2A::FilePart> {
-        static void to_json(nlohmann::json& j, const A2A::FilePart& p)
-        {
-            if (p.kind != "file") {
-                throw std::runtime_error("FilePart.kind must be 'file'");
-            }
-            j = nlohmann::json{{"kind", p.kind}};
-
-            if (p.metadata) {
-                j["metadata"] = *p.metadata;
-            }
-
-            // file is a union, emit discriminated by presence of field
-            std::visit(
-                [&](auto&& f) {
-                    j["file"] = json(f);
-                },
-                p.file);
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::FilePart& p)
-        {
-            if (j.contains("kind")) {
-                p.kind = j.at("kind").get<std::string>();
-                if (p.kind != "file") {
-                    throw std::runtime_error("FilePart.kind must be 'file'");
-                }
-            }
-
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
-            }
-
-            if (!j.contains("file")) {
-                throw std::runtime_error("FilePart must contain 'file' field");
-            }
-            const auto& jf = j.at("file");
-            if (jf.contains("bytes")) {
-                p.file = jf.get<A2A::FileWithBytes>();
-            } else if (jf.contains("uri")) {
-                p.file = jf.get<A2A::FileWithUri>();
-            } else {
-                throw std::runtime_error("File must contain either 'bytes' or 'uri' field");
-            }
-        }
-    };
-
     // Part serializers
     template<>
     struct adl_serializer<A2A::Part> {
         static void to_json(nlohmann::json& j, const A2A::Part& p)
         {
-            std::visit([&](auto&& part) { j = json(part); }, p);
+            j = nlohmann::json::object();
+
+            if (p.text.has_value()) {
+                j["text"] = p.text.value();
+            } else if (p.raw.has_value()) {
+                j["raw"] = p.raw.value();
+            } else if (p.url.has_value()) {
+                j["url"] = p.url.value();
+            } else if (p.data.has_value()) {
+                j["data"] = p.data.value();
+            }
+
+            if (p.metadata.has_value()) {
+                j["metadata"] = p.metadata.value();
+            }
+            if (p.filename.has_value()) {
+                j["filename"] = p.filename.value();
+            }
+            if (p.mediaType.has_value()) {
+                j["mediaType"] = p.mediaType.value();
+            }
         }
 
         static void from_json(const nlohmann::json& j, A2A::Part& p)
         {
-            const auto kind = j.value<std::string>("kind", "");
-            if (kind == "text") {
-                p = j.get<A2A::TextPart>();
-                return;
+            A2A::Part part;
+
+            std::string lastMutualField;
+            for (auto it = j.begin(); it != j.end(); ++it) {
+                const std::string& key = it.key();
+
+                if (key == "text" && !it.value().is_null()) {
+                    lastMutualField = "text";
+                    part.text = it.value().get<std::string>();
+                    break;
+                }
+                if (key == "raw" && !it.value().is_null()) {
+                    lastMutualField = "raw";
+                    part.raw = it.value().get<std::string>();
+                    break;
+                }
+                if (key == "url" && !it.value().is_null()) {
+                    lastMutualField = "url";
+                    part.url = it.value().get<std::string>();
+                    break;
+                }
+                if (key == "data" && !it.value().is_null()) {
+                    lastMutualField = "data";
+                    part.data = it.value().get<std::string>();
+                    break;
+                }
             }
 
-            if (kind == "data") {
-                p = j.get<A2A::DataPart>();
-                return;
+            if (lastMutualField.empty()) {
+                throw std::logic_error("Part must contain one of: text, raw, url, data");
             }
 
-            if (kind == "file") {
-                p = j.get<A2A::FilePart>();
-                return;
+            if (j.contains("metadata") && !j["metadata"].is_null()) {
+                part.metadata = j["metadata"].get<std::string>();
+            }
+            if (j.contains("filename") && !j["filename"].is_null()) {
+                part.filename = j["filename"].get<std::string>();
+            }
+            if (j.contains("mediaType") && !j["mediaType"].is_null()) {
+                part.mediaType = j["mediaType"].get<std::string>();
             }
 
-            throw std::runtime_error("UNKNOWN part kind: " + kind);
+            p = part;
         }
     };
 

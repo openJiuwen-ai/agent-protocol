@@ -106,12 +106,14 @@ int main(int argc, char** argv)
     msg.role = A2A::Role::USER;
     msg.messageId = "123";
 
-    A2A::TextPart tp;
+    A2A::Part tp;
     tp.text = "hello remote server";
+    tp.mediaType = "text/plain";
     msg.parts.push_back(tp);
 
-    A2A::DataPart dp;
-    dp.data = nlohmann::json{{"key", "value"}, {"number", 1}};
+    A2A::Part dp;
+    dp.data = nlohmann::json({{"key", "value"}, {"number", 1}}).dump();
+    dp.mediaType = "application/json";
     msg.parts.push_back(dp);
 
     std::cout << "--> Sending to " << card.url << std::endl;

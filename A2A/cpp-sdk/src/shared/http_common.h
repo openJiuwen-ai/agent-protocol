@@ -37,6 +37,10 @@ constexpr const char* CACHE_CONTROL_NO_CACHE_NO_TRANSFORM = "no-cache, no-transf
 constexpr const char* CONNECTION_KEEP_ALIVE = "keep-alive";
 constexpr const char* CONNECTION_CLOSE = "close";
 constexpr const char* TRANSFER_ENCODING_CHUNKED = "chunked";
+constexpr const char* ACCEPT_ENCODING_VALUE = "gzip, deflate";
+
+// A2A Custom Header
+constexpr const char* K_PROTOCOL_VERSION_HEADER = "A2A-Version";
 
 // HTTP Status Code constants
 constexpr int HTTP_STATUS_OK = 200;

@@ -354,6 +354,10 @@ private:
     void HandleJsonResponse(const HttpResponse& response);
     void HandleSseResponse(const HttpResponse& response);
     void SendSessionTerminatedError(const HttpResponse& response);
+
+    void SendError(const std::string& errorMsg, int errorCode, const UserData& userData) const;
+
+    void DoTerminate();
     void HandleUnexpectedContentType(const HttpResponse& response);
 
     // Handle response from server (called internally when response received, triggers session callback)

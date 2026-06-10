@@ -157,8 +157,9 @@ int main(int argc, char* argv[])
     m.role = A2A::Role::USER;
     m.messageId = "77777";
 
-    A2A::DataPart p;
-    p.data = json{{"action", "planTrip"}, {"destination", "Paris"}, {"date", "2025-12-25"}};
+    A2A::Part p;
+    p.data = json({{"action", "planTrip"}, {"destination", "Paris"}, {"date", "2025-12-25"}}).dump();
+    p.mediaType = "application/json";
 
     m.parts.push_back(p);
 
