@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "types.h"
+#include "common_types.h"
 
 namespace nlohmann {
     // Role serializers
@@ -1600,7 +1601,8 @@ namespace nlohmann {
                 throw std::runtime_error("AgentSkill.name cannot be empty");
             }
 
-            j = nlohmann::json{{"id", s.id}, {"name", s.name}, {"description", s.description}, {"tags", s.tags}};
+            j = nlohmann::json{{A2A::JSON_FIELD_ID, s.id}, {"name", s.name}, {"description", s.description},
+                {"tags", s.tags}};
 
             if (s.examples) {
                 j["examples"] = *s.examples;
@@ -1613,15 +1615,20 @@ namespace nlohmann {
             if (s.outputModes) {
                 j["outputModes"] = *s.outputModes;
             }
+
+            if (s.extension) {
+                j["extension"] = *s.extension;
+            }
         }
 
         static void from_json(const nlohmann::json& j, A2A::AgentSkill& s)
         {
-            if (!j.contains("id") || !j.contains("name") || !j.contains("description") || !j.contains("tags")) {
+            if (!j.contains(A2A::JSON_FIELD_ID) || !j.contains("name") || !j.contains("description") ||
+                !j.contains("tags")) {
                 throw std::runtime_error("AgentSkill missing required fields");
             }
 
-            j.at("id").get_to(s.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(s.id);
             j.at("name").get_to(s.name);
             j.at("description").get_to(s.description);
             j.at("tags").get_to(s.tags);
@@ -1643,6 +1650,10 @@ namespace nlohmann {
 
             if (j.contains("outputModes")) {
                 s.outputModes = j.at("outputModes").get<std::vector<std::string>>();
+            }
+
+            if (j.contains("extension")) {
+                s.extension = j.at("extension").get<std::string>();
             }
         }
     };
@@ -1705,8 +1716,12 @@ namespace nlohmann {
                 j["pushNotifications"] = *c.pushNotifications;
             }
 
-            if (c.stateTransitionHistory) {
-                j["stateTransitionHistory"] = *c.stateTransitionHistory;
+            if (c.extendedAgentCard) {
+                j["extendedAgentCard"] = *c.extendedAgentCard;
+            }
+
+            if (c.extension) {
+                j["extension"] = *c.extension;
             }
 
             if (c.extensions) {
@@ -1724,8 +1739,12 @@ namespace nlohmann {
                 c.pushNotifications = j.at("pushNotifications").get<bool>();
             }
 
-            if (j.contains("stateTransitionHistory")) {
-                c.stateTransitionHistory = j.at("stateTransitionHistory").get<bool>();
+            if (j.contains("extendedAgentCard")) {
+                c.extendedAgentCard = j.at("extendedAgentCard").get<bool>();
+            }
+
+            if (j.contains("extension")) {
+                c.extension = j.at("extension").get<std::string>();
             }
 
             if (j.contains("extensions")) {
@@ -1752,21 +1771,153 @@ namespace nlohmann {
         }
     };
 
+    // AgentInterface serializers
+    template<>
+    struct adl_serializer<A2A::AgentInterface> {
+        static void to_json(nlohmann::json& j, const A2A::AgentInterface& iface)
+        {
+            j = nlohmann::json{
+                {"url", iface.url},
+                {"protocolBinding", iface.protocolBinding},
+                {"protocolVersion", iface.protocolVersion},
+            };
+
+            if (iface.tenant) {
+                j["tenant"] = *iface.tenant;
+            }
+        }
+
+        static void from_json(const nlohmann::json& j, A2A::AgentInterface& iface)
+        {
+            if (!j.contains("url")) {
+                throw std::runtime_error("AgentInterface must contain 'url' field");
+            }
+            j.at("url").get_to(iface.url);
+
+            if (!j.contains("protocolBinding")) {
+                throw std::runtime_error("AgentInterface must contain 'protocolBinding' field");
+            }
+            j.at("protocolBinding").get_to(iface.protocolBinding);
+
+            if (!j.contains("protocolVersion")) {
+                throw std::runtime_error("AgentInterface must contain 'protocolVersion' field");
+            }
+            j.at("protocolVersion").get_to(iface.protocolVersion);
+
+            if (j.contains("tenant")) {
+                iface.tenant = j.at("tenant").get<std::string>();
+            }
+        }
+    };
+
+    // SecurityRequirement serializers
+    template<>
+    struct adl_serializer<A2A::SecurityRequirement> {
+        static void to_json(nlohmann::json& j, const A2A::SecurityRequirement& sr)
+        {
+            j = nlohmann::json::object();
+            for (const auto& [scheme_name, scopes] : sr.schemes) {
+                j[scheme_name] = scopes;
+            }
+        }
+        
+        static void from_json(const nlohmann::json& j, A2A::SecurityRequirement& sr)
+        {
+            if (!j.is_object()) {
+                throw std::runtime_error("SecurityRequirement must be a JSON object");
+            }
+            
+            sr.schemes.clear();
+            for (auto it = j.begin(); it != j.end(); ++it) {
+                const std::string& scheme_name = it.key();
+                const nlohmann::json& scheme_value = it.value();
+                
+                // Checking whether the value is an array.
+                if (!scheme_value.is_array()) {
+                    throw std::runtime_error(
+                        "SecurityRequirement scheme '" + scheme_name +
+                        "' must be a JSON array of strings"
+                    );
+                }
+                
+                // Parsing a String Array
+                std::vector<std::string> scopes;
+                for (const auto& scope : scheme_value) {
+                    if (!scope.is_string()) {
+                        throw std::runtime_error(
+                            "SecurityRequirement scope value must be a string in scheme '" +
+                            scheme_name + "'"
+                        );
+                    }
+                    scopes.push_back(scope.get<std::string>());
+                }
+                
+                sr.schemes[scheme_name] = std::move(scopes);
+            }
+        }
+    };
+
+    // AgentCardSignature serializers
+    template<>
+    struct adl_serializer<A2A::AgentCardSignature> {
+        static void to_json(nlohmann::json& j, const A2A::AgentCardSignature& sig)
+        {
+            j = nlohmann::json{
+                {"protected", sig.protected_},
+                {"signature", sig.signature}
+            };
+            
+            if (sig.header.has_value()) {
+                // The header is a JSON string and needs to be parsed before being assigned a value.
+                try {
+                    j["header"] = nlohmann::json::parse(*sig.header);
+                } catch (const nlohmann::json::parse_error& e) {
+                    // If the parsing fails, the value is stored as a string (fallback).
+                    j["header"] = *sig.header;
+                }
+            }
+        }
+        
+        static void from_json(const nlohmann::json& j, A2A::AgentCardSignature& sig)
+        {
+            if (j.contains("protected") && j["protected"].is_string()) {
+                sig.protected_ = j["protected"].get<std::string>();
+            } else {
+                throw std::runtime_error("AgentCardSignature missing required field: protected");
+            }
+            
+            if (j.contains("signature") && j["signature"].is_string()) {
+                sig.signature = j["signature"].get<std::string>();
+            } else {
+                throw std::runtime_error("AgentCardSignature missing required field: signature");
+            }
+            
+            if (j.contains("header") && !j["header"].is_null()) {
+                if (j["header"].is_string()) {
+                    sig.header = j["header"].get<std::string>();
+                } else {
+                    sig.header = j["header"].dump();
+                }
+            } else {
+                sig.header.reset();
+            }
+        }
+    };
+
     // AgentCard serializers
     template<>
     struct adl_serializer<A2A::AgentCard> {
         static void to_json(nlohmann::json& j, const A2A::AgentCard& c)
         {
             j = nlohmann::json{
-                {"protocolVersion", c.protocolVersion},
-                {"name", c.name},
-                {"description", c.description},
-                {"url", c.url},
-                {"version", c.version},
-                {"capabilities", c.capabilities},
-                {"defaultInputModes", c.defaultInputModes},
-                {"defaultOutputModes", c.defaultOutputModes},
-                {"skills", c.skills}
+                    {"name", c.name},
+                    {"description", c.description},
+                    {"version", c.version},
+                    {"capabilities", c.capabilities},
+                    {"defaultInputModes", c.defaultInputModes},
+                    {"defaultOutputModes", c.defaultOutputModes},
+                    {"skills", c.skills},
+                    {"supportedInterfaces", c.supportedInterfaces}
             };
 
             if (c.provider) {
@@ -1784,19 +1935,27 @@ namespace nlohmann {
             if (c.security) {
                 j["security"] = *c.security;
             }
-            if (c.supportsAuthenticatedExtendedCard) {
-                j["supportsAuthenticatedExtendedCard"] = *c.supportsAuthenticatedExtendedCard;
+
+            if (c.securityRequirements) {
+                j["securityRequirements"] = *c.securityRequirements;
             }
-            if (c.preferredTransport) {
-                j["preferredTransport"] = *c.preferredTransport;
+            if (c.signatures) {
+                j["signatures"] = *c.signatures;
+            }
+
+            if (c.category) {
+                j["category"] = *c.category;
+            }
+            if (c.extension) {
+                j["extension"] = *c.extension;
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::AgentCard& c)
         {
             const std::vector<std::string> required_fields = {
-                "protocolVersion", "name", "description", "url", "version", "capabilities",
-                "defaultInputModes", "defaultOutputModes", "skills"
+                "name", "description", "version", "capabilities",
+                "defaultInputModes", "defaultOutputModes", "skills", "supportedInterfaces"
             };
 
             for (const auto& field : required_fields) {
@@ -1805,15 +1964,14 @@ namespace nlohmann {
                 }
             }
 
-            j.at("protocolVersion").get_to(c.protocolVersion);
             j.at("name").get_to(c.name);
             j.at("description").get_to(c.description);
-            j.at("url").get_to(c.url);
             j.at("version").get_to(c.version);
             j.at("capabilities").get_to(c.capabilities);
             j.at("defaultInputModes").get_to(c.defaultInputModes);
             j.at("defaultOutputModes").get_to(c.defaultOutputModes);
             j.at("skills").get_to(c.skills);
+            j.at("supportedInterfaces").get_to(c.supportedInterfaces);
 
             if (j.contains("provider")) {
                 c.provider = j.at("provider").get<A2A::AgentProvider>();
@@ -1828,16 +1986,52 @@ namespace nlohmann {
                 c.securitySchemes = j.at("securitySchemes").get<std::map<std::string, A2A::SecurityScheme>>();
             }
             if (j.contains("security")) {
-                c.security = j.at("security").get<std::vector<nlohmann::json>>();
+                c.security = j.at("security").get<std::vector<std::string>>();
             }
-            if (j.contains("supportsAuthenticatedExtendedCard")) {
-                c.supportsAuthenticatedExtendedCard = j.at("supportsAuthenticatedExtendedCard").get<bool>();
+
+            if (j.contains("securityRequirements") && j["securityRequirements"].is_array()) {
+                c.securityRequirements = j.at("securityRequirements").get<std::vector<A2A::SecurityRequirement>>();
             }
-            if (j.contains("preferredTransport")) {
-                c.preferredTransport = j.at("preferredTransport").get<std::string>();
+            if (j.contains("signatures") && j["signatures"].is_array()) {
+                c.signatures = j.at("signatures").get<std::vector<A2A::AgentCardSignature>>();
+            }
+
+            if (j.contains("category")) {
+                c.category = j.at("category").get<std::string>();
+            }
+            if (j.contains("extension")) {
+                c.extension = j.at("extension").get<std::string>();
             }
         }
     };
+
+// GetAgentCardSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::GetAgentCardSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::GetAgentCardSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::GetAgentCardSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::AgentCard>();
+    }
+};
+
+
 } // namespace nlohmann
 
 #endif // A2A_TYPES_SERIALIZATION_H

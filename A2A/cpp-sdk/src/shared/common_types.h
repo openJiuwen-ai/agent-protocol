@@ -5,7 +5,10 @@
 #ifndef A2A_COMMON_TYPES_H
 #define A2A_COMMON_TYPES_H
 
+#include <optional>
 #include <string>
+
+#include "types.h"
 
 namespace A2A {
 
@@ -43,6 +46,15 @@ struct UserData {
     std::string requestId = "";
     std::string method;
     bool isStream = false;
+};
+
+struct BaseResponse {
+    std::optional<std::string> id;
+    std::string jsonrpc = JSON_VERSION;
+};
+
+struct GetAgentCardSuccessResponse : public BaseResponse {
+    AgentCard result;
 };
 
 }

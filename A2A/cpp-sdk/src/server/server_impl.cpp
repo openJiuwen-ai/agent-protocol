@@ -25,16 +25,15 @@ static bool IsSupportedStreamingMethod(const std::string& method)
 static std::unique_ptr<Transport::ServerTransport> BuildAgentCardTransport(
     const std::shared_ptr<AgentCard>& agentCard, const ServerConfig& config)
 {
-    if (!agentCard || !agentCard->preferredTransport) {
+    if (!agentCard || agentCard->supportedInterfaces.empty()) {
         return nullptr;
     }
 
-    if (agentCard->preferredTransport.value() == JSONRPC_TRANSPORT) {
+    if (agentCard->supportedInterfaces[0].protocolBinding == JSONRPC_TRANSPORT) {
         return std::make_unique<A2A::Transport::HttpServerTransport>(std::get<HttpConfig>(config));
-    } else {
-        // Placeholder for other transport types
-        return nullptr;
     }
+    // Placeholder for other transport types
+    return nullptr;
 }
 
 ServerImpl::ServerImpl(std::shared_ptr<AgentCard> agentCard,

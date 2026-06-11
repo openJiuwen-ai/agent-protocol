@@ -17,28 +17,29 @@ namespace A2A::Server {
 struct HttpConfig {
     std::string ip;
     int port;
-    int ioThreadNum = 1;
+    unsigned int ioThreadNum = 1;
+    std::string endpoint = "/jsonrpc";
 };
 
 class HttpServerBuilder {
 public:
     /**
-     * @brief destructor
-     */
+    * @brief destructor
+    */
     ~HttpServerBuilder();
 
     /**
-     * @brief create http server
-     *
-     * @param[in] config http config
-     * @param[in] agentCard agent card object
-     * @param[in] extendedAgentCard extended agent card object
-     * @param[in] agentExecutor agent executor object
-     * @param[in] taskStore store object to store task object
-     * @return A shared pointer to the created server instance
-     */
-    static std::shared_ptr<Server> Build(const HttpConfig& config, std::shared_ptr<AgentCard> agentCard,
-        std::shared_ptr<AgentCard> extendedAgentCard, std::shared_ptr<AgentExecutor> agentExecutor,
+    * @brief create http server
+    *
+    * @param[in] config http config
+    * @param[in] agentCard agent card object
+    * @param[in] extendedAgentCard extended agent card object
+    * @param[in] agentExecutor agent executor object
+    * @param[in] taskStore store object to store task object
+    * @return A shared pointer to the created server instance
+    */
+    static std::shared_ptr<Server> Build(const HttpConfig& config, const AgentCard& agentCard,
+        const AgentCard& extendedAgentCard, std::shared_ptr<AgentExecutor> agentExecutor,
         std::shared_ptr<TaskStore> taskStore = nullptr);
 };
 

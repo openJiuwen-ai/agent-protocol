@@ -28,22 +28,23 @@ void signal_handler(int)
 
 void printUsage(const char* program_name)
 {
-    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n"
-              << "\nRequired options:\n"
-              << "  -i, --ip <ip>        Server IP address to bind to\n"
-              << "  -p, --port <port>    Server port to listen on (1-65535)\n"
-              << "\nOptional:\n"
-              << "  -h, --help           Show this help message\n"
-              << "\nExamples:\n"
-              << "  " << program_name << " -i 127.0.0.1 -p 8080\n"
-              << "  " << program_name << " --ip=0.0.0.0 --port=9000\n"
-              << "  " << program_name << " -i 192.168.1.100 -p 3000\n";
+    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n" <<
+        "\nRequired options:\n" <<
+        "  -i, --ip <ip>        Server IP address to bind to\n" <<
+        "  -p, --port <port>    Server port to listen on (1-65535)\n" <<
+        "\nOptional:\n" <<
+        "  -h, --help           Show this help message\n" <<
+        "\nExamples:\n" <<
+        "  " << program_name << " -i 127.0.0.1 -p 8080\n" <<
+        "  " << program_name << " --ip=0.0.0.0 --port=9000\n" <<
+        "  " << program_name << " -i 192.168.1.100 -p 3000\n";
 }
 
 // 简化 AgentExecutor
 class MyAgentExecutor : public A2A::Server::AgentExecutor {
 public:
-    void Execute(const A2A::Server::RequestContext& context, std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
+    void Execute(std::shared_ptr<A2A::Server::RequestContext> context,
+        std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
     {
         std::cout << "AgentExecutor::Execute() called\n";
 
@@ -59,8 +60,8 @@ public:
 
         // 从请求中提取用户输入
         std::string user_input = "Hello World!";
-        if (context.GetMessage()) {
-            const auto& msg = context.GetMessage();
+        if (context->GetMessage()) {
+            const auto& msg = context->GetMessage();
             response_msg.messageId = msg->messageId;
             response_msg.contextId = msg->contextId.value_or("");
             for (const auto& part : msg->parts) {
@@ -77,10 +78,11 @@ public:
         response_msg.parts.push_back(text_part);
 
         // 发送完成状态
-        taskUpdater->Complete(response_msg);
+        taskUpdater->SendResponseMessage(response_msg);
     }
 
-    void Cancel(const A2A::Server::RequestContext& context, std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
+    void Cancel(std::shared_ptr<A2A::Server::RequestContext> context,
+        std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
     {
         std::cout << "AgentExecutor::Cancel() called\n";
         taskUpdater->Cancel();
@@ -141,9 +143,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::cout << "Server configuration:\n"
-              << "  IP: " << ip << "\n"
-              << "  Port: " << port << "\n\n";
+    std::cout << "Server configuration:\n" <<
+        "  IP: " << ip << "\n" <<
+        "  Port: " << port << "\n\n";
 
     // 1. 阻塞信号
     sigset_t sigset;
@@ -156,15 +158,18 @@ int main(int argc, char* argv[])
     auto executor = std::make_shared<MyAgentExecutor>();
 
     // 3. 创建 AgentCard
-    auto agentCard = std::make_shared<A2A::AgentCard>();
-    agentCard->name = "ExampleAgent";
-    agentCard->description = "A2A Hello World Example";
-    agentCard->url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
-    agentCard->version = "1.0.0";
-    agentCard->defaultInputModes = {"text"};
-    agentCard->defaultOutputModes = {"text"};
-    agentCard->capabilities.streaming = false;
-    agentCard->preferredTransport = A2A::JSONRPC_TRANSPORT;
+    A2A::AgentCard agentCard{};
+    agentCard.name = "ExampleAgent";
+    agentCard.description = "A2A Hello World Example";
+    agentCard.version = "1.0.0";
+    agentCard.defaultInputModes = {"text"};
+    agentCard.defaultOutputModes = {"text"};
+    agentCard.capabilities.streaming = false;
+    A2A::AgentInterface primaryInterface;
+    primaryInterface.url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
+    primaryInterface.protocolBinding = "JSONRPC";
+    primaryInterface.protocolVersion = "1.0";
+    agentCard.supportedInterfaces = {primaryInterface};
 
     std::cout << "--Built agent card \n";
 
@@ -177,7 +182,7 @@ int main(int argc, char* argv[])
     auto server = A2A::Server::HttpServerBuilder::Build(
         httpConfig,
         agentCard,
-        nullptr,  // extendedAgentCard
+        {},  // extendedAgentCard
         executor,  // agentExecutor
         nullptr   // taskStore
     );
