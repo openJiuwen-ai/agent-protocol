@@ -190,6 +190,10 @@ class ReqMethod(Enum):
     SCHEDULE_LOGS = "schedule.logs"
     SCHEDULE_CANCEL = "schedule.cancel"
     SCHEDULE_DELETE = "schedule.delete"
+    ISSUE_WATCH_ONCE = "issue.watch_once"
+    ISSUE_STATE_LIST = "issue.state.list"
+    ISSUE_DELETE = "issue.delete"
+    ISSUE_MATRIX = "issue.matrix"
 
 
 class EventType(Enum):
