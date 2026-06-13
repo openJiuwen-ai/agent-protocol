@@ -15,6 +15,7 @@ from a2x_registry.auth.deps import (
     require_admin_strict,
 )
 from a2x_registry.heartbeat.deps import get_heartbeat_store
+from a2x_registry.cluster.deps import get_cluster_store
 from a2x_registry.heartbeat.errors import (
     HeartbeatError, HeartbeatNotSupportedError,
     TTLOutOfRangeError, TTLRequiredError,
@@ -476,6 +477,22 @@ async def list_services(
         # Attach source so fields=detail can include it
         matched.append({**wrapped, "source": entry.source})
 
+    # Merge replicated (foreign) records from peer registries, if the cluster
+    # module is active. They go through the SAME filter pipeline as local
+    # entries; rows carry a namespaced id (origin_id:service_id) + origin_id
+    # and source="cluster". When the cluster module is off this is a no-op,
+    # so the response is byte-identical to before. Foreign records are
+    # read-only replicas: local-only liveness/lease filters don't apply.
+    cstore = get_cluster_store()
+    if cstore is not None:
+        for fr in cstore.foreign_rows(dataset):
+            match_dict = _entry_filter_dict(fr["entry"])
+            if match_dict is None:
+                continue
+            if filters and not _filter_matches(filters, match_dict):
+                continue
+            matched.append({**fr["wrapped"], "source": "cluster"})
+
     total = len(matched)
 
     # Pagination
@@ -516,6 +533,13 @@ async def get_single_service(
     svc = get_registry_service()
     entry = svc.get_entry(dataset, service_id)
     if not entry:
+        # A namespaced id (origin_id:service_id) resolves to a replicated
+        # record from a peer registry (cluster module active).
+        cstore = get_cluster_store()
+        if cstore is not None and ":" in service_id:
+            foreign = cstore.foreign_entry(dataset, service_id)
+            if foreign is not None:
+                return foreign
         raise HTTPException(
             status_code=404,
             detail=f"Service '{service_id}' not found in dataset '{dataset}'",

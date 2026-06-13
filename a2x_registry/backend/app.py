@@ -16,6 +16,7 @@ from a2x_registry.backend.startup import warmup_state, run_warmup
 from a2x_registry.common.errors import FeatureNotInstalledError, LLMNotConfiguredError
 from a2x_registry.auth.router import router as auth_router
 from a2x_registry.heartbeat.router import router as heartbeat_router
+from a2x_registry.cluster.router import router as cluster_router
 
 app = FastAPI(
     title="A2X Registry Demo",
@@ -41,6 +42,9 @@ app.include_router(auth_router)
 # Heartbeat endpoints. Same 404 fallback semantics when the heartbeat
 # module isn't initialized (e.g. lite mode without startup hook).
 app.include_router(heartbeat_router)
+# Cluster (distributed sync) endpoints. Opt-in: every route 404s until the
+# cluster module is initialized (cluster_state.json present at startup).
+app.include_router(cluster_router)
 
 
 @app.exception_handler(FeatureNotInstalledError)
@@ -96,6 +100,29 @@ async def _startup():
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(ThreadPoolExecutor(1), run_warmup)
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    # Stop background daemons BEFORE releasing the pool/transport, so a
+    # sweeper tick can't submit to an already-shut-down pool or use a closed
+    # HTTP client.
+    from a2x_registry.backend.startup import warmup_state
+    for key in ("_cluster_anti_entropy", "_cluster_keepalive", "_heartbeat_sweeper"):
+        sweeper = warmup_state.get(key)
+        if sweeper is not None:
+            try:
+                sweeper.stop()
+            except Exception:  # noqa: BLE001 — shutdown must not raise
+                pass
+    # Release the cluster fan-out pool + pooled HTTP connections, if loaded.
+    try:
+        from a2x_registry.cluster.deps import get_cluster_store
+        store = get_cluster_store()
+        if store is not None:
+            store.close()
+    except Exception:  # noqa: BLE001 — shutdown must not raise
+        pass
 
 
 # Optional static mount for the clone-source demo UI. When the source tree's

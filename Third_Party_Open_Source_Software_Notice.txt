@@ -127,6 +127,16 @@ Copyright (c) Aymeric Augustin and contributors. All rights reserved.
 BSD 3-Clause text is identical to the one shown above for numpy, with the
 copyright holder replaced by "Aymeric Augustin and contributors".
 
+--------------------------------------------------------------------------------
+Software: httpx 0.24.0 or later
+
+License: BSD 3-Clause License
+
+Copyright (c) 2019, Encode OSS Ltd. All rights reserved.
+
+BSD 3-Clause text is identical to the one shown above for numpy, with the
+copyright holder replaced by "Encode OSS Ltd."
+
 ================================================================================
 APPENDIX A: APACHE LICENSE, VERSION 2.0
 ================================================================================

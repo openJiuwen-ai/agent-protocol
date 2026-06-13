@@ -1,8 +1,8 @@
-"""End-to-end test mirroring the documented Agent Team heartbeat flow.
+"""End-to-end test mirroring client/README.md §2 closely.
 
 Verifies the documented 3-role flow (admin → provider → user) works
-against the current server code, exactly as a user would copy-paste
-each snippet. Any failure here means the documented example is broken.
+against current server + SDK code, exactly as a user would copy-paste
+each snippet. Any failure here means the README example is broken.
 """
 
 from __future__ import annotations

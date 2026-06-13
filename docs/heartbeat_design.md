@@ -1,6 +1,6 @@
 # A2X 心跳保活模块设计
 
-> 适用 v0.1.8+。本文件面向运维 / 开发者。**基本用法**见 [README.md](../README.md) 的相关章节；本文聚焦设计原理、文件布局、模块依赖与状态机不变式。
+> 适用 v0.1.8+。本文件面向运维 / 开发者。**基本用法**见 [README.md](../README.md) 与 [client/README.md](../client/README.md) 的相关章节；本文聚焦设计原理、文件布局、模块依赖与状态机不变式。
 
 ## 1. 定位与设计原则
 
@@ -126,7 +126,7 @@ database/<namespace>/
 }
 ```
 
-客户端 SDK 用 `code` 字段派发到 `A2XTTLOutOfRangeError` / `A2XTTLRequiredError` / `A2XHeartbeatNotSupportedError`。
+客户端 SDK 用 `code` 字段派发到 `A2XTTLOutOfRangeError` / `A2XTTLRequiredError` / `A2XHeartbeatNotSupportedError`（详见客户端 README）。
 
 ## 5. 端点
 
@@ -207,13 +207,13 @@ for (ds, sid) in to_hard_delete:
 
 ## 9. 客户端 SDK
 
-客户端 SDK 的心跳模块提供：
+[client/a2x_registry_client/heartbeat.py](../client/a2x_registry_client/heartbeat.py)：
 
 - `HeartbeatRenewer` —— per-(ds, sid) daemon thread，每 `ttl/3` 秒发一次心跳，指数退避，daemon=True 不阻塞进程退出
 - `HeartbeatRegistry` —— per-client 管理器
 - `AsyncHeartbeatRenewer` / `AsyncHeartbeatRegistry` —— 异步客户端用 `asyncio.Task`
 
-SDK 公开方法：
+SDK 公开方法（[client.py](../client/a2x_registry_client/client.py)）：
 
 ```python
 client.register_agent(..., lease_ttl=60, auto_renew=True)  # 注册即起后台续约
@@ -247,10 +247,12 @@ A2X 现在有三类 TTL，**互不耦合**：
 
 具体落到可测的承诺：
 
-1. **没启用 lease_config 的 namespace** → 行为与心跳模块未存在时 byte-equal。回归测试：[tests/heartbeat/test_back_compat.py](../tests/heartbeat/test_back_compat.py)，全部既有 server 测试不修改任何源码全绿。
+1. **没启用 lease_config 的 namespace** → 行为与心跳模块未存在时 byte-equal。回归测试：[tests/heartbeat/test_back_compat.py](../tests/heartbeat/test_back_compat.py)，全部既有 142 个 server 测试不修改任何源码全绿。
 2. **注册时不传 `lease_ttl`** → 服务永久，`api_config.json` 的 entry 不写 `lease_ttl` 字段（byte-equal pre-heartbeat output）。回归测试同上。
 3. **既有 SDK 客户端** → 不传 `lease_ttl` / 不调 `heartbeat()` / 不使用 `auto_renew`，注册端点行为不变；额外的 `lease_ttl` / `lease_expires_at` 响应字段对旧客户端是无害的（Pydantic 忽略未知字段）。
 
 ## 12. 进一步阅读
 
-- [tests/heartbeat/](../tests/heartbeat/) —— server 测试，对照本文档每个不变式逐项验证
+- [client/README.md §2.6](../client/README.md) —— 客户端心跳基本用法
+- [tests/heartbeat/](../tests/heartbeat/) —— 40 个 server 测试，对照本文档每个不变式逐项验证
+- [client/tests/test_heartbeat_renewer.py](../client/tests/test_heartbeat_renewer.py) —— 客户端 renewer 测试

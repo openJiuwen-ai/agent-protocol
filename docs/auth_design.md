@@ -1,6 +1,6 @@
 # A2X 鉴权模块设计
 
-> 适用 v0.1.7+。本文档面向运维 / 开发者。**基本用法**见 [README.md](../README.md) 的相关章节；本文聚焦设计原理、文件布局、模块依赖与安全不变式。
+> 适用 v0.1.7+。本文档面向运维 / 开发者。**基本用法**见 [README.md](../README.md) 与 [client/README.md](../client/README.md) 的相关章节；本文聚焦设计原理、文件布局、模块依赖与安全不变式。
 
 ## 1. 定位与设计原则
 
@@ -266,7 +266,7 @@ database/<namespace>/
 
 ## 9. 客户端凭据解析
 
-客户端 SDK 的凭据解析优先级（**有意省略环境变量路径**，避免凭据从父进程意外继承）：
+[client](../client) SDK 的解析优先级（**有意省略环境变量路径**，避免凭据从父进程意外继承）：
 
 ```
 1. A2XRegistryClient(api_key="...")     显式构造参数
@@ -280,7 +280,9 @@ database/<namespace>/
 {"base_url": "http://127.0.0.1:8000", "api_key": "a2x_pat_..."}
 ```
 
-客户端错误类型新增两条：`A2XAuthenticationError`（401） / `A2XAuthorizationError`（403），都继承 `A2XHTTPError`。
+由 [a2x_registry_client/auth.py](../client/a2x_registry_client/auth.py) 中的 `resolve_credentials / read_cli_token / write_cli_token / remove_cli_token` 维护；CLI 子命令 `a2x-registry-client login / logout / whoami / keys` 是其上层封装。
+
+错误类型新增两条：`A2XAuthenticationError`（401） / `A2XAuthorizationError`（403），都继承 `A2XHTTPError`。
 
 ---
 
@@ -297,7 +299,16 @@ a2x-registry auth reset-admin --confirm   # 销毁现有 principals.json + api_k
 
 ### 客户端
 
-客户端 SDK 提供配套的凭据管理子命令（交互式 paste token → `cli_token.json`（chmod 0600）、登出、`whoami`、key 列出 / 增发 / 撤销）；`login` 在 paste 之后会跑一次 `/whoami` 做即时验证，token 无效时立即提示而不是等到第一次业务调用。
+```bash
+a2x-registry-client login                 # 交互式 paste token → cli_token.json (chmod 0600)
+a2x-registry-client logout                # 删除 cli_token.json
+a2x-registry-client whoami                # GET /api/auth/whoami
+a2x-registry-client keys list             # 列出自己的 key（admin 可见全部）
+a2x-registry-client keys create --name X  # 增发新 key（plaintext 打到 stdout 一次）
+a2x-registry-client keys revoke <key_id>  # 撤销自己的 key（admin 可撤销任意）
+```
+
+`login` 在 paste 之后会跑一次 `/whoami` 做即时验证，token 无效时立即提示而不是等到第一次业务调用。
 
 ---
 
@@ -335,4 +346,4 @@ a2x-registry auth reset-admin --confirm   # 销毁现有 principals.json + api_k
 
 ## 12. 进一步阅读
 
-- [tests/auth/](../tests/auth/) — 鉴权相关测试，对照本文档每个不变式逐项验证
+- [tests/auth/](../tests/auth/) — 78 个鉴权相关测试，对照本文档每个不变式逐项验证

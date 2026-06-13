@@ -1,6 +1,6 @@
 # A2X Registry — Agent Team 场景快速启动
 
-**v0.2.0**
+**v0.3.2**
 
 本文档是针对 **Agent Team 动态组队** 场景的简化版本，仅包含启动一个空白后端所需的最少步骤。后续所有服务注册、查询、预订锁等操作均通过客户端SDK完成，服务端无需任何预置数据或 LLM 配置。
 
@@ -8,7 +8,7 @@
 
 ### 精简安装（默认）
 
-`pip install` **默认就是 Agent Team 精简版**——只装 SDK 必需的 5 个轻量包（`requests` / `fastapi` / `pydantic` / `python-multipart` / `uvicorn[standard]`），不附带 `numpy` / `sentence-transformers` / `chromadb` 等数百 MB 的搜索/索引依赖。
+`pip install` **默认就是 Agent Team 精简版**——只装 SDK 必需的轻量包（`requests` / `httpx` / `fastapi` / `pydantic` / `python-multipart` / `uvicorn[standard]`），不附带 `numpy` / `sentence-transformers` / `chromadb` 等数百 MB 的搜索/索引依赖。
 
 从 GitCode 克隆 `agent-protocol` 的 `feature/Agentregistry` 分支安装：
 
@@ -66,7 +66,7 @@ a2x-registry --host 0.0.0.0 --port 8080  # 指定端口
 a2x-registry auth init                          # 一次性 bootstrap，stderr 打印 admin token
 ```
 
-之后管理员可以：① 为整个 Agent Team 池创建 `auth_required=true` 的 namespace；② 为每个 Agent 进程 / teammate 颁发 `provider` 角色的 token，scope 到该 namespace；③ 为协调方颁发 `user` 角色 token，只读 + 预约。token 通过 `cli_token.json` 配置文件分发，详见 [docs/auth_design.md](docs/auth_design.md)。
+之后管理员可以：① 为整个 Agent Team 池创建 `auth_required=true` 的 namespace；② 为每个 Agent 进程 / teammate 颁发 `provider` 角色的 token，scope 到该 namespace；③ 为协调方颁发 `user` 角色 token，只读 + 预约。token 通过 `cli_token.json` 配置文件分发，详见 [docs/auth_design.md](docs/auth_design.md) 与 [client/README.md](client/README.md)。
 
 未跑 `auth init` 的部署 + 未声明 `auth_required` 的 namespace 走匿名通道，无需 token。
 
@@ -89,6 +89,6 @@ client.register_blank_agent("team_pool", endpoint="http://teammate-1:8080",
                              lease_ttl=30, auto_renew=True)
 ```
 
-Teammate 崩溃 → 30s 后被标记为不健康 → leader 的 `reserve_blank_agents` 不再选中 → grace_period 之后从注册表彻底清理。详见 [docs/heartbeat_design.md](docs/heartbeat_design.md)。
+Teammate 崩溃 → 30s 后被标记为不健康 → leader 的 `reserve_blank_agents` 不再选中 → grace_period 之后从注册表彻底清理。详见 [docs/heartbeat_design.md](docs/heartbeat_design.md) 与 [client/README.md](client/README.md)。
 
 未启用 `lease_config` 的 namespace 不需要心跳，注册的服务永久存在。

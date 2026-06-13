@@ -1,4 +1,5 @@
-"""HeartbeatStore — in-memory lease tracking + sweep.
+"""HeartbeatStore — per-namespace lease tracking on top of the shared
+``LeaseTable`` state machine.
 
 Pure runtime store: no disk I/O, no FastAPI. The corresponding persisted
 field ``RegistryEntry.lease_ttl`` lives in the register module. The store
@@ -6,25 +7,25 @@ is wired into ``RegistryService`` via the ``set_unhealthy_check`` callback
 at backend startup; the sweeper invokes ``RegistryService.deregister``
 through the synthetic ``SYSTEM_CTX`` for hard deletion.
 
-Thread-safety: all mutations behind ``self._lock``. The sweeper, the
-FastAPI heartbeat endpoint, and the unhealthy-check callback all share
-the same lock; the work in any critical section is dict-lookup-fast so
-contention is negligible.
+This module owns the heartbeat-specific concerns — the per-namespace
+4-corner validation matrix and the ``(dataset, service_id)`` keying —
+and delegates the actual lease countdown / state transitions to
+``a2x_registry.common.lease.LeaseTable``.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
+
+from a2x_registry.common.lease import LeaseTable
 
 from .errors import (
     HeartbeatNotSupportedError,
     TTLOutOfRangeError,
     TTLRequiredError,
 )
-from .models import HBState, HeartbeatLease
+from .models import HeartbeatLease
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,7 @@ class HeartbeatStore:
         ``grace_period``). Indirection avoids coupling HeartbeatStore to
         RegistryService internals — tests can pass a lambda."""
         self._config_provider = config_provider
-        self._leases: Dict[_LeaseKey, HeartbeatLease] = {}
-        self._lock = threading.Lock()
+        self._table: LeaseTable[_LeaseKey] = LeaseTable()
 
     # ── validate / install / heartbeat / revoke ─────────────────────────
 
@@ -104,6 +104,10 @@ class HeartbeatStore:
             )
         return int(client_ttl)
 
+    def _grace(self, dataset: str) -> int:
+        cfg = self._config_provider(dataset) or {}
+        return int(cfg.get("grace_period", 300))
+
     def install(
         self,
         dataset: str,
@@ -117,19 +121,7 @@ class HeartbeatStore:
         Idempotent: if a lease already exists for (dataset, sid), it's
         replaced. Returns the new lease for response composition.
         """
-        cfg = self._config_provider(dataset) or {}
-        grace = int(cfg.get("grace_period", 300))
-        now = time.monotonic()
-        lease = HeartbeatLease(
-            ttl_seconds=ttl,
-            grace_period_seconds=grace,
-            expires_at=now + ttl,
-            grace_deadline=now + ttl + grace,
-            last_heartbeat_at=now,
-            state=HBState.HEALTHY,
-        )
-        with self._lock:
-            self._leases[(dataset, service_id)] = lease
+        lease = self._table.install((dataset, service_id), ttl, self._grace(dataset))
         logger.debug("heartbeat: installed (%s, %s) ttl=%s", dataset, service_id, ttl)
         return lease
 
@@ -163,18 +155,13 @@ class HeartbeatStore:
         Raises ``KeyError`` if no lease exists for (dataset, service_id) —
         the caller (router) maps that to 404.
         """
-        now = time.monotonic()
-        with self._lock:
-            lease = self._leases.get((dataset, service_id))
-            if lease is None:
-                raise KeyError(
-                    f"No heartbeat lease for service {service_id!r} in dataset "
-                    f"{dataset!r} — was it registered with lease_ttl?"
-                )
-            lease.last_heartbeat_at = now
-            lease.expires_at = now + lease.ttl_seconds
-            lease.grace_deadline = lease.expires_at + lease.grace_period_seconds
-            lease.state = HBState.HEALTHY
+        try:
+            lease = self._table.renew((dataset, service_id))
+        except KeyError:
+            raise KeyError(
+                f"No heartbeat lease for service {service_id!r} in dataset "
+                f"{dataset!r} — was it registered with lease_ttl?"
+            )
         logger.debug("heartbeat: extended (%s, %s)", dataset, service_id)
         return lease
 
@@ -188,42 +175,28 @@ class HeartbeatStore:
         """Mark a lease unhealthy (default) or hard-drop it (``permanent=True``).
 
         Default ``revoke`` puts the lease into UNHEALTHY immediately but
-        leaves it in the dict so a heartbeat during the (still-running)
-        grace window can recover. ``permanent=True`` removes the lease
-        entirely; the caller is expected to also call
-        ``RegistryService.deregister`` to remove the entry.
+        leaves it in the table so a heartbeat during the (restarted) grace
+        window can recover. ``permanent=True`` removes the lease entirely;
+        the caller is expected to also call ``RegistryService.deregister``
+        to remove the entry.
 
         Returns ``True`` if a lease was found and acted on, ``False`` if
         no lease existed (idempotent). Never raises.
         """
-        with self._lock:
-            lease = self._leases.get((dataset, service_id))
-            if lease is None:
-                return False
-            if permanent:
-                del self._leases[(dataset, service_id)]
-            else:
-                now = time.monotonic()
-                lease.state = HBState.UNHEALTHY
-                # Move expires_at to now so subsequent sweep_tick treats
-                # this lease as just-expired; grace_deadline stays at its
-                # original value (or recompute relative to now — the design
-                # is "from this moment, you have grace_period to recover").
-                lease.expires_at = now
-                lease.grace_deadline = now + lease.grace_period_seconds
-        logger.debug(
-            "heartbeat: revoked (%s, %s) permanent=%s",
-            dataset, service_id, permanent,
-        )
-        return True
+        found = self._table.revoke((dataset, service_id), permanent=permanent)
+        if found:
+            logger.debug(
+                "heartbeat: revoked (%s, %s) permanent=%s",
+                dataset, service_id, permanent,
+            )
+        return found
 
     def drop(self, dataset: str, service_id: str) -> None:
         """Remove the lease entry without touching state. Used after
         ``RegistryService.deregister`` (e.g. operator-initiated DELETE)
         so the heartbeat store doesn't keep a stale lease for a dead sid.
         Idempotent."""
-        with self._lock:
-            self._leases.pop((dataset, service_id), None)
+        self._table.drop((dataset, service_id))
 
     # ── read paths (called by router + register_service callback) ───────
 
@@ -234,21 +207,16 @@ class HeartbeatStore:
         Services with no lease (permanent / no heartbeat) → always False
         (healthy by definition; nothing to monitor).
         """
-        with self._lock:
-            lease = self._leases.get((dataset, service_id))
-        return lease is not None and lease.state == HBState.UNHEALTHY
+        return self._table.is_unhealthy((dataset, service_id))
 
     def get_lease(self, dataset: str, service_id: str) -> Optional[HeartbeatLease]:
-        """Snapshot read for routers / tests. Returns a copy-by-reference
-        since HeartbeatLease is a dataclass with simple fields; callers
-        must not mutate."""
-        with self._lock:
-            return self._leases.get((dataset, service_id))
+        """Snapshot read for routers / tests. Returns the dataclass by
+        reference; callers must not mutate."""
+        return self._table.get((dataset, service_id))
 
     def list_leases(self) -> List[Tuple[str, str, HeartbeatLease]]:
         """All (dataset, sid, lease) triples — used by tests / debug."""
-        with self._lock:
-            return [(ds, sid, lease) for (ds, sid), lease in self._leases.items()]
+        return [(ds, sid, lease) for (ds, sid), lease in self._table.items()]
 
     # ── sweep (called by HeartbeatSweeper daemon) ───────────────────────
 
@@ -257,31 +225,14 @@ class HeartbeatStore:
 
         Returns ``(newly_unhealthy, to_hard_delete)``. The caller (sweeper)
         is responsible for invoking ``RegistryService.deregister`` for
-        each to_hard_delete sid; HeartbeatStore itself only updates the
+        each to_hard_delete sid; the lease table itself only updates the
         in-memory state. Separation lets us test the state machine without
         mocking RegistryService.
 
         ``now`` defaults to ``time.monotonic()`` — overridable for tests
         that want to drive time forward without sleep.
         """
-        if now is None:
-            now = time.monotonic()
-        newly_unhealthy: List[_LeaseKey] = []
-        to_hard_delete: List[_LeaseKey] = []
-        with self._lock:
-            for key, lease in self._leases.items():
-                if lease.state == HBState.HEALTHY and now >= lease.expires_at:
-                    lease.state = HBState.UNHEALTHY
-                    newly_unhealthy.append(key)
-                if lease.state == HBState.UNHEALTHY and now >= lease.grace_deadline:
-                    to_hard_delete.append(key)
-            # Pop the to_hard_delete entries now; sweeper will then call
-            # RegistryService.deregister to clean up the persistent record.
-            # Even if deregister fails, the lease is gone — the entry will
-            # just become a permanent service until next operator cleanup.
-            for key in to_hard_delete:
-                del self._leases[key]
-        return newly_unhealthy, to_hard_delete
+        return self._table.sweep_tick(now)
 
     # ── restart recovery ───────────────────────────────────────────────
 
@@ -298,19 +249,10 @@ class HeartbeatStore:
         this, restart would silently drop heartbeat protection for every
         previously-registered service.
         """
-        now = time.monotonic()
-        with self._lock:
-            for dataset, sid, ttl in entries:
-                cfg = self._config_provider(dataset) or {}
-                grace = int(cfg.get("grace_period", 300))
-                self._leases[(dataset, sid)] = HeartbeatLease(
-                    ttl_seconds=int(ttl),
-                    grace_period_seconds=grace,
-                    expires_at=now,                      # already expired
-                    grace_deadline=now + grace,          # but in grace window
-                    last_heartbeat_at=now,
-                    state=HBState.UNHEALTHY,             # honest state — needs heartbeat
-                )
+        for dataset, sid, ttl in entries:
+            self._table.install(
+                (dataset, sid), int(ttl), self._grace(dataset), expired=True,
+            )
         logger.info(
             "heartbeat: recovered %d leases from disk into grace window", len(entries),
         )

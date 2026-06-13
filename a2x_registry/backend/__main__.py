@@ -8,6 +8,10 @@ Usage:
 Auth admin subcommands (no server needed):
     a2x-registry auth init                       # bootstrap first admin key
     a2x-registry auth reset-admin --confirm      # rotate the bootstrap admin
+
+Cluster subcommands (distributed sync):
+    a2x-registry cluster init                    # generate node id (opt-in)
+    a2x-registry cluster status                  # show sync state
 """
 
 import argparse
@@ -50,6 +54,9 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "auth":
         from a2x_registry.auth.cli import main as auth_main
         sys.exit(auth_main(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "cluster":
+        from a2x_registry.cluster.cli import main as cluster_main
+        sys.exit(cluster_main(sys.argv[2:]))
     _serve(sys.argv[1:])
 
 

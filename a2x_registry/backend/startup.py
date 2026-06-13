@@ -114,6 +114,56 @@ def run_warmup() -> None:
             from a2x_registry.heartbeat.deps import set_heartbeat_store
             set_heartbeat_store(None)
 
+        # 1d. Cluster (distributed sync) module — opt-in. Loads only when
+        # cluster_state.json exists (created by 'a2x-registry cluster init');
+        # otherwise stays None and the whole feature is dormant (endpoints
+        # 404, read path unchanged). Failure is non-fatal.
+        try:
+            import os as _os
+            from a2x_registry.cluster.store import ClusterStore
+            from a2x_registry.cluster.config import ClusterConfig
+            from a2x_registry.cluster.deps import set_cluster_store
+            from a2x_registry.auth.deps import get_auth_store
+            # Advertised base URL peers use to reach us. Defaults empty; set
+            # A2X_REGISTRY_CLUSTER_ADVERTISE (e.g. http://10.0.0.2:8000) in a
+            # multi-instance deployment so peers can call back.
+            advertise = _os.environ.get("A2X_REGISTRY_CLUSTER_ADVERTISE", "")
+            cluster_store = ClusterStore.load_or_none(
+                config=ClusterConfig.from_env(),   # A2X_REGISTRY_CLUSTER_* overrides
+                registry_svc=registry_svc,
+                advertise=advertise,
+                auth_store_getter=get_auth_store,
+            )
+            set_cluster_store(cluster_store)
+            if cluster_store is not None:
+                # Declarative membership control plane. Attaching it lets the
+                # node rejoin its persisted cluster + auto-reconnect the mesh
+                # (driven by the AntiEntropySweeper's first tick). Absent
+                # cluster_id → no peers desired → behaves like today.
+                from a2x_registry.cluster.membership import MembershipStore
+                cluster_store.membership = MembershipStore(cluster_store)
+                # Replicate every local CRUD to peers (default no-op when off).
+                registry_svc.set_on_mutation(cluster_store.on_local_mutation)
+                # Background daemons (full-mesh): anti-entropy reconcile + GC,
+                # and direct-link keepalive/HOLD (the sole liveness path).
+                from a2x_registry.cluster.sweepers import (
+                    AntiEntropySweeper, KeepaliveMonitor,
+                )
+                cfg = cluster_store.config
+                ae = AntiEntropySweeper(cluster_store, period=cfg.anti_entropy_interval)
+                km = KeepaliveMonitor(cluster_store, period=cfg.keepalive_interval)
+                ae.start()
+                km.start()
+                warmup_state["_cluster_anti_entropy"] = ae
+                warmup_state["_cluster_keepalive"] = km
+                logger.info("  Cluster module loaded (node_id=%s)", cluster_store.node_id)
+            else:
+                logger.info("  Cluster module not initialized (standalone)")
+        except Exception as exc:
+            logger.error("  Cluster init failed: %s", exc, exc_info=True)
+            from a2x_registry.cluster.deps import set_cluster_store
+            set_cluster_store(None)
+
         # Only wire vector-sync side effects when the [vector] extras are
         # installed; otherwise every SDK register/deregister would spawn a
         # daemon thread that immediately ImportErrors on chromadb.
@@ -207,7 +257,7 @@ def run_warmup() -> None:
         warmup_state["stage"] = "完成"
         warmup_state["progress"] = 100
         warmup_state["ready"] = True
-        logger.info("Warmup complete — total %.1fs", time.time() - t0)
+        logger.info("Warmup [100%%] complete — total %.1fs", time.time() - t0)
 
     except Exception as e:
         import traceback

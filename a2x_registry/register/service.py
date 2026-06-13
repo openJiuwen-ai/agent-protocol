@@ -120,6 +120,13 @@ class RegistryService:
         # (lite mode, no heartbeat init, etc.). Affects list_services /
         # list_entries / reserve_services filtering.
         self._unhealthy_check = lambda dataset, service_id: False
+        # Cluster: optional callback (dataset, service_id, op, entry) invoked
+        # after every successful local CRUD so the cluster module can
+        # replicate the change. Default no-op → behaves identically when the
+        # cluster module isn't loaded. ``op`` is "register" | "update" |
+        # "deregister"; ``entry`` is the resulting RegistryEntry (None on
+        # deregister).
+        self._on_mutation = lambda dataset, service_id, op, entry: None
 
     # -----------------------------------------------------------------------
     # Startup
@@ -356,6 +363,8 @@ class RegistryService:
 
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
+        self._emit_mutation(dataset, service_id,
+                            "update" if status == "updated" else "register", entry)
         return SkillResponse(name=skill_data.name, dataset=dataset,
                              status=status, service_id=service_id)
 
@@ -380,6 +389,7 @@ class RegistryService:
         store.remove_skill(name)
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
+        self._emit_mutation(dataset, service_id, "deregister", None)
         return SkillResponse(name=name, dataset=dataset, status="deleted",
                              service_id=service_id)
 
@@ -472,6 +482,7 @@ class RegistryService:
         if taxonomy_affected:
             self._mark_taxonomy_stale(dataset)
 
+        self._emit_mutation(dataset, service_id, "update", new_entry)
         return UpdateResponse(
             service_id=service_id, dataset=dataset, status="updated",
             changed_fields=sorted(changed), taxonomy_affected=taxonomy_affected)
@@ -550,6 +561,8 @@ class RegistryService:
             self._get_store(dataset).save_api_entry(entry)
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
+        self._emit_mutation(dataset, entry.service_id,
+                            "update" if status == "updated" else "register", entry)
         return RegisterResponse(service_id=entry.service_id, dataset=dataset, status=status)
 
     # -----------------------------------------------------------------------
@@ -587,6 +600,7 @@ class RegistryService:
             self._get_store(dataset).remove_api_entry(service_id)
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
+        self._emit_mutation(dataset, service_id, "deregister", None)
         return DeregisterResponse(service_id=service_id, status="deregistered")
 
     # ----- Authorization helpers (used by all mutating service methods) ----
@@ -697,6 +711,26 @@ class RegistryService:
         loaded (lite mode, no startup init, etc.).
         """
         self._unhealthy_check = callback or (lambda d, s: False)
+
+    def set_on_mutation(self, callback) -> None:
+        """Install the cluster replication hook (called once at startup).
+
+        ``callback(dataset, service_id, op, entry)`` runs after every
+        successful local CRUD. Mirrors ``set_unhealthy_check`` — single
+        injection point, default no-op so the registry runs identically
+        when the cluster module isn't loaded.
+        """
+        self._on_mutation = callback or (lambda d, s, o, e: None)
+
+    def _emit_mutation(self, dataset: str, service_id: str, op: str,
+                       entry: Optional[RegistryEntry]) -> None:
+        """Fire the cluster hook defensively — a sync failure must never
+        break the CRUD that already committed locally."""
+        try:
+            self._on_mutation(dataset, service_id, op, entry)
+        except Exception as exc:  # noqa: BLE001 — replication is best-effort
+            logger.warning("cluster: on_mutation hook failed (%s, %s, %s): %s",
+                           dataset, service_id, op, exc)
 
     def get_entry(self, dataset: str, service_id: str) -> Optional[RegistryEntry]:
         """Get a single registry entry."""
