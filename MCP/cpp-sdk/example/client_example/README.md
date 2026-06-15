@@ -2,72 +2,73 @@
 
 ## 目录结构
 
-示例代码已按功能模块拆分为三个独立的文件夹：
-
 ```
 client_example/
-├── tool_example/             # 初始化和工具相关示例
-│   ├── tool_example.cpp      # 示例代码
-│   ├── CMakeLists.txt        # 构建配置
-│   └── run_example.sh        # 一键运行脚本
-├── prompt_example/           # Prompt相关示例
-│   ├── prompt_example.cpp    # 示例代码
-│   ├── CMakeLists.txt        # 构建配置
-│   └── run_example.sh        # 一键运行脚本
-├── resource_example/         # Resource相关示例
-│   ├── resource_example.cpp  # 示例代码
-│   ├── CMakeLists.txt        # 构建配置
-│   └── run_example.sh        # 一键运行脚本
-└── run_all_examples.sh       # 运行所有示例的脚本
+├── tool_example/             # 初始化、Ping、Tool、Progress、Complete
+├── prompt_example/           # Prompt
+├── resource_example/         # Resource 订阅与读取
+├── sampling_example/         # 服务端发起的 Sampling
+└── run_all_examples.sh       # 依次运行 tool / prompt / resource（不含 sampling）
 ```
 
 ## 示例内容
 
-### 1. tool_example - 初始化和工具示例
-- 客户端初始化 (Initialize)
-- 列出工具 (ListTools)
-- 调用工具 (CallTool)
+| 示例 | 主要 API |
+|------|----------|
+| `tool_example` | `Initialize`、`SendPing`、`ListTools`、`CallTool`、`Complete` |
+| `prompt_example` | `ListPrompts`、`GetPrompt` |
+| `resource_example` | `ListResources`、`ReadResource`、`SubscribeResource` |
+| `sampling_example` | `SetSamplingCreateMessageCallback`、`CallTool`（触发服务端 sampling） |
 
-### 2. prompt_example - Prompt示例
-- 列出Prompts (ListPrompts)
-- 获取Prompt详情 (GetPrompt)
+## 前置条件
 
-### 3. resource_example - Resource示例
-- 订阅/取消订阅资源 (Subscribe/Unsubscribe)
-- 列出资源 (ListResources)
-- 读取资源 (ReadResource)
-- 列出资源模板 (ListResourcesTemplates)
-
-## 使用方法
-
-### 运行单个示例
-
-进入对应的示例文件夹，执行：
+1. 已编译 SDK：
 
 ```bash
-# 工具示例
-cd tool_example
-./run_example.sh
-
-# Prompt示例
-cd prompt_example
-./run_example.sh
-
-# Resource示例
-cd resource_example
-./run_example.sh
+cd MCP/cpp-sdk
+./scripts/build.sh
 ```
 
-### 运行所有示例
+产物路径：`../../output/lib/libmcp.so`（相对于各示例子目录）。头文件使用源码树 `../../include/mcp/`。
 
-在 client_example 目录下执行：
+2. MCP Server 已启动，默认端点：`http://127.0.0.1:8000/mcp`
+
+推荐一键启动（在 `MCP/cpp-sdk` 下）：
+
+```bash
+./scripts/run_example.sh -t server    # 终端 1：后台 Server
+./scripts/run_example.sh -t tool      # 终端 2：Client 示例
+```
+
+或运行全部：
+
+```bash
+./scripts/run_example.sh -t all
+```
+
+## 运行单个示例
+
+```bash
+cd tool_example && ./run_example.sh
+cd prompt_example && ./run_example.sh
+cd resource_example && ./run_example.sh
+cd sampling_example && ./run_example.sh
+```
+
+指定端口（需与 Server 一致）：
+
+```bash
+./run_example.sh --port=9000
+```
+
+## 运行多个示例（不含 sampling）
 
 ```bash
 ./run_all_examples.sh
 ```
 
-## 前置条件
+## 相关文档
 
-- 确保已编译 libmcp.so 并放在 `../../output/` 目录下
-- 确保头文件在 `../../output/mcp/` 目录下
-- MCP服务器运行在 `http://127.0.0.1:8000/mcp`
+- [Server 示例](../server_example/README.md)
+- [Client API](../../docs/api/client.md)
+- [主 README](../../README.md)
