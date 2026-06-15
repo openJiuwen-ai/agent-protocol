@@ -102,6 +102,7 @@ class ReqMethod(Enum):
     SKILLS_TEAMSKILLS_HUB_DELETE = "skills.teamskillshub.delete"
     SKILLS_RETRIEVAL_STATUS = "skills.retrieval.status"
     SKILLS_RETRIEVAL_INDEX_BUILD = "skills.retrieval.index_build"
+    SKILLS_RETRIEVAL_INDEX_CANCEL = "skills.retrieval.index_cancel"
     SKILLS_RETRIEVAL_SEARCH = "skills.retrieval.search"
     SKILLS_RETRIEVAL_TREE = "skills.retrieval.tree"
     SKILLS_EVOLUTION_STATUS = "skills.evolution.status"
