@@ -21,15 +21,17 @@ Artifact NewArtifact(const std::vector<Part>& parts, const std::string& name, co
 
 Artifact NewTextArtifact(const std::string& name, const std::string& text, const std::string& description)
 {
-    TextPart t{.kind = "text", .metadata = std::nullopt, .text = text};
-    Part p = t;
+    Part p;
+    p.text = text;
+    p.mediaType = "text/plain";
     return NewArtifact({p}, name, description);
 }
 
 Artifact NewDataArtifact(const std::string& name, const nlohmann::json& data, const std::string& description)
 {
-    DataPart d{.kind = "data", .metadata = std::nullopt, .data = data};
-    Part p = d;
+    Part p;
+    p.data = data.dump();
+    p.mediaType = "application/octet-stream";
     return NewArtifact({p}, name, description);
 }
 

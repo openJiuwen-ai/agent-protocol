@@ -7,11 +7,8 @@
 #include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <variant>
 
-#include "client/a2a_card_resolver.h"
 #include "client/client_factory.h"
-#include "types.h"
 
 using json = nlohmann::json;
 
@@ -19,16 +16,16 @@ constexpr int MAX_PORT = 65535;
 
 void printUsage(const char* program_name)
 {
-    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n"
-              << "\nRequired options:\n"
-              << "  -i, --ip <ip>        Server IP address to connect to\n"
-              << "  -p, --port <port>    Server port to connect to (1-65535)\n"
-              << "\nOptional:\n"
-              << "  -h, --help           Show this help message\n"
-              << "\nExamples:\n"
-              << "  " << program_name << " -i 127.0.0.1 -p 8083\n"
-              << "  " << program_name << " --ip=192.168.1.100 --port=9000\n"
-              << "  " << program_name << " -i localhost -p 3000\n";
+    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n" <<
+        "\nRequired options:\n" <<
+        "  -i, --ip <ip>        Server IP address to connect to\n" <<
+        "  -p, --port <port>    Server port to connect to (1-65535)\n" <<
+        "\nOptional:\n" <<
+        "  -h, --help           Show this help message\n" <<
+        "\nExamples:\n" <<
+        "  " << program_name << " -i 127.0.0.1 -p 8083\n" <<
+        "  " << program_name << " --ip=192.168.1.100 --port=9000\n" <<
+        "  " << program_name << " -i localhost -p 3000\n";
 }
 
 int main(int argc, char* argv[])
@@ -85,8 +82,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::cout << "Client configuration:\n"
-              << "  Connecting to: " << ip << ":" << port << "\n\n";
+    std::cout << "Client configuration:\n" <<
+        "  Connecting to: " << ip << ":" << port << "\n\n";
 
     std::cout << "--- Streaming Client Demo ---" << std::endl;
     const std::string sessionId = "demo-session";
@@ -97,58 +94,65 @@ int main(int argc, char* argv[])
     A2A::AgentCard card;
     card.name = "OrchestratorAgent";
     card.description = "A2A Orchestrator Example";
-    card.url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
     card.version = "1.0.0";
     card.defaultInputModes = {"text"};
     card.defaultOutputModes = {"text"};
     card.capabilities.streaming = true;
-    card.preferredTransport = A2A::JSONRPC_TRANSPORT;
+    A2A::AgentInterface primaryInterface;
+    primaryInterface.url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
+    primaryInterface.protocolBinding = "JSONRPC";
+    primaryInterface.protocolVersion = "1.0";
+    card.supportedInterfaces = {primaryInterface};
 
     A2A::Client::ClientConfig cfg;
     cfg.streaming = true;
     cfg.supportedTransports = {"JSONRPC"};
     auto client = A2A::Client::ClientFactory::Create(card, cfg);
+    if (!client) {
+        std::cerr << "Failed to create client" << std::endl;
+        return -1;
+    }
 
     std::cout << "Client created for agent: " << card.name << std::endl;
 
-    // Consumer to log events with card context
-    std::cout << "[2] Adding a global event consumer..." << std::endl;
-    client->AddEventConsumer([](const A2A::Client::ClientEvent& ev, const A2A::AgentCard& card) {
-        std::cout << "[consumer] Event for " << card.name << ":" << std::endl;
-        std::visit(
-            [&](auto&& e) {
-                using T = std::decay_t<decltype(e)>;
-                if constexpr (std::is_same_v<T, A2A::Message>) {
-                    std::cout << "<-- Response: " << std::endl
-                              << "<---- kind: " << e.kind << std::endl
-                              << "<---- Role: " << (uint32_t)e.role << std::endl
-                              << "<---- messageId: " << e.messageId << std::endl;
-                } else {
-                    const auto& t = e.first;
-                    const auto& upd = e.second;
-                    std::cout << "<-- Task: " << std::endl
-                              << "<---- kind: " << t.kind << std::endl
-                              << "<---- contextId: " << t.contextId << std::endl
-                              << "<---- id: " << t.id << std::endl;
-                    if (!std::holds_alternative<std::monostate>(upd)) {
-                        if (std::holds_alternative<A2A::TaskStatusUpdateEvent>(upd)) {
-                            auto u = std::get<A2A::TaskStatusUpdateEvent>(upd);
-                            std::cout << "<-- Status: " << std::endl
-                                      << "<---- kind: " << u.kind << std::endl
-                                      << "<---- status: " << static_cast<uint32_t>(u.status.state) << std::endl
-                                      << "<---- taskId: " << u.taskId << std::endl;
-                        } else {
-                            auto u = std::get<A2A::TaskArtifactUpdateEvent>(upd);
-                            std::cout << "<-- Status: " << std::endl
-                                      << "<---- kind: " << u.kind << std::endl
-                                      << "<---- contextId: " << u.contextId << std::endl
-                                      << "<---- taskId: " << u.taskId << std::endl;
-                        }
+    auto f = [](auto&& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, A2A::Message>) {
+                std::cout << "<-- Response: " << std::endl <<
+                    "<---- Role: " << (uint32_t)e.role << std::endl <<
+                    "<---- messageId: " << e.messageId << std::endl;
+            } else if constexpr (std::is_same_v<T, A2A::A2AError>) {
+                std::cout << "<-- Error: " << std::endl <<
+                    "<---- code: " << e.code << std::endl <<
+                    "<---- message: " << e.message.value_or("") << std::endl;
+            } else {
+                const auto& t = e.first;
+                const auto& upd = e.second;
+                std::cout << "<-- Task: " << std::endl <<
+                    "<---- contextId: " << t.contextId << std::endl <<
+                    "<---- id: " << t.id << std::endl;
+                if (!std::holds_alternative<std::monostate>(upd)) {
+                    if (std::holds_alternative<A2A::TaskStatusUpdateEvent>(upd)) {
+                        auto u = std::get<A2A::TaskStatusUpdateEvent>(upd);
+                        std::cout << "<-- Status: " << std::endl <<
+                            "<---- status: " << (uint32_t)u.status.state << std::endl <<
+                            "<---- taskId: " << u.taskId << std::endl;
+                    } else {
+                        auto u = std::get<A2A::TaskArtifactUpdateEvent>(upd);
+                        std::cout << "<-- Status: " << std::endl <<
+                            "<---- contextId: " << u.contextId << std::endl <<
+                            "<---- taskId: " << u.taskId << std::endl;
                     }
                 }
                 std::cout << std::endl << std::endl;
-            },
-            ev);
+            }
+        };
+
+    // Consumer to log events with card context
+    std::cout << "[2] Adding a global event consumer..." << std::endl;
+    client->AddEventConsumer([&f](const A2A::Client::ClientEvent& ev, const A2A::AgentCard& card) {
+        std::cout << "[consumer] Event for " << card.name << ":" << std::endl;
+        std::visit(f, ev);
     });
 
     // Build request message from user
@@ -157,56 +161,25 @@ int main(int argc, char* argv[])
     m.role = A2A::Role::USER;
     m.messageId = "77777";
 
-    A2A::DataPart p;
-    p.data = json{{"action", "planTrip"}, {"destination", "Paris"}, {"date", "2025-12-25"}};
+    A2A::Part p;
+    p.data = json({{"action", "planTrip"}, {"destination", "Paris"}, {"date", "2025-12-25"}}).dump();
+    p.mediaType = "application/json";
 
     m.parts.push_back(p);
 
     // Per-call context with sessionId for credential lookup
     std::cout << "[4] Preparing call context with sessionId..." << std::endl;
     A2A::ClientCallContext ctx;
-    ctx.state["sessionId"] = sessionId;
-
+    json j;
+    j["sessionId"] = sessionId;
+    ctx.state = j.dump();
     std::cout << "\n--> [5] Sending streaming request to Orchestrator..." << std::endl;
-    client->SendMessage(m, &ctx, [](const A2A::Client::ClientEvent& ev, const A2A::AgentCard& card) {
+    auto ret = client->SendMessage(m, &ctx, [&f](const A2A::Client::ClientEvent& ev, const A2A::AgentCard& card) {
         std::cout << "[callback] Received event:" << std::endl;
-        std::visit(
-            [&](auto&& e) {
-                using T = std::decay_t<decltype(e)>;
-                if constexpr (std::is_same_v<T, A2A::Message>) {
-                    std::cout << "<-- Response: " << std::endl
-                              << "<---- kind: " << e.kind << std::endl
-                              << "<---- Role: " << (uint32_t)e.role << std::endl
-                              << "<---- messageId: " << e.messageId << std::endl;
-                } else {
-                    const auto& t = e.first;
-                    const auto& upd = e.second;
-                    std::cout << "<-- Task: " << std::endl
-                              << "<---- kind: " << t.kind << std::endl
-                              << "<---- contextId: " << t.contextId << std::endl
-                              << "<---- id: " << t.id << std::endl;
-                    if (!std::holds_alternative<std::monostate>(upd)) {
-                        if (std::holds_alternative<A2A::TaskStatusUpdateEvent>(upd)) {
-                            auto u = std::get<A2A::TaskStatusUpdateEvent>(upd);
-                            std::cout << "<-- Status: " << std::endl
-                                      << "<---- kind: " << u.kind << std::endl
-                                      << "<---- status: " << static_cast<uint32_t>(u.status.state) << std::endl
-                                      << "<---- taskId: " << u.taskId << std::endl;
-                        } else {
-                            auto u = std::get<A2A::TaskArtifactUpdateEvent>(upd);
-                            std::cout << "<-- Status: " << std::endl
-                                      << "<---- kind: " << u.kind << std::endl
-                                      << "<---- contextId: " << u.contextId << std::endl
-                                      << "<---- taskId: " << u.taskId << std::endl;
-                        }
-                    }
-                    std::cout << std::endl << std::endl;
-                }
-            },
-            ev);
+        std::visit(f, ev);
     });
 
-    ::getchar();
+    ret.wait();
     std::cout << "\nDone." << std::endl;
     return 0;
 }

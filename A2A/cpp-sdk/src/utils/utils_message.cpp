@@ -10,8 +10,9 @@ namespace A2A {
 Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& context_id,
                             const std::optional<std::string>& task_id)
 {
-    TextPart t{.kind = "text", .metadata = std::nullopt, .text = text};
-    Part p = t;
+    Part p;
+    p.text = text;
+    p.mediaType = "text/plain";
     Message m;
     m.role = Role::AGENT;
     m.parts = {p};
@@ -37,30 +38,8 @@ std::vector<std::string> GetTextParts(const std::vector<Part>& parts)
 {
     std::vector<std::string> out;
     for (const auto& p : parts) {
-        if (std::holds_alternative<TextPart>(p)) {
-            out.push_back(std::get<TextPart>(p).text);
-        }
-    }
-    return out;
-}
-
-std::vector<nlohmann::json> GetDataParts(const std::vector<Part>& parts)
-{
-    std::vector<nlohmann::json> out;
-    for (const auto& p : parts) {
-        if (std::holds_alternative<DataPart>(p)) {
-            out.push_back(std::get<DataPart>(p).data);
-        }
-    }
-    return out;
-}
-
-std::vector<std::variant<FileWithBytes, FileWithUri>> GetFileParts(const std::vector<Part>& parts)
-{
-    std::vector<std::variant<FileWithBytes, FileWithUri>> out;
-    for (const auto& p : parts) {
-        if (std::holds_alternative<FilePart>(p)) {
-            out.push_back(std::get<FilePart>(p).file);
+        if (p.text.has_value()) {
+            out.push_back(p.text.value());
         }
     }
     return out;

@@ -5,7 +5,10 @@
 #ifndef A2A_COMMON_TYPES_H
 #define A2A_COMMON_TYPES_H
 
+#include <optional>
 #include <string>
+
+#include "types.h"
 
 namespace A2A {
 
@@ -37,10 +40,21 @@ constexpr const char* STREAM_RESPONSE_TYPE_TASK = "task";
 constexpr const char* STREAM_RESPONSE_TYPE_STATUS_UPDATE = "status-update";
 constexpr const char* STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE = "artifact-update";
 
+constexpr const char* DEFAULT_PROTOCOL_VERSION = "1.0";
+
 struct UserData {
     std::string requestId = "";
     std::string method;
     bool isStream = false;
+};
+
+struct BaseResponse {
+    std::optional<std::string> id;
+    std::string jsonrpc = JSON_VERSION;
+};
+
+struct GetAgentCardSuccessResponse : public BaseResponse {
+    AgentCard result;
 };
 
 }

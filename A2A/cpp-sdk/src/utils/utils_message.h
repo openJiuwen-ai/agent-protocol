@@ -20,10 +20,6 @@ Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional
 
 std::vector<std::string> GetTextParts(const std::vector<Part>& parts);
 
-std::vector<nlohmann::json> GetDataParts(const std::vector<Part>& parts);
-
-std::vector<std::variant<FileWithBytes, FileWithUri>> GetFileParts(const std::vector<Part>& parts);
-
 std::string GetMessageText(const Message& message, const std::string& delimiter = "\n");
 
 } // namespace A2A

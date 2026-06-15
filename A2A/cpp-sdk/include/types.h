@@ -6,8 +6,10 @@
 #define A2A_TYPES
 
 #include <nlohmann/json.hpp>
+#include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -24,37 +26,17 @@ struct ClientCallContext {
     nlohmann::json headers;
 };
 
-struct FileWithBytes {
-    std::string bytes; // base64
-    std::optional<std::string> mimeType;
-    std::optional<std::string> name;
-};
+struct Part {
+    // oneof
+    std::optional<std::string> text;
+    std::optional<std::string> raw;
+    std::optional<std::string> url;
+    std::optional<std::string> data; // map-like JSON
 
-struct FileWithUri {
-    std::optional<std::string> mimeType;
-    std::optional<std::string> name;
-    std::string uri;
+    std::optional<std::string> metadata;
+    std::optional<std::string> filename;
+    std::optional<std::string> mediaType;
 };
-
-struct TextPart {
-    std::string kind = "text";
-    std::optional<nlohmann::json> metadata;
-    std::string text;
-};
-
-struct DataPart {
-    std::string kind = "data";
-    std::optional<nlohmann::json> metadata;
-    nlohmann::json data; // map-like JSON
-};
-
-struct FilePart {
-    std::string kind = "file";
-    std::optional<nlohmann::json> metadata;
-    std::variant<FileWithBytes, FileWithUri> file;
-};
-
-using Part = std::variant<TextPart, DataPart, FilePart>;
 
 struct Artifact {
     std::string artifactId;
@@ -361,6 +343,7 @@ struct AgentSkill {
     std::optional<std::vector<std::string>> examples;
     std::optional<std::vector<std::string>> inputModes;
     std::optional<std::vector<std::string>> outputModes;
+    std::optional<std::string> extension;
 };
 
 // AgentExtension mirrors the Python model used in extensions/common.py utilities
@@ -368,13 +351,14 @@ struct AgentExtension {
     std::string uri;
     std::optional<bool> required;
     std::optional<std::string> description;
-    std::optional<nlohmann::json> params;
+    std::optional<std::string> params;
 };
 
 struct AgentCapabilities {
     std::optional<bool> streaming;
     std::optional<bool> pushNotifications;
-    std::optional<bool> stateTransitionHistory;
+    std::optional<bool> extendedAgentCard;
+    std::optional<std::string> extension;
     std::optional<std::vector<AgentExtension>> extensions;
 };
 
@@ -384,28 +368,47 @@ struct AgentProvider {
 };
 
 struct AgentInterface {
-    std::string transport;
     std::string url;
+    std::string protocolBinding;
+    std::string protocolVersion;
+    std::optional<std::string> tenant;
+};
+
+struct SecurityRequirement {
+    std::unordered_map<std::string, std::vector<std::string>> schemes;
+};
+
+struct AgentCardSignature {
+    // Required. The protected JWS header. This is always a base64url-encoded JSON object.
+    // Note: Trailing underscore because 'protected' is a C++ keyword.
+    std::string protected_;
+
+    // Required. The computed signature, base64url-encoded.
+    std::string signature;
+
+    // The unprotected JWS header values
+    std::optional<std::string> header;  // json like
 };
 
 struct AgentCard {
-    std::string protocolVersion;
     std::string name;
     std::string description;
-    std::string url;
     std::optional<AgentProvider> provider;
     std::optional<std::string> iconUrl;
     std::string version;
     std::optional<std::string> documentationUrl;
     AgentCapabilities capabilities;
     std::optional<std::map<std::string, SecurityScheme>> securitySchemes;
-    std::optional<std::vector<nlohmann::json>> security;
+    std::optional<std::vector<std::string>> security;
     std::vector<std::string> defaultInputModes;
     std::vector<std::string> defaultOutputModes;
     std::vector<AgentSkill> skills;
-    std::optional<bool> supportsAuthenticatedExtendedCard;
-    std::optional<std::string> preferredTransport;
-    std::optional<std::vector<AgentInterface>> additionalInterfaces;
+    std::vector<AgentInterface> supportedInterfaces;
+    std::optional<std::vector<SecurityRequirement>> securityRequirements;
+    std::optional<std::vector<AgentCardSignature>> signatures;
+
+    std::optional<std::string> category;
+    std::optional<std::string> extension;
 };
 } // namespace A2A
 

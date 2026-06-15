@@ -14,7 +14,6 @@
 
 #include "server/server.h"
 #include "types.h"
-#include "utils/utils_message.h"
 
 using json = nlohmann::json;
 
@@ -23,13 +22,13 @@ constexpr int MAX_PORT = 65535;
 // --------------------- Streaming Orchestrator Executor ---------------------
 class OrchestratorAgentExecutor : public A2A::Server::AgentExecutor {
 public:
-    void Execute(const A2A::Server::RequestContext& context,
+    void Execute(std::shared_ptr<A2A::Server::RequestContext> context,
         std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
     {
         std::cout << "OrchestratorAgentExecutor::Execute() called\n";
 
         // 获取请求消息
-        const A2A::Message* req = context.GetMessage();
+        const A2A::Message* req = context->GetMessage();
         if (!req) {
             // 错误处理：发 error 事件
             const auto errMsg = makeErrorPart("No message in request");
@@ -41,10 +40,11 @@ public:
         std::string destination = "Unknown";
         std::string date = "anytime";
         for (const auto& part : req->parts) {
-            if (auto* data_part = std::get_if<A2A::DataPart>(&part)) {
-                const auto& data = data_part->data;
-                destination = data.value("destination", destination);
-                date = data.value("date", date);
+            if (part.data.has_value()) {
+                const auto& d = part.data.value();
+                nlohmann::json j = nlohmann::json::parse(std::get<std::string>(d));
+                destination = j.value("destination", destination);
+                date = j.value("date", date);
             }
         }
 
@@ -58,7 +58,10 @@ public:
         const json flight_data{
             {"action", "flights/info"}, {"airline", "Air France"}, {"destination", destination}, {"price", "750 USD"}};
         std::vector<A2A::Part> flight_artifact_parts;
-        flight_artifact_parts.emplace_back(A2A::TextPart{"text", std::nullopt, flight_data.dump()});
+        A2A::Part flight_data_part;
+        flight_data_part.text = flight_data.dump();
+        flight_data_part.mediaType = "text/plain";
+        flight_artifact_parts.emplace_back(flight_data_part);
 
         A2A::Server::TaskArtifactParam flight_artifact_param;
         flight_artifact_param.parts = flight_artifact_parts;
@@ -72,7 +75,10 @@ public:
         json weather_data{
             {"action", "weather/forecast"}, {"city", destination}, {"temperature", "-2°C"}, {"conditions", "Snowy"}};
         std::vector<A2A::Part> weather_artifact_parts;
-        weather_artifact_parts.emplace_back(A2A::TextPart{"text", std::nullopt, weather_data.dump()});
+        A2A::Part weather_data_part;
+        weather_data_part.text = weather_data.dump();
+        weather_data_part.mediaType = "text/plain";
+        weather_artifact_parts.emplace_back(weather_data_part);
 
         A2A::Server::TaskArtifactParam weather_artifact_param;
         weather_artifact_param.parts = weather_artifact_parts;
@@ -87,7 +93,7 @@ public:
         taskUpdater->Complete(merged_req);
     }
 
-    void Cancel(const A2A::Server::RequestContext& context,
+    void Cancel(std::shared_ptr<A2A::Server::RequestContext> context,
         std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
     {
         std::cout << "OrchestratorAgentExecutor::Cancel() called\n";
@@ -97,16 +103,18 @@ public:
 private:
     std::optional<A2A::Message> makeCombinedPart(const std::string& tag, const json& payload)
     {
-        A2A::DataPart dp;
-        dp.data = {{"tag", tag}, {"payload", payload}};
-        return A2A::NewAgentPartsMessage({dp});
+        A2A::Part dp;
+        dp.data = nlohmann::json({{"tag", tag}, {"payload", payload}}).dump();
+        dp.mediaType = "application/json";
+        return NewAgentPartsMessage({dp});
     }
 
     std::optional<A2A::Message> makeErrorPart(const std::string& msg)
     {
-        A2A::DataPart dp;
-        dp.data = {{"error", msg}};
-        return A2A::NewAgentPartsMessage({dp});
+        A2A::Part dp;
+        dp.data = nlohmann::json({{"error", msg}}).dump();
+        dp.mediaType = "application/json";
+        return NewAgentPartsMessage({dp});
     }
 
     std::optional<A2A::Message> makeCombinedMessage(const A2A::Message& input)
@@ -114,19 +122,36 @@ private:
         std::string destination = "Unknown";
         std::string date = "anytime";
         for (const auto& part : input.parts) {
-            if (auto* data_part = std::get_if<A2A::DataPart>(&part)) {
-                const auto& d = data_part->data;
-                destination = d.value("destination", destination);
-                date = d.value("date", date);
+            if (part.data.has_value()) {
+                const auto& d = part.data.value();
+                nlohmann::json j = nlohmann::json::parse(std::get<std::string>(d));
+                destination = j.value("destination", destination);
+                date = j.value("date", date);
             }
         }
 
         json combined{
             {"action", "tripPlan"}, {"destination", destination}, {"date", date}, {"summary", "Trip planned."}};
 
-        A2A::DataPart dp;
-        dp.data = combined;
-        return A2A::NewAgentPartsMessage({dp});
+        A2A::Part dp;
+        dp.data = combined.dump();
+        dp.mediaType = "application/json";
+        return NewAgentPartsMessage({dp});
+    }
+
+    static A2A::Message NewAgentPartsMessage(
+        const std::vector<A2A::Part>& parts,
+        const std::optional<std::string>& context_id = std::nullopt,
+        const std::optional<std::string>& task_id = std::nullopt)
+    {
+        static int count = 0;
+        A2A::Message m;
+        m.role = A2A::Role::AGENT;
+        m.parts = parts;
+        m.messageId = "message-" + std::to_string(++count);
+        m.taskId = task_id;
+        m.contextId = context_id;
+        return m;
     }
 };
 
@@ -141,16 +166,16 @@ void signal_handler(int sig)
 
 void printUsage(const char* program_name)
 {
-    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n"
-              << "\nRequired options:\n"
-              << "  -i, --ip <ip>        Server IP address to bind to\n"
-              << "  -p, --port <port>    Server port to listen on (1-65535)\n"
-              << "\nOptional:\n"
-              << "  -h, --help           Show this help message\n"
-              << "\nExamples:\n"
-              << "  " << program_name << " -i 127.0.0.1 -p 8083\n"
-              << "  " << program_name << " --ip=0.0.0.0 --port=9000\n"
-              << "  " << program_name << " -i 192.168.1.100 -p 3000\n";
+    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n" <<
+        "\nRequired options:\n" <<
+        "  -i, --ip <ip>        Server IP address to bind to\n" <<
+        "  -p, --port <port>    Server port to listen on (1-65535)\n" <<
+        "\nOptional:\n" <<
+        "  -h, --help           Show this help message\n" <<
+        "\nExamples:\n" <<
+        "  " << program_name << " -i 127.0.0.1 -p 8083\n" <<
+        "  " << program_name << " --ip=0.0.0.0 --port=9000\n" <<
+        "  " << program_name << " -i 192.168.1.100 -p 3000\n";
 }
 
 // ========================
@@ -210,9 +235,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::cout << "Server configuration:\n"
-              << "  IP: " << ip << "\n"
-              << "  Port: " << port << "\n\n";
+    std::cout << "Server configuration:\n" <<
+        "  IP: " << ip << "\n" <<
+        "  Port: " << port << "\n\n";
 
     // 1. 阻塞信号
     sigset_t sigset;
@@ -225,15 +250,18 @@ int main(int argc, char* argv[])
     auto orch_executor = std::make_shared<OrchestratorAgentExecutor>();
 
     // 3. 创建 AgentCard
-    auto agentCard = std::make_shared<A2A::AgentCard>();
-    agentCard->name = "OrchestratorAgent";
-    agentCard->description = "A2A Orchestrator Example";
-    agentCard->url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
-    agentCard->version = "1.0.0";
-    agentCard->defaultInputModes = {"text"};
-    agentCard->defaultOutputModes = {"text"};
-    agentCard->capabilities.streaming = true;
-    agentCard->preferredTransport = A2A::JSONRPC_TRANSPORT;
+    A2A::AgentCard agentCard{};
+    agentCard.name = "OrchestratorAgent";
+    agentCard.description = "A2A Orchestrator Example";
+    agentCard.version = "1.0.0";
+    agentCard.defaultInputModes = {"text"};
+    agentCard.defaultOutputModes = {"text"};
+    agentCard.capabilities.streaming = true;
+    A2A::AgentInterface primaryInterface;
+    primaryInterface.url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
+    primaryInterface.protocolBinding = "JSONRPC";
+    primaryInterface.protocolVersion = "1.0";
+    agentCard.supportedInterfaces = {primaryInterface};
 
     std::cout << "--Built agent card \n";
 
@@ -246,7 +274,7 @@ int main(int argc, char* argv[])
     auto server = A2A::Server::HttpServerBuilder::Build(
         httpConfig,
         agentCard,
-        nullptr,  // extendedAgentCard
+        {},  // extendedAgentCard
         orch_executor,  // agentExecutor
         nullptr   // taskStore
     );

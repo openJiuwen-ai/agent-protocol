@@ -108,10 +108,7 @@ void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const Us
     }
 
     if (message.errCode != 0) {
-        TransportError err;
-        err.errorCode = message.errCode;
-        err.errInfo = message.data;
-        transportEventCb_(userData->requestId, err);
+        transportEventCb_(userData->requestId, TransportError{message.errCode, message.data});
         return;
     }
 
@@ -121,9 +118,15 @@ void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const Us
     }
 
     TransportEvent ev;
-    nlohmann::json j = nlohmann::json::parse(message.data);
     try {
-        if (userData->method == METHOD_MESSAGE_SEND) {
+        nlohmann::json j = nlohmann::json::parse(message.data);
+        if (j.contains("error")) {
+            const auto& err = j.at("error");
+            ev = TransportError{err.at("code").get<int>(), err.at("message").get<std::string>()};
+        } else if (j.contains(JSON_FIELD_ID) && j.at(JSON_FIELD_ID).get<std::string>() != userData->requestId) {
+            ev = TransportError{static_cast<int>(JSONRPCErrorCode::INVALID_AGENT_RESPONSE),
+                "RequestId in response data does not match with requestId in request"};
+        } else if (userData->method == METHOD_MESSAGE_SEND) {
             ev = j.at(JSON_FIELD_RESULT).get<Message>();
         } else if (userData->method == METHOD_TASK_GET) {
             ev = j.at(JSON_FIELD_RESULT).get<Task>();
@@ -140,13 +143,11 @@ void JsonRpcTransport::OnTransportMessage(const ConnEventData& message, const Us
         } else if (userData->method == METHOD_AGENT_CARD_GET) {
             ev = j.get<AgentCard>();
         } else {
-            return;
+            ev = TransportError{static_cast<int>(JSONRPCErrorCode::METHOD_NOT_FOUND),
+                "Method not found in response data"};
         }
     } catch (const nlohmann::json::exception& e) {
-        TransportError err;
-        err.errorCode = static_cast<int>(JSONRPCErrorCode::PARSE_ERROR);
-        err.errInfo = e.what();
-        transportEventCb_(userData->requestId, err);
+        ev = TransportError{static_cast<int>(JSONRPCErrorCode::PARSE_ERROR), e.what()};
     }
 
     transportEventCb_(userData->requestId, ev);
@@ -189,39 +190,37 @@ void JsonRpcTransport::Send(const std::string& requestId, const std::string& met
 
 void JsonRpcTransport::OnStreamResp(const ConnEventData& message, const UserData* userData)
 {
+    TransportEvent ev;
     if (message.isStreamFin) {
-        TransportError err;
-        err.errorCode = 0;
-        transportEventCb_(userData->requestId, err);
+        transportEventCb_(userData->requestId, TransportError{0, ""});
         return;
     }
 
-    nlohmann::json result = nlohmann::json::parse(message.data);
-    if (!result.contains(JSON_FIELD_RESULT)) {
-        TransportError err;
-        err.errorCode = 1;
-        err.errInfo = "result not found";
-        transportEventCb_(userData->requestId, err);
-        return;
-    }
+    try {
+        nlohmann::json data = nlohmann::json::parse(message.data);
+        if (!data.contains(JSON_FIELD_RESULT)) {
+            transportEventCb_(userData->requestId, TransportError{1, "result not found"});
+            return;
+        }
+        if (data.contains(JSON_FIELD_ID) && data.at(JSON_FIELD_ID).get<std::string>() != userData->requestId) {
+            ev = TransportError{static_cast<int>(JSONRPCErrorCode::INVALID_AGENT_RESPONSE),
+                "RequestId in response data does not match with requestId in request"};
+            transportEventCb_(userData->requestId, ev);
+            return;
+        }
 
-    auto& j = result.at(JSON_FIELD_RESULT);
-    // Only task/update events
-    if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_TASK) {
-        auto t = j.get<Task>();
-        transportEventCb_(userData->requestId, t);
-        return;
+        auto& j = data.at(JSON_FIELD_RESULT);
+        if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_TASK) {
+            ev = j.get<Task>();
+        } else if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_STATUS_UPDATE) {
+            ev = j.get<TaskStatusUpdateEvent>();
+        } else if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE) {
+            ev = j.get<TaskArtifactUpdateEvent>();
+        }
+    } catch (const nlohmann::json::exception& e) {
+        ev = TransportError{static_cast<int>(JSONRPCErrorCode::PARSE_ERROR), e.what()};
     }
-    if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_STATUS_UPDATE) {
-        auto u = j.get<TaskStatusUpdateEvent>();
-        transportEventCb_(userData->requestId, u);
-        return;
-    }
-    if (j.contains(JSON_FIELD_KIND) && j.at(JSON_FIELD_KIND) == STREAM_RESPONSE_TYPE_ARTIFACT_UPDATE) {
-        auto u = j.get<TaskArtifactUpdateEvent>();
-        transportEventCb_(userData->requestId, u);
-        return;
-    }
+    transportEventCb_(userData->requestId, ev);
 }
 
 } // namespace A2A::Client

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "client/client.h"
+#include "client/client_transport.h"
 #include "types.h"
 
 namespace A2A::Client {
@@ -32,6 +33,9 @@ public:
     static std::shared_ptr<Client> Create(const AgentCard& card, const ClientConfig& config,
         const std::vector<Consumer>& consumers = {},
         const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors = {});
+
+    static std::shared_ptr<Client> Create(const AgentCard& card, const ClientConfig& config,
+        std::shared_ptr<ClientTransport> transport, const std::vector<Consumer>& consumers = {});
 };
 
 } // namespace A2A::Client

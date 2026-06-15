@@ -70,8 +70,9 @@ bool AreModalitiesCompatible(const std::optional<std::vector<std::string>>& serv
 
 Artifact BuildTextArtifact(const std::string& text, const std::string& artifactId)
 {
-    TextPart t{.kind = "text", .metadata = std::nullopt, .text = text};
-    Part p = t;
+    Part p;
+    p.text = text;
+    p.mediaType = "text/plain";
     Artifact a;
     a.artifactId = artifactId;
     a.parts = {p};
