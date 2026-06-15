@@ -30,8 +30,8 @@ void TrimInPlace(std::string& value)
 }
 
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
-                         std::unordered_map<std::string, std::string>& headers, std::string& body,
-                         std::size_t& consumedBytes)
+    std::unordered_map<std::string, std::string>& headers, std::string& body,
+    std::size_t& consumedBytes)
 {
     consumedBytes = 0;
 
@@ -68,13 +68,12 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     }
 
     std::size_t contentLength = 0;
-    auto contentLengthIterator = headers.find(CONTENT_LENGTH_HEADER);
-    if (contentLengthIterator != headers.end()) {
+    std::string contentLengthStr = GetHeaderValue(headers, CONTENT_LENGTH_HEADER);
+    if (!contentLengthStr.empty()) {
         try {
-            contentLength = static_cast<std::size_t>(std::stoul(contentLengthIterator->second));
+            contentLength = static_cast<std::size_t>(std::stoul(contentLengthStr));
         } catch (...) {
             contentLength = 0;
-            return false;
         }
     }
 
@@ -87,13 +86,18 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     return true;
 }
 
-std::string GetContentType(const HttpResponse& response)
+std::string GetHeaderValue(const HttpResponse& response, const std::string& headerName)
 {
-    auto contentTypeIter = response.headers.find(CONTENT_TYPE_HEADER);
-    if (contentTypeIter == response.headers.end()) {
+    return GetHeaderValue(response.headers, headerName);
+}
+
+std::string GetHeaderValue(const std::unordered_map<std::string, std::string>& headers, const std::string& headerName)
+{
+    auto iter = FindHeaderCaseInsensitive(headers, headerName);
+    if (iter == headers.end()) {
         return "";
     }
-    return contentTypeIter->second;
+    return iter->second;
 }
 
 bool ParseSseLine(const std::string& line, ServerSentEvent& sseEvent)
@@ -122,15 +126,46 @@ bool ParseSseLine(const std::string& line, ServerSentEvent& sseEvent)
             sseEvent.id = sseEvent.id.substr(firstNonSpace);
         }
     } else if (line.find("data:") == 0) {
-        sseEvent.data = line.substr(SSE_DATA_PREFIX_LEN);
+        std::string dataValue = line.substr(SSE_DATA_PREFIX_LEN);
         // Trim leading whitespace
-        size_t firstNonSpace = sseEvent.data.find_first_not_of(" \t");
+        size_t firstNonSpace = dataValue.find_first_not_of(" \t");
         if (firstNonSpace != std::string::npos) {
-            sseEvent.data = sseEvent.data.substr(firstNonSpace);
+            dataValue = dataValue.substr(firstNonSpace);
+        }
+        // 追加到现有数据（SSE规范要求用换行符连接多行数据）
+        if (sseEvent.data.empty()) {
+            sseEvent.data = dataValue;
+        } else {
+            sseEvent.data += "\n" + dataValue;
         }
     }
 
     return false;
 }
+
+std::unordered_map<std::string, std::string>::const_iterator FindHeaderCaseInsensitive(
+    const std::unordered_map<std::string, std::string>& headers, const std::string& headerName)
+{
+    // 先尝试精确匹配
+    auto it = headers.find(headerName);
+    if (it != headers.end()) {
+        return it;
+    }
+
+    // 如果没找到，尝试小写版本
+    std::string lowerHeaderName = headerName;
+    std::transform(lowerHeaderName.begin(), lowerHeaderName.end(), lowerHeaderName.begin(), ::tolower);
+
+    for (auto iter = headers.begin(); iter != headers.end(); ++iter) {
+        std::string keyLower = iter->first;
+        std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(), ::tolower);
+        if (keyLower == lowerHeaderName) {
+            return iter;
+        }
+    }
+
+    return headers.end();
+}
+
 
 } // namespace A2A::Http

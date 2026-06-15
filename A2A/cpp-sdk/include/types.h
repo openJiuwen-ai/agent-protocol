@@ -20,6 +20,51 @@ constexpr const char* JSONRPC_VERSION = "2.0";
 
 enum class Role { AGENT, USER };
 
+enum class A2AErrorCode : int {
+    A2A_SUCCESS                 = 0,
+
+    // Standard JSON-RPC 2.0 Errors (RFC 7196)
+    JSONRPC_PARSE_ERROR         = -32700,
+    JSONRPC_INVALID_REQUEST     = -32600,
+    JSONRPC_METHOD_NOT_FOUND    = -32601,
+    JSONRPC_INVALID_PARAMS      = -32602,
+    JSONRPC_INTERNAL_ERROR      = -32603,
+
+    // Implementation-defined Server Errors (in [-32099, -32000])
+    TASK_NOT_FOUND                              = -32001,
+    TASK_NOT_CANCELABLE                         = -32002,
+    PUSH_NOTIFICATION_NOT_SUPPORTED             = -32003,
+    UNSUPPORTED_OPERATION                       = -32004,
+    CONTENT_TYPE_NOT_SUPPORTED                  = -32005,
+    INVALID_AGENT_RESPONSE                      = -32006,
+    AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED  = -32007,
+    EXTENSION_SUPPORT_REQUIRED_ERROR            = -32008,
+    VERSION_NOT_SUPPORTED_ERROR                 = -32009,
+
+    // A2A Client Errors (in [-32199, -32100])
+    A2A_REQUEST_TIMEOUT         = -32101,
+    A2A_TRANSPORT_EXCEPTION     = -32102,
+    A2A_INVALID_TRANSPORT       = -32103,
+    A2A_ENCRYPT_ERROR           = -32104,
+    A2A_DECRYPT_ERROR           = -32105,
+    A2A_INVALID_FORMAT          = -32106,
+    A2A_UNAUTHORIZED            = -32107,
+    A2A_STATUS_ERROR            = -32108,
+    A2A_INVALID_INPUT           = -32109,
+    A2A_BAD_ALLOC               = -32110,
+    A2A_CONCURRENT_LIMIT        = -32111,
+
+    // Business errors for server
+    INVALID_INPUT               = 1022400010,
+    BAD_ALLOC                   = 1022420001
+};
+
+struct A2AError {
+    int code = -1;
+    std::optional<std::string> data;
+    std::optional<std::string> message;
+};
+
 struct ClientCallContext {
     // Arbitrary per-request state
     nlohmann::json state;
@@ -69,7 +114,8 @@ enum class TaskState {
     FAILED,
     REJECTED,
     AUTH_REQUIRED,
-    UNKNOWN
+    UNKNOWN,
+    UNSPECIFIED = UNKNOWN
 };
 
 struct TaskStatus {
@@ -103,10 +149,11 @@ struct PushNotificationConfig {
 
 // Minimal parameter and event types used by helpers
 struct MessageSendConfiguration {
-    std::vector<std::string> acceptedOutputModes;
+    std::optional<std::vector<std::string>> acceptedOutputModes;
     std::optional<int> historyLength;
     std::optional<PushNotificationConfig> pushNotificationConfig;
     std::optional<bool> blocking;
+    std::optional<bool> returnImmediately;
 };
 
 struct MessageSendParams {
@@ -167,12 +214,6 @@ struct DeleteTaskPushNotificationConfigParams {
     std::string id;
     std::optional<nlohmann::json> metadata;
     std::string pushNotificationConfigId;
-};
-
-struct SendMessageSuccessResponse {
-    std::optional<std::string> id;
-    std::string jsonrpc = JSONRPC_VERSION;
-    std::variant<Task, Message> result;
 };
 
 // Error models (A2A + JSON-RPC)

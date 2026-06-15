@@ -42,7 +42,7 @@ HttpCardResolver::HttpCardResolver(
         fullPath += path;
     }
     // create JSONRPC transport
-    transport_ = std::make_shared<JsonRpcTransport>(fullPath, AgentCard{},
+    transport_ = std::make_shared<JsonRpcTransport>(fullPath, AgentCard{}, ClientConfig{},
         std::vector<std::shared_ptr<ClientCallInterceptor>>{});
     // register callback
     transport_->SetTransportCallback([this](const std::string& id, const TransportEvent& ev) {
@@ -63,7 +63,7 @@ std::future<AgentCard> HttpCardResolver::GetAgentCard([[maybe_unused]] const std
         }
 
         // send request
-        transport_->GetCard(requestId, nullptr);
+        transport_->GetCard(requestId, nullptr, 0);
     } catch (const std::bad_alloc& e) {
         A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
         std::promise<AgentCard> fallbackPromise;
@@ -119,8 +119,10 @@ void HttpCardResolver::OnTransportEvent(const std::string& requestId, const Tran
 
 std::exception_ptr HttpCardResolver::CreateExceptionPtr(int code, const std::string& msg) const
 {
-    nlohmann::json error = {{"code", code}, {"message", msg}};
-    return std::make_exception_ptr(std::runtime_error(error.dump()));
+    A2AError error;
+    error.code = code;
+    error.message = msg;
+    return std::make_exception_ptr(std::runtime_error(nlohmann::json(error).dump()));
 }
 
 } // namespace A2A::Client

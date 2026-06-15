@@ -2,7 +2,7 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  */
 
-#include "client/protocol_version_interceptor.h"
+#include "protocol_version_interceptor.h"
 #include "protocol_version_interceptor_impl.h"
 
 namespace A2A::Client {
@@ -14,7 +14,7 @@ ProtocolVersionInterceptor::ProtocolVersionInterceptor()
 
 ProtocolVersionInterceptor::~ProtocolVersionInterceptor() = default;
 
-void ProtocolVersionInterceptor::Intercept(const std::string& methodName, nlohmann::json& payload,
+void ProtocolVersionInterceptor::Intercept(const std::string& methodName, std::string& payload,
     std::map<std::string, std::string>& headers,
     const A2A::AgentCard* agentCard, const ClientCallContext* context)
 {
