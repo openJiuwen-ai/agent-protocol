@@ -182,6 +182,7 @@ void Socket::NotifyCloseOnce()
 void Socket::Close()
 {
     if (fd_ < 0) {
+        selfHold_.reset();
         return;
     }
     // First unregister/disable any registered events

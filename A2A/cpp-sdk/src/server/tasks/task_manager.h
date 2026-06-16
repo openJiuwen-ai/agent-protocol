@@ -60,7 +60,8 @@ private:
     void SaveTaskEvent(const EventType& event);
     Task EnsureTaskForEvent(const EventType& event);
     Task EnsureTask(const std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& event);
-    void HandleError(const std::string& taskId, const std::string& message, int code = INTERNAL_ERROR_CODE) const;
+    void HandleError(const std::string& taskId, const std::string& message,
+        int code = static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR)) const;
 
     std::shared_ptr<TaskStore> taskStore_;
     std::unordered_map<std::string, std::shared_ptr<TaskExecuteInfo>> taskExecuteMap_;

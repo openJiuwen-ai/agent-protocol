@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "test_network.h"
 #include "transport/http_server_transport.h"
 #include "server/http_server_manager.h"
 #include "transport_emitter.h"
@@ -55,7 +56,7 @@ protected:
     void SetUp() override
     {
         config.ip = "127.0.0.1";
-        config.port = 8080;
+        config.port = A2A::Test::GetFreeTcpPort();
         config.ioThreadNum = 2;
 
         transport = std::make_shared<HttpServerTransport>(config);
@@ -306,12 +307,10 @@ TEST_F(HttpServerTransportTest, DestructorWithRunningServer)
 // ===========================================================================
 TEST_F(HttpServerTransportTest, DifferentPorts)
 {
-    std::vector<int> ports = {8080, 8081, 8082, 0};
-
-    for (int port : ports) {
+    for (int i = 0; i < 4; ++i) {
         HttpConfig testConfig;
         testConfig.ip = "127.0.0.1";
-        testConfig.port = port;
+        testConfig.port = (i == 3) ? 0 : static_cast<int>(A2A::Test::GetFreeTcpPort());
         testConfig.ioThreadNum = 1;
 
         auto testTransport = std::make_shared<HttpServerTransport>(testConfig);
@@ -325,13 +324,10 @@ TEST_F(HttpServerTransportTest, DifferentPorts)
 
 TEST_F(HttpServerTransportTest, DifferentIPs)
 {
-    std::vector<std::pair<std::string, int>> ipPortPairs = {
-        {"127.0.0.1", 8081},
-        {"0.0.0.0", 8082},
-        {"localhost", 8083}
-    };
+    const std::vector<std::string> ips = {"127.0.0.1", "0.0.0.0", "localhost"};
 
-    for (const auto& [ip, port] : ipPortPairs) {
+    for (const auto& ip : ips) {
+        const int port = static_cast<int>(A2A::Test::GetFreeTcpPort());
         HttpConfig testConfig;
         testConfig.ip = ip;
         testConfig.port = port;
@@ -353,7 +349,7 @@ TEST_F(HttpServerTransportTest, DifferentThreadCounts)
     for (int threadCount : threadCounts) {
         HttpConfig testConfig;
         testConfig.ip = "127.0.0.1";
-        testConfig.port = 8080;
+        testConfig.port = static_cast<int>(A2A::Test::GetFreeTcpPort());
         testConfig.ioThreadNum = threadCount;
 
         auto testTransport = std::make_shared<HttpServerTransport>(testConfig);
@@ -387,7 +383,7 @@ TEST_F(HttpServerTransportTest, EmptyIP)
 {
     HttpConfig testConfig;
     testConfig.ip = "";
-    testConfig.port = 8080;
+    testConfig.port = static_cast<int>(A2A::Test::GetFreeTcpPort());
     testConfig.ioThreadNum = 1;
 
     auto testTransport = std::make_shared<HttpServerTransport>(testConfig);
@@ -402,7 +398,7 @@ TEST_F(HttpServerTransportTest, ZeroThreadCount)
 {
     HttpConfig testConfig;
     testConfig.ip = "127.0.0.1";
-    testConfig.port = 8080;
+    testConfig.port = static_cast<int>(A2A::Test::GetFreeTcpPort());
     testConfig.ioThreadNum = 0;
 
     auto testTransport = std::make_shared<HttpServerTransport>(testConfig);
@@ -421,7 +417,7 @@ TEST_F(HttpServerTransportTest, NoMemoryLeak)
     for (int i = 0; i < 10; i++) {
         {
             HttpConfig testConfig = config;
-            testConfig.port = 8080 + i;
+            testConfig.port = static_cast<int>(A2A::Test::GetFreeTcpPort());
 
             HttpServerTransport testTransport(testConfig);
 

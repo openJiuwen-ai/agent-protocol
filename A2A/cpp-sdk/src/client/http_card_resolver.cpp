@@ -7,6 +7,7 @@
 #include <future>
 #include <string>
 
+#include "error.h"
 #include "uuid.h"
 #include "a2a_log.h"
 #include "jsonrpc.h"
@@ -114,10 +115,7 @@ void HttpCardResolver::OnTransportEvent(const std::string& requestId, const Tran
 
 std::exception_ptr HttpCardResolver::CreateExceptionPtr(int code, const std::string& msg) const
 {
-    A2AError error;
-    error.code = code;
-    error.message = msg;
-    return std::make_exception_ptr(std::runtime_error(nlohmann::json(error).dump()));
+    return A2AClientException::Make(code, msg);
 }
 
 } // namespace A2A::Client

@@ -8,28 +8,11 @@ file(GLOB_RECURSE A2A_TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp"
 )
 
-file(GLOB_RECURSE A2A_CLIENT_SOURCES "${CMAKE_SOURCE_DIR}/src/client/*.cpp")
-file(GLOB_RECURSE A2A_SERVER_SOURCES "${CMAKE_SOURCE_DIR}/src/server/*.cpp")
-file(GLOB_RECURSE A2A_EVENT_SOURCES "${CMAKE_SOURCE_DIR}/src/event/*.cpp")
-file(GLOB_RECURSE A2A_LOG_SOURCES "${CMAKE_SOURCE_DIR}/src/log/*.cpp")
-file(GLOB_RECURSE A2A_SHARED_SOURCES "${CMAKE_SOURCE_DIR}/src/shared/*.cpp")
-file(GLOB_RECURSE A2A_TRANSPORT_SOURCES "${CMAKE_SOURCE_DIR}/src/transport/*.cpp")
-file(GLOB_RECURSE A2A_UTILS_SOURCES "${CMAKE_SOURCE_DIR}/src/utils/*.cpp")
-
-add_executable(a2a_ut_test
-    ${A2A_TEST_SOURCES}
-    ${A2A_CLIENT_SOURCES}
-    ${A2A_SERVER_SOURCES}
-    ${A2A_EVENT_SOURCES}
-    ${A2A_LOG_SOURCES}
-    ${A2A_SHARED_SOURCES}
-    ${A2A_TRANSPORT_SOURCES}
-    ${A2A_UTILS_SOURCES}
-)
+add_executable(a2a_ut_test ${A2A_TEST_SOURCES})
 
 target_include_directories(a2a_ut_test
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/tests/ut/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/client
@@ -45,6 +28,7 @@ target_include_directories(a2a_ut_test
 )
 
 set(_a2a_ut_libs
+    a2a
     nlohmann_json::nlohmann_json
     OpenSSL::SSL
     OpenSSL::Crypto
@@ -95,5 +79,7 @@ if(A2A_ENABLE_COVERAGE)
         message(WARNING "Coverage not supported for compiler: ${CMAKE_CXX_COMPILER_ID}")
     endif()
 endif()
+
+add_dependencies(a2a_ut_test a2a)
 
 gtest_discover_tests(a2a_ut_test DISCOVERY_MODE PRE_TEST)

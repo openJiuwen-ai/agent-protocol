@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include "common_types.h"
+#include "error.h"
 #include "uuid.h"
 #include "a2a_log.h"
 #include "jsonrpc.h"
@@ -606,10 +607,7 @@ std::future<void> DefaultClient::ProcessMessageRequest(const MessageSendParams& 
 
 std::exception_ptr DefaultClient::CreateExceptionPtr(int code, const std::string& msg) const
 {
-    A2AError error;
-    error.code = code;
-    error.message = msg;
-    return std::make_exception_ptr(std::runtime_error(nlohmann::json(error).dump()));
+    return A2AClientException::Make(code, msg);
 }
 
 } // namespace Client

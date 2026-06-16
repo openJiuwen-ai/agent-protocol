@@ -12,29 +12,30 @@
 
 namespace A2A::Server {
 
+/**
+ * @brief User-implemented agent logic for task execution and cancellation.
+ * @note 实现此接口以处理 message/send 与 tasks/cancel 请求。
+ */
 class AgentExecutor {
 public:
-    /**
-    * @brief destructor
-    */
+    /** @brief Virtual destructor. */
     virtual ~AgentExecutor() = default;
 
     /**
-    * @brief execute a task in given request context
-    *
-    * @param[in] context request context containing task information
-    * @param[in] taskUpdater updater used to update events
-    */
+     * @brief Execute a task in the given request context.
+     * @param[in] context     Request context with message and task info.
+     * @param[in] taskUpdater Updater for publishing status / artifact events.
+     * @throws A2AServerError on unrecoverable execution errors.
+     */
     virtual void Execute(std::shared_ptr<RequestContext> context, std::shared_ptr<TaskUpdater> taskUpdater) = 0;
 
     /**
-    * @brief execute a task in given request context and customized jsonrpc method
-    * (other than SendMessage and SendMessageStreaming)
-    *
-    * @param[in] context request context
-    * @param[in] taskUpdater updater used to update events
-    * @param[in] method Customizable jsonrpc method
-    */
+     * @brief Execute a task for a custom JSON-RPC method (non SendMessage variants).
+     * @param[in] context     Request context.
+     * @param[in] taskUpdater Updater for publishing events.
+     * @param[in] method      Custom JSON-RPC method name.
+     * @note Default implementation delegates to Execute(context, taskUpdater).
+     */
     virtual void Execute(std::shared_ptr<RequestContext> context, std::shared_ptr<TaskUpdater> taskUpdater,
         [[maybe_unused]] const std::string& method)
     {
@@ -42,11 +43,11 @@ public:
     }
 
     /**
-    * @brief cancel a task in given request context
-    *
-    * @param[in] context request context cintaining task information
-    * @param[in] taskUpdater updater used to update events
-    */
+     * @brief Cancel a running task.
+     * @param[in] context     Request context containing task information.
+     * @param[in] taskUpdater Updater for publishing cancellation status.
+     * @throws A2AServerError if the task cannot be canceled.
+     */
     virtual void Cancel(std::shared_ptr<RequestContext> context, std::shared_ptr<TaskUpdater> taskUpdater) = 0;
 };
 

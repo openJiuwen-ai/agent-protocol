@@ -44,7 +44,7 @@ TlsConfigType MakeTlsConfig(bool enabled = false)
 
 std::unique_ptr<HttpServer> MakeServer(RouteMap& routes)
 {
-    return std::make_unique<HttpServer>("127.0.0.1", 8080, MakeTlsConfig(false), routes, 0);
+    return std::make_unique<HttpServer>("127.0.0.1", 0, MakeTlsConfig(false), routes, 0);
 }
 
 class FakeTcpSocket final : public TcpSocket {

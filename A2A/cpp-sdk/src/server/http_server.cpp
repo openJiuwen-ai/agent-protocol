@@ -11,6 +11,7 @@
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 extern "C" {
 #include <http_parser.h>
@@ -191,9 +192,25 @@ void HttpServer::Run()
 
 void HttpServer::Stop()
 {
-    if (!running_.exchange(false)) {
+    const bool wasRunning = running_.exchange(false);
+
+    if (listener_ != nullptr) {
+        listener_->Stop();
+    }
+
+    std::vector<int> activeFds;
+    activeFds.reserve(connections_.size());
+    for (const auto& entry : connections_) {
+        activeFds.push_back(entry.first);
+    }
+    for (int fd : activeFds) {
+        CleanupConnection(fd);
+    }
+
+    if (!wasRunning) {
         return;
     }
+
     if (taskQueue_ != nullptr) {
         taskQueue_->Cleanup();
     }
@@ -371,20 +388,41 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
 
 void HttpServer::HandleClose(const SocketPtr& socket)
 {
-    int fileDescriptor = socket ? socket->Fd() : -1;
+    if (!socket) {
+        return;
+    }
+    const int fileDescriptor = socket->Fd();
     A2A_LOG(A2A_LOG_LEVEL::INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
+        return;
+    }
+    // Socket::Close() clears fd before OnClose; match by connection pointer.
+    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
+        if (it->second.connection == socket) {
+            CleanupConnection(it->first);
+            return;
+        }
     }
 }
 
-void HttpServer::HandleError(const SocketPtr &socket, int errorCode, const std::string &message)
+void HttpServer::HandleError(const SocketPtr& socket, int errorCode, const std::string& message)
 {
-    int fileDescriptor = socket ? socket->Fd() : -1;
+    if (!socket) {
+        return;
+    }
+    const int fileDescriptor = socket->Fd();
     A2A_LOG(A2A_LOG_LEVEL::ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
             " err=" + std::to_string(errorCode) + " msg=" + message);
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
+        return;
+    }
+    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
+        if (it->second.connection == socket) {
+            CleanupConnection(it->first);
+            return;
+        }
     }
 }
 
@@ -628,21 +666,27 @@ bool HttpServer::SendResponse(int connectionFd, const Http::HttpResponse& respon
 void HttpServer::CleanupConnection(int fileDescriptor)
 {
     auto iterator = connections_.find(fileDescriptor);
-    if (iterator != connections_.end()) {
-        ConnectionContext& context = iterator->second;
-        if (context.ssl != nullptr) {
-            SSL_shutdown(context.ssl);
-            SSL_free(context.ssl);
-            context.ssl = nullptr;
-        }
-        // The rbio/wbio BIOs are owned by the SSL object after SSL_set_bio,
-        // so they are freed as part of SSL_free above. Just clear pointers.
-        context.rbio = nullptr;
-        context.wbio = nullptr;
-        if (context.connection) {
-            context.connection->Close();
-        }
-        connections_.erase(iterator);
+    if (iterator == connections_.end()) {
+        return;
+    }
+
+    ConnectionContext context = std::move(iterator->second);
+    connections_.erase(iterator);
+
+    if (context.ssl != nullptr) {
+        SSL_shutdown(context.ssl);
+        SSL_free(context.ssl);
+        context.ssl = nullptr;
+    }
+    // The rbio/wbio BIOs are owned by the SSL object after SSL_set_bio,
+    // so they are freed as part of SSL_free above. Just clear pointers.
+    context.rbio = nullptr;
+    context.wbio = nullptr;
+
+    if (context.connection) {
+        context.connection->OnClose(nullptr);
+        context.connection->OnError(nullptr);
+        context.connection->Close();
     }
 }
 

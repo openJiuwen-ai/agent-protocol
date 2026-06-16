@@ -2,6 +2,7 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
+#include "test_network.h"
 #include "net/tcp_listener.h"
 
 #include <gmock/gmock.h>
@@ -48,33 +49,6 @@ protected:
             if (fd >= 0) close(fd);
         }
         testFds_.clear();
-    }
-
-    uint16_t GetFreePort()
-    {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) {
-            return 0;
-        }
-
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = 0;
-
-        if (bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-            close(fd);
-            return 0;
-        }
-
-        socklen_t len = sizeof(addr);
-        if (getsockname(fd, (sockaddr*)&addr, &len) < 0) {
-            close(fd);
-            return 0;
-        }
-
-        close(fd);
-        return ntohs(addr.sin_port);
     }
 
     bool IsPortListening(uint16_t port)
@@ -125,7 +99,7 @@ protected:
 // 基础测试：接受连接
 TEST_F(TcpListenerTest, OnNewConnectionCallbackAccepts)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     std::atomic<bool> newConnectionCalled{false};
@@ -171,7 +145,7 @@ TEST_F(TcpListenerTest, StartWithoutListen)
 // 测试：重复 Start
 TEST_F(TcpListenerTest, StartTwice)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     EXPECT_TRUE(listener_->Listen("127.0.0.1", testPort_, 5, false));
@@ -189,7 +163,7 @@ TEST_F(TcpListenerTest, StopWithoutStart)
 // 测试：重复 Listen 同一个端口
 TEST_F(TcpListenerTest, ListenSamePortTwice)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     EXPECT_TRUE(listener_->Listen("127.0.0.1", testPort_, 5, false));
@@ -199,7 +173,7 @@ TEST_F(TcpListenerTest, ListenSamePortTwice)
 // 测试：使用 SO_REUSEPORT
 TEST_F(TcpListenerTest, ListenWithReusePort)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     EXPECT_TRUE(listener_->Listen("127.0.0.1", testPort_, 5, true));
@@ -216,7 +190,7 @@ TEST_F(TcpListenerTest, ListenWithReusePort)
 // 测试：不同 backlog 值
 TEST_F(TcpListenerTest, DifferentBacklogValues)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     // 测试小的 backlog
@@ -225,14 +199,14 @@ TEST_F(TcpListenerTest, DifferentBacklogValues)
     listener_->Stop();
 
     // 测试大的 backlog
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
     EXPECT_TRUE(listener_->Listen("127.0.0.1", testPort_, 128, false));
     EXPECT_TRUE(listener_->Start());
     listener_->Stop();
 
     // 测试 SOMAXCONN
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
     EXPECT_TRUE(listener_->Listen("127.0.0.1", testPort_, SOMAXCONN, false));
     EXPECT_TRUE(listener_->Start());
@@ -242,7 +216,7 @@ TEST_F(TcpListenerTest, DifferentBacklogValues)
 // 测试：无效的 host
 TEST_F(TcpListenerTest, InvalidHost)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     EXPECT_FALSE(listener_->Listen("invalid.host.that.does.not.exist", testPort_, 5, false));
@@ -250,7 +224,7 @@ TEST_F(TcpListenerTest, InvalidHost)
 
 TEST_F(TcpListenerTest, EmptyHost)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     EXPECT_TRUE(listener_->Listen("", testPort_, 5, false));
@@ -261,7 +235,7 @@ TEST_F(TcpListenerTest, EmptyHost)
 // 测试：无效的端口
 TEST_F(TcpListenerTest, PortAlreadyInUse)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     // 第一个监听器占用端口
@@ -284,7 +258,7 @@ TEST_F(TcpListenerTest, PortAlreadyInUse)
 // 测试：多次 Start/Stop 循环
 TEST_F(TcpListenerTest, MultipleStartStopCycles)
 {
-    testPort_ = GetFreePort();
+    testPort_ = A2A::Test::GetFreeTcpPort();
     ASSERT_GT(testPort_, 0);
 
     EXPECT_TRUE(listener_->Listen("127.0.0.1", testPort_, 5, false));

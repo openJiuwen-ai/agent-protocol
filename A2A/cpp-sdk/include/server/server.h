@@ -7,21 +7,25 @@
 
 namespace A2A::Server {
 
+/**
+ * @brief Top-level A2A server interface.
+ * @note 服务端生命周期：Start() → Stop()。
+ */
 class Server {
 public:
-    /**
-    * @brief destructor
-    */
+    /** @brief Virtual destructor. */
     virtual ~Server() = default;
 
     /**
-    * @brief start server and listen
-    */
+     * @brief Start the server and begin listening for requests.
+     * @return 0 on success, non-zero on failure.
+     * @throws std::runtime_error if the transport fails to bind or start.
+     */
     virtual int Start() = 0;
 
     /**
-    * @brief stop server
-    */
+     * @brief Stop the server and release listening resources.
+     */
     virtual void Stop() = 0;
 };
 

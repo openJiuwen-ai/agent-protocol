@@ -14,35 +14,34 @@
 
 namespace A2A::Client {
 
+/**
+ * @brief Factory for creating configured A2A Client instances.
+ */
 class ClientFactory {
 public:
-    /**
-    * @brief destructor
-    */
+    /** @brief Destructor. */
     ~ClientFactory();
 
     /**
-    * @brief create client
-    *
-    * @param[in] card agent card
-    * @param[in] config client config
-    * @param[in] consumers consumers of client being created
-    * @param[in] interceptors interceptors of client being created
-    * @return unique pointer of client been created
-    */
+     * @brief Create a client with the default JSON-RPC transport.
+     * @param[in] card         Resolved agent card.
+     * @param[in] config       Client behaviour configuration.
+     * @param[in] consumers    Optional event consumers.
+     * @param[in] interceptors Optional request interceptors.
+     * @return Shared pointer to the created client.
+     */
     static std::shared_ptr<Client> Create(const AgentCard& card, const ClientConfig& config,
         const std::vector<Consumer>& consumers = {},
         const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors = {});
 
     /**
-    * @brief create client with a custom transport
-    *
-    * @param[in] card agent card
-    * @param[in] config client config
-    * @param[in] transport client transport
-    * @param[in] consumers consumers of client being created
-    * @return unique pointer of client been created
-    */
+     * @brief Create a client with a custom transport implementation.
+     * @param[in] card       Resolved agent card.
+     * @param[in] config     Client behaviour configuration.
+     * @param[in] transport  Custom transport layer.
+     * @param[in] consumers  Optional event consumers.
+     * @return Shared pointer to the created client.
+     */
     static std::shared_ptr<Client> Create(const AgentCard& card, const ClientConfig& config,
         std::shared_ptr<ClientTransport> transport, const std::vector<Consumer>& consumers = {});
 };

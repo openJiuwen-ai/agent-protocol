@@ -13,34 +13,34 @@
 
 namespace A2A::Server {
 
+/**
+ * @brief Persistence interface for A2A tasks.
+ * @note 任务存储抽象；默认实现为内存存储。
+ */
 struct TaskStore {
-    /**
-    * @brief constructor
-    */
+    /** @brief Virtual destructor. */
     virtual ~TaskStore() = default;
 
     /**
-    * @brief saves or updates a task in the store
-    *
-    * @param[in] task transport type
-    * @param[in] context server call context
-    */
+     * @brief Save or update a task.
+     * @param[in] task    Task to persist.
+     * @param[in] context Server call context.
+     */
     virtual void Save(const A2A::Task& task, std::shared_ptr<ServerCallContext> context) = 0;
 
     /**
-    * @brief retrives a task from the store by ID
-    *
-    * @param[in] taskId task id
-    * @param[in] context server call context
-    */
+     * @brief Retrieve a task by ID.
+     * @param[in] taskId  Task identifier.
+     * @param[in] context Server call context.
+     * @return Shared pointer to the task, or nullptr if not found.
+     */
     virtual std::shared_ptr<Task> Get(const std::string& taskId, std::shared_ptr<ServerCallContext> context) = 0;
 
     /**
-    * @brief delete a task from the store by ID
-    *
-    * @param[in] taskId task id
-    * @param[in] context server call context
-    */
+     * @brief Delete a task by ID.
+     * @param[in] taskId  Task identifier.
+     * @param[in] context Server call context.
+     */
     virtual void Delete(const std::string& taskId, std::shared_ptr<ServerCallContext> context) = 0;
 };
 

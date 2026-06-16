@@ -112,7 +112,7 @@ protected:
     std::shared_ptr<AgentCard> agentCard = std::make_shared<AgentCard>();
     std::shared_ptr<AgentCard> extendedAgentCard = std::make_shared<AgentCard>();
 
-    HttpConfig config {"127.0.0.1", 8080, 1, "/jsonrpc"};
+    HttpConfig config {"127.0.0.1", 0, 1, "/jsonrpc"};
 
     std::unique_ptr<ServerImpl> server;
 

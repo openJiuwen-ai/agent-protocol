@@ -13,145 +13,94 @@
 #include "types.h"
 
 namespace A2A {
+
+/** @brief Opaque HTTP client connection (libcurl). */
 class ClientConn;
 
 namespace Client {
 
+/** @brief PIMPL holder for JsonRpcTransport. */
 class JsonRpcTransportImpl;
 
+/**
+ * @brief JSON-RPC over HTTP implementation of ClientTransport.
+ * @note 默认客户端传输层，支持 SSE 流式响应。
+ */
 class JsonRpcTransport : public ClientTransport {
 public:
+    /**
+     * @brief Construct a JSON-RPC transport.
+     * @param[in] url          JSON-RPC endpoint URL.
+     * @param[in] agentCard    Resolved agent card.
+     * @param[in] config       Client configuration.
+     * @param[in] interceptors Request interceptors applied to every call.
+     */
     JsonRpcTransport(const std::string& url, const AgentCard& agentCard, const ClientConfig& config,
         const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors);
 
+    /** @brief Destructor; closes the underlying connection. */
     ~JsonRpcTransport() override;
 
-    /**
-    * @brief send message to server and get response
-    *
-    * @param[in] requestId requestId
-    * @param[in] request request data info
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::SendMessage */
     void SendMessage(const std::string& requestId, const MessageSendParams& request,
         const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief send stream message to server and get response with callback
-    *
-    * @param[in] requestId requestId
-    * @param[in] request request data info
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::SendMessageStreaming */
     void SendMessageStreaming(const std::string& requestId, const MessageSendParams& request,
         const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief retrieve task information from server
-    *
-    * @param[in] requestId requestId
-    * @param[in] params query params
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::GetTask */
     void GetTask(const std::string& requestId, const TaskQueryParams& params,
         const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief call server to cancel task
-    *
-    * @param[in] requestId requestId
-    * @param[in] params task id params
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::CancelTask */
     void CancelTask(const std::string& requestId, const TaskIdParams& params,
         const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief set push notification config for a specific task
-    *
-    * @param[in] requestId requestId
-    * @param[in] config push notification config
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::SetTaskPushNotificationConfig */
     void SetTaskPushNotificationConfig(const std::string& requestId, const TaskPushNotificationConfig& config,
         const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief retrieve push notification config for a specific task
-    *
-    * @param[in] requestId requestId
-    * @param[in] params task id and metadata information
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::GetTaskPushNotificationConfig */
     void GetTaskPushNotificationConfig(const std::string& requestId,
         const GetTaskPushNotificationConfigParams& params, const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief retrieve the list of push notification config for a specific task
-    *
-    * @param[in] requestId requestId
-    * @param[in] params task id and metadata information
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::ListTaskPushNotificationConfigs */
     void ListTaskPushNotificationConfigs(const std::string& requestId,
         const ListTaskPushNotificationConfigParams& params, const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief delete the list of push notification config for a specific task
-    *
-    * @param[in] requestId requestId
-    * @param[in] params task id and metadata information
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::DeleteTaskPushNotificationConfig */
     void DeleteTaskPushNotificationConfig(const std::string& requestId,
         const DeleteTaskPushNotificationConfigParams& params, const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief resubscribe to server
-    *
-    * @param[in] requestId requestId
-    * @param[in] params task id params
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::Resubscribe */
     void Resubscribe(const std::string& requestId, const TaskIdParams& params,
         const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief retrieve agent card from server
-    *
-    * @param[in] requestId requestId
-    * @param[in] context client call context
-    */
+    /** @copydoc ClientTransport::GetCard */
     void GetCard(const std::string& requestId, const ClientCallContext* context, int timeout) override;
 
-    /**
-    * @brief set transport callback
-    *
-    * @param[in] callback callback function triggered when receive response data
-    */
+    /** @copydoc ClientTransport::SetTransportCallback */
     void SetTransportCallback(TransportEventCallback callback) override;
 
-    /**
-    * @brief close client connection and release associated resources
-    *
-    * @note after calling this, no further operations should be performed
-    */
+    /** @copydoc ClientTransport::Close */
     void Close() override;
 
-    /**
-    * @brief add request middleware
-    *
-    * @param[in] middleware interceptor object
-    */
+    /** @copydoc ClientTransport::AddRequestMiddleware */
     void AddRequestMiddleware(const std::shared_ptr<ClientCallInterceptor>& middleware) override;
 
 protected:
+    /**
+     * @brief Get the underlying HTTP connection (for testing / extension).
+     * @return Shared pointer to the active ClientConn.
+     */
     std::shared_ptr<ClientConn> GetConn();
 
 private:
     std::unique_ptr<JsonRpcTransportImpl> impl_;
 };
 
-}
-} // namespace A2A::Client
+} // namespace Client
+} // namespace A2A
+
 #endif
