@@ -1,215 +1,268 @@
 #!/usr/bin/env bash
-
-# Install dependencies for a2a_cpp project
-# Checks and installs libcurl and openssl if not present on the system
+# Install system dependencies for yellow_a2a (a2a_cpp).
+# Speeds up CMake by satisfying third_party.cmake system lookups before FetchContent.
 #
 # Usage:
-#   ./scripts/install_deps.sh
-#   sudo ./scripts/install_deps.sh  # if running as non-root user
+#   bash ./scripts/install_deps.sh
+#   sudo bash ./scripts/install_deps.sh
 
 set -euo pipefail
 
-echo "==> Checking system dependencies for a2a_cpp..."
+echo "==> Checking system dependencies for yellow_a2a..."
 
-# Detect OS type
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-    OS_VERSION=$VERSION_ID
-else
-    echo "Error: Cannot detect OS type"
+if [[ ! -f /etc/os-release ]]; then
+    echo "Error: Linux with /etc/os-release is required" >&2
     exit 1
 fi
+# shellcheck disable=SC1091
+. /etc/os-release
+OS="${ID:-}"
+OS_VERSION="${VERSION_ID:-}"
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-    echo "Warning: Not running as root. You may need sudo privileges to install packages."
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "Warning: Not running as root. Package install may require sudo."
     SUDO="sudo"
 else
     SUDO=""
 fi
 
-# Function to check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to check if a package is installed (Debian/Ubuntu)
 check_deb_package() {
     dpkg -l "$1" 2>/dev/null | grep -q "^ii"
 }
 
-# Function to check if a package is installed (RHEL/CentOS)
-check_yum_package() {
-    yum list installed "$1" >/dev/null 2>&1
+check_rpm_package() {
+    rpm -q "$1" >/dev/null 2>&1
 }
 
-# Install dependencies based on OS
+# Returns 0 if header/library appears present (best-effort).
+have_libevent() {
+    [[ -f /usr/include/event2/event.h ]] \
+        || [[ -f /usr/local/include/event2/event.h ]] \
+        || pkg-config --exists libevent 2>/dev/null
+}
+
+have_nlohmann_json() {
+    [[ -f /usr/include/nlohmann/json.hpp ]] \
+        || [[ -f /usr/local/include/nlohmann/json.hpp ]]
+}
+
+have_http_parser() {
+    [[ -f /usr/include/http_parser.h ]] \
+        || [[ -f /usr/local/include/http_parser.h ]]
+}
+
 install_dependencies() {
+    local need_build_tools=0
     local need_curl=0
     local need_openssl=0
+    local need_libevent=0
+    local need_json=0
+    local need_http_parser=0
 
-    # Check dependencies (both runtime lib and development packages)
-    case "$OS" in
+    echo "Detected OS: ${OS} ${OS_VERSION}"
+
+    if command_exists cmake; then
+        echo "  - cmake: OK"
+    else
+        echo "  - cmake: NOT FOUND"
+        need_build_tools=1
+    fi
+
+    if command_exists g++ || command_exists clang++; then
+        echo "  - C++ compiler: OK"
+    else
+        echo "  - C++ compiler: NOT FOUND"
+        need_build_tools=1
+    fi
+
+    if command_exists pkg-config; then
+        echo "  - pkg-config: OK"
+    else
+        echo "  - pkg-config: NOT FOUND"
+        need_build_tools=1
+    fi
+
+    case "${OS}" in
         ubuntu|debian)
-            # Check libcurl
-            if check_deb_package libcurl4 || check_deb_package libcurl3; then
-                echo "  - libcurl: OK"
+            if check_deb_package libcurl4-openssl-dev || check_deb_package libcurl4-gnutls-dev; then
+                echo "  - libcurl (dev): OK"
             else
-                echo "  - libcurl: NOT FOUND"
+                echo "  - libcurl (dev): NOT FOUND"
                 need_curl=1
             fi
-
-            # Check libcurl-devel
-            if check_deb_package libcurl4-openssl-dev; then
-                echo "  - libcurl-devel: OK"
-            else
-                echo "  - libcurl-devel: NOT FOUND"
-                need_curl=1
-            fi
-
-            # Check openssl-devel (development package)
             if check_deb_package libssl-dev; then
-                echo "  - openssl-devel: OK"
+                echo "  - openssl (dev): OK"
             else
-                echo "  - openssl-devel: NOT FOUND"
+                echo "  - openssl (dev): NOT FOUND"
                 need_openssl=1
+            fi
+            if check_deb_package libevent-dev || have_libevent; then
+                echo "  - libevent (dev): OK"
+            else
+                echo "  - libevent (dev): NOT FOUND"
+                need_libevent=1
+            fi
+            if check_deb_package nlohmann-json3-dev || have_nlohmann_json; then
+                echo "  - nlohmann_json (dev): OK"
+            else
+                echo "  - nlohmann_json (dev): NOT FOUND"
+                need_json=1
+            fi
+            if check_deb_package libhttp-parser-dev || have_http_parser; then
+                echo "  - http_parser (dev): OK"
+            else
+                echo "  - http_parser (dev): NOT FOUND"
+                need_http_parser=1
             fi
             ;;
-
-        centos|rhel|fedora|euleros)
-            # Check libcurl (runtime library)
-            if check_yum_package libcurl; then
-                echo "  - libcurl: OK"
+        centos|rhel|fedora|euleros|rocky|almalinux)
+            if check_rpm_package libcurl-devel; then
+                echo "  - libcurl (dev): OK"
             else
-                echo "  - libcurl: NOT FOUND"
+                echo "  - libcurl (dev): NOT FOUND"
                 need_curl=1
             fi
-
-            # Check libcurl-devel (development package)
-            if check_yum_package libcurl-devel; then
-                echo "  - libcurl-devel: OK"
+            if check_rpm_package openssl-devel; then
+                echo "  - openssl (dev): OK"
             else
-                echo "  - libcurl-devel: NOT FOUND"
-                need_curl=1
-            fi
-
-            # Check openssl-libs (runtime library)
-            if check_yum_package openssl-libs; then
-                echo "  - openssl-libs: OK"
-            else
-                echo "  - openssl-libs: NOT FOUND"
+                echo "  - openssl (dev): NOT FOUND"
                 need_openssl=1
             fi
-
-            # Check openssl-devel (development package)
-            if check_yum_package openssl-devel; then
-                echo "  - openssl-devel: OK"
+            if check_rpm_package libevent-devel || have_libevent; then
+                echo "  - libevent (dev): OK"
             else
-                echo "  - openssl-devel: NOT FOUND"
-                need_openssl=1
+                echo "  - libevent (dev): NOT FOUND"
+                need_libevent=1
+            fi
+            if check_rpm_package nlohmann-json-devel || have_nlohmann_json; then
+                echo "  - nlohmann_json (dev): OK"
+            else
+                echo "  - nlohmann_json (dev): NOT FOUND (CMake may fetch from GitHub)"
+                need_json=1
+            fi
+            if check_rpm_package http-parser-devel || have_http_parser; then
+                echo "  - http_parser (dev): OK"
+            else
+                echo "  - http_parser (dev): NOT FOUND (CMake may fetch from GitHub)"
+                need_http_parser=1
+            fi
+            if ! command_exists g++; then
+                need_build_tools=1
+            fi
+            if ! command_exists cmake; then
+                need_build_tools=1
+            fi
+            if ! command_exists pkg-config; then
+                need_build_tools=1
             fi
             ;;
-
         arch|manjaro)
-            # Arch packages both lib and devel in one package
-            if pacman -Q curl >/dev/null 2>&1; then
-                echo "  - curl (lib+devel): OK"
+            for pkg in curl openssl libevent nlohmann-json; do
+                if pacman -Q "${pkg}" >/dev/null 2>&1; then
+                    echo "  - ${pkg}: OK"
+                else
+                    echo "  - ${pkg}: NOT FOUND"
+                    case "${pkg}" in
+                        curl) need_curl=1 ;;
+                        openssl) need_openssl=1 ;;
+                        libevent) need_libevent=1 ;;
+                        nlohmann-json) need_json=1 ;;
+                    esac
+                fi
+            done
+            if pacman -Q http-parser >/dev/null 2>&1 || have_http_parser; then
+                echo "  - http_parser: OK"
             else
-                echo "  - curl (lib+devel): NOT FOUND"
-                need_curl=1
+                echo "  - http_parser: NOT FOUND"
+                need_http_parser=1
             fi
-
-            if pacman -Q openssl >/dev/null 2>&1; then
-                echo "  - openssl (lib+devel): OK"
-            else
-                echo "  - openssl (lib+devel): NOT FOUND"
-                need_openssl=1
+            if ! pacman -Q base-devel cmake pkgconf >/dev/null 2>&1; then
+                need_build_tools=1
             fi
             ;;
-
         *)
-            # Fallback: check for header files
             if command_exists curl-config; then
                 echo "  - libcurl: OK"
             else
-                echo "  - libcurl: NOT FOUND"
                 need_curl=1
             fi
-
-            if [ -f /usr/include/openssl/ssl.h ] || [ -f /usr/local/include/openssl/ssl.h ]; then
+            if [[ -f /usr/include/openssl/ssl.h ]] || [[ -f /usr/local/include/openssl/ssl.h ]]; then
                 echo "  - openssl: OK"
             else
-                echo "  - openssl: NOT FOUND"
                 need_openssl=1
             fi
+            have_libevent && echo "  - libevent: OK" || { echo "  - libevent: NOT FOUND"; need_libevent=1; }
+            have_nlohmann_json && echo "  - nlohmann_json: OK" || { echo "  - nlohmann_json: NOT FOUND"; need_json=1; }
+            have_http_parser && echo "  - http_parser: OK" || { echo "  - http_parser: NOT FOUND"; need_http_parser=1; }
             ;;
     esac
 
-    # If all dependencies are present, exit
-    if [ $need_curl -eq 0 ] && [ $need_openssl -eq 0 ]; then
-        echo "==> All dependencies are already installed!"
+    local need_any=$((need_build_tools + need_curl + need_openssl + need_libevent + need_json + need_http_parser))
+    if [[ ${need_any} -eq 0 ]]; then
+        echo "==> All tracked dependencies are already installed!"
         return 0
     fi
 
     echo ""
     echo "==> Installing missing dependencies..."
 
-    case "$OS" in
+    case "${OS}" in
         ubuntu|debian)
-            echo "Detected Debian/Ubuntu system"
-
-            # Update package list
-            $SUDO apt-get update -qq
-
-            # Install libcurl if needed
-            if [ $need_curl -eq 1 ]; then
-                echo "Installing libcurl and libcurl4-openssl-dev..."
-                $SUDO apt-get install -y libcurl4-openssl-dev
-            fi
-
-            # Install openssl if needed
-            if [ $need_openssl -eq 1 ]; then
-                echo "Installing libssl-dev (openssl-devel)..."
-                $SUDO apt-get install -y libssl-dev
+            ${SUDO} apt-get update -qq
+            local pkgs=()
+            [[ ${need_build_tools} -eq 1 ]] && pkgs+=(build-essential cmake pkg-config)
+            [[ ${need_curl} -eq 1 ]] && pkgs+=(libcurl4-openssl-dev)
+            [[ ${need_openssl} -eq 1 ]] && pkgs+=(libssl-dev)
+            [[ ${need_libevent} -eq 1 ]] && pkgs+=(libevent-dev)
+            [[ ${need_json} -eq 1 ]] && pkgs+=(nlohmann-json3-dev)
+            [[ ${need_http_parser} -eq 1 ]] && pkgs+=(libhttp-parser-dev)
+            if [[ ${#pkgs[@]} -gt 0 ]]; then
+                echo "Installing: ${pkgs[*]}"
+                ${SUDO} apt-get install -y "${pkgs[@]}"
             fi
             ;;
-
-        centos|rhel|fedora|euleros)
-            echo "Detected RHEL/CentOS/Fedora/EulerOS system"
-
-            # Install libcurl if needed
-            if [ $need_curl -eq 1 ]; then
-                echo "Installing libcurl and libcurl-devel..."
-                $SUDO yum install -y libcurl libcurl-devel
+        centos|rhel|fedora|euleros|rocky|almalinux)
+            local pkgs=()
+            [[ ${need_build_tools} -eq 1 ]] && pkgs+=(gcc-c++ make cmake pkgconfig)
+            [[ ${need_curl} -eq 1 ]] && pkgs+=(libcurl-devel)
+            [[ ${need_openssl} -eq 1 ]] && pkgs+=(openssl-devel)
+            [[ ${need_libevent} -eq 1 ]] && pkgs+=(libevent-devel)
+            [[ ${need_json} -eq 1 ]] && pkgs+=(nlohmann-json-devel)
+            [[ ${need_http_parser} -eq 1 ]] && pkgs+=(http-parser-devel)
+            if [[ ${#pkgs[@]} -gt 0 ]]; then
+                if command_exists dnf; then
+                    echo "Installing: ${pkgs[*]}"
+                    ${SUDO} dnf install -y "${pkgs[@]}" || true
+                else
+                    echo "Installing: ${pkgs[*]}"
+                    ${SUDO} yum install -y "${pkgs[@]}" || true
+                fi
             fi
-
-            # Install openssl if needed
-            if [ $need_openssl -eq 1 ]; then
-                echo "Installing openssl-libs and openssl-devel..."
-                $SUDO yum install -y openssl-libs openssl-devel
+            if [[ ${need_json} -eq 1 ]] && ! have_nlohmann_json; then
+                echo "[INFO] nlohmann-json-devel unavailable on this distro; CMake will fetch nlohmann_json."
+            fi
+            if [[ ${need_http_parser} -eq 1 ]] && ! have_http_parser; then
+                echo "[INFO] http-parser-devel unavailable on this distro; CMake will fetch http_parser."
             fi
             ;;
-
         arch|manjaro)
-            echo "Detected Arch Linux system"
-
-            # Install libcurl if needed
-            if [ $need_curl -eq 1 ]; then
-                echo "Installing curl (includes libcurl)..."
-                $SUDO pacman -S --noconfirm curl
-            fi
-
-            # Install openssl if needed
-            if [ $need_openssl -eq 1 ]; then
-                echo "Installing openssl (includes lib and devel)..."
-                $SUDO pacman -S --noconfirm openssl
-            fi
+            local pkgs=(base-devel cmake pkgconf)
+            [[ ${need_curl} -eq 1 ]] && pkgs+=(curl)
+            [[ ${need_openssl} -eq 1 ]] && pkgs+=(openssl)
+            [[ ${need_libevent} -eq 1 ]] && pkgs+=(libevent)
+            [[ ${need_json} -eq 1 ]] && pkgs+=(nlohmann-json)
+            [[ ${need_http_parser} -eq 1 ]] && pkgs+=(http-parser)
+            echo "Installing: ${pkgs[*]}"
+            ${SUDO} pacman -S --noconfirm "${pkgs[@]}"
             ;;
-
         *)
-            echo "Error: Unsupported OS: $OS"
-            echo "Please install libcurl-devel and openssl manually"
+            echo "Error: Unsupported OS for automatic install: ${OS}" >&2
+            echo "Please install manually: cmake, g++, pkg-config, libcurl-devel, openssl-devel," >&2
+            echo "libevent-devel, nlohmann-json (optional), http-parser (optional)." >&2
             exit 1
             ;;
     esac
@@ -219,14 +272,54 @@ install_dependencies() {
 }
 
 check_dependencies() {
-    # Verify installation
     echo ""
     echo "==> Verifying installation..."
-    if command_exists curl-config && command_exists openssl; then
-        echo "✓ All dependencies verified successfully!"
-        return 0
-    else
-        echo "✗ Some dependencies are still missing. Please check the errors above."
-        exit 1
+    local ok=1
+
+    if ! command_exists cmake; then
+        echo "✗ cmake is missing" >&2
+        ok=0
     fi
+    if ! command_exists g++ && ! command_exists clang++; then
+        echo "✗ C++ compiler (g++ or clang++) is missing" >&2
+        ok=0
+    fi
+    if ! command_exists pkg-config; then
+        echo "✗ pkg-config is missing" >&2
+        ok=0
+    fi
+    if ! command_exists curl-config && ! pkg-config --exists libcurl 2>/dev/null; then
+        echo "✗ libcurl development files are missing" >&2
+        ok=0
+    fi
+    if ! command_exists openssl; then
+        echo "✗ openssl is missing" >&2
+        ok=0
+    fi
+
+    if have_libevent; then
+        echo "✓ libevent headers found"
+    else
+        echo "[WARN] libevent not found on system; first build may download libevent via CMake"
+    fi
+    if have_nlohmann_json; then
+        echo "✓ nlohmann/json headers found"
+    else
+        echo "[WARN] nlohmann_json not found on system; CMake may fetch from GitHub"
+    fi
+    if have_http_parser; then
+        echo "✓ http_parser headers found"
+    else
+        echo "[WARN] http_parser not found on system; CMake may fetch from GitHub"
+    fi
+
+    if [[ ${ok} -eq 1 ]]; then
+        echo "✓ Core dependencies verified. You can run: bash ./scripts/build.sh -e"
+        return 0
+    fi
+    echo "✗ Some required dependencies are still missing." >&2
+    exit 1
 }
+
+install_dependencies
+check_dependencies

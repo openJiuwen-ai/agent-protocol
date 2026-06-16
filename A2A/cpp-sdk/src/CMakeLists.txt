@@ -1,24 +1,44 @@
 # Sources and target definition for the a2a library (modularized by subdirectory)
 
-add_subdirectory(client)
-add_subdirectory(event)
-add_subdirectory(shared)
-add_subdirectory(log)
-add_subdirectory(server)
-add_subdirectory(utils)
-add_subdirectory(transport)
-
 add_library(a2a SHARED)
 
+add_compile_options(
+    -Werror
+)
+
+if(A2A_BUILD_CLIENT)
+    add_subdirectory(client)
+    target_sources(a2a
+        PRIVATE
+            $<TARGET_OBJECTS:a2a_client>
+    )
+endif()
+
+if(A2A_BUILD_SERVER)
+    add_subdirectory(server)
+    add_subdirectory(transport)
+    target_sources(a2a
+        PRIVATE
+            $<TARGET_OBJECTS:a2a_server>
+            $<TARGET_OBJECTS:a2a_transport>
+    )
+endif()
+
+add_subdirectory(event)
 target_sources(a2a
     PRIVATE
         $<TARGET_OBJECTS:a2a_event>
-        $<TARGET_OBJECTS:a2a_client>
+)
+
+add_subdirectory(shared)
+add_subdirectory(log)
+add_subdirectory(utils)
+
+target_sources(a2a
+    PRIVATE
         $<TARGET_OBJECTS:a2a_shared>
         $<TARGET_OBJECTS:a2a_log>
-        $<TARGET_OBJECTS:a2a_server>
         $<TARGET_OBJECTS:a2a_utils>
-        $<TARGET_OBJECTS:a2a_transport>
 )
 
 # Public include paths: src/ (for internal headers) and top-level include/
@@ -35,17 +55,68 @@ find_path(NLOHMANN_JSON_INCLUDE_DIR
     NAMES nlohmann/json.hpp
 )
 
-if(NLOHMANN_JSON_INCLUDE_DIR)
-    set(A2A_NLOHMANN_COPY_DIR "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann")
-else()
-    set(A2A_NLOHMANN_COPY_DIR "${CMAKE_SOURCE_DIR}/third_party/nlohmann_json-src/single_include/nlohmann")
-endif()
+set(A2A_COMMON_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/a2a_log.h
+    ${CMAKE_SOURCE_DIR}/include/error.h
+    ${CMAKE_SOURCE_DIR}/include/types.h
+)
 
 add_custom_command(TARGET a2a POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${A2A_OUTPUT_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:a2a>" "${A2A_OUTPUT_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/include" "${A2A_OUTPUT_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${A2A_OUTPUT_DIR}/nlohmann"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${A2A_NLOHMANN_COPY_DIR}" "${A2A_OUTPUT_DIR}/nlohmann"
-    COMMENT "Copying a2a shared library, headers and nlohmann json to ${A2A_OUTPUT_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${A2A_OUTPUT_DIR}/include"
 )
+
+foreach(header ${A2A_COMMON_HEADERS})
+    add_custom_command(TARGET a2a POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy "${header}" "${A2A_OUTPUT_DIR}/include/"
+    )
+endforeach()
+
+if(A2A_BUILD_CLIENT)
+    set(A2A_CLIENT_HEADERS
+        ${CMAKE_SOURCE_DIR}/include/client/a2a_card_resolver.h
+        ${CMAKE_SOURCE_DIR}/include/client/client_call_interceptor.h
+        ${CMAKE_SOURCE_DIR}/include/client/client_factory.h
+        ${CMAKE_SOURCE_DIR}/include/client/client.h
+        ${CMAKE_SOURCE_DIR}/include/client/client_transport.h
+        ${CMAKE_SOURCE_DIR}/include/client/jsonrpc_transport.h
+    )
+    set(A2A_CLIENT_HEADERS
+        ${A2A_CLIENT_HEADERS}
+        ${CMAKE_SOURCE_DIR}/include/client/http_card_resolver_builder.h
+    )
+
+    add_custom_command(TARGET a2a POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${A2A_OUTPUT_DIR}/include/client"
+    )
+
+    foreach(header ${A2A_CLIENT_HEADERS})
+        add_custom_command(TARGET a2a POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy "${header}" "${A2A_OUTPUT_DIR}/include/client"
+        )
+    endforeach()
+endif()
+
+if(A2A_BUILD_SERVER)
+    set(A2A_SERVER_HEADERS
+        ${CMAKE_SOURCE_DIR}/include/server/agent_executor.h
+        ${CMAKE_SOURCE_DIR}/include/server/request_context.h
+        ${CMAKE_SOURCE_DIR}/include/server/server_call_context.h
+        ${CMAKE_SOURCE_DIR}/include/server/server.h
+        ${CMAKE_SOURCE_DIR}/include/server/task_store.h
+        ${CMAKE_SOURCE_DIR}/include/server/task_updater.h
+    )
+    set(A2A_SERVER_HEADERS
+        ${A2A_SERVER_HEADERS}
+        ${CMAKE_SOURCE_DIR}/include/server/http_server_builder.h
+    )
+
+    add_custom_command(TARGET a2a POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${A2A_OUTPUT_DIR}/include/server"
+    )
+
+    foreach(header ${A2A_SERVER_HEADERS})
+        add_custom_command(TARGET a2a POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy "${header}" "${A2A_OUTPUT_DIR}/include/server"
+        )
+    endforeach()
+endif()

@@ -43,7 +43,7 @@ void StreamServerEmitter::WriteNonStreamingData(const std::string& data)
         ctx_.httpSendFunc(response, ctx_);
         return;
     }
-    A2A_LOG(A2A_LOG_LEVEL_WARN, "Non-streaming data already written");
+    A2A_LOG(A2A_LOG_LEVEL::WARN, "Non-streaming data already written");
 }
 
 void StreamServerEmitter::WriteDone()

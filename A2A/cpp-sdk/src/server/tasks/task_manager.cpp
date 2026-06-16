@@ -99,11 +99,12 @@ void TaskManager::SaveTaskEvent(const EventType& event)
         if (!task.metadata) {
             task.metadata = e.metadata;
         } else if (e.metadata) {
-            nlohmann::json merged = *task.metadata;
-            for (auto it = e.metadata->begin(); it != e.metadata->end(); ++it) {
-                merged[it.key()] = it.value();
+            nlohmann::json taskMetadata = nlohmann::json::parse(*task.metadata);
+            nlohmann::json eventMetadata = nlohmann::json::parse(*e.metadata);
+            for (auto it = eventMetadata.begin(); it != eventMetadata.end(); ++it) {
+                taskMetadata[it.key()] = it.value();
             }
-            task.metadata = merged;
+            task.metadata = taskMetadata.dump();
         }
         task.status = e.status;
     } else {
@@ -150,7 +151,7 @@ void TaskManager::Process(const std::string& taskId, const StreamEvent& event)
         if (callback) {
             callback(event);
         } else {
-            A2A_LOG(A2A_LOG_LEVEL_WARN,
+            A2A_LOG(A2A_LOG_LEVEL::WARN,
                 "Transport callback is null or has expired, will not send response, task id: " +
                 taskId);
         }
@@ -236,7 +237,7 @@ void TaskManager::CancelTask(const std::shared_ptr<Task>& task)
 {
     if (IsFinal(task->status.state)) {
         // Agent may have already cancelled this task
-        A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Task already canceled by agent, task id: " + task->id);
+        A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Task already canceled by agent, task id: " + task->id);
         return;
     }
 
@@ -249,16 +250,18 @@ void TaskManager::CancelTask(const std::shared_ptr<Task>& task)
 
     // Agent is actively working on this task, need to stop all streaming responses
     std::lock_guard<std::mutex> lock(it->second->callbackMutex);
-    TaskStatusUpdateEvent event;
-    event.contextId = task->contextId;
-    event.status = TaskStatus{std::nullopt, TaskState::CANCELED, std::nullopt};
-    event.taskId = task->id;
+    const auto event = TaskStatusUpdateEvent{
+        task->contextId,
+        std::nullopt,
+        TaskStatus{std::nullopt, TaskState::CANCELED, std::nullopt},
+        task->id
+    };
     task->status.state = TaskState::CANCELED;
     for (const auto& callback : it->second->eventCb) {
         if (callback) {
             callback(event);
         } else {
-            A2A_LOG(A2A_LOG_LEVEL_WARN,
+            A2A_LOG(A2A_LOG_LEVEL::WARN,
                 "Transport callback is null or has expired, will not notify task cancellation, task id: " + task->id);
         }
     }
@@ -267,7 +270,7 @@ void TaskManager::CancelTask(const std::shared_ptr<Task>& task)
 
 void TaskManager::HandleError(const std::string& taskId, const std::string& message, int code) const
 {
-    A2A_LOG(A2A_LOG_LEVEL_ERROR, "Process task failed, task id: " + taskId +
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "Process task failed, task id: " + taskId +
         ", error msg: " + message +
         ", error code: " + std::to_string(code));
 }

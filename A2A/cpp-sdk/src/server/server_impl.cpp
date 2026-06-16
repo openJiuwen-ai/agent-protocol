@@ -77,18 +77,18 @@ ServerImpl::~ServerImpl()
 int ServerImpl::Start()
 {
     if (started_.load()) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "Server already started, ignoring duplicate Start() call");
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "Server already started, ignoring duplicate Start() call");
         return 0;
     }
     if (transport_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Start server failed, server transport is null");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Start server failed, server transport is null");
         return 1;
     }
     transport_->SetRpcHandler(
         [this](const std::string& reqBody, std::string& respBody,
             std::shared_ptr<Transport::TransportEmitter> emitter) {
         if (!started_.load()) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "Server stopped, will not process request");
+            A2A_LOG(A2A_LOG_LEVEL::WARN, "Server stopped, will not process request");
             return;
         }
         try {
@@ -100,7 +100,7 @@ int ServerImpl::Start()
             }
         } catch (const std::exception& e) {
             // For non-streaming requests, set error in response body
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Parse request failed: ") + e.what());
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Parse request failed: ") + e.what());
             if (!respBody.empty()) {
                 return;
             }
@@ -256,7 +256,7 @@ void ServerImpl::ProcessStandardJsonRpc(const nlohmann::json& req, std::string& 
     } else if (method == METHOD_TASK_PUSH_NOTIFICATION_CONFIG_DELETE) {
         respBody = jsonRpcHandler_->OnDeletePushNotificationConfig(req).dump();
     } else {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Method not found");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Method not found");
         auto err = json{{JSON_FIELD_JSONRPC, JSON_VERSION},
                         {JSON_FIELD_ID, req.value(JSON_FIELD_ID, json{})},
                         {"error", {{"code", static_cast<int>(A2AErrorCode::JSONRPC_METHOD_NOT_FOUND)},

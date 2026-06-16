@@ -39,7 +39,7 @@ std::vector<Task> DefaultRequestHandler::GetRelatedTasksFromReferenceTaskIds(
         }
         auto referencedTask = taskStore_->Get(refTaskId, ctx);
         if (referencedTask == nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "Reference task Id does not exist: " + refTaskId);
+            A2A_LOG(A2A_LOG_LEVEL::WARN, "Reference task Id does not exist: " + refTaskId);
             continue;
         }
         relatedTasks.push_back(*referencedTask);
@@ -148,7 +148,7 @@ void DefaultRequestHandler::ExecuteAgentAndGetResult(
         try {
             auto task = taskManager_->GetTask(taskId);
             if (task == nullptr) {
-                A2A_LOG(A2A_LOG_LEVEL_ERROR, "Error processing event: task id is invalid, task id: " + taskId);
+                A2A_LOG(A2A_LOG_LEVEL::ERROR, "Error processing event: task id is invalid, task id: " + taskId);
                 return;
             }
             if (std::holds_alternative<Message>(event)) {
@@ -166,7 +166,7 @@ void DefaultRequestHandler::ExecuteAgentAndGetResult(
                 }
             }
         } catch (const std::exception& e) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "Error processing event: " + std::string(e.what()));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "Error processing event: " + std::string(e.what()));
             if (taskManager_) {
                 auto task = taskManager_->GetTask(taskId);
                 if (task != nullptr) {
@@ -196,7 +196,7 @@ void DefaultRequestHandler::SendPushNotificationIfNeeded(const std::string& task
             }
         } catch (const std::exception& e) {
             // Log error but don't fail the request
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to send push notification: " + std::string(e.what()));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to send push notification: " + std::string(e.what()));
         }
     }
 }
@@ -249,11 +249,11 @@ Task DefaultRequestHandler::OnCancelTask(const TaskIdParams& params, const std::
 
         // Update task status
         taskManager_->CancelTask(taskPtr);
-        A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Task canceled, task id: " + taskPtr->id);
+        A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Task canceled, task id: " + taskPtr->id);
     } else {
         taskPtr->status.state = TaskState::CANCELED;
         taskStore_->Save(*taskPtr, ctx);
-        A2A_LOG(A2A_LOG_LEVEL_WARN,
+        A2A_LOG(A2A_LOG_LEVEL::WARN,
             "Agent executor not available, task state set to canceled, task id: " + taskPtr->id);
     }
 
@@ -417,7 +417,7 @@ void DefaultRequestHandler::SetupAndExecuteStreamingAgent(
         try {
             emit(ev);
         } catch (const std::exception& e) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "An error occurred while processing streaming request: " +
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "An error occurred while processing streaming request: " +
                 std::string(e.what()));
             if (taskManager_) {
                 auto task = taskManager_->GetTask(taskId);
@@ -435,7 +435,7 @@ void DefaultRequestHandler::SetupAndExecuteStreamingAgent(
                 pushSender_->SendNotification(task);
             }
         } catch (const std::exception& e) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to send push notification: " + std::string(e.what()));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to send push notification: " + std::string(e.what()));
         }
     });
     if (resubscribe) {
@@ -483,7 +483,7 @@ void DefaultRequestHandler::UpdatePushNotificationConfig(const MessageSendParams
             }
         } catch (const std::exception& e) {
             // Log error but don't fail the request
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to update push notification config: " + std::string(e.what()));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to update push notification config: " + std::string(e.what()));
         }
     }
 }

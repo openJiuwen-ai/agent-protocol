@@ -2,7 +2,7 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  */
 
-#include "protocol_version_interceptor.h"
+#include "client/protocol_version_interceptor.h"
 #include "protocol_version_interceptor_impl.h"
 
 namespace A2A::Client {

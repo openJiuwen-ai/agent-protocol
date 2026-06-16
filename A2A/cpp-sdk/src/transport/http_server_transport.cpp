@@ -80,7 +80,7 @@ void HttpServerTransport::SetupJsonRpcEndpoint(Server::RouteMap& routeMap)
         HandleJsonRpcRequest(req, ctx);
     };
     
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "JSON-RPC endpoint setup at: " + jsonrpc_endpoint_);
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "JSON-RPC endpoint setup at: " + jsonrpc_endpoint_);
 }
 
 void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
@@ -151,7 +151,7 @@ void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, con
             handler_(reqBody, unusedResp, emitter);
         } catch (const std::exception& e) {
             std::string error_msg = e.what() ? e.what() : "Unknown exception";
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed: " + error_msg);
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed: " + error_msg);
 
             // Send error as SSE event
             Http::HttpResponse error_response;
@@ -252,9 +252,9 @@ HttpServerTransport::~HttpServerTransport()
             httpServerMgr_->Stop();
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Exception in stopping http server: %s", e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Exception in stopping http server: %s", e.what());
     } catch (...) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Unknown exception in stopping http server");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in stopping http server");
     }
 
     try {
@@ -262,9 +262,9 @@ HttpServerTransport::~HttpServerTransport()
             listenThread_.join();
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Exception in joining listen thread: %s", e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Exception in joining listen thread: %s", e.what());
     } catch (...) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Unknown exception in joining listen thread");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in joining listen thread");
     }
 
     // Join all worker threads before destruction

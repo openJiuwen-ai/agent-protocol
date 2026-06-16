@@ -19,16 +19,6 @@
 #include "task_updater_impl.h"
 
 namespace A2A::Server {
-namespace {
-std::optional<nlohmann::json> MetadataFromString(const std::optional<std::string>& metadata)
-{
-    if (!metadata) {
-        return std::nullopt;
-    }
-    return nlohmann::json::parse(*metadata);
-}
-} // namespace
-
 TaskUpdaterImpl::TaskUpdaterImpl(std::string taskId, std::string contextId,
     const std::shared_ptr<TaskManager>& taskManager)
     : taskId_(std::move(taskId)),
@@ -45,7 +35,7 @@ void TaskUpdaterImpl::UpdateStatus(const TaskState state,
     const std::optional<std::string>& metadata)
 {
     if (terminalStateReached_) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "Task " + taskId_ + " is already in a terminal state!");
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "Task " + taskId_ + " is already in a terminal state!");
         return;
     }
 
@@ -57,7 +47,7 @@ void TaskUpdaterImpl::UpdateStatus(const TaskState state,
 
     TaskStatusUpdateEvent event;
     event.contextId = contextId_;
-    event.metadata = MetadataFromString(metadata);
+    event.metadata = metadata;
     event.status = TaskStatus{message, state, ts};
     event.taskId = taskId_;
 
@@ -69,7 +59,7 @@ void TaskUpdaterImpl::UpdateStatus(const TaskState state,
 void TaskUpdaterImpl::AddArtifact(const TaskArtifactParam& artifactParam)
 {
     if (terminalStateReached_) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "Task " + taskId_ + " is already in a terminal state!");
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "Task " + taskId_ + " is already in a terminal state!");
         return;
     }
     std::string aid = artifactParam.artifactId.value_or(artifactIdGenerator_->Generate({taskId_, contextId_}));
@@ -78,7 +68,7 @@ void TaskUpdaterImpl::AddArtifact(const TaskArtifactParam& artifactParam)
     artifact.artifactId = aid;
     artifact.parts = artifactParam.parts;
     artifact.name = artifactParam.name;
-    artifact.metadata = MetadataFromString(artifactParam.metadata);
+    artifact.metadata = artifactParam.metadata;
     artifact.extensions = artifactParam.extensions;
 
     TaskArtifactUpdateEvent event;
@@ -87,7 +77,7 @@ void TaskUpdaterImpl::AddArtifact(const TaskArtifactParam& artifactParam)
     event.taskId = taskId_;
     event.append = artifactParam.append;
     event.lastChunk = artifactParam.lastChunk;
-    event.metadata = MetadataFromString(artifactParam.metadata);
+    event.metadata = artifactParam.metadata;
 
     if (taskManager_) {
         taskManager_->Process(taskId_, event);

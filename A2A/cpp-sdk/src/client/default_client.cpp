@@ -57,7 +57,7 @@ std::future<Task> DefaultClient::GetTask(const TaskQueryParams& params, const Cl
         return promise.get_future();
     }
     if (params.id.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "GetTask invalid parameter.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "GetTask invalid parameter.");
         std::promise<Task> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
@@ -80,7 +80,7 @@ std::future<Task> DefaultClient::GetTask(const TaskQueryParams& params, const Cl
 
         transport_->GetTask(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<Task> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -104,7 +104,7 @@ std::future<Task> DefaultClient::CancelTask(const TaskIdParams& params, const Cl
         return promise.get_future();
     }
     if (params.id.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "CancelTask invalid parameter.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "CancelTask invalid parameter.");
         std::promise<Task> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
@@ -126,7 +126,7 @@ std::future<Task> DefaultClient::CancelTask(const TaskIdParams& params, const Cl
 
         transport_->CancelTask(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<Task> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -150,7 +150,7 @@ std::future<TaskPushNotificationConfig> DefaultClient::SetTaskPushNotificationCo
         return promise.get_future();
     }
     if (config.taskId.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetTaskPushNotificationConfig invalid parameter.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetTaskPushNotificationConfig invalid parameter.");
         std::promise<TaskPushNotificationConfig> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
@@ -173,7 +173,7 @@ std::future<TaskPushNotificationConfig> DefaultClient::SetTaskPushNotificationCo
 
         transport_->SetTaskPushNotificationConfig(info->requestId, config, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<TaskPushNotificationConfig> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -197,7 +197,7 @@ std::future<TaskPushNotificationConfig> DefaultClient::GetTaskPushNotificationCo
         return promise.get_future();
     }
     if (params.id.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "GetTaskPushNotificationConfig invalid parameter.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "GetTaskPushNotificationConfig invalid parameter.");
         std::promise<TaskPushNotificationConfig> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
@@ -220,7 +220,7 @@ std::future<TaskPushNotificationConfig> DefaultClient::GetTaskPushNotificationCo
 
         transport_->GetTaskPushNotificationConfig(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<TaskPushNotificationConfig> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -244,7 +244,7 @@ std::future<std::vector<TaskPushNotificationConfig>> DefaultClient::ListTaskPush
         return promise.get_future();
     }
     if (params.id.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "ListTaskPushNotificationConfigs invalid parameter.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "ListTaskPushNotificationConfigs invalid parameter.");
         std::promise<std::vector<TaskPushNotificationConfig>> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
@@ -266,7 +266,7 @@ std::future<std::vector<TaskPushNotificationConfig>> DefaultClient::ListTaskPush
         }
         transport_->ListTaskPushNotificationConfigs(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<std::vector<TaskPushNotificationConfig>> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -290,7 +290,7 @@ std::future<void> DefaultClient::DeleteTaskPushNotificationConfig(const DeleteTa
         return promise.get_future();
     }
     if (params.id.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "DeleteTaskPushNotificationConfig invalid parameter.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "DeleteTaskPushNotificationConfig invalid parameter.");
         std::promise<void> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
@@ -313,7 +313,7 @@ std::future<void> DefaultClient::DeleteTaskPushNotificationConfig(const DeleteTa
 
         transport_->DeleteTaskPushNotificationConfig(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<void> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -350,7 +350,7 @@ void DefaultClient::Resubscribe(const TaskIdParams& params, const ClientCallCont
 
         transport_->Resubscribe(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::lock_guard<std::mutex> g(mutex_);
         callbackInfo_.erase(requestId);
         throw;
@@ -378,7 +378,7 @@ std::future<AgentCard> DefaultClient::GetCard(const ClientCallContext* context, 
         }
         transport_->GetCard(info->requestId, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<AgentCard> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);
@@ -421,7 +421,7 @@ void DefaultClient::TransportEventCb(const std::string& requestId, const Transpo
         std::lock_guard<std::mutex> g(mutex_);
         auto it = callbackInfo_.find(requestId);
         if (it == callbackInfo_.end()) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "The eventId not found: " + requestId);
+            A2A_LOG(A2A_LOG_LEVEL::WARN, "The eventId not found: " + requestId);
             return;
         }
         cb = it->second;
@@ -433,7 +433,7 @@ void DefaultClient::TransportEventCb(const std::string& requestId, const Transpo
 
     if (std::holds_alternative<TransportError>(event)) {
         auto e = std::get<TransportError>(event);
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "requestId: " + requestId + ", error code: " + std::to_string(e.errorCode) +
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "requestId: " + requestId + ", error code: " + std::to_string(e.errorCode) +
             ", err msg: " + e.errInfo);
         HandlerErrorResp(cb, e);
         return;
@@ -442,7 +442,7 @@ void DefaultClient::TransportEventCb(const std::string& requestId, const Transpo
     try {
         HandlerSuccessResp(cb, event);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what() +
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what() +
             ", abandon response and release request: " + requestId);
         std::lock_guard<std::mutex> g(mutex_);
         callbackInfo_.erase(requestId);
@@ -453,7 +453,7 @@ void DefaultClient::HandlerErrorResp(std::shared_ptr<CallbackInfo> cb, const Tra
 {
     if (cb->method == METHOD_MESSAGE_SEND || cb->method == METHOD_MESSAGE_STREAM ||
         cb->method == METHOD_TASK_RESUBSCRIBE) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "method: " + cb->method + ", error code: " +
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "method: " + cb->method + ", error code: " +
             std::to_string(e.errorCode) + ", err msg: " + e.errInfo);
         A2AError err;
         err.code = e.errorCode;
@@ -478,7 +478,7 @@ void DefaultClient::HandlerErrorResp(std::shared_ptr<CallbackInfo> cb, const Tra
         auto p = std::get_if<std::shared_ptr<std::promise<AgentCard>>>(&cb->promise);
         (*p)->set_exception(CreateExceptionPtr(e.errorCode, e.errInfo));
     } else {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "method: " + cb->method + "is ignored by HandlerErrorResp");
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "method: " + cb->method + "is ignored by HandlerErrorResp");
     }
 }
 
@@ -552,7 +552,7 @@ std::future<void> DefaultClient::ProcessMessageRequest(const MessageSendParams& 
     const ClientCallContext* context, ResponseHandler handler, int timeout, const std::string& method)
 {
     if (transport_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SendMessage invalid transport.");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SendMessage invalid transport.");
         std::promise<void> promise;
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_TRANSPORT),
             "Invalid transport"));
@@ -561,7 +561,7 @@ std::future<void> DefaultClient::ProcessMessageRequest(const MessageSendParams& 
 
     if (params.message.messageId.empty() || params.message.parts.empty() || !handler) {
         std::promise<void> promise;
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SendMessage invalid parameter");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SendMessage invalid parameter");
         promise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_INPUT),
             "Invalid parameter"));
         return promise.get_future();
@@ -589,7 +589,7 @@ std::future<void> DefaultClient::ProcessMessageRequest(const MessageSendParams& 
         info->mgr = std::make_shared<ClientTaskManager>();
         transport_->SendMessageStreaming(info->requestId, params, context, timeout);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<void> fallbackPromise;
         fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> g(mutex_);

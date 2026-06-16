@@ -1,120 +1,85 @@
-cmake_minimum_required(VERSION 3.15)
-
-project(a2a LANGUAGES CXX C)
+cmake_minimum_required(VERSION 3.16)
+project(a2a_cpp LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(A2A_BUILD_CLIENT "Build A2A client components" ON)
+option(A2A_BUILD_SERVER "Build A2A server components" ON)
+option(A2A_ENABLE_EXAMPLES "Build example binaries" OFF)
 option(A2A_ENABLE_TESTS "Build unit tests" OFF)
-option(A2A_ENABLE_EXAMPLES "Build examples" OFF)
-option(A2A_ENABLE_COVERAGE "Enable code coverage" OFF)
+option(A2A_ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 
-include(third_party/third_party.cmake)
+if(A2A_ENABLE_COVERAGE)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --coverage")
+    link_libraries(--coverage)
+endif()
+
+if(DEFINED ASAN AND ASAN STREQUAL "enable")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
+
+include(${CMAKE_SOURCE_DIR}/third_party/third_party.cmake)
+
+add_subdirectory(src)
+
+if(A2A_ENABLE_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 
-add_compile_options(-fPIC)
-add_compile_options(-ftrapv)
+set(_a2a_link_libs pthread dl OpenSSL::SSL OpenSSL::Crypto http_parser)
 
-if(A2A_ENABLE_COVERAGE)
-    message(STATUS "Code coverage is enabled")
-
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        add_compile_options(-fprofile-arcs -ftest-coverage)
-        add_link_options(-fprofile-arcs -ftest-coverage)
-    else()
-        message(WARNING "Code coverage not supported for compiler: ${CMAKE_CXX_COMPILER_ID}")
-    endif()
-endif()
-
-# Set compiler flags based on build type
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-g -O2")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
-set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
-
-# Common compiler flags
-add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal -Wtrampolines -fno-strict-aliasing -fstack-protector-strong)
-
-# Linker flags for security hardening
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic -pie")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic")
-
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
-endif()
-
-# Skip RPATH to avoid hardcoded paths in binaries
-set(CMAKE_SKIP_RPATH TRUE)
-
-# Ensure debug symbols are included
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(STATUS "Building in Debug mode with full debug symbols")
-elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    message(STATUS "Building in Release with Debug Info mode")
-endif()
-
-# Add all sources and target definition for a2a from src/
-add_subdirectory(src)
-
-## Link against libevent. Prefer the imported target provided by FetchContent or the
-## package config; fall back to `event` which is what libevent's CMake creates when
-## fetched by FetchContent in many setups.
-set(_a2a_libevent_target "")
 if(TARGET event)
-	set(_a2a_libevent_target event)
+    list(APPEND _a2a_link_libs event)
 elseif(TARGET libevent)
-	set(_a2a_libevent_target libevent)
-elseif(TARGET "libevent::event")
-	set(_a2a_libevent_target libevent::event)
-elseif(TARGET libevent_core)
-	set(_a2a_libevent_target libevent_core)
-else()
-	message(WARNING "No imported libevent target found; attempting to link 'event' (may fail).")
-	set(_a2a_libevent_target event)
+    list(APPEND _a2a_link_libs libevent)
 endif()
 
-target_link_libraries(a2a PUBLIC ${_a2a_libevent_target} nlohmann_json::nlohmann_json http_parser CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
-
-# Pull in libevent's pthread helper when available so evthread_use_pthreads resolves.
 if(TARGET event_pthreads)
-    target_link_libraries(a2a PUBLIC event_pthreads)
+    list(APPEND _a2a_link_libs event_pthreads)
 elseif(TARGET libevent_pthreads)
-    target_link_libraries(a2a PUBLIC libevent_pthreads)
-elseif(TARGET "libevent::pthread")
-    target_link_libraries(a2a PUBLIC libevent::pthread)
+    list(APPEND _a2a_link_libs libevent_pthreads)
 else()
     find_library(_a2a_event_pthreads_lib NAMES event_pthreads libevent_pthreads)
     if(_a2a_event_pthreads_lib)
-        target_link_libraries(a2a PUBLIC ${_a2a_event_pthreads_lib})
-    else()
-        message(WARNING "libevent pthread helper target not found; thread support may fail at link time.")
+        list(APPEND _a2a_link_libs ${_a2a_event_pthreads_lib})
     endif()
 endif()
 
-set_target_properties(a2a PROPERTIES
-    OUTPUT_NAME "a2a"
-)
-
-if(TARGET http_parser)
-    target_link_libraries(a2a PRIVATE http_parser)
-endif()
-
-if (TARGET OpenSSL::SSL AND OpenSSL::Crypto)
-    target_link_libraries(a2a PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+if(TARGET nlohmann_json::nlohmann_json)
+    list(APPEND _a2a_link_libs nlohmann_json::nlohmann_json)
 endif()
 
 if(TARGET CURL::libcurl)
-    target_link_libraries(a2a PUBLIC CURL::libcurl)
+    list(APPEND _a2a_link_libs CURL::libcurl)
+elseif(TARGET libcurl)
+    list(APPEND _a2a_link_libs libcurl)
+endif()
+
+target_link_libraries(a2a PUBLIC ${_a2a_link_libs})
+
+set_target_properties(a2a PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/output/lib
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/output/lib
+)
+
+if(A2A_ENABLE_EXAMPLES)
+    foreach(_example_target helloworld_client helloworld_server streaming_client streaming_server)
+        if(TARGET ${_example_target})
+            set_target_properties(${_example_target} PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/output/bin
+            )
+        endif()
+    endforeach()
 endif()
 
 if(A2A_ENABLE_TESTS)
     enable_testing()
     add_subdirectory(tests)
-endif()
-
-if(A2A_ENABLE_EXAMPLES)
-    add_subdirectory(examples)
 endif()

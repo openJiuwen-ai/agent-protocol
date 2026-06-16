@@ -157,7 +157,7 @@ void HttpServer::Run()
     }
     listener_->OnError([](const SocketPtr& socket, int errorCode, const std::string& message) {
         int fileDescriptor = socket ? socket->Fd() : -1;
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "listener error fd=" + std::to_string(fileDescriptor) +
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "listener error fd=" + std::to_string(fileDescriptor) +
                 " err=" + std::to_string(errorCode) + " msg=" + message);
     });
 
@@ -231,7 +231,7 @@ void HttpServer::HandleNewConnection(const TcpSocketPtr& connection)
     if (tlsConfig_.enabled) {
         SSL* ssl = SSL_new(sslContext_);
         if (ssl == nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_new failed for HTTPS connection");
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_new failed for HTTPS connection");
             connection->Close();
             return;
         }
@@ -239,7 +239,7 @@ void HttpServer::HandleNewConnection(const TcpSocketPtr& connection)
         BIO* rbio = BIO_new(BIO_s_mem());
         BIO* wbio = BIO_new(BIO_s_mem());
         if (rbio == nullptr || wbio == nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "BIO_new failed for HTTPS connection");
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "BIO_new failed for HTTPS connection");
             if (rbio != nullptr) {
                 BIO_free(rbio);
             }
@@ -304,7 +304,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
 
     int written = BIO_write(context.rbio, encryptedData.data(), static_cast<int>(encryptedData.size()));
     if (written <= 0) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "BIO_write failed for HTTPS connection, fd=" + std::to_string(fileDescriptor));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "BIO_write failed for HTTPS connection, fd=" + std::to_string(fileDescriptor));
         CleanupConnection(fileDescriptor);
         return;
     }
@@ -318,7 +318,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
             }
 
             if (!context.connection || !context.connection->Send(outBuffer, static_cast<size_t>(pending))) {
-                A2A_LOG(A2A_LOG_LEVEL_ERROR, "failed to send TLS handshake data, fd=" +
+                A2A_LOG(A2A_LOG_LEVEL::ERROR, "failed to send TLS handshake data, fd=" +
                         std::to_string(fileDescriptor));
                 CleanupConnection(fileDescriptor);
                 return false;
@@ -331,7 +331,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
         int result = SSL_accept(context.ssl);
         if (result == 1) {
             context.handshaked = true;
-            A2A_LOG(A2A_LOG_LEVEL_INFO, "SSL_accept succeeded for HTTPS connection, fd=" +
+            A2A_LOG(A2A_LOG_LEVEL::INFO, "SSL_accept succeeded for HTTPS connection, fd=" +
                     std::to_string(fileDescriptor));
 
             if (!flushTlsPendingData()) {
@@ -343,7 +343,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
                 flushTlsPendingData();
                 return;
             }
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_accept failed for HTTPS connection, fd=" +
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_accept failed for HTTPS connection, fd=" +
                 std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
             CleanupConnection(fileDescriptor);
             return;
@@ -358,7 +358,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
             if (errorCode == SSL_ERROR_WANT_READ || errorCode == SSL_ERROR_WANT_WRITE) {
                 break;
             }
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_read returned " + std::to_string(bytesRead) +
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_read returned " + std::to_string(bytesRead) +
                     " (err=" + std::to_string(errorCode) + "), closing HTTPS connection fd=" +
                     std::to_string(fileDescriptor));
             CleanupConnection(fileDescriptor);
@@ -372,7 +372,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
 void HttpServer::HandleClose(const SocketPtr& socket)
 {
     int fileDescriptor = socket ? socket->Fd() : -1;
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
     }
@@ -381,7 +381,7 @@ void HttpServer::HandleClose(const SocketPtr& socket)
 void HttpServer::HandleError(const SocketPtr &socket, int errorCode, const std::string &message)
 {
     int fileDescriptor = socket ? socket->Fd() : -1;
-    A2A_LOG(A2A_LOG_LEVEL_ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
             " err=" + std::to_string(errorCode) + " msg=" + message);
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
@@ -573,7 +573,7 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
     if (writeResult <= 0) {
         int errorCode = SSL_get_error(context.ssl, writeResult);
         if (errorCode != SSL_ERROR_WANT_READ && errorCode != SSL_ERROR_WANT_WRITE) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_write failed for HTTPS response, fd=" +
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_write failed for HTTPS response, fd=" +
                     std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
             CleanupConnection(fileDescriptor);
             return false;
@@ -605,7 +605,7 @@ bool HttpServer::SendResponse(int connectionFd, const Http::HttpResponse& respon
 
     ConnectionContext& context = iterator->second;
 
-    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Response Status: " + std::to_string(response.statusCode) + " " +
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Response Status: " + std::to_string(response.statusCode) + " " +
             response.statusText);
 
     bool isChunked = false;

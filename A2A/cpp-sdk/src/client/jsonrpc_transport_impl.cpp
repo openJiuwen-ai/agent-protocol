@@ -119,7 +119,7 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
             // find user data according to response payload
             if (!j.contains(JSON_FIELD_ID)) {
                 // abandon invalid data and record warn log
-                A2A_LOG(A2A_LOG_LEVEL_WARN, "invalid data from transport layer, abandon it");
+                A2A_LOG(A2A_LOG_LEVEL::WARN, "invalid data from transport layer, abandon it");
                 return;
             }
 
@@ -128,7 +128,7 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
                 std::lock_guard<std::mutex> lock(requestMutex_);
                 auto it = requestData_.find(id);
                 if (it == requestData_.end()) {
-                    A2A_LOG(A2A_LOG_LEVEL_WARN, "requestId[" + id + "] not found, abandon response data");
+                    A2A_LOG(A2A_LOG_LEVEL::WARN, "requestId[" + id + "] not found, abandon response data");
                     return;
                 }
                 udata = *it->second;
@@ -166,7 +166,7 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
             OnNonStreamResp(udata, j);
         }
     } catch (const nlohmann::json::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "invalid data from transport layer");
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "invalid data from transport layer");
         if (udata.valid) {
             TransportEvent ev = TransportError{static_cast<int>(A2AErrorCode::JSONRPC_PARSE_ERROR), e.what()};
             conn_->FinishRequest(udata.timerId);
@@ -180,7 +180,7 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
             transportEventCb_(udata.requestId, ev);
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "exception caught: " + std::string(e.what()));
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "exception caught: " + std::string(e.what()));
     }
 }
 
@@ -251,7 +251,7 @@ int JsonRpcTransportImpl::Send(const std::string& requestId, const std::string& 
     }
     auto ret = conn_->SendMessage(data, headers, userData, timeout);
     if (ret != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "ret: " + std::to_string(ret));
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "ret: " + std::to_string(ret));
         std::lock_guard<std::mutex> lock(requestMutex_);
         requestData_.erase(requestId);
         throw std::runtime_error("transport exception");

@@ -111,7 +111,7 @@ int TcpSocket::CreateNonblockingTcpSocket(int family)
         return -1;
     }
     if (!Socket::SetNonBlocking(fd)) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed, errno: " + std::to_string(errno));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed, errno: " + std::to_string(errno));
         ::close(fd);
         return -1;
     }
@@ -143,7 +143,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     addrinfo* res = nullptr;
     int gai = ::getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res);
     if (gai != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "getaddrinfo failed: " + std::string(::gai_strerror(gai)));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "getaddrinfo failed: " + std::string(::gai_strerror(gai)));
         return nullptr;
     }
 
@@ -151,7 +151,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
         fd = CreateNonblockingTcpSocket(ai->ai_family);
         if (fd < 0) {
-            A2A_LOG(A2A_LOG_LEVEL_DEBUG, "socket() create failed for family " + std::to_string(ai->ai_family));
+            A2A_LOG(A2A_LOG_LEVEL::DEBUG, "socket() create failed for family " + std::to_string(ai->ai_family));
             continue;
         }
 
@@ -163,7 +163,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
             if (errno == EINPROGRESS || errno == EALREADY) {
                 break;
             }
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "connect() failed, errno: " + std::to_string(errno));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "connect() failed, errno: " + std::to_string(errno));
             ::close(fd);
             fd = -1;
             continue;
@@ -184,7 +184,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     int soerr = 0;
     socklen_t slen = sizeof(soerr);
     if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "getsockopt(SO_ERROR) failed, errno: " + std::to_string(errno));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "getsockopt(SO_ERROR) failed, errno: " + std::to_string(errno));
         soerr = errno;
     }
 
@@ -236,7 +236,7 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts) const
         int val = 1;
         int rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &val, static_cast<socklen_t>(sizeof(val)));
         if (rc != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_NODELAY) failed, errno: " + std::to_string(errno));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_NODELAY) failed, errno: " + std::to_string(errno));
         }
     }
 
@@ -244,27 +244,27 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts) const
         int on = 1;
         int rc = ::setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE, &on, static_cast<socklen_t>(sizeof(on)));
         if (rc != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(SO_KEEPALIVE) failed, errno: " + std::to_string(errno));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(SO_KEEPALIVE) failed, errno: " + std::to_string(errno));
         }
         if (opts.keepAliveIdleSec > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &opts.keepAliveIdleSec,
                 static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_KEEPIDLE) failed, errno: " + std::to_string(errno));
+                A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_KEEPIDLE) failed, errno: " + std::to_string(errno));
             }
         }
         if (opts.keepAliveIntvlSec > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &opts.keepAliveIntvlSec,
                 static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_KEEPINTVL) failed, errno: " + std::to_string(errno));
+                A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_KEEPINTVL) failed, errno: " + std::to_string(errno));
             }
         }
         if (opts.keepAliveCnt > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &opts.keepAliveCnt,
                 static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_KEEPCNT) failed, errno: " + std::to_string(errno));
+                A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_KEEPCNT) failed, errno: " + std::to_string(errno));
             }
         }
     }
@@ -316,7 +316,7 @@ void TcpSocket::HandleConnectWritable()
     }
 
     if (err != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "connection failed:, errno: " + std::to_string(err));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "connection failed:, errno: " + std::to_string(err));
         NotifyError(err, "connect");
         Close();
         return;

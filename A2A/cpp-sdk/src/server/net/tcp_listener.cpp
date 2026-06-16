@@ -21,7 +21,7 @@ static bool SetReusePort(int fd, bool on)
 {
     int v = on ? 1 : 0;
     if (::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &v, static_cast<socklen_t>(sizeof(v))) != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SO_REUSEPORT failed, errno: " + std::to_string(errno));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SO_REUSEPORT failed, errno: " + std::to_string(errno));
         return false;
     }
     return true;
@@ -62,18 +62,18 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
         fd = static_cast<int>(::socket(ai->ai_family, SOCK_STREAM, 0));
         if (fd < 0) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "socket() failed, errno: " + std::to_string(errno));
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "socket() failed, errno: " + std::to_string(errno));
             continue;
         }
 
         if (reusePort) {
             if (!SetReusePort(fd, true)) {
-                A2A_LOG(A2A_LOG_LEVEL_INFO, "requested SO_REUSEPORT not available on this platform");
+                A2A_LOG(A2A_LOG_LEVEL::INFO, "requested SO_REUSEPORT not available on this platform");
             }
         }
 
         if (::bind(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen)) != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "bind() failed on fd " + std::to_string(fd) +
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "bind() failed on fd " + std::to_string(fd) +
                 " errno: " + std::to_string(errno));
             ::close(fd);
             fd = -1;
@@ -81,7 +81,7 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
         }
 
         if (::listen(fd, backlog) != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "listen() failed on fd " + std::to_string(fd) +
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "listen() failed on fd " + std::to_string(fd) +
                 " errno: " + std::to_string(errno));
             ::close(fd);
             fd = -1;
@@ -97,7 +97,7 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     }
 
     if (!Socket::SetNonBlocking(fd)) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed on fd " + std::to_string(fd) +
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed on fd " + std::to_string(fd) +
                 " errno: " + std::to_string(errno));
         ::close(fd);
         return false;
