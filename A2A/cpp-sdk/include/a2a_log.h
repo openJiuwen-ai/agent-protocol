@@ -42,20 +42,20 @@ enum class A2A_LOG_LEVEL {
  */
 using A2aLogCallback = void (*)(A2A_LOG_LEVEL logLevel, std::string message);
 
-/** @brief Active log sink callback; nullptr disables custom logging. */
+/** @brief Active log sink; defaults to @ref A2aPrintfImpl. nullptr suppresses all output. */
 extern A2aLogCallback logCallback;
 
 /**
- * @brief Write a log line to the default sink (stderr).
- * @param logLevel Severity of the message.
- * @param message  Log text without trailing newline.
+ * @brief Default log sink: writes to stdout via @c printf (appends newline).
+ * @param logLevel Severity of the message (filtered against @ref GetLogLevel).
+ * @param message  Fully formatted log line without trailing newline.
  */
 void A2aPrintfImpl(A2A_LOG_LEVEL logLevel, std::string message);
 
 /**
- * @brief Register a custom log callback.
- * @param[in] a2aLogCallback Callback to receive log lines.
- * @return 0 on success, non-zero on failure (e.g. duplicate registration).
+ * @brief Register a custom log callback (process-wide, once only).
+ * @param[in] a2aLogCallback Callback to receive formatted log lines.
+ * @return 0 on success, @c -1 if a callback was already registered.
  */
 int32_t SetLogCallback(const A2aLogCallback a2aLogCallback);
 
@@ -91,9 +91,9 @@ void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func, int li
 } // namespace A2A::Log
 
 /**
- * @brief Log with printf-style formatting (legacy; format string is not interpolated).
- * @param logLevel One of A2A::Log::A2A_LOG_LEVEL values.
- * @param format   Message or format string.
+ * @brief Log a pre-formatted message via @ref LogInternal (legacy).
+ * @param level  One of @c A2A::Log::A2A_LOG_LEVEL values.
+ * @param format Message body; **not** printf-interpolated (passed as-is).
  */
 #define A2A_LOG_COMMON(logLevel, format, ...) \
     ::A2A::Log::LogInternal(::A2A::Log::logLevel, __FILE__, __FUNCTION__, __LINE__, format)
@@ -101,10 +101,10 @@ void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func, int li
 #define A2A_LOG(level, format, ...) A2A_LOG_COMMON(level, format, ##__VA_ARGS__)
 
 /**
- * @brief Log a pre-built C++ string with level short-circuiting.
- * @param level   One of A2A::Log::A2A_LOG_LEVEL values.
- * @param message String expression to log.
- * @note 推荐用于需要字符串拼接的日志场景。
+ * @brief Log with stream concatenation; formats timestamp, tid, and location.
+ * @param level   One of @c A2A::Log::A2A_LOG_LEVEL values.
+ * @param message Expression streamed with @c << (e.g. @c "port " << port).
+ * @note Filtered by @ref GetLogLevel; requires non-null @ref logCallback.
  */
 #define A2A_LOG_CONCAT(level, message) \
     do { \

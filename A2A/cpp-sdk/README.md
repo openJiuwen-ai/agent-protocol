@@ -1,298 +1,174 @@
-# a2a_cpp
+# A2A C++ SDK
 
-## 简介
+## 目录
 
-**A2A C++ SDK**是基于agent to agent协议的C++实现，旨在帮助开发者快速构建多智能体协作系统、任务编排系统、AI Agent平台、边缘智能设备通信等场景。
-[A2A协议规范](https://a2a-protocol.org/v0.3.0/specification/)是一套用于智能体之间通信的标准化协议，定义了任务、消息、时间、智能体能力描述等核心结构。
-SDK提供统一的数据结构、序列化能力、协议校验机制以及通信接口，让智能体之间的交互更加稳定、高效、可维护。
+- [概述](#概述)
+- [文档](#文档)
+- [环境要求](#环境要求)
+- [快速入门](#快速入门)
+- [构建与安装](#构建与安装)
+- [运行示例](#运行示例)
+- [运行测试](#运行测试)
+- [参与贡献](#参与贡献)
+- [License](#license)
 
+## 概述
 
-## 编译宏说明
+A2A C++ SDK 是 [Agent-to-Agent 协议 v1.0](https://a2a-protocol.org/v1.0.0/specification/) 的 C++ 实现，提供 A2A 客户端与服务器能力，支持基于 **HTTP + JSON-RPC** 的智能体间通信。
 
-A2A C++ SDK 在构建过程中会使用若干编译宏（`-D`），用于控制构建行为、启用安全加固以及适配不同平台环境。以下为当前使用的主要编译宏说明。
+- 构建 A2A 客户端：发现 Agent Card、发送消息、查询/取消任务、接收流式事件
+- 构建 A2A 服务器：注册 `AgentExecutor`、管理任务生命周期、暴露 JSON-RPC 端点
+- 支持多模态 `Part`、推送通知配置、请求拦截器、自定义 `TaskStore` 等扩展能力（详见示例与 API 文档）
 
-| 宏名称 | 来源 | 作用 | 说明 |
-|------|------|------|------|
-| `NDEBUG` | Release / MinSizeRel 构建类型 | 关闭断言 | 标识当前为非调试构建，`assert` 宏将被禁用 |
-| `_FORTIFY_SOURCE=2` | Release / RelWithDebInfo 构建类型 | 安全加固 | 启用 libc 边界检查增强，提升运行时安全性 |
-| `__MUSL__` | 平台工具链 | musl libc 标识 | 由 musl 平台工具链自动定义，用于区分 glibc 与 musl 环境 |
+## 文档
 
-## 快速开始
+| 文档 | 说明 |
+|------|------|
+| [API 参考](docs/API.md) | 公开头文件、类型、Client / Server API 说明 |
+| [日志说明](docs/LOGGING.md) | SDK 诊断日志、`A2A_LOG` / `SetLogCallback` 用法 |
+| [测试说明](docs/TESTING.md) | 单元测试布局、构建与运行、覆盖率 |
 
-### 安装
+## 环境要求
 
-#### 环境要求
-- C++ 17或以上编译器
-- CMake >= 3.16
-- 操作系统：兼容Linux
+- **操作系统**：Linux（glibc 或 musl，主要验证平台）
+- **编译器**：C++17 及以上（GCC 9+ / Clang 10+）
+- **CMake**：≥ 3.16（见根目录 `CMakeLists.txt`）
+- **依赖**：OpenSSL、libcurl、libevent、nlohmann_json；`http_parser` 由 `third_party/` 提供（v2.9.4）
 
+可使用 `scripts/install_deps.sh` 一键安装系统包；`libevent` / `nlohmann_json` 缺失时会由 `third_party/third_party.cmake` 自动从 GitHub 拉取。
 
-**源代码安装**
+## 快速入门
 
-#### 安装构建依赖
-
-在 Debian/Ubuntu、RHEL 系等 Linux 上可一键安装系统包（推荐，可加快首次编译）：
-
-```bash
-bash ./scripts/install_deps.sh
-```
-
-也可手动安装以下依赖：
-- curl >= 8.8.0
-- curl-devel >= 8.8.0
-- nlohmann_json >= 3.11.2
-- libevent >= 2.1.12
-- http_parser >= 2.9.4
-
-##### curl
-使用对应平台的包管理工具进行安装
-Ubuntu/Debian
-```bash
-sudo apt-get install libcurl
-sudo apt-get install libcurl-devel
-```
-
-CentOS/RHEL
-```bash
-sudo yum install libcurl
-sudo yum install libcurl-devel
-```
-
-其他 Linux 发行版请安装等价包
-
-##### libevent 和 nlohmann_json
-在 `third_party/third_party.cmake` 中会尝试先在本地系统查找，查找失败则会从 GitHub 拉取源代码。
-
-##### http_parser
-与 blue 一致：仅使用 `third_party/http_parser-src`（不存在时由 FetchContent 下载 v2.9.4），不从系统 `find_library` 链接。
-
-#### 编译a2a cpp
+在仓库 `A2A/cpp-sdk` 目录下，按以下顺序执行（约 5–15 分钟，视网络与编译环境而定）：
 
 ```bash
-bash ./scripts/build.sh -e
+# 1. 安装系统依赖（curl、openssl、libevent 等；部分发行版需 sudo）
+sudo ./scripts/install_deps.sh
+
+# 2. 编译 SDK 与示例（产物：output/lib/liba2a.so、output/bin/*）
+./scripts/build.sh -e
+
+# 3. 一键冒烟测试全部示例（推荐）
+./scripts/run_example.sh
 ```
 
-编译成功后，会在项目根目录生成 `output/`，包含 `include`、`lib` 和 `bin`（头文件、动态库与示例二进制）。
-
-运行示例冒烟测试（需先完成 `-e` 编译）：
+默认示例端口：`8888`。JSON-RPC 端点：`http://127.0.0.1:8888/jsonrpc`。指定端口示例：
 
 ```bash
-bash ./scripts/run_example.sh
+A2A_EXAMPLE_PORT=9000 ./scripts/run_example.sh
 ```
 
-手动运行示例时，将 `lib` 加入动态库搜索路径，例如：
+**注意**：`run_example.sh` 会依次启动 `helloworld` 与 `streaming` 示例的 Server/Client 并做 HTTP/JSON-RPC 检查，需先完成 `-e` 编译。
+
+## 构建与安装
+
+统一入口为 `scripts/build.sh`（不是仓库根目录下的 `build.sh`）。
+
+```bash
+# Release 构建（默认，仅核心库）
+./scripts/build.sh
+
+# Release 构建 + 示例
+./scripts/build.sh -e
+
+# Debug 构建（含调试符号）
+./scripts/build.sh -t Debug
+
+# 编译并启用单元测试
+./scripts/build.sh -u -t Debug
+
+# 覆盖率构建 + 运行测试报告（见 docs/TESTING.md）
+./scripts/build.sh -c
+
+# AddressSanitizer 调试构建
+./scripts/build.sh -u -t Debug --asan
+```
+
+常用 CMake 裁剪选项（经 `build.sh` 传入）：
+
+| 选项 | 含义 |
+|------|------|
+| `-e, --with-examples` | 编译 `examples/` 下示例程序 |
+| `-u, --with-tests` | 编译单元测试 |
+| `-c, --coverage` | 启用覆盖率（隐含 `-u`，Debug） |
+| `--no-client` | 不编译 Client 组件 |
+| `--no-server` | 不编译 Server 组件 |
+| `--asan` | 启用 AddressSanitizer（自动使用 Debug） |
+| `-t Debug\|Release` | 构建类型，默认 Release |
+| `-b, --build-dir <dir>` | 构建目录，默认 `build` |
+
+**构建产物**：
+
+| 路径 | 说明 |
+|------|------|
+| `output/lib/liba2a.so` | 共享库 |
+| `output/include/` | 公共头文件（`types.h`、`client/`、`server/` 等） |
+| `output/bin/` | 示例二进制（需 `-e`） |
+
+集成到自己工程时，链接 `liba2a.so` 并添加头文件路径 `output/include`（或源码树 `include/`）。运行时需要将 `output/lib` 加入 `LD_LIBRARY_PATH`。详见 `examples/CMakeLists.txt`。
+
+## 运行示例
+
+示例位于 `examples/` 目录。可使用统一脚本 `scripts/run_example.sh` 做冒烟测试，也可手动分别启动 Server 与 Client：
 
 ```bash
 export LD_LIBRARY_PATH="$(pwd)/output/lib:${LD_LIBRARY_PATH:-}"
-```
 
-服务端启动后会监听本机指定端口，例如：
-
-```bash
 ./output/bin/helloworld_server -i 127.0.0.1 -p 8080
 ./output/bin/helloworld_client -i 127.0.0.1 -p 8080
 ```
 
-成功运行会在客户端控制台输出服务端返回的数据
+| 示例 | 源文件 | 说明 |
+|------|--------|------|
+| Hello World Server | `examples/helloworld_server.cpp` | HTTP Server，非流式消息处理 |
+| Hello World Client | `examples/helloworld_client.cpp` | 获取 Agent Card、发送消息 |
+| Streaming Server | `examples/streaming_server.cpp` | 流式任务状态与产物推送 |
+| Streaming Client | `examples/streaming_client.cpp` | `message/stream` 流式接收 |
 
-### 样例
+API 与协议细节见 [docs/API.md](docs/API.md)。
 
-让我们创建一个简单的hello world示例。详细实现可以参考example/helloworld_client.cpp
+## 运行测试
 
-client代码：
-```c++
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <thread>
+```bash
+# 构建 + 运行 ctest（含覆盖率与 ASAN，默认）
+./scripts/run_ut.sh
 
-#include "client/http_card_resolver_builder.h"
-#include "client/a2a_card_resolver.h"
-#include "client/client_factory.h"
+# 跳过覆盖率，更快
+./scripts/run_ut.sh --no-coverage
 
-int main(int argc, char** argv)
-{
-    std::string baseUrl = "127.0.0.1:8080";
-    std::string cardpath = "/.well-known/agent-card.json";
-    std::shared_ptr<A2A::Client::A2ACardResolver> resolver =
-        A2A::Client::HttpCardResolverBuilder::Build(baseUrl, cardpath);
-    auto card = resolver->GetAgentCard();
-
-    A2A::Client::ClientConfig cfg;
-    cfg.streaming = false;
-    cfg.supportedTransports = {"JSONRPC"};
-    auto client = A2A::Client::ClientFactory::Create(card.get(), cfg);
-
-    A2A::Message msg;
-    msg.role = A2A::Role::USER;
-    msg.messageId = 123;
-
-    A2A::Part tp;
-    tp.text = "hello remote server";
-    tp.mediaType = "text/plain";
-    msg.parts.push_back(tp);
-
-    A2A::Part dp;
-    dp.data = nlohmann::json {
-        {"key", "value"},
-        {"number", 456}
-    };
-    dp.mediaType = "application/json";
-    msg.parts.push_back(dp);
-
-    client->SendMessage(msg, nullptr, [&](const A2A::Client::ClientEvent& ev, const A2A::AgentCard& card) {
-        if (std::holds_alternative<A2A::Message>(ev)) {
-            auto m = std::get<A2A::Message>(ev);
-            std::cout << "receive response, message id: " << m.messageId << std::endl;
-        } else {
-            std::cout << "Unexpected Task variant received (non-streaming config)" << std::endl;
-        }
-    });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    return 0;
-}
-
+# 跳过 ASAN
+./scripts/run_ut.sh --no-coverage --no-asan
+# 或
+A2A_SKIP_ASAN=1 ./scripts/run_ut.sh --no-coverage
 ```
 
-server代码
-```c++
-#include <csignal>
-#include <iostream>
-#include <thread>
+也可手动构建后运行：
 
-#include "server/agent_executor.h"
-#include "server/http_server_builder.h"
-#include "server/server.h"
-#include "types.h"
-
-class MyAgentExecutor : public A2A::Server::AgentExecutor {
-public:
-    void Execute(const A2A::Server::RequestContext& context,
-        std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
-    {
-        std::cout << "AgentExecutor::Execute() called\n";
-
-        // 发送初始状态
-        taskUpdater->StartWork();
-
-        // 发送处理结果
-        A2A::Message response_msg;
-        response_msg.role = A2A::Role::AGENT;
-
-        // 从请求中提取用户输入
-        std::string user_input = "Hello World!";
-        if (context.GetMessage()) {
-            const auto& msg = context.GetMessage();
-            response_msg.messageId = msg->messageId;
-            response_msg.contextId = msg->contextId.value_or("");
-            for (const auto& part : msg->parts) {
-                if (part.text.has_value()) {
-                    user_input = part.text.value();
-                    break;
-                }
-            }
-        }
-
-        A2A::Part text_part;
-        text_part.text = "Processed: " + user_input;
-        text_part.mediaType = "text/plain";
-        response_msg.parts.push_back(text_part);
-
-        // 发送完成状态
-        taskUpdater->Complete(response_msg);
-    }
-
-    void Cancel(const A2A::Server::RequestContext& context,
-        std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
-    {
-        std::cout << "AgentExecutor::Cancel() called\n";
-        taskUpdater->Cancel();
-    }
-};
-
-int main() {
-    // 1. 创建executor
-    auto executor = std::make_shared<MyAgentExecutor>();
-
-    // 2. 创建 AgentCard
-    auto agentCard = std::make_shared<A2A::AgentCard>();
-    agentCard->name = "ExampleAgent";
-    agentCard->description = "A2A Hello World Example";
-    agentCard->version = "1.0.0";
-    agentCard->defaultInputModes = {"text"};
-    agentCard->defaultOutputModes = {"text"};
-    agentCard->capabilities.streaming = false;
-    agentCard->supportedInterfaces = {
-        {
-            "http://127.0.0.1:8080/jsonrpc",
-            "JSONRPC",
-            "1.0",
-            std::nullopt
-        }
-    };
-
-    std::cout << "--Built agent card \n";
-
-    // 3. 创建HTTP服务器配置
-    A2A::Server::HttpConfig httpConfig;
-    httpConfig.ip = "127.0.0.1";
-    httpConfig.port = 8080;
-
-    // 4. 使用HTTP服务器构建器创建服务器
-    auto server = A2A::Server::HttpServerBuilder::Build(
-        httpConfig,
-        agentCard,
-        nullptr,
-        executor,
-        nullptr
-    );
-
-    std::cout << "\nStarting A2A Hello World server..." << std::endl;
-    int ret = server->Start();
-    if (ret != 0) {
-        std::cerr << "Server failed to start" << std::endl;
-        return -1;
-    }
-
-    // 简单等待一段时间，然后退出
-    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-
-    // 停止服务器
-    server->Stop();
-
-    std::cout << "Server stopped.\n";
-    return 0;
-}
-
+```bash
+./scripts/build.sh -u -t Debug
+cd build && ctest --output-on-failure
 ```
 
-## 架构设计
-
-**A2A C++ SDK**采用模块化设计，核心模块包括：
-
-* **SDK接口层**：定义Client、Server、A2ACardResolver、AgentExecutor等类，提供对外结构，帮助用户快速搭建客户端和服务端能力。
-
-* **协议结构层**：定义Message、Task、Event、AgentCard等结构，提供字段校验、默认值处理等功能。
-
-* **传输层**：抽象底层传输，对上层功能实现提供统一接口，便于底层不同传输类型的扩展。
-
-## 功能特性
-
-### **智能体能力获取**
-A2A C++ SDK提供根据智能体url获取智能体能力的功能，查询智能体支持的基本信息、支持的功能、认证方式、输入输出模式、所有技能列表
-
-### **智能体之间标准化调用**
-A2A C++ SDK支持任务管理、状态同步、多模态数据、实时通信等，让用户可以快速简单的在智能体之间传递消息，进行多智能体协作，完成实时推送与流式交互
-
+覆盖率与报告说明见 [docs/TESTING.md](docs/TESTING.md)。
 
 ## 参与贡献
 
-我们欢迎所有形式的贡献，包括但不限于:
-- 提交问题和功能建议
-- 改进文档
-- 提交代码
-- 分享使用经验
+欢迎提交 Issue、文档改进与代码贡献。提交 PR 前请运行：
 
-## 开源许可证
+```bash
+./scripts/run_ut.sh --no-coverage
+```
 
-本项目依据Apache-2.0许可证授权。
+确保单元测试通过。
+
+## License
+
+本项目依据 Apache-2.0 许可证授权。
+
+## Copyright
+
+Copyright (c) 2025-2026 Huawei Technologies Co., Ltd. All rights reserved.
+
+## Third-Party Notices
+
+本项目包含或依赖第三方开源软件，其版权和许可证信息均归原作者所有，并在相应文件中予以说明。
