@@ -9,6 +9,7 @@
 | [client.md](client.md) | 客户端创建、初始化、RPC 调用、回调 |
 | [server.md](server.md) | 服务端创建、注册 Tool/Prompt/Resource、运行 |
 | [protocol-mapping.md](protocol-mapping.md) | MCP 协议方法 ↔ C++ API 对照 |
+| [../errors.md](../errors.md) | 错误码、异常类型与处理建议 |
 
 ## 头文件一览
 
@@ -44,4 +45,5 @@ McpClientFactory / McpServerFactory
 
 - [依赖说明](../dependencies.md)
 - [测试说明](../testing.md)
-- [主 README](../README.md)
+- [错误处理说明](../errors.md)
+- [主 README](../../README.md)

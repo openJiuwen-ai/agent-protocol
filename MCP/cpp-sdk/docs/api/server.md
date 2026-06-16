@@ -47,6 +47,7 @@ server->Stop();
 ```
 
 - `Run()` 成功返回 `true`，失败返回 `false`（错误信息见日志）。
+- 注册 API 异常、JSON-RPC 错误映射与 Tool `isError` 语义见 [errors.md](../errors.md)。
 - `Stop()` 后不应再调用 `AddTool` 等注册接口。
 
 ## 注册 Tool

@@ -50,6 +50,7 @@ client->CloseGracefully();
 - 所有 RPC 方法返回 `std::future<std::shared_ptr<T>>`，通过 `future.get()` 获取结果。
 - 未调用 `Initialize()` 前调用 RPC 会抛出 `std::runtime_error`。
 - 远端 JSON-RPC 错误在 `future.get()` 时以 `Mcp::MCPError` 抛出。
+- 完整错误语义、`CallTool` 双路径与捕获顺序见 [errors.md](../errors.md)。
 
 ## 常用 RPC
 
