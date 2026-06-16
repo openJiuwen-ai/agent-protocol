@@ -9,7 +9,10 @@
 - [构建与安装](#构建与安装)
 - [运行示例](#运行示例)
 - [运行测试](#运行测试)
+- [日志](#日志)
 - [License](#license)
+- [Copyright](#copyright)
+- [Third-Party Notices](#third-party-notices)
 
 ## 概述
 
@@ -129,6 +132,10 @@ cd build && ctest --output-on-failure
 ```
 
 覆盖率与 HTML 报告见 [docs/testing.md](docs/testing.md)。
+
+## 日志
+
+SDK 默认将诊断日志输出到 **stdout**。stdio 传输模式下请通过 `SetLogCallback` 重定向日志，避免污染协议通道。详见 [docs/logging.md](docs/logging.md)。
 
 ## License
 

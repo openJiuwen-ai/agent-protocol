@@ -67,7 +67,7 @@ cd example/client_example/tool_example && ./run_example.sh
 ## 日志
 
 - 控制台：部分启动信息（`std::cout`）
-- SDK 日志：`SetLogCallback(FileLogCallback)` 写入 `server_example/build/server_example.log`（运行目录下）
+- SDK 日志：`SetLogCallback(FileLogCallback)` 写入 `server_example/build/server_example.log`；级别由 `SetLogLevel` 统一过滤（见 [日志说明](../../docs/logging.md)）
 
 ## 相关文档
 

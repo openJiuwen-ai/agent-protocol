@@ -70,6 +70,9 @@ inline void LogInternal(MCP_LOG_LEVEL level, const char* file, const char* func,
     if (g_logCallback == nullptr) {
         return;
     }
+    if (level < GetLogLevel()) {
+        return;
+    }
 
     std::string timestamp;
     GetCurrentTimeStamp(timestamp);
