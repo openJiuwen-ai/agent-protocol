@@ -16,6 +16,16 @@ test = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
 ]
+metrics = [
+    "prometheus-client>=0.16",
+]
+bedrock = [
+    "botocore>=1.31",
+]
+all = [
+    "prometheus-client>=0.16",
+    "botocore>=1.31",
+]
 
 [project.urls]
 Source = "https://gitcode.com/openJiuwen/agent-protocol.git"
@@ -26,3 +36,7 @@ packages = ["intelli_router"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.poetry.group.dev.dependencies]
+prometheus-client = "^0.25.0"
+

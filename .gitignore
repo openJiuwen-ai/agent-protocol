@@ -6,3 +6,12 @@ dist/
 build/
 .venv/
 *.egg
+.remember/
+
+# Docs (local only)
+intelli_router/docs/
+
+# Nested gitignore
+intelli_router/.gitignore
+
+CLAUDE.md

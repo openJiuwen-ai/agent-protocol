@@ -36,83 +36,75 @@ def test_health_check_result_dataclass():
     assert result.timestamp > 0
 
 
+def _setup_check_client_mock(health_checker, side_effect):
+    """Set up a mock _ensure_client that returns a client with the given
+    post side_effect. Clears any previously cached client."""
+    health_checker._client = None
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = side_effect
+    health_checker._ensure_client = MagicMock(return_value=mock_client)
+    return mock_client
+
+
 @pytest.mark.asyncio
 async def test_check_deployment_success(health_checker, deployment_gpt4_1):
-    with patch("intelli_router.health.checker.httpx.AsyncClient") as mock_ctx:
-        mock_ctx_instance = AsyncMock()
-        mock_ctx.return_value.__aenter__.return_value = mock_ctx_instance
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_ctx_instance.post.return_value = mock_response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    _setup_check_client_mock(health_checker, [mock_response])
 
-        result = await health_checker.check_deployment(deployment_gpt4_1)
-        assert result.is_healthy is True
-        assert result.deployment_id == deployment_gpt4_1.id
-        assert result.latency is not None
-        assert result.latency > 0
-        assert result.error is None
+    result = await health_checker.check_deployment(deployment_gpt4_1)
+    assert result.is_healthy is True
+    assert result.deployment_id == deployment_gpt4_1.id
+    assert result.latency is not None
+    assert result.latency > 0
+    assert result.error is None
 
 
 @pytest.mark.asyncio
 async def test_check_deployment_non_200(health_checker, deployment_gpt4_1):
-    with patch("intelli_router.health.checker.httpx.AsyncClient") as mock_ctx:
-        mock_ctx_instance = AsyncMock()
-        mock_ctx.return_value.__aenter__.return_value = mock_ctx_instance
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_ctx_instance.post.return_value = mock_response
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    _setup_check_client_mock(health_checker, [mock_response])
 
-        result = await health_checker.check_deployment(deployment_gpt4_1)
-        assert result.is_healthy is False
-        assert "HTTP 500" in result.error
+    result = await health_checker.check_deployment(deployment_gpt4_1)
+    assert result.is_healthy is False
+    assert "HTTP 500" in result.error
 
 
 @pytest.mark.asyncio
 async def test_check_deployment_exception(health_checker, deployment_gpt4_1):
-    with patch("intelli_router.health.checker.httpx.AsyncClient") as mock_ctx:
-        mock_ctx_instance = AsyncMock()
-        mock_ctx.return_value.__aenter__.return_value = mock_ctx_instance
-        mock_ctx_instance.post.side_effect = ConnectionError("connection refused")
+    _setup_check_client_mock(health_checker, ConnectionError("connection refused"))
 
-        result = await health_checker.check_deployment(deployment_gpt4_1)
-        assert result.is_healthy is False
-        assert "connection refused" in result.error
+    result = await health_checker.check_deployment(deployment_gpt4_1)
+    assert result.is_healthy is False
+    assert "connection refused" in result.error
 
 
 @pytest.mark.asyncio
 async def test_check_all_deployments(health_checker, health_deployments):
-    with patch("intelli_router.health.checker.httpx.AsyncClient") as mock_ctx:
-        mock_ctx_instance = AsyncMock()
-        mock_ctx.return_value.__aenter__.return_value = mock_ctx_instance
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_ctx_instance.post.return_value = mock_response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    _setup_check_client_mock(health_checker, [mock_response, mock_response])
 
-        results = await health_checker.check_all_deployments()
-        assert len(results) == len(health_deployments)
-        for dep_id, result in results.items():
-            assert isinstance(result, HealthCheckResult)
-            assert result.is_healthy is True
-        # state.update_health should have been called for each
-        for dep in health_deployments:
-            assert health_checker.state.health_state.get(dep.id) is True
+    results = await health_checker.check_all_deployments()
+    assert len(results) == len(health_deployments)
+    for dep_id, result in results.items():
+        assert isinstance(result, HealthCheckResult)
+        assert result.is_healthy is True
+    for dep in health_deployments:
+        assert health_checker.state.health_state.get(dep.id) is True
 
 
 @pytest.mark.asyncio
 async def test_check_all_deployments_partial_failure(health_checker, health_deployments):
-    with patch("intelli_router.health.checker.httpx.AsyncClient") as mock_ctx:
-        mock_ctx_instance = AsyncMock()
-        mock_ctx.return_value.__aenter__.return_value = mock_ctx_instance
+    mock_ok = MagicMock()
+    mock_ok.status_code = 200
+    _setup_check_client_mock(health_checker, [mock_ok, ConnectionError("timeout")])
 
-        # First deployment succeeds, second fails with exception
-        mock_ok = MagicMock()
-        mock_ok.status_code = 200
-        mock_ctx_instance.post.side_effect = [mock_ok, ConnectionError("timeout")]
-
-        results = await health_checker.check_all_deployments()
-        assert len(results) == 2
-        assert results[health_deployments[0].id].is_healthy is True
-        assert results[health_deployments[1].id].is_healthy is False
+    results = await health_checker.check_all_deployments()
+    assert len(results) == 2
+    assert results[health_deployments[0].id].is_healthy is True
+    assert results[health_deployments[1].id].is_healthy is False
 
 
 @pytest.mark.asyncio

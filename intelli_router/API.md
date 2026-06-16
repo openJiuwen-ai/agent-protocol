@@ -1,15 +1,17 @@
-# SDK LLM API接口文档
+# IntelliRouter API 接口文档
 
 ## 目录
 
 - [核心类](#核心类)
+- [Provider 适配器](#provider-适配器)
+- [类型模块](#类型模块)
+- [输出解析器](#输出解析器)
 - [路由策略](#路由策略)
 - [策略工厂函数](#策略工厂函数)
 - [状态管理](#状态管理)
 - [缓存](#缓存)
 - [健康检查](#健康检查)
 - [异常](#异常)
-- [类型定义](#类型定义)
 - [使用示例](#使用示例)
 
 ---
@@ -18,7 +20,7 @@
 
 ### `Deployment`
 
-部署配置类 - 表示一个API端点。
+部署配置类 - 表示一个 API 端点。
 
 **构造函数**:
 ```python
@@ -34,7 +36,7 @@ Deployment(
     tpm: Optional[int] = None,                # Token Per Minute限制
     rpm: Optional[int] = None,                # Request Per Minute限制
     timeout: Optional[float] = None,          # 请求超时
-    litellm_params: Dict[str, Any] = {}       # litellm额外参数
+    provider: str = "openai",                 # Provider 类型 (见 Provider 适配器)
 )
 ```
 
@@ -42,7 +44,7 @@ Deployment(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `is_available` | `is_available(now: float) -> bool` | 检查部署是否可用（非冷却中且非失败状态） |
+| `is_available` | `is_available(now: float) -> bool` | 检查部署是否可用（非冷却中） |
 | `to_dict` | `to_dict() -> Dict[str, Any]` | 序列化为字典 |
 | `from_dict` | `(data: Dict[str, Any]) -> Deployment` | 从字典反序列化 (类方法) |
 
@@ -50,7 +52,7 @@ Deployment(
 
 ### `DeploymentStatus` (枚举)
 
-部署状态枚举。
+部署状态枚举。所有失败均为暂时性的，通过冷却机制自愈。
 
 ```python
 class DeploymentStatus(Enum):
@@ -83,12 +85,28 @@ ReliableRouter(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `completion` | `async completion(model: str, messages: List[Dict], **kwargs) -> Any` | 发送completion请求 |
-| `batch_completion` | `async batch_completion(requests: List[Dict], max_concurrent: int = 10) -> List[Any]` | 批量completion请求（并发控制） |
+| `completion` | `async completion(model: str, messages: List[Dict], **kwargs) -> Dict` | 发送 completion 请求，返回 OpenAI 格式原始字典 |
+| `invoke` | `async invoke(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, output_parser=None, **kwargs) -> AssistantMessage` | 类型化 completion 请求，返回 `AssistantMessage` |
+| `stream` | `async stream(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, **kwargs) -> AsyncIterator[AssistantMessageChunk]` | 流式 completion，逐 chunk 返回 `AssistantMessageChunk` |
+| `batch_completion` | `async batch_completion(requests: List[Dict], max_concurrent: int = 10) -> List[Any]` | 批量 completion 请求（并发控制） |
 | `get_deployments_for_model` | `get_deployments_for_model(model: str) -> List[Deployment]` | 获取模型的部署列表 |
 | `get_model_list` | `get_model_list() -> List[str]` | 获取已注册模型名列表 |
 | `update_deployments` | `update_deployments(new_deployments: List[Deployment]) -> None` | 动态更新部署列表 |
 | `get_stats` | `get_stats() -> Dict[str, Any]` | 获取路由器统计信息 |
+| `close` | `async close() -> None` | 关闭底层 HTTP 客户端，释放连接池 |
+
+**`invoke()` 参数说明**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `messages` | `List[Dict[str, Any]]` | 消息列表 |
+| `tools` | `Optional[List[Dict]]` | 工具定义 |
+| `temperature` | `Optional[float]` | 温度 |
+| `top_p` | `Optional[float]` | top_p |
+| `model` | `Optional[str]` | 模型名（省略则使用第一个 deployment 的模型） |
+| `max_tokens` | `Optional[int]` | 最大 token 数 |
+| `stop` | `Optional[Union[str, List[str]]]` | 停止序列 |
+| `output_parser` | `Optional[BaseOutputParser]` | 输出解析器 |
 
 **异步上下文管理器**:
 ```python
@@ -100,7 +118,7 @@ async with ReliableRouter(...) as router:
 
 ### `BaseRouter`
 
-基础路由器 - 提供API池化和请求转发能力。
+基础路由器 - 提供 API 池化和请求转发能力。
 
 **构造函数**:
 ```python
@@ -116,12 +134,349 @@ BaseRouter(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `completion` | `async completion(model: str, messages: List[Dict], deployment: Optional[Deployment] = None, **kwargs) -> Any` | 发送completion请求（可指定部署） |
-| `completion_with_fallback` | `async completion_with_fallback(model: str, messages: List[Dict], fallback: Optional[Dict[str, str]] = None, **kwargs) -> Any` | 带降级模型的completion |
+| `completion` | `async completion(model: str, messages: List[Dict], deployment: Optional[Deployment] = None, **kwargs) -> Dict` | 发送 completion 请求（可指定部署） |
+| `acompletion_stream` | `async acompletion_stream(model: str, messages: List[Dict], deployment: Optional[Deployment] = None, **kwargs) -> AsyncIterator[Dict]` | 流式 SSE completion，yield OpenAI 格式 chunk |
+| `completion_with_fallback` | `async completion_with_fallback(model: str, messages: List[Dict], fallback: Optional[Dict[str, str]] = None, **kwargs) -> Any` | 带降级模型的 completion |
 | `get_deployments_for_model` | `get_deployments_for_model(model: str) -> List[Deployment]` | 获取模型部署列表 |
 | `get_model_list` | `get_model_list() -> List[str]` | 获取模型名列表 |
 | `get_deployment_configs` | `get_deployment_configs() -> List[Dict[str, Any]]` | 获取所有部署配置 |
 | `get_deployment_config_by_model` | `get_deployment_config_by_model(model: str) -> List[Dict[str, Any]]` | 获取指定模型的部署配置 |
+| `close` | `async close() -> None` | 关闭底层 HTTP 客户端 |
+
+---
+
+## Provider 适配器
+
+Provider 适配器将不同 LLM 提供商的请求/响应格式统一转换为 OpenAI 兼容格式。路由器通过 `Deployment.provider` 字段自动选择对应的适配器。
+
+### `BaseProviderAdapter` (抽象基类)
+
+所有 Provider 适配器的基类。
+
+```python
+class BaseProviderAdapter(ABC):
+    @abstractmethod
+    def get_api_url(self, deployment: Deployment, stream: bool = False) -> str:
+        """构建 API 请求 URL"""
+
+    @abstractmethod
+    def get_headers(self, deployment: Deployment) -> Dict[str, str]:
+        """构建请求头"""
+
+    def transform_request(
+        self, model: str, messages: List[Dict], deployment: Deployment, **kwargs
+    ) -> Dict[str, Any]:
+        """将 OpenAI 格式请求转换为目标 Provider 格式（默认透传）"""
+
+    def transform_response(
+        self, raw_response: Dict[str, Any], model: str, deployment: Deployment
+    ) -> Dict[str, Any]:
+        """将目标 Provider 响应转换为 OpenAI 格式（默认透传）"""
+
+    def transform_stream_chunk(
+        self, chunk: Dict[str, Any], model: str, deployment: Deployment
+    ) -> Optional[Dict[str, Any]]:
+        """将流式 chunk 转换为 OpenAI 格式（默认透传）"""
+```
+
+**辅助静态方法**:
+
+| 方法 | 说明 |
+|------|------|
+| `_build_completion_response(id, model, message, finish_reason, prompt_tokens, completion_tokens)` | 构建 OpenAI 格式完整响应 |
+| `_build_chunk_response(model, delta, finish_reason, id, usage)` | 构建 OpenAI 格式流式 chunk |
+| `_extract_system_messages(messages)` | 分离 system 消息和其他消息 |
+| `sanitize_tool_calls(messages)` | 清理消息中 tool_calls 的非标准字段 |
+
+---
+
+### 注册表函数
+
+```python
+from intelli_router.provider.registry import register_provider, get_provider_adapter
+
+register_provider(name: str, adapter_cls: Type[BaseProviderAdapter]) -> None
+get_provider_adapter(provider: str) -> BaseProviderAdapter
+```
+
+---
+
+### 内置 Provider
+
+| Provider 名称 | 适配器类 | 说明 |
+|---------------|---------|------|
+| `"openai"` | `OpenAIProviderAdapter` | OpenAI 及兼容端点 (默认) |
+| `"anthropic"` | `AnthropicProviderAdapter` | Anthropic Claude Messages API |
+| `"google-gemini"` | `GeminiProviderAdapter` | Google Gemini API |
+| `"aws-bedrock"` | `BedrockProviderAdapter` | AWS Bedrock (需 SigV4，暂未实现) |
+| `"deepseek"` | `DeepSeekProviderAdapter` | DeepSeek API (继承 OpenAI，自动补 reasoning_content) |
+| `"siliconflow"` | `SiliconFlowProviderAdapter` | SiliconFlow (继承 OpenAI，清理 tool_calls) |
+| `"inference-affinity"` | `InferenceAffinityProviderAdapter` | InferenceAffinity (支持 cache_sharing / session_id) |
+| `"dashscope"` | `DashScopeProviderAdapter` | 阿里云 DashScope (URL: `/compatible-mode/v1/chat/completions`) |
+
+---
+
+## 类型模块
+
+### `ToolCall`
+
+工具调用。
+
+```python
+@dataclass
+class ToolCall:
+    id: str                        # 调用ID
+    type: str = "function"         # 调用类型
+    name: str = ""                 # 函数名
+    arguments: str = ""            # JSON 参数字符串
+    index: Optional[int] = None    # 流式中的索引
+```
+
+---
+
+### `UsageMetadata`
+
+Token 使用统计。
+
+```python
+@dataclass
+class UsageMetadata:
+    model_name: Optional[str] = None   # 模型名
+    input_tokens: int = 0              # 输入 token 数
+    output_tokens: int = 0             # 输出 token 数
+    total_tokens: int = 0              # 总 token 数 (自动计算)
+    cache_tokens: int = 0              # 缓存 token 数
+```
+
+---
+
+### `AssistantMessage`
+
+类型化的助手回复。由 `ReliableRouter.invoke()` 返回。
+
+```python
+@dataclass
+class AssistantMessage:
+    content: str                                       # 文本内容
+    tool_calls: Optional[List[ToolCall]] = None        # 工具调用列表
+    usage_metadata: Optional[UsageMetadata] = None     # Token 使用统计
+    finish_reason: str = "stop"                        # 结束原因 ("stop" / "tool_calls" / "length")
+    reasoning_content: Optional[str] = None            # 思维链内容 (DeepSeek 等)
+```
+
+---
+
+### `AssistantMessageChunk`
+
+流式消息片段。由 `ReliableRouter.stream()` 逐个 yield。支持通过 `+` 运算符累积。
+
+```python
+@dataclass
+class AssistantMessageChunk:
+    content: str = ""                                  # 文本片段
+    reasoning_content: Optional[str] = None            # 思维链片段
+    tool_calls: Optional[List[ToolCall]] = None        # 工具调用片段
+    usage_metadata: Optional[UsageMetadata] = None     # Token 使用统计 (通常在最后一个 chunk)
+    finish_reason: Optional[str] = None                # 结束原因 (通常在最后一个 chunk)
+```
+
+**累积用法**:
+```python
+accumulated = None
+async for chunk in router.stream(messages=[...]):
+    accumulated = chunk if accumulated is None else accumulated + chunk
+# accumulated 包含完整的 content, tool_calls, finish_reason
+```
+
+---
+
+### `ImageGenerationResponse`
+
+图片生成响应。
+
+```python
+@dataclass
+class ImageGenerationResponse:
+    model: str              # 模型名
+    images: List[str]       # 图片 URL 或 base64 列表
+```
+
+---
+
+### `AudioGenerationResponse`
+
+音频生成响应。
+
+```python
+@dataclass
+class AudioGenerationResponse:
+    model: str                            # 模型名
+    audio_url: Optional[str] = None       # 音频 URL
+    audio_data: Optional[bytes] = None    # 音频二进制数据
+    format: Optional[str] = None          # 音频格式
+```
+
+---
+
+### `VideoGenerationResponse`
+
+视频生成响应。
+
+```python
+@dataclass
+class VideoGenerationResponse:
+    model: str                            # 模型名
+    video_url: str                        # 视频 URL
+    duration: Optional[int] = None        # 时长（秒）
+    resolution: Optional[str] = None      # 分辨率
+    format: str = "mp4"                   # 视频格式
+```
+
+---
+
+### `StrategyType`
+
+策略类型字面量。
+
+```python
+StrategyType = Literal[
+    "simple-shuffle",
+    "lowest-latency",
+    "tag-based",
+    "token-aware",
+    "rate-limit-aware",
+    "adaptive"
+]
+```
+
+---
+
+### `RoutingContext`
+
+路由上下文 - 请求级别信息。
+
+```python
+@dataclass
+class RoutingContext:
+    model: str                              # 请求模型
+    messages: List[Dict[str, str]]          # 消息列表
+    kwargs: Dict[str, Any]                  # 其他参数
+    selected_deployment: Optional[Deployment]   # 选中的部署
+    attempted_deployments: List[str]            # 尝试过的部署ID
+    start_time: float                       # 开始时间
+    end_time: Optional[float]               # 结束时间
+    response: Optional[Any]                 # 响应
+    error: Optional[Exception]              # 错误
+    request_tags: List[str]                 # 请求标签
+```
+
+**方法**:
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `mark_attempt` | `mark_attempt(deployment: Deployment) -> None` | 标记已尝试的部署 |
+| `set_success` | `set_success(deployment: Deployment, response: Any) -> None` | 设置成功结果 |
+| `set_failure` | `set_failure(error: Exception) -> None` | 设置失败结果 |
+| `to_log_dict` | `to_log_dict() -> Dict[str, Any]` | 转换为日志字典 |
+
+**属性**:
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `latency` | float | 请求延迟（只读，`end_time - start_time`） |
+
+---
+
+## 输出解析器
+
+### `BaseOutputParser` (抽象基类)
+
+输出解析器基类。可传入 `ReliableRouter.invoke()` 的 `output_parser` 参数。
+
+```python
+class BaseOutputParser(ABC):
+    @abstractmethod
+    async def parse(self, inputs: Any) -> Any:
+        """解析完整输出"""
+
+    @abstractmethod
+    async def stream_parse(self, streaming_inputs: AsyncIterator) -> AsyncIterator[Any]:
+        """解析流式输出"""
+```
+
+---
+
+### `JsonOutputParser`
+
+JSON 输出解析器 - 从 LLM 输出中提取 JSON。
+
+```python
+class JsonOutputParser(BaseOutputParser):
+    async def parse(self, llm_output: Union[str, AssistantMessage]) -> Any
+    async def stream_parse(self, streaming_inputs: AsyncIterator) -> AsyncIterator[Optional[dict]]
+```
+
+**解析规则**:
+- 支持裸 JSON：`{"key": "value"}`
+- 支持代码块：`` ```json\n{...}\n``` ``
+- 解析失败返回 `None`
+
+---
+
+### `MarkdownOutputParser`
+
+Markdown 输出解析器 - 将 LLM 输出解析为结构化 Markdown 内容。
+
+```python
+class MarkdownOutputParser(BaseOutputParser):
+    async def parse(self, llm_output: Union[str, AssistantMessage]) -> Optional[MarkdownContent]
+    async def stream_parse(self, streaming_inputs: AsyncIterator) -> AsyncIterator[Optional[MarkdownContent]]
+```
+
+---
+
+### `MarkdownContent`
+
+结构化 Markdown 内容。
+
+```python
+@dataclass
+class MarkdownContent:
+    raw_content: str = ""                              # 原始文本
+    elements: List[MarkdownElement] = []               # 所有元素列表
+    headers: List[Dict[str, str]] = []                 # 标题列表
+    code_blocks: List[Dict[str, str]] = []             # 代码块列表
+    links: List[Dict[str, str]] = []                   # 链接列表
+    images: List[Dict[str, str]] = []                  # 图片列表
+    tables: List[str] = []                             # 表格列表
+    lists: List[str] = []                              # 列表
+```
+
+### `MarkdownElement`
+
+```python
+@dataclass
+class MarkdownElement:
+    type: str                    # 元素类型 (见 MarkdownElementType)
+    content: Dict[str, Any]      # 元素内容
+    start_pos: int               # 起始位置
+    end_pos: int                 # 结束位置
+    raw: str                     # 原始文本
+```
+
+### `MarkdownElementType`
+
+```python
+class MarkdownElementType:
+    HEADER = "header"
+    CODE_BLOCK = "code_block"
+    INLINE_CODE = "inline_code"
+    LINK = "link"
+    IMAGE = "image"
+    TABLE = "table"
+    LIST = "list"
+    TEXT = "text"
+```
 
 ---
 
@@ -220,8 +575,6 @@ TokenAwareStrategy(
 )
 ```
 
-**评分因素**: 剩余Token配额
-
 ---
 
 ### `RateLimitAwareStrategy`
@@ -236,8 +589,6 @@ RateLimitAwareStrategy(
     exploration_ratio: float = 0.1  # 探索比例
 )
 ```
-
-**评分因素**: 剩余RPM配额
 
 ---
 
@@ -351,7 +702,7 @@ def create_strategy(
 
 ### `LatencyRecord`
 
-延迟记录 - 记录单次请求的延迟信息。
+延迟记录。
 
 ```python
 @dataclass
@@ -414,7 +765,7 @@ class RPMTracker:
 
 ### `RPMRecord`
 
-RPM请求记录 - 单次请求的时间戳。
+RPM请求记录。
 
 ```python
 @dataclass
@@ -463,7 +814,7 @@ LocalCache(
 
 ### `CacheEntry`
 
-缓存条目 - 内部使用的缓存数据结构。
+缓存条目。
 
 ```python
 @dataclass
@@ -481,7 +832,7 @@ class CacheEntry:
 
 ### `SDKHealthChecker`
 
-部署健康检查器 - 支持后台定时检查。
+部署健康检查器 - 支持后台定时检查。现已兼容所有 Provider（通过 Provider 适配器构建请求）。
 
 **构造函数**:
 ```python
@@ -503,6 +854,7 @@ SDKHealthChecker(
 | `check_all_deployments` | `async check_all_deployments() -> Dict[str, HealthCheckResult]` | 检查所有部署 |
 | `start_background_check` | `async start_background_check() -> None` | 启动后台检查任务 |
 | `stop_background_check` | `async stop_background_check() -> None` | 停止后台检查任务 |
+| `close` | `async close() -> None` | 关闭共享 HTTP 客户端 |
 
 **同步方法**:
 
@@ -541,7 +893,12 @@ IntelliRouterError (基类)
 │   └── StrategyError
 ├── DeploymentError
 │   ├── DeploymentInCooldown
-│   └── DeploymentFailed
+│   ├── DeploymentFailed
+│   ├── DeploymentTimeoutError
+│   ├── DeploymentAuthError
+│   ├── DeploymentRateLimitError
+│   ├── DeploymentServerError
+│   └── DeploymentNetworkError
 ├── CacheError
 │   ├── CacheKeyNotFound
 │   └── CacheExpired
@@ -587,11 +944,7 @@ class RouterError(IntelliRouterError): ...
 
 ```python
 class NoDeploymentAvailable(RouterError):
-    def __init__(
-        self,
-        model: str,
-        reason: str = ""
-    )
+    def __init__(self, model: str, reason: str = "")
 ```
 
 ---
@@ -602,11 +955,7 @@ class NoDeploymentAvailable(RouterError):
 
 ```python
 class AllDeploymentsFailed(RouterError):
-    def __init__(
-        self,
-        model: str,
-        errors: List[Exception]
-    )
+    def __init__(self, model: str, errors: List[Exception])
 ```
 
 ---
@@ -617,11 +966,7 @@ class AllDeploymentsFailed(RouterError):
 
 ```python
 class StrategyError(RouterError):
-    def __init__(
-        self,
-        strategy_name: str,
-        reason: str
-    )
+    def __init__(self, strategy_name: str, reason: str)
 ```
 
 ---
@@ -642,11 +987,7 @@ class DeploymentError(IntelliRouterError): ...
 
 ```python
 class DeploymentInCooldown(DeploymentError):
-    def __init__(
-        self,
-        deployment_id: str,
-        cooldown_until: float
-    )
+    def __init__(self, deployment_id: str, cooldown_until: float)
 ```
 
 ---
@@ -657,11 +998,62 @@ class DeploymentInCooldown(DeploymentError):
 
 ```python
 class DeploymentFailed(DeploymentError):
-    def __init__(
-        self,
-        deployment_id: str,
-        consecutive_failures: int
-    )
+    def __init__(self, deployment_id: str, consecutive_failures: int)
+```
+
+---
+
+### `DeploymentTimeoutError`
+
+部署请求超时异常。
+
+```python
+class DeploymentTimeoutError(DeploymentError):
+    def __init__(self, deployment_id: str, timeout: float)
+```
+
+---
+
+### `DeploymentAuthError`
+
+认证失败异常 (HTTP 401/403)。
+
+```python
+class DeploymentAuthError(DeploymentError):
+    def __init__(self, deployment_id: str, status_code: int)
+```
+
+---
+
+### `DeploymentRateLimitError`
+
+限流异常 (HTTP 429)。
+
+```python
+class DeploymentRateLimitError(DeploymentError):
+    def __init__(self, deployment_id: str, retry_after: Optional[float] = None)
+```
+
+---
+
+### `DeploymentServerError`
+
+服务器错误异常 (HTTP 5xx)。
+
+```python
+class DeploymentServerError(DeploymentError):
+    def __init__(self, deployment_id: str, status_code: int, response_body: str = "")
+```
+
+---
+
+### `DeploymentNetworkError`
+
+网络连接错误异常。
+
+```python
+class DeploymentNetworkError(DeploymentError):
+    def __init__(self, deployment_id: str, reason: str)
 ```
 
 ---
@@ -693,11 +1085,7 @@ class CacheKeyNotFound(CacheError):
 
 ```python
 class CacheExpired(CacheError):
-    def __init__(
-        self,
-        key: str,
-        expired_at: float
-    )
+    def __init__(self, key: str, expired_at: float)
 ```
 
 ---
@@ -718,11 +1106,7 @@ class HealthCheckError(IntelliRouterError): ...
 
 ```python
 class HealthCheckFailed(HealthCheckError):
-    def __init__(
-        self,
-        deployment_id: str,
-        error: str
-    )
+    def __init__(self, deployment_id: str, error: str)
 ```
 
 ---
@@ -733,11 +1117,7 @@ class HealthCheckFailed(HealthCheckError):
 
 ```python
 class HealthCheckTimeout(HealthCheckError):
-    def __init__(
-        self,
-        deployment_id: str,
-        timeout: float
-    )
+    def __init__(self, deployment_id: str, timeout: float)
 ```
 
 ---
@@ -758,12 +1138,7 @@ class ConfigError(IntelliRouterError): ...
 
 ```python
 class InvalidDeploymentConfig(ConfigError):
-    def __init__(
-        self,
-        field: str,
-        value: Any,
-        reason: str
-    )
+    def __init__(self, field: str, value: Any, reason: str)
 ```
 
 ---
@@ -774,11 +1149,7 @@ class InvalidDeploymentConfig(ConfigError):
 
 ```python
 class MissingRequiredField(ConfigError):
-    def __init__(
-        self,
-        field: str,
-        context: str
-    )
+    def __init__(self, field: str, context: str)
 ```
 
 ---
@@ -799,100 +1170,125 @@ def get_status_code(error: Exception) -> int
 | `AllDeploymentsFailed` | 503 |
 | `DeploymentInCooldown` | 503 |
 | `DeploymentFailed` | 503 |
+| `DeploymentTimeoutError` | 504 |
+| `DeploymentAuthError` | 401 |
+| `DeploymentRateLimitError` | 429 |
+| `DeploymentServerError` | 502 |
+| `DeploymentNetworkError` | 502 |
 | `CacheKeyNotFound` | 404 |
 | `CacheExpired` | 410 |
+| `HealthCheckFailed` | 503 |
+| `HealthCheckTimeout` | 504 |
+| `InvalidDeploymentConfig` | 400 |
+| `MissingRequiredField` | 400 |
 | 其他 | 500 |
-
----
-
-## 类型定义
-
-### `StrategyType`
-
-策略类型字面量。
-
-```python
-StrategyType = Literal[
-    "simple-shuffle",
-    "lowest-latency",
-    "tag-based",
-    "token-aware",
-    "rate-limit-aware",
-    "adaptive"
-]
-```
-
----
-
-### `RoutingContext`
-
-路由上下文 - 请求级别信息。
-
-```python
-@dataclass
-class RoutingContext:
-    model: str                              # 请求模型
-    messages: List[Dict[str, str]]          # 消息列表
-    kwargs: Dict[str, Any]                  # 其他参数
-    selected_deployment: Optional[Deployment]   # 选中的部署
-    attempted_deployments: List[str]            # 尝试过的部署ID
-    start_time: float                       # 开始时间
-    end_time: Optional[float]               # 结束时间
-    response: Optional[Any]                 # 响应
-    error: Optional[Exception]              # 错误
-    request_tags: List[str]                 # 请求标签
-```
-
-**方法**:
-
-| 方法 | 签名 | 说明 |
-|------|------|------|
-| `mark_attempt` | `mark_attempt(deployment: Deployment) -> None` | 标记已尝试的部署 |
-| `set_success` | `set_success(deployment: Deployment, response: Any) -> None` | 设置成功结果 |
-| `set_failure` | `set_failure(error: Exception) -> None` | 设置失败结果 |
-| `to_log_dict` | `to_log_dict() -> Dict[str, Any]` | 转换为日志字典 |
-
-**属性**:
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `latency` | float | 请求延迟（只读，`end_time - start_time`） |
 
 ---
 
 ## 使用示例
 
-### 基础使用
+### 多 Provider 路由
 
 ```python
 from intelli_router import ReliableRouter, Deployment
 
 deployments = [
     Deployment(
-        model_name="gpt-4",
-        api_key="sk-key1",
-        api_base="https://api.openai.com/v1",
-        tpm=100000,
-        rpm=1000
+        model_name="gpt-4o-mini",
+        api_key="sk-...",
+        api_base="https://api.openai.com",
+        provider="openai",
     ),
     Deployment(
-        model_name="gpt-4",
-        api_key="sk-key2",
-        api_base="https://api.backup.com/v1",
-        tpm=50000,
-        rpm=500
-    )
+        model_name="claude-3-haiku-20240307",
+        api_key="sk-ant-...",
+        api_base="https://api.anthropic.com",
+        provider="anthropic",
+    ),
+    Deployment(
+        model_name="gemini-1.5-flash",
+        api_key="AIza...",
+        api_base="https://generativelanguage.googleapis.com",
+        provider="google-gemini",
+    ),
 ]
 
-router = ReliableRouter(
-    deployments=deployments,
-    strategy="adaptive"
+async with ReliableRouter(deployments=deployments, strategy="adaptive") as router:
+    response = await router.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+```
+
+### 类型化调用 (invoke)
+
+```python
+from intelli_router import ReliableRouter, Deployment
+
+router = ReliableRouter(deployments=deployments, strategy="adaptive")
+
+msg = await router.invoke(
+    messages=[{"role": "user", "content": "Hello!"}],
+    model="gpt-4o-mini",
+    temperature=0.7,
+    max_tokens=1000,
 )
 
-response = await router.completion(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Hello!"}]
+print(msg.content)                        # 文本内容
+print(msg.finish_reason)                  # "stop"
+print(msg.usage_metadata.total_tokens)    # token 总量
+print(msg.tool_calls)                     # 工具调用（如有）
+
+await router.close()
+```
+
+### 流式调用 (stream)
+
+```python
+accumulated = None
+async for chunk in router.stream(
+    messages=[{"role": "user", "content": "Write a story"}],
+    model="gpt-4o-mini",
+):
+    print(chunk.content, end="", flush=True)
+    accumulated = chunk if accumulated is None else accumulated + chunk
+
+print(f"\nFinish reason: {accumulated.finish_reason}")
+print(f"Total tokens: {accumulated.usage_metadata.total_tokens}")
+```
+
+### 输出解析器
+
+```python
+from intelli_router import ReliableRouter, JsonOutputParser
+
+parser = JsonOutputParser()
+msg = await router.invoke(
+    messages=[{"role": "user", "content": "Return a JSON: {\"name\": \"...\", \"age\": ...}"}],
+    model="gpt-4o-mini",
+    output_parser=parser,
 )
+# msg.content 已被解析为 JSON 字符串
+```
+
+### 自定义 Provider Adapter
+
+```python
+from intelli_router.provider.base_provider import BaseProviderAdapter
+from intelli_router.provider.registry import register_provider
+
+class MyProviderAdapter(BaseProviderAdapter):
+    def get_api_url(self, deployment, stream=False):
+        return f"{deployment.api_base}/my/chat/endpoint"
+
+    def get_headers(self, deployment):
+        return {
+            "Authorization": f"Token {deployment.api_key}",
+            "Content-Type": "application/json",
+        }
+
+# 注册后即可在 Deployment(provider="my-provider") 中使用
+register_provider("my-provider", MyProviderAdapter)
 ```
 
 ### 使用自定义策略
@@ -912,21 +1308,18 @@ strategy = create_strategy(
     w_health=1.0,
     w_token=0.5,
     w_rpm=0.3,
-    w_latency=0.2
+    w_latency=0.2,
 )
 
-router = ReliableRouter(
-    deployments=deployments,
-    strategy=strategy
-)
+router = ReliableRouter(deployments=deployments, strategy=strategy)
 ```
 
 ### 批量请求
 
 ```python
 requests = [
-    {"model": "gpt-4", "messages": [{"role": "user", "content": "Test 1"}]},
-    {"model": "gpt-4", "messages": [{"role": "user", "content": "Test 2"}]},
+    {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Test 1"}]},
+    {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Test 2"}]},
 ]
 
 results = await router.batch_completion(requests, max_concurrent=5)
@@ -955,31 +1348,39 @@ health_checker = SDKHealthChecker(
     deployments=deployments,
     state=state,
     check_interval=60,
-    check_timeout=5
+    check_timeout=5,
 )
 
 await health_checker.start_background_check()
 
 result = await health_checker.check_deployment(deployments[0])
 print(f"Healthy: {result.is_healthy}, Latency: {result.latency}")
+
+await health_checker.close()
 ```
 
 ### 异常处理
 
 ```python
 from intelli_router import ReliableRouter, Deployment
-from intelli_router.exceptions import (
+from intelli_router.utils.exceptions import (
     IntelliRouterError,
     NoDeploymentAvailable,
     AllDeploymentsFailed,
-    get_status_code
+    DeploymentAuthError,
+    DeploymentRateLimitError,
+    get_status_code,
 )
 
 try:
     response = await router.completion(
-        model="gpt-4",
-        messages=[{"role": "user", "content": "Hello!"}]
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello!"}],
     )
+except DeploymentAuthError as e:
+    print(f"Auth failed: {e}")
+except DeploymentRateLimitError as e:
+    print(f"Rate limited: {e}")
 except NoDeploymentAvailable as e:
     print(f"No deployment available for {e.model}")
 except AllDeploymentsFailed as e:

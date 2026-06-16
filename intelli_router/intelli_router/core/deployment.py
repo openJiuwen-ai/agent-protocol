@@ -1,5 +1,5 @@
 """
-SDK LLM Core - 部署配罫
+SDK LLM Core - 部署配置
 
 Deployment: 一个API端点
 DeploymentStatus: 状态枚举
@@ -47,8 +47,8 @@ class Deployment:
     rpm: Optional[int] = None
     timeout: Optional[float] = None
 
+    provider: str = "openai"
     verify_ssl: bool = True
-    litellm_params: Dict[str, Any] = field(default_factory=dict)
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -65,8 +65,8 @@ class Deployment:
             "tpm": self.tpm,
             "rpm": self.rpm,
             "timeout": self.timeout,
+            "provider": self.provider,
             "verify_ssl": self.verify_ssl,
-            "litellm_params": self.litellm_params,
         }
 
     @classmethod

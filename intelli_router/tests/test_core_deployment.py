@@ -20,7 +20,6 @@ def test_deployment_defaults():
     assert dep.rpm is None
     assert dep.timeout is None
     assert dep.verify_ssl is True
-    assert dep.litellm_params == {}
 
 
 def test_deployment_auto_id():

@@ -3,9 +3,9 @@ SDK LLM Router - 基础路由
 
 BaseRouter: 处理API池化和请求转发
 """
-from typing import Dict, List, Optional, Any, AsyncIterator, NoReturn
-import asyncio
+from typing import Dict, List, Optional, Any, AsyncIterator
 import json
+import asyncio
 import logging
 
 import httpx
@@ -26,10 +26,11 @@ from ..utils.exceptions import (
     DeploymentServerError,
     DeploymentNetworkError,
 )
+from ..provider.base_provider import BaseProviderAdapter
 
-# 黙认重试次数
+# 默认重试次数
 DEFAULT_NUM_RETRIES = 0
-# 黙认超时
+# 默认超时
 DEFAULT_TIMEOUT = 30.0
 
 class BaseRouter:
@@ -49,6 +50,7 @@ class BaseRouter:
         self.timeout = timeout
         self.cache = cache or LocalCache()
         self._client: Optional[httpx.AsyncClient] = None
+        self._adapter_cache: Dict[str, BaseProviderAdapter] = {}
         self._build_model_indices()
 
     def _build_model_indices(self) -> None:
@@ -94,26 +96,71 @@ class BaseRouter:
             if dep.model_name == model
         ]
 
-    def _build_request_params(self, deployment: Deployment) -> tuple:
-        """构建请求URL和headers"""
-        url = f"{deployment.api_base.rstrip('/')}/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {deployment.api_key}",
-            "Content-Type": "application/json",
-        }
-        return url, headers
+    def _get_adapter(self, deployment: Deployment) -> BaseProviderAdapter:
+        """获取 provider adapter（带缓存）。"""
+        provider = deployment.provider
+        if provider not in self._adapter_cache:
+            from ..provider.registry import get_provider_adapter
 
-    def _raise_for_deployment_error(
-        self, deployment: Deployment, e: Exception, response_body: str = ""
-    ) -> NoReturn:
-        """将httpx异常映射为领域异常"""
-        if isinstance(e, httpx.TimeoutException):
+            self._adapter_cache[provider] = get_provider_adapter(provider)
+        return self._adapter_cache[provider]
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        """获取或创建可复用的httpx客户端"""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=self.timeout,
+                    read=self.timeout,
+                    write=self.timeout,
+                    pool=self.timeout,
+                )
+            )
+        return self._client
+
+    async def _make_request(
+        self,
+        deployment: Deployment,
+        request_body: Dict[str, Any]
+    ) -> Any:
+        """
+        发送HTTP请求并处理异常映射
+
+        Args:
+            deployment: 目标部署
+            request_body: 请求体
+
+        Returns:
+            API响应JSON
+
+        Raises:
+            DeploymentTimeoutError: 请求超时
+            DeploymentAuthError: 认证失败 (401/403)
+            DeploymentRateLimitError: 限流 (429)
+            DeploymentServerError: 服务端错误 (5xx)
+            DeploymentNetworkError: 网络连接错误
+            DeploymentError: 其他部署错误
+        """
+        client = self._ensure_client()
+        adapter = self._get_adapter(deployment)
+        url = adapter.get_api_url(deployment, stream=False)
+        headers = adapter.get_headers(deployment)
+        body_bytes = json.dumps(request_body).encode("utf-8")
+        headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
+
+        try:
+            response = await client.post(url, headers=headers, content=body_bytes)
+            response.raise_for_status()
+            raw = response.json()
+            return adapter.transform_response(raw, deployment.model_name, deployment)
+        except httpx.TimeoutException as e:
             raise DeploymentTimeoutError(
-                deployment_id=deployment.id, timeout=self.timeout
+                deployment_id=deployment.id,
+                timeout=self.timeout,
             ) from e
-        if isinstance(e, httpx.HTTPStatusError):
+        except httpx.HTTPStatusError as e:
             status = e.response.status_code
-            body = response_body or ""
+            body = e.response.text
             if status in (401, 403):
                 raise DeploymentAuthError(
                     deployment_id=deployment.id, status_code=status
@@ -143,81 +190,19 @@ class BaseRouter:
                         "response_body": body,
                     },
                 ) from e
-        if isinstance(e, (httpx.ConnectError, httpx.RemoteProtocolError)):
+        except httpx.ConnectError as e:
             raise DeploymentNetworkError(
                 deployment_id=deployment.id, reason=str(e)
             ) from e
-        if isinstance(e, httpx.HTTPError):
+        except httpx.RemoteProtocolError as e:
+            raise DeploymentNetworkError(
+                deployment_id=deployment.id, reason=str(e)
+            ) from e
+        except httpx.HTTPError as e:
             raise DeploymentError(
                 message=f"Deployment '{deployment.id}' HTTP error: {e}",
                 details={"deployment_id": deployment.id, "original_error": str(e)},
             ) from e
-        raise
-
-    def _ensure_client(self) -> httpx.AsyncClient:
-        """获取或创建可复用的httpx客户端"""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    connect=self.timeout,
-                    read=self.timeout,
-                    write=self.timeout,
-                    pool=self.timeout,
-                )
-            )
-        return self._client
-
-    async def _make_request(
-        self,
-        deployment: Deployment,
-        request_body: Dict[str, Any]
-    ) -> Any:
-        """发送HTTP请求并处理异常映射"""
-        client = self._ensure_client()
-        url, headers = self._build_request_params(deployment)
-
-        try:
-            response = await client.post(url, headers=headers, json=request_body)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            self._raise_for_deployment_error(deployment, e, e.response.text)
-            raise AssertionError("unreachable")  # _raise_for_deployment_error is NoReturn
-        except httpx.HTTPError as e:
-            self._raise_for_deployment_error(deployment, e)
-            raise AssertionError("unreachable")  # _raise_for_deployment_error is NoReturn
-
-    async def _make_stream_request(
-        self,
-        deployment: Deployment,
-        request_body: Dict[str, Any]
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """发送流式HTTP请求，解析SSE并逐chunk yield"""
-        client = self._ensure_client()
-        url, headers = self._build_request_params(deployment)
-
-        try:
-            async with client.stream("POST", url, headers=headers, json=request_body) as response:
-                if response.status_code >= 400:
-                    await response.aread()
-                    response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data == "[DONE]":
-                        return
-                    try:
-                        yield json.loads(data)
-                    except json.JSONDecodeError:
-                        logger.warning("Skipping malformed SSE chunk: %s", data[:100])
-        except httpx.HTTPStatusError as e:
-            await e.response.aclose()
-            self._raise_for_deployment_error(deployment, e, e.response.text)
-            raise AssertionError("unreachable")  # _raise_for_deployment_error is NoReturn
-        except httpx.HTTPError as e:
-            self._raise_for_deployment_error(deployment, e)
-            raise AssertionError("unreachable")  # _raise_for_deployment_error is NoReturn
 
     async def close(self) -> None:
         """关闭底层httpx客户端，释放连接池"""
@@ -234,7 +219,7 @@ class BaseRouter:
     async def completion(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         deployment: Optional[Deployment] = None,
         **kwargs
     ) -> Any:
@@ -255,17 +240,109 @@ class BaseRouter:
             if not deployments:
                 raise NoDeploymentAvailable(f"No deployment for model: {model}")
             deployment = deployments[0]
-        request_body = {
-            "model": model,
-            "messages": messages,
-            **kwargs,
-        }
+        adapter = self._get_adapter(deployment)
+        request_body = adapter.transform_request(
+            model=model, messages=messages, deployment=deployment, **kwargs
+        )
         return await self._make_request(deployment, request_body)
+
+    async def acompletion_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        deployment: Optional[Deployment] = None,
+        **kwargs
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        流式 completion — 以 AsyncIterator 形式 yield OpenAI 统一 SSE 格式的 chunk。
+
+        Args:
+            model: 模型名
+            messages: 消息列表
+            deployment: 指定部署 (可选)
+            **kwargs: 其他参数
+
+        Yields:
+            标准 OpenAI 格式的 streaming chunk dict
+        """
+        if deployment is None:
+            deployments = self.get_deployments_for_model(model)
+            if not deployments:
+                raise NoDeploymentAvailable(f"No deployment for model: {model}")
+            deployment = deployments[0]
+
+        adapter = self._get_adapter(deployment)
+        request_body = adapter.transform_request(
+            model=model, messages=messages, deployment=deployment, stream=True, **kwargs
+        )
+        client = self._ensure_client()
+        url = adapter.get_api_url(deployment, stream=True)
+        headers = adapter.get_headers(deployment)
+        body_bytes = json.dumps(request_body).encode("utf-8")
+        headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
+
+        try:
+            async with client.stream(
+                "POST", url, headers=headers, content=body_bytes
+            ) as response:
+                response.raise_for_status()
+                async for chunk in adapter.iter_stream_events(response):
+                    mapped = adapter.transform_stream_chunk(
+                        chunk, model, deployment
+                    )
+                    if mapped is not None:
+                        yield mapped
+        except httpx.TimeoutException as e:
+            raise DeploymentTimeoutError(
+                deployment_id=deployment.id,
+                timeout=self.timeout,
+            ) from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = e.response.text
+            if status in (401, 403):
+                raise DeploymentAuthError(
+                    deployment_id=deployment.id, status_code=status
+                ) from e
+            elif status == 429:
+                retry_after = None
+                if "retry-after" in e.response.headers:
+                    try:
+                        retry_after = float(e.response.headers["retry-after"])
+                    except (ValueError, TypeError):
+                        pass
+                raise DeploymentRateLimitError(
+                    deployment_id=deployment.id, retry_after=retry_after
+                ) from e
+            elif 500 <= status < 600:
+                raise DeploymentServerError(
+                    deployment_id=deployment.id,
+                    status_code=status,
+                    response_body=body,
+                ) from e
+            else:
+                raise DeploymentError(
+                    message=f"Deployment '{deployment.id}' returned HTTP {status}",
+                    details={"deployment_id": deployment.id, "status_code": status, "response_body": body},
+                ) from e
+        except httpx.ConnectError as e:
+            raise DeploymentNetworkError(
+                deployment_id=deployment.id, reason=str(e)
+            ) from e
+        except httpx.RemoteProtocolError as e:
+            raise DeploymentNetworkError(
+                deployment_id=deployment.id, reason=str(e)
+            ) from e
+        except httpx.HTTPError as e:
+            raise DeploymentError(
+                message=f"Deployment '{deployment.id}' HTTP error: {e}",
+                details={"deployment_id": deployment.id, "original_error": str(e)},
+            ) from e
 
     async def completion_with_fallback(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         fallback: Optional[Dict[str, str]] = None,
         **kwargs
     ) -> Any:
@@ -287,5 +364,3 @@ class BaseRouter:
                 except Exception as e:
                     errors.append((dep.id, str(e)))
         raise RouterError(f"All deployments failed: {errors}")
-
-
