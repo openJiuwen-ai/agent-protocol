@@ -20,16 +20,23 @@ namespace nlohmann {
     struct adl_serializer<A2A::Role> {
         static void to_json(nlohmann::json& j, const A2A::Role& r)
         {
-            j = (r == A2A::Role::AGENT) ? "agent" : "user";
+            switch (r) {
+                case A2A::Role::AGENT: j = "ROLE_AGENT"; break;
+                case A2A::Role::USER: j = "ROLE_USER"; break;
+                case A2A::Role::UNSPECIFIED: j = "ROLE_UNSPECIFIED"; break;
+                default: throw std::runtime_error("Invalid Role value");
+            }
         }
 
         static void from_json(const nlohmann::json& j, A2A::Role& r)
         {
             const auto s = j.get<std::string>();
-            if (s == "agent") {
+            if (s == "ROLE_AGENT") {
                 r = A2A::Role::AGENT;
-            } else if (s == "user") {
+            } else if (s == "ROLE_USER") {
                 r = A2A::Role::USER;
+            } else if (s == "ROLE_UNSPECIFIED") {
+                r = A2A::Role::UNSPECIFIED;
             } else {
                 throw std::runtime_error("Invalid Role value: " + s);
             }
@@ -42,7 +49,8 @@ namespace nlohmann {
         static void to_json(nlohmann::json& j, const A2A::Part& p)
         {
             j = nlohmann::json::object();
-
+        
+            // Serialize the four mutually exclusive fields
             if (p.text.has_value()) {
                 j["text"] = p.text.value();
             } else if (p.raw.has_value()) {
@@ -50,11 +58,25 @@ namespace nlohmann {
             } else if (p.url.has_value()) {
                 j["url"] = p.url.value();
             } else if (p.data.has_value()) {
-                j["data"] = p.data.value();
+                std::visit(
+                    [&](auto&& s) {
+                        using T = std::decay_t<decltype(s)>;
+                        if constexpr (std::is_same_v<T, std::string>) {
+                            // 先尝试当做object来处理，不行再当做string
+                            try {
+                                j["data"] = nlohmann::json::parse(s);
+                            } catch (...) {
+                                j["data"] = json(s);
+                            }
+                        } else {
+                            j["data"] = json(s);
+                        }
+                    },
+                    p.data.value());
             }
 
             if (p.metadata.has_value()) {
-                j["metadata"] = p.metadata.value();
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(p.metadata.value());
             }
             if (p.filename.has_value()) {
                 j["filename"] = p.filename.value();
@@ -68,38 +90,61 @@ namespace nlohmann {
         {
             A2A::Part part;
 
-            std::string lastMutualField;
+            // Track the last encountered mutually exclusive field
+            std::string last_mutual_field;
+            
+            // Process fields in the order they appear in the JSON object
+            // nlohmann::json maintains insertion order for objects
             for (auto it = j.begin(); it != j.end(); ++it) {
                 const std::string& key = it.key();
-
+                
+                // Check if this is a mutually exclusive field
                 if (key == "text" && !it.value().is_null()) {
-                    lastMutualField = "text";
+                    last_mutual_field = "text";
                     part.text = it.value().get<std::string>();
                     break;
                 }
                 if (key == "raw" && !it.value().is_null()) {
-                    lastMutualField = "raw";
+                    last_mutual_field = "raw";
                     part.raw = it.value().get<std::string>();
                     break;
                 }
                 if (key == "url" && !it.value().is_null()) {
-                    lastMutualField = "url";
+                    last_mutual_field = "url";
                     part.url = it.value().get<std::string>();
                     break;
                 }
                 if (key == "data" && !it.value().is_null()) {
-                    lastMutualField = "data";
-                    part.data = it.value().get<std::string>();
+                    last_mutual_field = "data";
+                    const auto& data_value = it.value();
+                    if (data_value.is_string()) {
+                        part.data = data_value.get<std::string>();
+                    } else if (data_value.is_object()) {
+                        part.data = data_value.dump();
+                    } else if (data_value.is_number_integer()) {
+                        part.data = data_value.get<int>();
+                    } else if (data_value.is_number_float()) {
+                        part.data = data_value.get<double>();
+                    } else if (data_value.is_boolean()) {
+                        part.data = data_value.get<bool>();
+                    } else {
+                        throw std::runtime_error("data field must be a string, bool, integer double or JSON object");
+                    }
                     break;
                 }
             }
 
-            if (lastMutualField.empty()) {
+            // Validate that at least one mutually exclusive field exists
+            if (last_mutual_field.empty()) {
                 throw std::logic_error("Part must contain one of: text, raw, url, data");
             }
 
-            if (j.contains("metadata") && !j["metadata"].is_null()) {
-                part.metadata = j["metadata"].get<std::string>();
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    part.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    part.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
             if (j.contains("filename") && !j["filename"].is_null()) {
                 part.filename = j["filename"].get<std::string>();
@@ -137,7 +182,7 @@ namespace nlohmann {
             }
 
             if (a.metadata) {
-                j["metadata"] = *a.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*a.metadata);
             }
 
             if (a.name) {
@@ -164,8 +209,12 @@ namespace nlohmann {
                 a.extensions = j.at("extensions").get<std::vector<std::string>>();
             }
 
-            if (j.contains("metadata")) {
-                a.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    a.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    a.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
 
             if (j.contains("name")) {
@@ -184,17 +233,14 @@ namespace nlohmann {
     struct adl_serializer<A2A::Message> {
         static void to_json(nlohmann::json& j, const A2A::Message& m)
         {
-            if (m.kind != "message") {
-                throw std::runtime_error("Message.kind must be 'message'");
-            }
             if (m.messageId.empty()) {
                 throw std::runtime_error("Message.messageId cannot be empty");
             }
 
-            j = nlohmann::json{{"kind", m.kind},
-                               {"messageId", m.messageId},
-                               {"parts", nlohmann::json::array()},
-                               {"role", m.role == A2A::Role::AGENT ? "agent" : "user"}};
+            j = nlohmann::json{{"messageId", m.messageId},
+                                {"parts", nlohmann::json::array()}};
+
+            j["role"] = m.role;
 
             if (m.contextId) {
                 j["contextId"] = *m.contextId;
@@ -205,7 +251,7 @@ namespace nlohmann {
             }
 
             if (m.metadata) {
-                j["metadata"] = *m.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*m.metadata);
             }
 
             if (m.referenceTaskIds) {
@@ -223,20 +269,13 @@ namespace nlohmann {
 
         static void from_json(const nlohmann::json& j, A2A::Message& m)
         {
-            if (!j.contains("messageId") || !j.contains("parts") || !j.contains("role")) {
+            if (!j.contains("messageId") || !j.contains("parts")) {
                 throw std::runtime_error("Message missing required fields");
             }
 
             j.at("messageId").get_to(m.messageId);
             if (m.messageId.empty()) {
                 throw std::runtime_error("Message.messageId cannot be empty");
-            }
-
-            if (j.contains("kind")) {
-                m.kind = j.at("kind").get<std::string>();
-                if (m.kind != "message") {
-                    throw std::runtime_error("Message.kind must be 'message', got: " + m.kind);
-                }
             }
 
             if (j.contains("contextId")) {
@@ -247,8 +286,12 @@ namespace nlohmann {
                 m.extensions = j.at("extensions").get<std::vector<std::string>>();
             }
 
-            if (j.contains("metadata")) {
-                m.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    m.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    m.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
 
             if (j.contains("taskId")) {
@@ -280,30 +323,30 @@ namespace nlohmann {
             auto stateToStr = [](A2A::TaskState st) {
                 switch (st) {
                     case A2A::TaskState::SUBMITTED:
-                        return "submitted";
+                        return "TASK_STATE_SUBMITTED";
                     case A2A::TaskState::WORKING:
-                        return "working";
+                        return "TASK_STATE_WORKING";
                     case A2A::TaskState::INPUT_REQUIRED:
-                        return "input-required";
+                        return "TASK_STATE_INPUT_REQUIRED";
                     case A2A::TaskState::COMPLETED:
-                        return "completed";
+                        return "TASK_STATE_COMPLETED";
                     case A2A::TaskState::CANCELED:
-                        return "canceled";
+                        return "TASK_STATE_CANCELED";
                     case A2A::TaskState::FAILED:
-                        return "failed";
+                        return "TASK_STATE_FAILED";
                     case A2A::TaskState::REJECTED:
-                        return "rejected";
+                        return "TASK_STATE_REJECTED";
                     case A2A::TaskState::AUTH_REQUIRED:
-                        return "auth-required";
+                        return "TASK_STATE_AUTH_REQUIRED";
                     default:
-                        return "unknown";
+                        return "TASK_STATE_UNSPECIFIED";
                 }
             };
 
             j = nlohmann::json{{"state", stateToStr(s.state)}};
 
             if (s.message) {
-                j["message"] = *s.message;
+                j[A2A::JSON_FIELD_MESSAGE] = *s.message;
             }
 
             if (s.timestamp) {
@@ -313,29 +356,29 @@ namespace nlohmann {
 
         static void from_json(const nlohmann::json& j, A2A::TaskStatus& s)
         {
-            auto str = j.value<std::string>("state", "unknown");
-            if (str == "submitted") {
+            auto str = j.value<std::string>("state", "TASK_STATE_UNSPECIFIED");
+            if (str == "TASK_STATE_SUBMITTED") {
                 s.state = A2A::TaskState::SUBMITTED;
-            } else if (str == "working") {
+            } else if (str == "TASK_STATE_WORKING") {
                 s.state = A2A::TaskState::WORKING;
-            } else if (str == "input-required") {
+            } else if (str == "TASK_STATE_INPUT_REQUIRED") {
                 s.state = A2A::TaskState::INPUT_REQUIRED;
-            } else if (str == "completed") {
+            } else if (str == "TASK_STATE_COMPLETED") {
                 s.state = A2A::TaskState::COMPLETED;
-            } else if (str == "canceled") {
+            } else if (str == "TASK_STATE_CANCELED") {
                 s.state = A2A::TaskState::CANCELED;
-            } else if (str == "failed") {
+            } else if (str == "TASK_STATE_FAILED") {
                 s.state = A2A::TaskState::FAILED;
-            } else if (str == "rejected") {
+            } else if (str == "TASK_STATE_REJECTED") {
                 s.state = A2A::TaskState::REJECTED;
-            } else if (str == "auth-required") {
+            } else if (str == "TASK_STATE_AUTH_REQUIRED") {
                 s.state = A2A::TaskState::AUTH_REQUIRED;
             } else {
-                s.state = A2A::TaskState::UNKNOWN;
+                s.state = A2A::TaskState::UNSPECIFIED;
             }
 
-            if (j.contains("message")) {
-                s.message = j.at("message").get<A2A::Message>();
+            if (j.contains(A2A::JSON_FIELD_MESSAGE)) {
+                s.message = j.at(A2A::JSON_FIELD_MESSAGE).get<A2A::Message>();
             }
 
             if (j.contains("timestamp")) {
@@ -352,11 +395,8 @@ namespace nlohmann {
             if (t.id.empty()) {
                 throw std::runtime_error("Task.id cannot be empty");
             }
-            if (t.kind != "task") {
-                throw std::runtime_error("Task.kind must be 'task'");
-            }
 
-            j = nlohmann::json{{"contextId", t.contextId}, {"id", t.id}, {"kind", t.kind}, {"status", t.status}};
+            j = nlohmann::json{{"contextId", t.contextId}, {A2A::JSON_FIELD_ID, t.id}, {"status", t.status}};
 
             if (t.artifacts) {
                 j["artifacts"] = *t.artifacts;
@@ -367,28 +407,21 @@ namespace nlohmann {
             }
 
             if (t.metadata) {
-                j["metadata"] = *t.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*t.metadata);
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::Task& t)
         {
-            if (!j.contains("contextId") || !j.contains("id") || !j.contains("status")) {
+            if (!j.contains("contextId") || !j.contains(A2A::JSON_FIELD_ID) || !j.contains("status")) {
                 throw std::runtime_error("Task missing required fields");
             }
 
             j.at("contextId").get_to(t.contextId);
 
-            j.at("id").get_to(t.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(t.id);
             if (t.id.empty()) {
                 throw std::runtime_error("Task.id cannot be empty");
-            }
-
-            if (j.contains("kind")) {
-                t.kind = j.at("kind").get<std::string>();
-                if (t.kind != "task") {
-                    throw std::runtime_error("Task.kind must be 'task', got: " + t.kind);
-                }
             }
 
             if (j.contains("artifacts")) {
@@ -399,8 +432,12 @@ namespace nlohmann {
                 t.history = j.at("history").get<std::vector<A2A::Message>>();
             }
 
-            if (j.contains("metadata")) {
-                t.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    t.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    t.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
 
             t.status = j.at("status").get<A2A::TaskStatus>();
@@ -456,8 +493,12 @@ namespace nlohmann {
                 j["authentication"] = *c.authentication;
             }
 
+            if (c.configId) {
+                j["configId"] = *c.configId;
+            }
+
             if (c.id) {
-                j["id"] = *c.id;
+                j[A2A::JSON_FIELD_ID] = *c.id;
             }
 
             if (c.token) {
@@ -479,8 +520,12 @@ namespace nlohmann {
                 c.authentication = j.at("authentication").get<A2A::PushNotificationAuthenticationInfo>();
             }
 
-            if (j.contains("id")) {
-                c.id = j.at("id").get<std::string>();
+            if (j.contains(A2A::JSON_FIELD_ID)) {
+                c.id = j.at(A2A::JSON_FIELD_ID).get<std::string>();
+            }
+
+            if (j.contains("configId")) {
+                c.id = j.at("configId").get<std::string>();
             }
 
             if (j.contains("token")) {
@@ -506,10 +551,6 @@ namespace nlohmann {
 
             if (c.pushNotificationConfig) {
                 j["pushNotificationConfig"] = *c.pushNotificationConfig;
-            }
-
-            if (c.blocking) {
-                j["blocking"] = *c.blocking;
             }
 
             if (c.returnImmediately) {
@@ -545,10 +586,6 @@ namespace nlohmann {
                 c.pushNotificationConfig = j.at("pushNotificationConfig").get<A2A::PushNotificationConfig>();
             }
 
-            if (j.contains("blocking")) {
-                c.blocking = j.at("blocking").get<bool>();
-            }
-
             if (j.contains("returnImmediately")) {
                 c.returnImmediately = j.at("returnImmediately").get<bool>();
             }
@@ -560,30 +597,34 @@ namespace nlohmann {
     struct adl_serializer<A2A::MessageSendParams> {
         static void to_json(nlohmann::json& j, const A2A::MessageSendParams& p)
         {
-            j = nlohmann::json{{"message", p.message}};
+            j = nlohmann::json{{A2A::JSON_FIELD_MESSAGE, p.message}};
 
             if (p.configuration) {
                 j["configuration"] = *p.configuration;
             }
 
             if (p.metadata) {
-                j["metadata"] = *p.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*p.metadata);
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::MessageSendParams& p)
         {
-            if (!j.contains("message")) {
+            if (!j.contains(A2A::JSON_FIELD_MESSAGE)) {
                 throw std::runtime_error("MessageSendParams must contain 'message' field");
             }
-            p.message = j.at("message").get<A2A::Message>();
+            p.message = j.at(A2A::JSON_FIELD_MESSAGE).get<A2A::Message>();
 
             if (j.contains("configuration")) {
                 p.configuration = j.at("configuration").get<A2A::MessageSendConfiguration>();
             }
 
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
         }
     };
@@ -593,15 +634,10 @@ namespace nlohmann {
     struct adl_serializer<A2A::TaskArtifactUpdateEvent> {
         static void to_json(nlohmann::json& j, const A2A::TaskArtifactUpdateEvent& e)
         {
-            if (e.kind != "artifact-update") {
-                throw std::runtime_error("TaskArtifactUpdateEvent.kind must be 'artifact-update'");
-            }
-
             j = nlohmann::json{
-                {"artifact", e.artifact},
-                {"contextId", e.contextId},
-                {"kind", e.kind},
-                {"taskId", e.taskId}};
+                    {"artifact", e.artifact},
+                    {"contextId", e.contextId},
+                    {"taskId", e.taskId}};
 
             if (e.append) {
                 j["append"] = *e.append;
@@ -612,7 +648,7 @@ namespace nlohmann {
             }
 
             if (e.metadata) {
-                j["metadata"] = *e.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*e.metadata);
             }
         }
 
@@ -629,13 +665,6 @@ namespace nlohmann {
                 throw std::runtime_error("TaskArtifactUpdateEvent.taskId cannot be empty");
             }
 
-            if (j.contains("kind")) {
-                e.kind = j.at("kind").get<std::string>();
-                if (e.kind != "artifact-update") {
-                    throw std::runtime_error("kind must be 'artifact-update'");
-                }
-            }
-
             if (j.contains("append")) {
                 e.append = j.at("append").get<bool>();
             }
@@ -644,8 +673,12 @@ namespace nlohmann {
                 e.lastChunk = j.at("lastChunk").get<bool>();
             }
 
-            if (j.contains("metadata")) {
-                e.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    e.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    e.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
         }
     };
@@ -655,18 +688,11 @@ namespace nlohmann {
     struct adl_serializer<A2A::TaskStatusUpdateEvent> {
         static void to_json(nlohmann::json& j, const A2A::TaskStatusUpdateEvent& e)
         {
-            if (e.kind != "status-update") {
-                throw std::runtime_error("TaskStatusUpdateEvent.kind must be 'status-update'");
-            }
             j = nlohmann::json{
-            {"contextId", e.contextId}, {"kind", e.kind}, {"status", e.status}, {"taskId", e.taskId}};
-
-            if (e.final) {
-                j["final"] = *e.final;
-            }
+                    {"contextId", e.contextId}, {"status", e.status}, {"taskId", e.taskId}};
 
             if (e.metadata) {
-                j["metadata"] = *e.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*e.metadata);
             }
         }
 
@@ -684,19 +710,12 @@ namespace nlohmann {
 
             e.status = j.at("status").get<A2A::TaskStatus>();
 
-            if (j.contains("kind")) {
-                e.kind = j.at("kind").get<std::string>();
-                if (e.kind != "status-update") {
-                    throw std::runtime_error("kind must be 'status-update'");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    e.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    e.metadata = j[A2A::JSON_FIELD_METADATA].dump();
                 }
-            }
-
-            if (j.contains("final")) {
-                e.final = j.at("final").get<bool>();
-            }
-
-            if (j.contains("metadata")) {
-                e.metadata = j.at("metadata");
             }
         }
     };
@@ -710,24 +729,28 @@ namespace nlohmann {
             if (p.id.empty()) {
                 throw std::runtime_error("TaskIdParams.id cannot be empty");
             }
-            j = {{"id", p.id}};
+            j = {{A2A::JSON_FIELD_ID, p.id}};
             if (p.metadata) {
-                j["metadata"] = *p.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*p.metadata);
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::TaskIdParams& p)
         {
-            if (!j.contains("id")) {
+            if (!j.contains(A2A::JSON_FIELD_ID)) {
                 throw std::runtime_error("TaskIdParams must contain 'id' field");
             }
-            j.at("id").get_to(p.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(p.id);
             if (p.id.empty()) {
                 throw std::runtime_error("TaskIdParams.id cannot be empty");
             }
 
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
         }
     };
@@ -740,23 +763,23 @@ namespace nlohmann {
             if (p.id.empty()) {
                 throw std::runtime_error("TaskQueryParams.id cannot be empty");
             }
-            j = {{"id", p.id}};
+            j = {{A2A::JSON_FIELD_ID, p.id}};
 
             if (p.historyLength) {
                 j["historyLength"] = *p.historyLength;
             }
 
             if (p.metadata) {
-                j["metadata"] = *p.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*p.metadata);
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::TaskQueryParams& p)
         {
-            if (!j.contains("id")) {
+            if (!j.contains(A2A::JSON_FIELD_ID)) {
                 throw std::runtime_error("TaskQueryParams must contain 'id' field");
             }
-            j.at("id").get_to(p.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(p.id);
             if (p.id.empty()) {
                 throw std::runtime_error("TaskQueryParams.id cannot be empty");
             }
@@ -765,8 +788,12 @@ namespace nlohmann {
                 p.historyLength = j.at("historyLength").get<int>();
             }
 
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
         }
     };
@@ -804,10 +831,10 @@ namespace nlohmann {
             if (p.id.empty()) {
                 throw std::runtime_error("GetTaskPushNotificationConfigParams.id cannot be empty");
             }
-            j = {{"id", p.id}};
+            j = {{A2A::JSON_FIELD_ID, p.id}};
 
             if (p.metadata) {
-                j["metadata"] = *p.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*p.metadata);
             }
 
             if (p.pushNotificationConfigId) {
@@ -817,16 +844,20 @@ namespace nlohmann {
 
         static void from_json(const nlohmann::json& j, A2A::GetTaskPushNotificationConfigParams& p)
         {
-            if (!j.contains("id")) {
+            if (!j.contains(A2A::JSON_FIELD_ID)) {
                 throw std::runtime_error("GetTaskPushNotificationConfigParams must contain 'id' field");
             }
-            j.at("id").get_to(p.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(p.id);
             if (p.id.empty()) {
                 throw std::runtime_error("GetTaskPushNotificationConfigParams.id cannot be empty");
             }
 
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
 
             if (j.contains("pushNotificationConfigId")) {
@@ -843,25 +874,29 @@ namespace nlohmann {
             if (p.id.empty()) {
                 throw std::runtime_error("ListTaskPushNotificationConfigParams.id cannot be empty");
             }
-            j = {{"id", p.id}};
+            j = {{A2A::JSON_FIELD_ID, p.id}};
 
             if (p.metadata) {
-                j["metadata"] = *p.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*p.metadata);
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::ListTaskPushNotificationConfigParams& p)
         {
-            if (!j.contains("id")) {
+            if (!j.contains(A2A::JSON_FIELD_ID)) {
                 throw std::runtime_error("ListTaskPushNotificationConfigParams must contain 'id' field");
             }
-            j.at("id").get_to(p.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(p.id);
             if (p.id.empty()) {
                 throw std::runtime_error("ListTaskPushNotificationConfigParams.id cannot be empty");
             }
 
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
+                } else {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
+                }
             }
         }
     };
@@ -879,19 +914,19 @@ namespace nlohmann {
                     "DeleteTaskPushNotificationConfigParams.pushNotificationConfigId cannot be empty");
             }
 
-            j = {{"id", p.id}, {"pushNotificationConfigId", p.pushNotificationConfigId}};
+            j = {{A2A::JSON_FIELD_ID, p.id}, {"pushNotificationConfigId", p.pushNotificationConfigId}};
 
             if (p.metadata) {
-                j["metadata"] = *p.metadata;
+                j[A2A::JSON_FIELD_METADATA] = nlohmann::json::parse(*p.metadata);
             }
         }
 
         static void from_json(const nlohmann::json& j, A2A::DeleteTaskPushNotificationConfigParams& p)
         {
-            if (!j.contains("id") || !j.contains("pushNotificationConfigId")) {
+            if (!j.contains(A2A::JSON_FIELD_ID) || !j.contains("pushNotificationConfigId")) {
                 throw std::runtime_error("DeleteTaskPushNotificationConfigParams missing required fields");
             }
-            j.at("id").get_to(p.id);
+            j.at(A2A::JSON_FIELD_ID).get_to(p.id);
             j.at("pushNotificationConfigId").get_to(p.pushNotificationConfigId);
             if (p.id.empty()) {
                 throw std::runtime_error("DeleteTaskPushNotificationConfigParams.id cannot be empty");
@@ -901,623 +936,103 @@ namespace nlohmann {
                     "DeleteTaskPushNotificationConfigParams.pushNotificationConfigId cannot be empty");
             }
 
-            if (j.contains("metadata")) {
-                p.metadata = j.at("metadata");
-            }
-        }
-    };
-
-// SendMessageSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::SendMessageSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::SendMessageSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}};
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-
-        std::visit(
-            [&](auto&& f) {
-                using T = std::decay_t<decltype(f)>;
-
-                if constexpr (std::is_same_v<T, A2A::Task>) {
-                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
-                        {A2A::STREAM_RESPONSE_TYPE_TASK, f}
-                    };
-                } else if constexpr (std::is_same_v<T, A2A::Message>) {
-                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
-                        {A2A::JSON_FIELD_MESSAGE, f}
-                    };
+            if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
+                if (j[A2A::JSON_FIELD_METADATA].is_string()) {
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
                 } else {
-                    throw std::runtime_error("Unhandled type in variant");
+                    p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
                 }
-            },
-            r.result);
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::SendMessageSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
+            }
         }
+    };
 
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        if (!j.contains(A2A::JSON_FIELD_RESULT)) {
-            throw std::runtime_error("Response missing 'result' field");
-        }
-
-        const auto& res = j.at(A2A::JSON_FIELD_RESULT);
-        if (res.contains(A2A::JSON_FIELD_MESSAGE) && res.contains(A2A::STREAM_RESPONSE_TYPE_TASK)) {
-            throw std::runtime_error("Response must contain either 'message' or 'task', not both");
-        }
-        if (res.contains(A2A::JSON_FIELD_MESSAGE)) {
-            r.result = res.at(A2A::JSON_FIELD_MESSAGE).get<A2A::Message>();
-        } else if (res.contains(A2A::STREAM_RESPONSE_TYPE_TASK)) {
-            r.result = res.at(A2A::STREAM_RESPONSE_TYPE_TASK).get<A2A::Task>();
-        } else {
-            throw std::runtime_error("Response must contain either 'message' or 'task' field");
-        }
-    }
-};
-
-// SendStreamingMessageSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::SendStreamingMessageSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::SendStreamingMessageSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}};
-
-        std::visit(
-            [&](auto&& f) {
-                using T = std::decay_t<decltype(f)>;
-                // Check if the type needs special nesting
-                if constexpr (std::is_same_v<T, A2A::TaskStatusUpdateEvent>) {
-                    // Wrap TaskStatusUpdateEvent under "statusUpdate" key
-                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
-                        {"statusUpdate", f}
-                    };
-                } else if constexpr (std::is_same_v<T, A2A::TaskArtifactUpdateEvent>) {
-                    // Wrap TaskArtifactUpdateEvent under "taskArtifactUpdate" key
-                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
-                        {"artifactUpdate", f}
-                    };
-                } else if constexpr (std::is_same_v<T, A2A::Task>) {
-                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
-                        {A2A::STREAM_RESPONSE_TYPE_TASK, f}
-                    };
-                } else if constexpr (std::is_same_v<T, A2A::Message>) {
-                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
-                        {A2A::JSON_FIELD_MESSAGE, f}
-                    };
-                } else {
-                    throw std::runtime_error("Unhandled type in variant");
-                }
-            },
-            r.result);
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::SendStreamingMessageSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
-        }
-
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        const auto& res = j.at(A2A::JSON_FIELD_RESULT);
-        if (res.contains(A2A::STREAM_RESPONSE_TYPE_TASK)) {
-            r.result = res.at(A2A::STREAM_RESPONSE_TYPE_TASK).get<A2A::Task>();
-        } else if (res.contains(A2A::JSON_FIELD_MESSAGE)) {
-            r.result = res.at(A2A::JSON_FIELD_MESSAGE).get<A2A::Message>();
-        } else if (res.contains("statusUpdate")) {
-            r.result = res.at("statusUpdate").get<A2A::TaskStatusUpdateEvent>();
-        } else if (res.contains("artifactUpdate")) {
-            r.result = res.at("artifactUpdate").get<A2A::TaskArtifactUpdateEvent>();
-        } else {
-            throw std::runtime_error("result deserialize field");
-        }
-    }
-};
-
-// GetTaskSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::GetTaskSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::GetTaskSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::GetTaskSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
-        }
-
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::Task>();
-    }
-};
-
-// CancelTaskSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::CancelTaskSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::CancelTaskSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::CancelTaskSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
-        }
-
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::Task>();
-    }
-};
-
-// SetTaskPushNotificationConfigSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::SetTaskPushNotificationConfigSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::SetTaskPushNotificationConfigSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::SetTaskPushNotificationConfigSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
-        }
-
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::TaskPushNotificationConfig>();
-    }
-};
-
-// GetTaskPushNotificationConfigSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::GetTaskPushNotificationConfigSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::GetTaskPushNotificationConfigSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::GetTaskPushNotificationConfigSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
-        }
-
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::TaskPushNotificationConfig>();
-    }
-};
-
-// ListTaskPushNotificationConfigSuccessResponse serializers
-template<>
-struct adl_serializer<A2A::ListTaskPushNotificationConfigSuccessResponse> {
-    static void to_json(nlohmann::json& j, const A2A::ListTaskPushNotificationConfigSuccessResponse& r)
-    {
-        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
-
-        if (r.id) {
-            j[A2A::JSON_FIELD_ID] = *r.id;
-        }
-    }
-
-    static void from_json(const nlohmann::json& j, A2A::ListTaskPushNotificationConfigSuccessResponse& r)
-    {
-        if (j.contains(A2A::JSON_FIELD_ID)) {
-            r.id = j.at(A2A::JSON_FIELD_ID);
-        }
-
-        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
-            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
-        }
-
-        r.result = j.at(A2A::JSON_FIELD_RESULT).get<std::vector<A2A::TaskPushNotificationConfig>>();
-    }
-};
-    // InvalidRequestError serializers
     template<>
-    struct adl_serializer<A2A::InvalidRequestError> {
-        static void to_json(nlohmann::json& j, const A2A::InvalidRequestError& e)
+    struct adl_serializer<A2A::A2AError> {
+        static void to_json(nlohmann::json& j, const A2A::A2AError& e)
         {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
-
+            j = {{"code", e.code}, {A2A::JSON_FIELD_MESSAGE, e.message.value_or("")}};
             if (e.data) {
                 j["data"] = *e.data;
             }
         }
 
-        static void from_json(const nlohmann::json& j, A2A::InvalidRequestError& e)
+        static void from_json(const nlohmann::json& j, A2A::A2AError& e)
         {
+            e.code = j.at("code").get<int>();
             if (j.contains("data")) {
                 e.data = j.at("data");
             }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
+            if (j.contains(A2A::JSON_FIELD_MESSAGE)) {
+                e.message = j.at(A2A::JSON_FIELD_MESSAGE).get<std::string>();
             }
         }
     };
 
-    // ServerError serializers
+    template<typename T>
+    struct adl_serializer_error_base {
+        static void to_json(nlohmann::json& j, const T& e)
+        {
+            adl_serializer<A2A::A2AError>::to_json(j, static_cast<const A2A::A2AError&>(e));
+        }
+
+        static void from_json(const nlohmann::json& j, T& e)
+        {
+            adl_serializer<A2A::A2AError>::from_json(j, static_cast<A2A::A2AError&>(e));
+        }
+    };
+
     template<>
-    struct adl_serializer<A2A::ServerError> {
-        static void to_json(nlohmann::json& j, const A2A::ServerError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::InvalidRequestError> : public adl_serializer_error_base<A2A::InvalidRequestError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::ServerError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // InvalidParamsError serializers
     template<>
-    struct adl_serializer<A2A::InvalidParamsError> {
-        static void to_json(nlohmann::json& j, const A2A::InvalidParamsError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::ServerError> : public adl_serializer_error_base<A2A::ServerError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::InvalidParamsError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // InvalidAgentIdError serializers
     template<>
-    struct adl_serializer<A2A::InvalidAgentIdError> {
-        static void to_json(nlohmann::json& j, const A2A::InvalidAgentIdError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::InvalidParamsError> : public adl_serializer_error_base<A2A::InvalidParamsError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::InvalidAgentIdError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // AddExternalMemoryError serializers
     template<>
-    struct adl_serializer<A2A::AddExternalMemoryError> {
-        static void to_json(nlohmann::json& j, const A2A::AddExternalMemoryError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::JSONParseError> : public adl_serializer_error_base<A2A::JSONParseError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::AddExternalMemoryError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // JSONParseError serializers
     template<>
-    struct adl_serializer<A2A::JSONParseError> {
-        static void to_json(nlohmann::json& j, const A2A::JSONParseError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::InternalError> : public adl_serializer_error_base<A2A::InternalError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::JSONParseError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // InternalError serializers
     template<>
-    struct adl_serializer<A2A::InternalError> {
-        static void to_json(nlohmann::json& j, const A2A::InternalError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::MethodNotFoundError> : public adl_serializer_error_base<A2A::MethodNotFoundError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::InternalError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // MethodNotFoundError serializers
     template<>
-    struct adl_serializer<A2A::MethodNotFoundError> {
-        static void to_json(nlohmann::json& j, const A2A::MethodNotFoundError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::TaskNotFoundError> : public adl_serializer_error_base<A2A::TaskNotFoundError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::MethodNotFoundError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // TaskNotFoundError serializers
     template<>
-    struct adl_serializer<A2A::TaskNotFoundError> {
-        static void to_json(nlohmann::json& j, const A2A::TaskNotFoundError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::ExtensionSupportRequiredError>
+        : public adl_serializer_error_base<A2A::ExtensionSupportRequiredError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::TaskNotFoundError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // TaskNotCancelableError serializers
     template<>
-    struct adl_serializer<A2A::TaskNotCancelableError> {
-        static void to_json(nlohmann::json& j, const A2A::TaskNotCancelableError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::VersionNotSupportedError>
+        : public adl_serializer_error_base<A2A::VersionNotSupportedError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::TaskNotCancelableError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // PushNotificationNotSupportedError serializers
     template<>
-    struct adl_serializer<A2A::PushNotificationNotSupportedError> {
-        static void to_json(nlohmann::json& j, const A2A::PushNotificationNotSupportedError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::TaskNotCancelableError>
+        : public adl_serializer_error_base<A2A::TaskNotCancelableError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::PushNotificationNotSupportedError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // UnsupportedOperationErrorModel serializers
     template<>
-    struct adl_serializer<A2A::UnsupportedOperationErrorModel> {
-        static void to_json(nlohmann::json& j, const A2A::UnsupportedOperationErrorModel& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::PushNotificationNotSupportedError>
+        : public adl_serializer_error_base<A2A::PushNotificationNotSupportedError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::UnsupportedOperationErrorModel& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // ContentTypeNotSupportedError serializers
     template<>
-    struct adl_serializer<A2A::ContentTypeNotSupportedError> {
-        static void to_json(nlohmann::json& j, const A2A::ContentTypeNotSupportedError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::UnsupportedOperationError>
+        : public adl_serializer_error_base<A2A::UnsupportedOperationError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::ContentTypeNotSupportedError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // InvalidAgentResponseError serializers
     template<>
-    struct adl_serializer<A2A::InvalidAgentResponseError> {
-        static void to_json(nlohmann::json& j, const A2A::InvalidAgentResponseError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::ContentTypeNotSupportedError>
+        : public adl_serializer_error_base<A2A::ContentTypeNotSupportedError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::InvalidAgentResponseError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
-
-    // AuthenticatedExtendedCardNotConfiguredError serializers
     template<>
-    struct adl_serializer<A2A::AuthenticatedExtendedCardNotConfiguredError> {
-        static void to_json(nlohmann::json& j, const A2A::AuthenticatedExtendedCardNotConfiguredError& e)
-        {
-            j = {{"code", e.code}, {"message", e.message.value_or("")}};
+    struct adl_serializer<A2A::InvalidAgentResponseError>
+        : public adl_serializer_error_base<A2A::InvalidAgentResponseError> {};
 
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::AuthenticatedExtendedCardNotConfiguredError& e)
-        {
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-
-            if (j.contains("message")) {
-                e.message = j.at("message").get<std::string>();
-            }
-        }
-    };
+    template<>
+    struct adl_serializer<A2A::AuthenticatedExtendedCardNotConfiguredError>
+        : public adl_serializer_error_base<A2A::AuthenticatedExtendedCardNotConfiguredError> {};
 
     // APIKeySecurityScheme serializers
     template<>
@@ -1793,10 +1308,7 @@ struct adl_serializer<A2A::ListTaskPushNotificationConfigSuccessResponse> {
         static void to_json(nlohmann::json& j, const A2A::SecurityScheme& ss)
         {
             std::visit(
-                [&](auto&& s) {
-                    j = json(s);
-                },
-                ss.v);
+                [&](auto&& s) { j = json(s); }, ss.v);
         }
 
         static void from_json(const nlohmann::json& j, A2A::SecurityScheme& ss)
@@ -1813,29 +1325,7 @@ struct adl_serializer<A2A::ListTaskPushNotificationConfigSuccessResponse> {
             } else if (t == "mutualTLS") {
                 ss.v = j.get<A2A::MutualTLSSecurityScheme>();
             } else {
-                throw std::runtime_error("UNKNOWN security scheme type");
-            }
-        }
-    };
-
-    template<>
-    struct adl_serializer<A2A::A2AError> {
-        static void to_json(nlohmann::json& j, const A2A::A2AError& e)
-        {
-            j = {{"code", e.code}, {A2A::JSON_FIELD_MESSAGE, e.message.value_or("")}};
-            if (e.data) {
-                j["data"] = *e.data;
-            }
-        }
-
-        static void from_json(const nlohmann::json& j, A2A::A2AError& e)
-        {
-            e.code = j.at("code").get<int>();
-            if (j.contains("data")) {
-                e.data = j.at("data");
-            }
-            if (j.contains(A2A::JSON_FIELD_MESSAGE)) {
-                e.message = j.at(A2A::JSON_FIELD_MESSAGE).get<std::string>();
+                throw std::runtime_error("UNSPECIFIED security scheme type");
             }
         }
     };
@@ -2256,6 +1746,260 @@ struct adl_serializer<A2A::ListTaskPushNotificationConfigSuccessResponse> {
         }
     };
 
+
+// SendMessageSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::SendMessageSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::SendMessageSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+
+        std::visit(
+            [&](auto&& f) {
+                using T = std::decay_t<decltype(f)>;
+
+                if constexpr (std::is_same_v<T, A2A::Task>) {
+                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
+                        {A2A::STREAM_RESPONSE_TYPE_TASK, f}
+                    };
+                } else if constexpr (std::is_same_v<T, A2A::Message>) {
+                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
+                        {A2A::JSON_FIELD_MESSAGE, f}
+                    };
+                } else {
+                    throw std::runtime_error("Unhandled type in variant");
+                }
+            },
+            r.result);
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::SendMessageSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        if (!j.contains(A2A::JSON_FIELD_RESULT)) {
+            throw std::runtime_error("Response missing 'result' field");
+        }
+
+        const auto& res = j.at(A2A::JSON_FIELD_RESULT);
+        if (res.contains(A2A::JSON_FIELD_MESSAGE) && res.contains(A2A::STREAM_RESPONSE_TYPE_TASK)) {
+            throw std::runtime_error("Response must contain either 'message' or 'task', not both");
+        }
+        if (res.contains(A2A::JSON_FIELD_MESSAGE)) {
+            r.result = res.at(A2A::JSON_FIELD_MESSAGE).get<A2A::Message>();
+        } else if (res.contains(A2A::STREAM_RESPONSE_TYPE_TASK)) {
+            r.result = res.at(A2A::STREAM_RESPONSE_TYPE_TASK).get<A2A::Task>();
+        } else {
+            throw std::runtime_error("Response must contain either 'message' or 'task' field");
+        }
+    }
+};
+
+// SendStreamingMessageSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::SendStreamingMessageSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::SendStreamingMessageSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}};
+
+        std::visit(
+            [&](auto&& f) {
+                using T = std::decay_t<decltype(f)>;
+                // Check if the type needs special nesting
+                if constexpr (std::is_same_v<T, A2A::TaskStatusUpdateEvent>) {
+                    // Wrap TaskStatusUpdateEvent under "statusUpdate" key
+                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
+                        {"statusUpdate", f}
+                    };
+                } else if constexpr (std::is_same_v<T, A2A::TaskArtifactUpdateEvent>) {
+                    // Wrap TaskArtifactUpdateEvent under "taskArtifactUpdate" key
+                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
+                        {"artifactUpdate", f}
+                    };
+                } else if constexpr (std::is_same_v<T, A2A::Task>) {
+                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
+                        {A2A::STREAM_RESPONSE_TYPE_TASK, f}
+                    };
+                } else if constexpr (std::is_same_v<T, A2A::Message>) {
+                    j[A2A::JSON_FIELD_RESULT] = nlohmann::json{
+                        {A2A::JSON_FIELD_MESSAGE, f}
+                    };
+                } else {
+                    throw std::runtime_error("Unhandled type in variant");
+                }
+            },
+            r.result);
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::SendStreamingMessageSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        const auto& res = j.at(A2A::JSON_FIELD_RESULT);
+        if (res.contains(A2A::STREAM_RESPONSE_TYPE_TASK)) {
+            r.result = res.at(A2A::STREAM_RESPONSE_TYPE_TASK).get<A2A::Task>();
+        } else if (res.contains(A2A::JSON_FIELD_MESSAGE)) {
+            r.result = res.at(A2A::JSON_FIELD_MESSAGE).get<A2A::Message>();
+        } else if (res.contains("statusUpdate")) {
+            r.result = res.at("statusUpdate").get<A2A::TaskStatusUpdateEvent>();
+        } else if (res.contains("artifactUpdate")) {
+            r.result = res.at("artifactUpdate").get<A2A::TaskArtifactUpdateEvent>();
+        } else {
+            throw std::runtime_error("result deserialize field");
+        }
+    }
+};
+
+// GetTaskSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::GetTaskSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::GetTaskSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::GetTaskSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::Task>();
+    }
+};
+
+// CancelTaskSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::CancelTaskSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::CancelTaskSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::CancelTaskSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::Task>();
+    }
+};
+
+// SetTaskPushNotificationConfigSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::SetTaskPushNotificationConfigSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::SetTaskPushNotificationConfigSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::SetTaskPushNotificationConfigSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::TaskPushNotificationConfig>();
+    }
+};
+
+// GetTaskPushNotificationConfigSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::GetTaskPushNotificationConfigSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::GetTaskPushNotificationConfigSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::GetTaskPushNotificationConfigSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::TaskPushNotificationConfig>();
+    }
+};
+
+// ListTaskPushNotificationConfigSuccessResponse serializers
+template<>
+struct adl_serializer<A2A::ListTaskPushNotificationConfigSuccessResponse> {
+    static void to_json(nlohmann::json& j, const A2A::ListTaskPushNotificationConfigSuccessResponse& r)
+    {
+        j = {{A2A::JSON_FIELD_JSONRPC, r.jsonrpc}, {A2A::JSON_FIELD_RESULT, r.result}};
+
+        if (r.id) {
+            j[A2A::JSON_FIELD_ID] = *r.id;
+        }
+    }
+
+    static void from_json(const nlohmann::json& j, A2A::ListTaskPushNotificationConfigSuccessResponse& r)
+    {
+        if (j.contains(A2A::JSON_FIELD_ID)) {
+            r.id = j.at(A2A::JSON_FIELD_ID);
+        }
+
+        if (j.contains(A2A::JSON_FIELD_JSONRPC)) {
+            r.jsonrpc = j.at(A2A::JSON_FIELD_JSONRPC).get<std::string>();
+        }
+
+        r.result = j.at(A2A::JSON_FIELD_RESULT).get<std::vector<A2A::TaskPushNotificationConfig>>();
+    }
+};
+
 // GetAgentCardSuccessResponse serializers
 template<>
 struct adl_serializer<A2A::GetAgentCardSuccessResponse> {
@@ -2281,7 +2025,6 @@ struct adl_serializer<A2A::GetAgentCardSuccessResponse> {
         r.result = j.at(A2A::JSON_FIELD_RESULT).get<A2A::AgentCard>();
     }
 };
-
 
 } // namespace nlohmann
 

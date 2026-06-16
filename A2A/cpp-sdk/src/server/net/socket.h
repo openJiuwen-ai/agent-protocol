@@ -29,7 +29,6 @@ struct SocketOptions {
 
     int recvBufSize{0}; // 0 = do not set when 0
     int sendBufSize{0}; // 0 = do not set when 0
-    bool reuseAddr{false};
     bool reusePort{false};
 };
 
@@ -76,7 +75,7 @@ protected:
     void NotifyCloseOnce();
 
     // Apply common socket options
-    void ApplyOptions(const SocketOptions& opts);
+    void ApplyOptions(const SocketOptions& opts) const;
 
     EventSystem& es_;
     int fd_{-1};

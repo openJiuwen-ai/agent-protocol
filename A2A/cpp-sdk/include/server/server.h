@@ -10,18 +10,18 @@ namespace A2A::Server {
 class Server {
 public:
     /**
-     * @brief destructor
-     */
+    * @brief destructor
+    */
     virtual ~Server() = default;
 
     /**
-     * @brief start server and listen
-     */
+    * @brief start server and listen
+    */
     virtual int Start() = 0;
 
     /**
-     * @brief stop server
-     */
+    * @brief stop server
+    */
     virtual void Stop() = 0;
 };
 

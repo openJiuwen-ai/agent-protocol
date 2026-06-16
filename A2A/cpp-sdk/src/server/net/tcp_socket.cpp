@@ -21,11 +21,10 @@
 
 namespace A2A::Server {
 
-constexpr int EXTRA_BUFF_SIZE = 65536;
-constexpr int RECV_VEC_SIZE = 2;
-constexpr int MAX_VEC_SIZE = 2;
-constexpr int DEFAULT_VEC_SIZE = 2;
+constexpr size_t MAX_READ_ONCE = 65536;
 constexpr int DEFAULT_INPUT_BUFF_SIZE = 4096;
+constexpr size_t MIN_FREE_SPACE = 1024;
+constexpr size_t EXPAND_SPACE = 4096;
 
 Buffer::Buffer(size_t initialCap) : buf_(initialCap), r_(0), w_(0)
 {
@@ -46,32 +45,11 @@ const char* Buffer::Peek() const
     return buf_.data() + r_;
 }
 
-void Buffer::Retrieve(size_t n)
-{
-    if (n >= ReadableBytes()) {
-        RetrieveAll();
-    } else {
-        r_ += n;
-    }
-}
-
-void Buffer::RetrieveAll()
-{
-    r_ = w_ = 0;
-}
-
 std::string Buffer::RetrieveAllAsString()
 {
     std::string s(Peek(), ReadableBytes());
-    RetrieveAll();
+    r_ = w_ = 0;
     return s;
-}
-
-void Buffer::Append(const char* data, size_t len)
-{
-    EnsureWritable(len);
-    std::memcpy(buf_.data() + w_, data, len);
-    w_ += len;
 }
 
 void Buffer::EnsureWritable(size_t len)
@@ -84,42 +62,29 @@ void Buffer::EnsureWritable(size_t len)
 
 void Buffer::MakeSpace(size_t len)
 {
-    if (WritableBytes() + r_ >= len) {
-        // Move existing readable data to the front of the buffer so writable
-        // space becomes contiguous. This avoids allocating a larger buffer
-        // when there is free space at the beginning.
-        size_t readable = ReadableBytes();
-        if (readable > 0) {
-            std::memmove(buf_.data(), buf_.data() + r_, readable);
-        }
-        r_ = 0;
-        w_ = readable;
-    } else {
+    if (WritableBytes() + r_ < len) {
         buf_.resize(w_ + len);
     }
 }
 
 ssize_t Buffer::ReadFd(int fd)
 {
-    char extrabuf[EXTRA_BUFF_SIZE];
-    struct iovec vec[RECV_VEC_SIZE];
-
     size_t writable = WritableBytes();
-    vec[0].iov_base = buf_.data() + w_;
-    vec[0].iov_len = writable;
-    vec[1].iov_base = extrabuf;
-    vec[1].iov_len = sizeof(extrabuf);
+    if (writable < MIN_FREE_SPACE) {
+        buf_.resize(buf_.size() + EXPAND_SPACE);
+        writable += EXPAND_SPACE;
+    }
 
-    int iovcnt = writable > 0 ? MAX_VEC_SIZE : DEFAULT_VEC_SIZE;
-    ssize_t n = ::readv(fd, vec, iovcnt);
+    size_t readSize = std::min(writable, MAX_READ_ONCE);
+    ssize_t n = ::read(fd, buf_.data() + w_, readSize);
     if (n < 0) {
         return -1;
-    } else if (static_cast<size_t>(n) <= writable) {
-        w_ += static_cast<size_t>(n);
-    } else {
-        w_ = buf_.size();
-        Append(extrabuf, static_cast<size_t>(n) - writable);
     }
+    if (n == 0) {
+        return 0; // EOF
+    }
+
+    w_ += static_cast<size_t>(n);
     return n;
 }
 
@@ -146,7 +111,7 @@ int TcpSocket::CreateNonblockingTcpSocket(int family)
         return -1;
     }
     if (!Socket::SetNonBlocking(fd)) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed: %s (%d)", std::strerror(errno), errno);
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed, errno: " + std::to_string(errno));
         ::close(fd);
         return -1;
     }
@@ -174,13 +139,11 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     hints.ai_family = AF_UNSPEC;
     hints.ai_flags = AI_ADDRCONFIG;
 
-    char portStr[LISTENER_PORT_STRING_SIZE];
-    std::snprintf(portStr, sizeof(portStr), "%u", static_cast<unsigned>(port));
-
+    std::string portStr = std::to_string(port);
     addrinfo* res = nullptr;
-    int gai = ::getaddrinfo(host.c_str(), portStr, &hints, &res);
+    int gai = ::getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res);
     if (gai != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "getaddrinfo(%s:%s) failed: %s", host.c_str(), portStr, ::gai_strerror(gai));
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "getaddrinfo failed: " + std::string(::gai_strerror(gai)));
         return nullptr;
     }
 
@@ -188,7 +151,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
         fd = CreateNonblockingTcpSocket(ai->ai_family);
         if (fd < 0) {
-            A2A_LOG(A2A_LOG_LEVEL_DEBUG, "socket() create failed for family %d", ai->ai_family);
+            A2A_LOG(A2A_LOG_LEVEL_DEBUG, "socket() create failed for family " + std::to_string(ai->ai_family));
             continue;
         }
 
@@ -200,7 +163,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
             if (errno == EINPROGRESS || errno == EALREADY) {
                 break;
             }
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "connect() failed: %s (%d)", std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "connect() failed, errno: " + std::to_string(errno));
             ::close(fd);
             fd = -1;
             continue;
@@ -221,7 +184,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     int soerr = 0;
     socklen_t slen = sizeof(soerr);
     if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "getsockopt(SO_ERROR) failed: %s (%d)", std::strerror(errno), errno);
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "getsockopt(SO_ERROR) failed, errno: " + std::to_string(errno));
         soerr = errno;
     }
 
@@ -263,7 +226,7 @@ TcpSocketPtr TcpSocket::Connect(EventSystem& es, const std::string& host, uint16
     return sp;
 }
 
-void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
+void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts) const
 {
     if (fd_ < 0) {
         return;
@@ -273,7 +236,7 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
         int val = 1;
         int rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &val, static_cast<socklen_t>(sizeof(val)));
         if (rc != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(TCP_NODELAY) failed: %s (%d)", std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_NODELAY) failed, errno: " + std::to_string(errno));
         }
     }
 
@@ -281,27 +244,27 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
         int on = 1;
         int rc = ::setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE, &on, static_cast<socklen_t>(sizeof(on)));
         if (rc != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(SO_KEEPALIVE) failed: %s (%d)", std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(SO_KEEPALIVE) failed, errno: " + std::to_string(errno));
         }
         if (opts.keepAliveIdleSec > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &opts.keepAliveIdleSec,
-                              static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
+                static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPIDLE) failed: %s (%d)", std::strerror(errno), errno);
+                A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_KEEPIDLE) failed, errno: " + std::to_string(errno));
             }
         }
         if (opts.keepAliveIntvlSec > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &opts.keepAliveIntvlSec,
-                              static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
+                static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPINTVL) failed: %s (%d)", std::strerror(errno), errno);
+                A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_KEEPINTVL) failed, errno: " + std::to_string(errno));
             }
         }
         if (opts.keepAliveCnt > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &opts.keepAliveCnt,
-                              static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
+                static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPCNT) failed: %s (%d)", std::strerror(errno), errno);
+                A2A_LOG(A2A_LOG_LEVEL_ERROR, "setsockopt(TCP_KEEPCNT) failed, errno: " + std::to_string(errno));
             }
         }
     }
@@ -326,12 +289,6 @@ bool TcpSocket::Send(std::string_view sv)
 Buffer& TcpSocket::InputBuffer()
 {
     return inBuf_;
-}
-
-// Buffer convenience overload moved from header
-void Buffer::Append(std::string_view sv)
-{
-    Append(sv.data(), sv.size());
 }
 
 void TcpSocket::HandleConnectWritable()
@@ -359,7 +316,7 @@ void TcpSocket::HandleConnectWritable()
     }
 
     if (err != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "connection failed: %s (%d)", std::strerror(err), err);
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "connection failed:, errno: " + std::to_string(err));
         NotifyError(err, "connect");
         Close();
         return;
@@ -459,7 +416,7 @@ bool TcpSocket::Send(const char* data, size_t len)
         return true;
     }
 
-    const char* p = data;
+    const char* p = static_cast<const char*>(data);
 
     // If there is no queued data, try an immediate non-blocking send to
     // avoid copying into the send queue. On EAGAIN/EWOULDBLOCK we fall
@@ -499,7 +456,7 @@ bool TcpSocket::Send(const char* data, size_t len)
     }
 }
 
-void TcpSocket::ShutdownWrite()
+void TcpSocket::ShutdownWrite() const
 {
     if (fd_ < 0) {
         return;

@@ -2,166 +2,141 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "jsonrpc_handler.h"
+#include <utility>
+
 #include "types.h"
 #include "error.h"
 #include "jsonrpc.h"
-#include "a2a_errno.h"
+#include "common_types.h"
+#include "utils_helpers.h"
+#include "jsonrpc_handler.h"
 
 namespace A2A::Server {
 
 using nlohmann::json;
 
-static json make_error(const json& id, int code, const std::string& msg)
+json JSONRPCHandler::OnMessageSend(const json& req, StreamEmitter emit, const std::string& method)
 {
-    return json{{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", msg}}}};
-}
-
-json JSONRPCHandler::OnMessageSend(const json& req)
-{
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        MessageSendParams p{};
-        const auto& pr = req.at("params");
-        p.message = pr.at("message").get<Message>();
-        if (pr.contains("configuration")) {
-            p.configuration = pr.at("configuration");
-        }
-        if (pr.contains("metadata")) {
-            p.metadata = pr.at("metadata");
-        }
-        auto r = handler_->OnSendMessage(p, nullptr);
-        json result;
-        if (std::holds_alternative<Message>(r)) {
-            result = std::get<Message>(r);
-        } else {
-            result = std::get<Task>(r);
-        }
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
+        const MessageSendParams p = req.at(JSON_FIELD_PARAMS);
+        handler_->OnSendMessage(p, nullptr, std::move(emit), method);
+        // 正常处理场景，通过emit发送
+        return {};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnGetTask(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        TaskQueryParams p{};
-        const auto& pr = req.at("params");
-        p.id = pr.at("id").get<std::string>();
-        if (pr.contains("historyLength")) {
-            p.historyLength = pr.at("historyLength").get<int>();
-        }
-        if (pr.contains("metadata")) {
-            p.metadata = pr.at("metadata");
-        }
+        const TaskQueryParams p = req.at(JSON_FIELD_PARAMS);
         auto t = handler_->OnGetTask(p, nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", t}};
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, t}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnCancelTask(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        TaskIdParams p{};
-        const auto& pr = req.at("params");
-        p.id = pr.at("id").get<std::string>();
-        if (pr.contains("metadata")) {
-            p.metadata = pr.at("metadata");
-        }
+        const TaskIdParams p = req.at(JSON_FIELD_PARAMS);
         auto t = handler_->OnCancelTask(p, nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", t}};
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, t}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnSetPushNotificationConfig(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        const auto cfg = req.at("params").get<TaskPushNotificationConfig>();
-        auto r = handler_->OnSetTaskPushNotificationConfig(cfg, nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", r}};
+        const auto cfg = req.at(JSON_FIELD_PARAMS).get<TaskPushNotificationConfig>();
+        handler_->OnSetTaskPushNotificationConfig(cfg, nullptr);
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, cfg}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnGetPushNotificationConfig(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        const auto p = req.at("params").get<GetTaskPushNotificationConfigParams>();
+        const auto p = req.at(JSON_FIELD_PARAMS).get<GetTaskPushNotificationConfigParams>();
         auto r = handler_->OnGetTaskPushNotificationConfig(p, nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", r}};
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, r}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnListPushNotificationConfig(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        const auto p = req.at("params").get<ListTaskPushNotificationConfigParams>();
+        const auto p = req.at(JSON_FIELD_PARAMS).get<ListTaskPushNotificationConfigParams>();
         auto r = handler_->OnListTaskPushNotificationConfigs(p, nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", r}};
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, r}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnDeletePushNotificationConfig(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
-        const auto p = req.at("params").get<DeleteTaskPushNotificationConfigParams>();
+        const auto p = req.at(JSON_FIELD_PARAMS).get<DeleteTaskPushNotificationConfigParams>();
         handler_->OnDeleteTaskPushNotificationConfig(p, nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", nullptr}};
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, nullptr}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
 json JSONRPCHandler::OnGetAgentCard(const json& req)
 {
-    auto id = req.value("id", json{});
+    auto id = req.value(JSON_FIELD_ID, json{});
     try {
         auto c = handler_->OnGetCard(nullptr);
-        return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", c}};
+        return json{{JSON_FIELD_JSONRPC, JSON_VERSION}, {JSON_FIELD_ID, id}, {JSON_FIELD_RESULT, c}};
+    } catch (const A2AServerError& e) {
+        return MakeError(id, e.statusCode, e.what());
     } catch (const std::exception& e) {
-        return make_error(id, static_cast<int>(JSONRPCErrorCode::INTERNAL_ERROR), e.what());
+        return MakeError(id, static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR), e.what());
     }
 }
 
-void JSONRPCHandler::OnMessageSendStreaming(const json& req, const RequestHandler::StreamEmitter& emit)
+void JSONRPCHandler::OnMessageSendStreaming(const json& req, StreamEmitter emit)
 {
-    MessageSendParams p{};
-    const auto& pr = req.at("params");
-    p.message = pr.at("message").get<Message>();
-    if (pr.contains("configuration")) {
-        p.configuration = pr.at("configuration");
-    }
-    if (pr.contains("metadata")) {
-        p.metadata = pr.at("metadata");
-    }
-    handler_->OnSendMessageStreaming(p, emit, nullptr);
+    const MessageSendParams p = req.at(JSON_FIELD_PARAMS);
+    handler_->OnSendMessageStreaming(p, std::move(emit), nullptr);
 }
 
-void JSONRPCHandler::OnResubscribeToTask(const json& req, const RequestHandler::StreamEmitter& emit)
+void JSONRPCHandler::OnResubscribeToTask(const json& req, StreamEmitter emit)
 {
-    TaskIdParams p{};
-    const auto& pr = req.at("params");
-    p.id = pr.at("id").get<std::string>();
-    if (pr.contains("metadata")) {
-        p.metadata = pr.at("metadata");
-    }
-    handler_->OnResubscribeToTask(p, emit, nullptr);
+    const TaskIdParams p = req.at(JSON_FIELD_PARAMS);
+    handler_->OnResubscribeToTask(p, std::move(emit), nullptr);
 }
 
 } // namespace A2A::Server

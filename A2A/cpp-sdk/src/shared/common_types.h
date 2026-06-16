@@ -5,9 +5,8 @@
 #ifndef A2A_COMMON_TYPES_H
 #define A2A_COMMON_TYPES_H
 
-#include <optional>
 #include <string>
-#include <vector>
+#include <variant>
 
 #include "types.h"
 
@@ -31,7 +30,6 @@ constexpr const char* METHOD_AGENT_CARD_GET = "GetAgentCard";
 
 constexpr const char* JSON_VERSION = "2.0";
 constexpr const char* JSON_FIELD_RESULT = "result";
-constexpr const char* JSON_FIELD_KIND = "kind";
 constexpr const char* JSON_FIELD_JSONRPC = "jsonrpc";
 constexpr const char* JSON_FIELD_ID = "id";
 constexpr const char* JSON_FIELD_METHOD = "method";

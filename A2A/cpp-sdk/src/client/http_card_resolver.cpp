@@ -14,12 +14,6 @@
 
 namespace A2A::Client {
 
-namespace {
-constexpr int K_BAD_ALLOC = -32110;
-constexpr int K_TRANSPORT_EXCEPTION = -32102;
-constexpr int K_INVALID_FORMAT = -32106;
-} // namespace
-
 HttpCardResolver::HttpCardResolver(
     std::string baseUrl,
     const std::optional<std::string>& relativeCardPath,
@@ -65,16 +59,16 @@ std::future<AgentCard> HttpCardResolver::GetAgentCard([[maybe_unused]] const std
         // send request
         transport_->GetCard(requestId, nullptr, 0);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<AgentCard> fallbackPromise;
-        fallbackPromise.set_exception(CreateExceptionPtr(K_BAD_ALLOC, e.what()));
+        fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
         std::lock_guard<std::mutex> lock(callbackMutex_);
         pendingPromises_.erase(requestId);
         return fallbackPromise.get_future();
     } catch (const std::exception& e) {
         std::lock_guard<std::mutex> lock(callbackMutex_);
         pendingPromises_.erase(requestId);
-        promise->set_exception(CreateExceptionPtr(K_TRANSPORT_EXCEPTION, e.what()));
+        promise->set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION), e.what()));
     }
 
     return promise->get_future();
@@ -113,7 +107,8 @@ void HttpCardResolver::OnTransportEvent(const std::string& requestId, const Tran
         promise->set_value(*card);
     } else {
         // wrong type (i.e. Message, Task)
-        promise->set_exception(CreateExceptionPtr(K_INVALID_FORMAT, "invalid response format for GetCard"));
+        promise->set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_FORMAT),
+            "invalid response format for GetCard"));
     }
 }
 

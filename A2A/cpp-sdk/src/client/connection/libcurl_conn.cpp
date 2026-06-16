@@ -107,11 +107,11 @@ void LibcurlConn::SendError(const std::string& errorMsg, const int errorCode, co
     ConnEventData event;
     event.errCode = errorCode;
     event.data = data.dump();
-    A2A_LOG(A2A_LOG_LEVEL_ERROR, "Error msg: " + errorMsg + ", error code: " + std::to_string(errorCode));
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "Error msg: " + errorMsg + ", error code: " + std::to_string(errorCode));
     try {
         callback_->OnMessageReceived(event, userData);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, e.what());
     }
 }
 
@@ -165,7 +165,7 @@ int LibcurlConn::SendMessage(const std::string& message, const std::map<std::str
     httpRequest.headers.insert(headers.begin(), headers.end());
 
     if (!this->IsRunning()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "LibcurlConn is not running");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "LibcurlConn is not running");
         return -1;
     }
 
@@ -239,7 +239,7 @@ void LibcurlConn::DoTerminate()
     try {
         this->Stop();
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Exception caught in terminate: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception caught in terminate: ") + e.what());
     }
 }
 
@@ -280,18 +280,18 @@ void LibcurlConn::HandleUnexpectedContentType(const HttpResponse& response) cons
     if (contentType.empty()) {
         contentType = "<missing>";
     }
-    A2A_LOG(A2A_LOG_LEVEL_ERROR, "receive unexpected content type: " + contentType);
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "receive unexpected content type: " + contentType);
 }
 
 // Lifecycle management
 bool LibcurlConn::Start()
 {
     if (state_.load(std::memory_order_acquire) != ConnState::STOPPED) {
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "Service already running");
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Service already running");
         return true;
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Starting HTTP client service...");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Starting HTTP client service...");
     if (!CurlInit()) {
         return false;
     }
@@ -307,7 +307,7 @@ bool LibcurlConn::Start()
         HandleRequestInIOThread(req);
     };
     if (!requestQueue_.Initialize(eventSystem_.get(), f)) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize request queue");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to initialize request queue");
         eventSystem_.reset();
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
@@ -324,7 +324,7 @@ bool LibcurlConn::Start()
             HandleStopRequestInIOThread();
         }, nullptr, true);
     if (stopNotifyEventId_ == -1) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to create stop notify event");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to create stop notify event");
         requestQueue_.Cleanup();
         eventSystem_.reset();
         curl_multi_cleanup(multiHandle_);
@@ -335,7 +335,7 @@ bool LibcurlConn::Start()
     state_.store(ConnState::RUNNING, std::memory_order_release);
 
     ioThread_ = std::thread(&LibcurlConn::IoThreadMain, this);
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "HTTP client service started successfully");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "HTTP client service started successfully");
     return true;
 }
 
@@ -346,7 +346,7 @@ void LibcurlConn::Stop()
         return;
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Stopping HTTP client service");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Stopping HTTP client service");
 
     // Transition to stopping state
     state_.store(ConnState::STOPPING, std::memory_order_release);
@@ -358,7 +358,7 @@ void LibcurlConn::Stop()
 
     // Wait for I/O thread to finish
     if (ioThread_.joinable()) {
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "Waiting for I/O thread to finish...");
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Waiting for I/O thread to finish...");
         ioThread_.join();
     }
 
@@ -378,18 +378,18 @@ void LibcurlConn::Stop()
     requestQueue_.Cleanup();
 
     if (multiHandle_ != nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Cleaning up libcurl multi handle");
+        A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Cleaning up libcurl multi handle");
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
     }
-    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Cleaning up libcurl global resources");
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Cleaning up libcurl global resources");
 
     if (eventSystem_ != nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Cleaning up EventSystem");
+        A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Cleaning up EventSystem");
         eventSystem_.reset();
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "HTTP client service stopped");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "HTTP client service stopped");
 }
 
 // Core sending interface
@@ -397,37 +397,37 @@ int LibcurlConn::Send(const HttpRequest& request, UserData& userData, int timeou
     HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback)
 {
     if (state_.load(std::memory_order_acquire) != ConnState::RUNNING) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to send HTTP request: Service is not running");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to send HTTP request: Service is not running");
         return -1;
     }
 
     if (responseBodyCallback == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Response body callback is required");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Response body callback is required");
         return -1;
     }
 
     std::string requestId = userData.requestId;
-    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Send request " + requestId + ": " + request.method + " " + request.url);
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Send request " + requestId + ": " + request.method + " " + request.url);
 
     auto requestContext = std::make_shared<RequestContext>(request, responseHeaderCallback, responseBodyCallback,
         timeoutMs, userData);
 
     // Submit to queue and return immediately
     if (!requestQueue_.Send(requestContext)) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Request queue is full");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Request queue is full");
         return -1;
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Send request into queue successfully");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Send request into queue successfully");
     return 0;
 }
 
 void LibcurlConn::IoThreadMain()
 {
     SetCurrentThreadName("A2A-IO-" + std::to_string(ioThreadIndex_));
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Starting EventSystem event loop...");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Starting EventSystem event loop...");
     eventSystem_->Start(false); // Block current thread
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "I/O thread event loop ended");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "I/O thread event loop ended");
 }
 
 void LibcurlConn::HandleErrorResponse(const std::shared_ptr<RequestContext>& request,
@@ -460,7 +460,7 @@ void LibcurlConn::HandleFinishedResponse(const std::shared_ptr<RequestContext>& 
         return;
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Request " + request->userData.requestId + " completed with status: " +
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Request " + request->userData.requestId + " completed with status: " +
         std::to_string(response.statusCode) + ", headers_count=" + std::to_string(response.headers.size()));
     request->responseBodyCallback(response);
 }
@@ -468,19 +468,19 @@ void LibcurlConn::HandleFinishedResponse(const std::shared_ptr<RequestContext>& 
 void LibcurlConn::HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request)
 {
     if (request == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "failed: received null request");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "failed: received null request");
         return;
     }
 
     std::string requestId = request->userData.requestId;
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Processing request " + requestId + " in I/O thread: " +
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Processing request " + requestId + " in I/O thread: " +
         request->request.method + " " + request->request.url + " (timeout=" +
         std::to_string(request->timeoutMs) + "ms)");
 
     // Create CURL handle
     request->easyHandle = curl_easy_init();
     if (request->easyHandle == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to create CURL handle for request " + requestId);
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to create CURL handle for request " + requestId);
         HandleErrorResponse(request, "Failed to create CURL handle");
         return;
     }
@@ -504,16 +504,16 @@ void LibcurlConn::HandleRequestInIOThread(const std::shared_ptr<RequestContext>&
 
     activeRequests_[requestId] = request;
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Request " + requestId + " added to libcurl multi handle");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Request " + requestId + " added to libcurl multi handle");
 }
 
 void LibcurlConn::HandleStopRequestInIOThread()
 {
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Processing stop request in I/O thread");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Processing stop request in I/O thread");
     // 1. Process remaining requests in queue
     size_t remaining = requestQueue_.GetQueueSize();
     if (remaining > 0) {
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "Processing " + std::to_string(remaining) +
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Processing " + std::to_string(remaining) +
             " remaining requests in queue before stop");
         std::shared_ptr<RequestContext> request;
         int processed = 0;
@@ -526,11 +526,11 @@ void LibcurlConn::HandleStopRequestInIOThread()
             HandleErrorResponse(request, "Service is stopping");
             processed++;
         }
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "Processed " + std::to_string(processed) + " requests from queue during stop");
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Processed " + std::to_string(processed) + " requests from queue during stop");
     }
     // 3. Wait for active requests to complete (max 3 seconds)
     if (!activeRequests_.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "Waiting for " + std::to_string(activeRequests_.size()) +
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Waiting for " + std::to_string(activeRequests_.size()) +
             " active requests to complete");
         auto start = std::chrono::steady_clock::now();
         while (!activeRequests_.empty()) {
@@ -550,14 +550,14 @@ void LibcurlConn::HandleStopRequestInIOThread()
     }
     // 4. Force cancel remaining active requests
     if (!activeRequests_.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "Cancelling " + std::to_string(activeRequests_.size()) +
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Cancelling " + std::to_string(activeRequests_.size()) +
         " remaining active requests");
         CancelAllActiveRequests();
     }
     // 5. Cleanup socket contexts before stopping event loop
     for (auto& [sockfd, context] : socketContexts_) {
         if (context != nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL_INFO, "Cleaning up socket context: sockfd=" + std::to_string(sockfd));
+            A2A_LOG(A2A_LOG_LEVEL::INFO, "Cleaning up socket context: sockfd=" + std::to_string(sockfd));
 
             // Remove event if still active
             if (context->eventId != -1 && eventSystem_ != nullptr) {
@@ -570,7 +570,7 @@ void LibcurlConn::HandleStopRequestInIOThread()
     // 6. Set state to stopped before stopping event loop
     state_.store(ConnState::STOPPED, std::memory_order_release);
     // 7. Stop event loop
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "Stopping event loop");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Stopping event loop");
     eventSystem_->Stop();
 }
 
@@ -601,7 +601,7 @@ void LibcurlConn::CheckMultiInfo()
         }
 
         if (request == nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "Received completion for unknown request");
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "Received completion for unknown request");
             curl_multi_remove_handle(multiHandle_, easyHandle);
             curl_easy_cleanup(easyHandle);
             continue;
@@ -667,7 +667,7 @@ int LibcurlConn::SocketCallback([[maybe_unused]] CURL* easy, curl_socket_t sockf
                         [service](int fd, short eventFlags, void* arg) { service->OnSocketEvent(fd, eventFlags, arg); },
                         context);
                 }  catch (const std::bad_alloc& e) {
-                    A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+                    A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
                     return -1;
                 }
             }
@@ -742,7 +742,7 @@ void LibcurlConn::OnTimeout([[maybe_unused]] int fd, [[maybe_unused]] short even
     int runningBefore = 0;
     CURLMcode code = curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &runningBefore);
     if (code != CURLM_OK) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "OnTimeout() - curl_multi_socket_action failed: " +
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "OnTimeout() - curl_multi_socket_action failed: " +
                 std::string(curl_multi_strerror(code)));
     }
 
@@ -759,7 +759,7 @@ void LibcurlConn::OnSocketEvent(int fd, short events, void* arg)
 
     CurlSocketContext* context = static_cast<CurlSocketContext*>(arg);
     if (context == nullptr || !context->IsValid()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Socket context is null or invalid for fd=" + std::to_string(fd));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Socket context is null or invalid for fd=" + std::to_string(fd));
         return;
     }
 
@@ -772,7 +772,7 @@ void LibcurlConn::OnSocketEvent(int fd, short events, void* arg)
         curlAction |= CURL_CSELECT_OUT;
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Socket activity: fd=" + std::to_string(fd) +
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Socket activity: fd=" + std::to_string(fd) +
             ", sockfd=" + std::to_string(context->sockfd) +
             ", events=0x" + std::to_string(events) + ", curlAction=" + std::to_string(curlAction));
 
@@ -781,7 +781,7 @@ void LibcurlConn::OnSocketEvent(int fd, short events, void* arg)
     CURLMcode code = curl_multi_socket_action(multiHandle_, context->sockfd,
         static_cast<int>(curlAction), &runningBefore);
     if (code != CURLM_OK) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "curl_multi_socket_action failed: " + std::string(curl_multi_strerror(code)));
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "curl_multi_socket_action failed: " + std::string(curl_multi_strerror(code)));
     }
 
     // Check for completed requests
@@ -795,7 +795,7 @@ std::shared_ptr<CurlSocketContext> LibcurlConn::CreateSocketContext(curl_socket_
         socketContexts_[sockfd] = context;
         return context;
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
     }
 }
@@ -806,7 +806,7 @@ void LibcurlConn::DestroySocketContext(const std::shared_ptr<CurlSocketContext>&
         return;
     }
 
-    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Socket destroy: fd=" + std::to_string(context->eventId) +
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Socket destroy: fd=" + std::to_string(context->eventId) +
             ", sockfd=" + std::to_string(context->sockfd));
 
     // Mark as invalid first to prevent concurrent access
@@ -940,7 +940,7 @@ size_t LibcurlConn::WriteCallback(char* contents, size_t size, size_t nmemb, voi
 
         // end of event, callback
         if (isSseEnd) {
-            A2A_LOG(A2A_LOG_LEVEL_DEBUG, "SSE event end,event data:" + request->response.sseEvent.data);
+            A2A_LOG(A2A_LOG_LEVEL::DEBUG, "SSE event end,event data:" + request->response.sseEvent.data);
             request->responseBodyCallback(request->response);
             request->response.sseEvent = ServerSentEvent();
             continue;
@@ -966,7 +966,7 @@ size_t LibcurlConn::HeaderCallback(char* contents, size_t size, size_t nmemb, vo
     }
 
     if (isfinish) {
-        A2A_LOG(A2A_LOG_LEVEL_INFO, "header finished");
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "header finished");
         request->response.headers = LibcurlConn::ParseHeaderData(request->headerData);
         request->response.success = true;
         request->response.userData = request->userData;
@@ -1017,14 +1017,14 @@ bool LibcurlConn::CurlInit()
 {
     // Initialize libcurl
     if (!EnsureCurlGlobal()) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize CURL");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to initialize CURL");
         return false;
     }
 
     // Initialize CURL multi handle
     multiHandle_ = curl_multi_init();
     if (multiHandle_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize CURL multi handle");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to initialize CURL multi handle");
         return false;
     }
 
@@ -1038,13 +1038,13 @@ bool LibcurlConn::CurlInit()
     try {
         eventSystem_ = std::make_unique<EventSystem>(true, static_cast<int>(ioThreadIndex_));
         if (!eventSystem_->Init()) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to initialize EventSystem");
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to initialize EventSystem");
             curl_multi_cleanup(multiHandle_);
             multiHandle_ = nullptr;
             return false;
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Failed to create EventSystem: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Failed to create EventSystem: ") + e.what());
         curl_multi_cleanup(multiHandle_);
         multiHandle_ = nullptr;
         return false;
@@ -1074,14 +1074,14 @@ void LibcurlConn::CancelRequest(const std::shared_ptr<RequestContext>& request) 
         curl_easy_cleanup(request->easyHandle);
         request->easyHandle = nullptr;
 
-        A2A_LOG(A2A_LOG_LEVEL_INFO, std::string("Request ") + request->userData.requestId +
+        A2A_LOG(A2A_LOG_LEVEL::INFO, std::string("Request ") + request->userData.requestId +
                 " cancelled successfully");
     }
 }
 
 void LibcurlConn::CancelAllActiveRequests()
 {
-    A2A_LOG(A2A_LOG_LEVEL_INFO,
+    A2A_LOG(A2A_LOG_LEVEL::INFO,
             std::string("Cancelling ") + std::to_string(activeRequests_.size()) + " active requests");
 
     // Create a copy to avoid iterator invalidation
@@ -1098,7 +1098,7 @@ void LibcurlConn::CancelAllActiveRequests()
     // Clear active requests map
     activeRequests_.clear();
 
-    A2A_LOG(A2A_LOG_LEVEL_INFO, "All active requests cancelled");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "All active requests cancelled");
 }
 
 } // namespace A2A::Http

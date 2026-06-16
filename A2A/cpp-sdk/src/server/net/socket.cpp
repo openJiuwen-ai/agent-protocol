@@ -30,42 +30,35 @@ bool Socket::SetNonBlocking(int fd)
 {
     int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "F_GETFL failed: %s (%d)", std::strerror(errno), errno);
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "F_GETFL failed: %s (%d)", std::strerror(errno), errno);
         return false;
     }
-    if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "F_SETFL failed: %s (%d)", std::strerror(errno), errno);
+    if (::fcntl(fd, F_SETFL, static_cast<unsigned int>(flags) | O_NONBLOCK) < 0) {
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "F_SETFL failed: %s (%d)", std::strerror(errno), errno);
         return false;
     }
     return true;
 }
 
-void Socket::ApplyOptions(const SocketOptions& opts)
+void Socket::ApplyOptions(const SocketOptions& opts) const
 {
     // Configure non-blocking and close-on-exec according to options.
     if (opts.nonBlocking) {
         if (!SetNonBlocking(fd_)) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "SetNonBlocking failed: %s (%d)", std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed: %s (%d)", std::strerror(errno), errno);
         }
     }
 
     if (opts.recvBufSize > 0) {
         if (::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &opts.recvBufSize,
-                         static_cast<socklen_t>(sizeof(opts.recvBufSize))) != 0) {
+            static_cast<socklen_t>(sizeof(opts.recvBufSize))) != 0) {
             A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(SO_RCVBUF) failed: %s (%d)", std::strerror(errno), errno);
         }
     }
     if (opts.sendBufSize > 0) {
         if (::setsockopt(fd_, SOL_SOCKET, SO_SNDBUF, &opts.sendBufSize,
-                         static_cast<socklen_t>(sizeof(opts.sendBufSize))) != 0) {
+            static_cast<socklen_t>(sizeof(opts.sendBufSize))) != 0) {
             A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(SO_SNDBUF) failed: %s (%d)", std::strerror(errno), errno);
-        }
-    }
-
-    if (opts.reuseAddr) {
-        int on = 1;
-        if (::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &on, static_cast<socklen_t>(sizeof(on))) != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(SO_REUSEADDR) failed: %s (%d)", std::strerror(errno), errno);
         }
     }
 

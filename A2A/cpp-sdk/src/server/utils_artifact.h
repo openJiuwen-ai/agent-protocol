@@ -16,7 +16,7 @@ Artifact NewArtifact(const std::vector<Part>& parts, const std::string& name, co
 
 Artifact NewTextArtifact(const std::string& name, const std::string& text, const std::string& description = "");
 
-Artifact NewDataArtifact(const std::string& name, const nlohmann::json& data, const std::string& description = "");
+Artifact NewDataArtifact(const std::string& name, const std::string& data, const std::string& description = "");
 
 } // namespace A2A
 

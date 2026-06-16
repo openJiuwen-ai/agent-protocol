@@ -47,7 +47,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
             if (it == serverSet.end()) {
                 serverSet[itf.protocolBinding] = itf.url;
             } else {
-                A2A_LOG(A2A_LOG_LEVEL_WARN, "Duplicate protocolBinding:" + itf.protocolBinding);
+                A2A_LOG(A2A_LOG_LEVEL::WARN, "Duplicate protocolBinding:" + itf.protocolBinding);
             }
         }
 
@@ -92,7 +92,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
 
         return std::make_shared<DefaultClient>(card, config, transport, consumers);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
     }
 }
@@ -106,7 +106,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
         }
         return std::make_shared<DefaultClient>(card, config, transport, consumers);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
     }
 }
