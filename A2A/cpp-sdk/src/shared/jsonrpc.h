@@ -142,7 +142,7 @@ namespace nlohmann {
             if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
                 if (j[A2A::JSON_FIELD_METADATA].is_string()) {
                     part.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
-                } else {
+            } else {
                     part.metadata = j[A2A::JSON_FIELD_METADATA].dump();
                 }
             }
@@ -561,16 +561,16 @@ namespace nlohmann {
         static void from_json(const nlohmann::json& j, A2A::MessageSendConfiguration& c)
         {
             if (j.contains("acceptedOutputModes") && !j["acceptedOutputModes"].is_null()) {
-                const auto& modes_json = j.at("acceptedOutputModes");
-                if (!modes_json.is_array()) {
-                    throw std::runtime_error("acceptedOutputModes must be an array");
-                }
-                
+            const auto& modes_json = j.at("acceptedOutputModes");
+            if (!modes_json.is_array()) {
+                throw std::runtime_error("acceptedOutputModes must be an array");
+            }
+
                 std::vector<std::string> modes;
-                for (const auto& mode : modes_json) {
-                    if (!mode.is_string()) {
-                        throw std::runtime_error("acceptedOutputModes must contain only strings");
-                    }
+            for (const auto& mode : modes_json) {
+                if (!mode.is_string()) {
+                    throw std::runtime_error("acceptedOutputModes must contain only strings");
+                }
                     modes.push_back(mode.get<std::string>());
                 }
                 c.acceptedOutputModes = std::move(modes);
@@ -635,9 +635,9 @@ namespace nlohmann {
         static void to_json(nlohmann::json& j, const A2A::TaskArtifactUpdateEvent& e)
         {
             j = nlohmann::json{
-                    {"artifact", e.artifact},
-                    {"contextId", e.contextId},
-                    {"taskId", e.taskId}};
+                {"artifact", e.artifact},
+                {"contextId", e.contextId},
+                {"taskId", e.taskId}};
 
             if (e.append) {
                 j["append"] = *e.append;
@@ -939,7 +939,7 @@ namespace nlohmann {
             if (j.contains(A2A::JSON_FIELD_METADATA) && !j[A2A::JSON_FIELD_METADATA].is_null()) {
                 if (j[A2A::JSON_FIELD_METADATA].is_string()) {
                     p.metadata = j[A2A::JSON_FIELD_METADATA].get<std::string>();
-                } else {
+            } else {
                     p.metadata = j[A2A::JSON_FIELD_METADATA].dump();
                 }
             }
@@ -1651,12 +1651,12 @@ namespace nlohmann {
         static void to_json(nlohmann::json& j, const A2A::AgentCard& c)
         {
             j = nlohmann::json{
-                    {"name", c.name},
-                    {"description", c.description},
-                    {"version", c.version},
-                    {"capabilities", c.capabilities},
-                    {"defaultInputModes", c.defaultInputModes},
-                    {"defaultOutputModes", c.defaultOutputModes},
+                {"name", c.name},
+                {"description", c.description},
+                {"version", c.version},
+                {"capabilities", c.capabilities},
+                {"defaultInputModes", c.defaultInputModes},
+                {"defaultOutputModes", c.defaultOutputModes},
                     {"skills", c.skills},
                     {"supportedInterfaces", c.supportedInterfaces}
             };

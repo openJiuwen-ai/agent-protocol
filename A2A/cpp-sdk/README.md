@@ -24,18 +24,18 @@ A2A C++ SDK 是 [Agent-to-Agent 协议 v1.0](https://a2a-protocol.org/v1.0.0/spe
 
 | 文档 | 说明 |
 |------|------|
-| [API 参考](docs/API.md) | 公开头文件、类型、Client / Server API 说明 |
-| [日志说明](docs/LOGGING.md) | SDK 诊断日志、`A2A_LOG` / `SetLogCallback` 用法 |
-| [测试说明](docs/TESTING.md) | 单元测试布局、构建与运行、覆盖率 |
+| [依赖说明](docs/dependencies.md) | 运行/编译依赖、版本、各发行版安装命令 |
+| [测试说明](docs/testing.md) | 单元测试、覆盖率、ASAN |
+| [API 文档索引](docs/api/README.md) | Client / Server API、协议对照 |
+| [错误处理说明](docs/errors.md) | 错误码、异常类型与处理建议 |
+| [日志说明](docs/logging.md) | SDK 诊断日志、`A2A_LOG` / `SetLogCallback` 用法 |
 
 ## 环境要求
 
 - **操作系统**：Linux（glibc 或 musl，主要验证平台）
 - **编译器**：C++17 及以上（GCC 9+ / Clang 10+）
 - **CMake**：≥ 3.16（见根目录 `CMakeLists.txt`）
-- **依赖**：OpenSSL、libcurl、libevent、nlohmann_json；`http_parser` 由 `third_party/` 提供（v2.9.4）
-
-可使用 `scripts/install_deps.sh` 一键安装系统包；`libevent` / `nlohmann_json` 缺失时会由 `third_party/third_party.cmake` 自动从 GitHub 拉取。
+- **依赖**：见 [docs/dependencies.md](docs/dependencies.md)
 
 ## 快速入门
 
@@ -77,7 +77,7 @@ A2A_EXAMPLE_PORT=9000 ./scripts/run_example.sh
 # 编译并启用单元测试
 ./scripts/build.sh -u -t Debug
 
-# 覆盖率构建 + 运行测试报告（见 docs/TESTING.md）
+# 覆盖率构建 + 运行测试报告（见 docs/testing.md）
 ./scripts/build.sh -c
 
 # AddressSanitizer 调试构建
@@ -125,7 +125,7 @@ export LD_LIBRARY_PATH="$(pwd)/output/lib:${LD_LIBRARY_PATH:-}"
 | Streaming Server | `examples/streaming_server.cpp` | 流式任务状态与产物推送 |
 | Streaming Client | `examples/streaming_client.cpp` | `message/stream` 流式接收 |
 
-API 与协议细节见 [docs/API.md](docs/API.md)。
+API 与协议细节见 [docs/api/README.md](docs/api/README.md)。
 
 ## 运行测试
 
@@ -149,7 +149,11 @@ A2A_SKIP_ASAN=1 ./scripts/run_ut.sh --no-coverage
 cd build && ctest --output-on-failure
 ```
 
-覆盖率与报告说明见 [docs/TESTING.md](docs/TESTING.md)。
+覆盖率与报告说明见 [docs/testing.md](docs/testing.md)。
+
+## 日志
+
+SDK 默认将诊断日志输出到 **stdout**，输出前缀含 `[LEVEL]`（`DEBUG` / `INFO` / `WARN` / `ERROR` / `FATAL`）。若 stdout 被应用占用，可通过 `SetLogCallback` 重定向到 stderr 或文件。详见 [docs/logging.md](docs/logging.md)。
 
 ## 参与贡献
 

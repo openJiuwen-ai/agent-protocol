@@ -179,22 +179,39 @@ TEST_F(LoggerTest, SetLogCallback)
     EXPECT_EQ(SetLogCallback(LogTestHelper::callback), -1);
 }
 
-// ==================== 使用 A2A_LOG_CONCAT 的测试用例 ====================
+// ==================== A2A_LOG 测试用例 ====================
 // 测试基本日志记录
 TEST_F(LoggerTest, BasicLogging)
 {
     SetLogLevel(A2A_LOG_LEVEL::DEBUG);
     LogTestHelper::clear();
 
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::DEBUG, "Debug message with number: " << 42);
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Info message with string: " << "test");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::WARN, "Warning message with float: " << 3.14159);
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::ERROR, "Error message without params");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::FATAL, "Fatal message");
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Debug message with number: " + std::to_string(42));
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Info message with string: test");
+    A2A_LOG(A2A_LOG_LEVEL::WARN, "Warning message with float: " + std::to_string(3.14159));
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "Error message without params");
+    A2A_LOG(A2A_LOG_LEVEL::FATAL, "Fatal message");
 
     WaitForLogs();
 
     EXPECT_EQ(LogTestHelper::size(), 5);
+
+    auto logs = LogTestHelper::logs();
+    EXPECT_THAT(logs[0].message, HasSubstr("[DEBUG]"));
+    EXPECT_THAT(logs[1].message, HasSubstr("[INFO]"));
+    EXPECT_THAT(logs[2].message, HasSubstr("[WARN]"));
+    EXPECT_THAT(logs[3].message, HasSubstr("[ERROR]"));
+    EXPECT_THAT(logs[4].message, HasSubstr("[FATAL]"));
+}
+
+TEST_F(LoggerTest, GetLogLevelNameMapsKnownLevels)
+{
+    EXPECT_STREQ("DEBUG", GetLogLevelName(A2A_LOG_LEVEL::DEBUG));
+    EXPECT_STREQ("INFO", GetLogLevelName(A2A_LOG_LEVEL::INFO));
+    EXPECT_STREQ("WARN", GetLogLevelName(A2A_LOG_LEVEL::WARN));
+    EXPECT_STREQ("ERROR", GetLogLevelName(A2A_LOG_LEVEL::ERROR));
+    EXPECT_STREQ("FATAL", GetLogLevelName(A2A_LOG_LEVEL::FATAL));
+    EXPECT_STREQ("UNKNOWN", GetLogLevelName(static_cast<A2A_LOG_LEVEL>(0)));
 }
 
 // 测试日志级别过滤
@@ -204,11 +221,11 @@ TEST_F(LoggerTest, LogLevelFiltering)
     SetLogLevel(A2A_LOG_LEVEL::WARN);
     LogTestHelper::clear();
 
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::DEBUG, "Debug message - should be filtered");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Info message - should be filtered");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::WARN, "Warning message - should be logged");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::ERROR, "Error message - should be logged");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::FATAL, "Fatal message - should be logged");
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Debug message - should be filtered");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Info message - should be filtered");
+    A2A_LOG(A2A_LOG_LEVEL::WARN, "Warning message - should be logged");
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "Error message - should be logged");
+    A2A_LOG(A2A_LOG_LEVEL::FATAL, "Fatal message - should be logged");
 
     WaitForLogs();
 
@@ -226,11 +243,11 @@ TEST_F(LoggerTest, LogLevelInMessage)
     SetLogLevel(A2A_LOG_LEVEL::DEBUG);
     LogTestHelper::clear();
 
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::DEBUG, "Debug test");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Info test");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::WARN, "Warn test");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::ERROR, "Error test");
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::FATAL, "Fatal test");
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Debug test");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Info test");
+    A2A_LOG(A2A_LOG_LEVEL::WARN, "Warn test");
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "Error test");
+    A2A_LOG(A2A_LOG_LEVEL::FATAL, "Fatal test");
 
     WaitForLogs();
 
@@ -253,7 +270,8 @@ TEST_F(LoggerTest, MultipleParameters)
     double b = 3.14159;
     std::string c = "hello";
 
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Parameters: int=" << a << ", float=" << b << ", string=" << c);
+    A2A_LOG(A2A_LOG_LEVEL::INFO,
+        "Parameters: int=" + std::to_string(a) + ", float=" + std::to_string(b) + ", string=" + c);
 
     WaitForLogs();
 
@@ -279,7 +297,8 @@ TEST_F(LoggerTest, MultiThreadedLogging)
     for (int i = 0; i < THREAD_COUNT; ++i) {
         threads.emplace_back([i]() {
             for (int j = 0; j < LOGS_PER_THREAD; ++j) {
-                A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Thread " << i << " logging message " << j);
+                A2A_LOG(A2A_LOG_LEVEL::INFO,
+                    "Thread " + std::to_string(i) + " logging message " + std::to_string(j));
                 std::this_thread::sleep_for(std::chrono::microseconds(rand() % 100));
             }
         });
@@ -300,10 +319,11 @@ TEST_F(LoggerTest, MacroExpansion)
     LogTestHelper::clear();
 
     EXPECT_NO_THROW({
-        A2A_LOG_CONCAT(A2A_LOG_LEVEL::DEBUG, "No params");
-        A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "One param: " << 1);
-        A2A_LOG_CONCAT(A2A_LOG_LEVEL::WARN, "Two params: " << 2 << " and " << "test");
-        A2A_LOG_CONCAT(A2A_LOG_LEVEL::ERROR, "Three params: " << 3 << ", " << "test" << ", " << 3.14);
+        A2A_LOG(A2A_LOG_LEVEL::DEBUG, "No params");
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "One param: " + std::to_string(1));
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "Two params: " + std::to_string(2) + " and test");
+        A2A_LOG(A2A_LOG_LEVEL::ERROR,
+            "Three params: " + std::to_string(3) + ", test, " + std::to_string(3.14));
     });
 
     WaitForLogs();
@@ -330,7 +350,7 @@ TEST_F(LoggerTest, SequentialLogging)
     LogTestHelper::clear();
 
     for (int i = 0; i < 10; ++i) {
-        A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Sequence number: " << i);
+        A2A_LOG(A2A_LOG_LEVEL::INFO, "Sequence number: " + std::to_string(i));
     }
 
     WaitForLogs();
@@ -349,7 +369,7 @@ TEST_F(LoggerTest, SpecialCharacters)
     SetLogLevel(A2A_LOG_LEVEL::DEBUG);
     LogTestHelper::clear();
 
-    A2A_LOG_CONCAT(A2A_LOG_LEVEL::INFO, "Special chars: !@#$%^&*()_+");
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Special chars: !@#$%^&*()_+");
 
     WaitForLogs();
     ASSERT_EQ(LogTestHelper::size(), 1);

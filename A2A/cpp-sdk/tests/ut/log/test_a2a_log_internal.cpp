@@ -45,9 +45,20 @@ TEST(A2aLogInternalTest, LogInternal_InvokesCallbackWithMetadata)
 
     EXPECT_NE(g_capturedLogMessage.find("hello log"), std::string::npos);
     EXPECT_NE(g_capturedLogMessage.find("::"), std::string::npos);
+    EXPECT_NE(g_capturedLogMessage.find("[INFO]"), std::string::npos);
 
     logCallback = previousCallback;
     SetLogLevel(previousLevel);
+}
+
+TEST(A2aLogInternalTest, GetLogLevelNameMapsKnownLevels)
+{
+    EXPECT_STREQ("DEBUG", GetLogLevelName(A2A_LOG_LEVEL::DEBUG));
+    EXPECT_STREQ("INFO", GetLogLevelName(A2A_LOG_LEVEL::INFO));
+    EXPECT_STREQ("WARN", GetLogLevelName(A2A_LOG_LEVEL::WARN));
+    EXPECT_STREQ("ERROR", GetLogLevelName(A2A_LOG_LEVEL::ERROR));
+    EXPECT_STREQ("FATAL", GetLogLevelName(A2A_LOG_LEVEL::FATAL));
+    EXPECT_STREQ("UNKNOWN", GetLogLevelName(static_cast<A2A_LOG_LEVEL>(0)));
 }
 
 TEST(A2aLogInternalTest, A2aPrintfImpl_FiltersBelowLogLevel)

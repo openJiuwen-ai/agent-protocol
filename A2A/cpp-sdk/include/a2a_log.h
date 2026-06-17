@@ -5,6 +5,7 @@
 #ifndef A2A_LOG_INCLUDE_H_
 #define A2A_LOG_INCLUDE_H_
 
+#include <stdint.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -73,50 +74,70 @@ int32_t SetLogLevel(const A2A_LOG_LEVEL logLevel);
 A2A_LOG_LEVEL GetLogLevel(void);
 
 /**
+ * @brief Get the string name for a log level (e.g. @c "INFO").
+ * @param[in] level Log severity.
+ * @return @c "DEBUG" / @c "INFO" / @c "WARN" / @c "ERROR" / @c "FATAL", or @c "UNKNOWN".
+ */
+const char* GetLogLevelName(A2A_LOG_LEVEL level);
+
+/**
  * @brief Format the current wall-clock time into a string.
  * @param[out] timestamp Receives "YYYY-MM-DD HH:MM:SS.mmm".
  */
-void GetCurrentTimeStamp(std::string& timestamp);
+static inline void GetCurrentTimeStamp(std::string& timestamp)
+{
+    struct timespec ts;
+    struct tm tmInfo;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tmInfo);
 
-/**
- * @brief Internal helper used by A2A_LOG / A2A_LOG_CONCAT macros.
- * @param[in] level  Severity.
- * @param[in] file   Source file name.
- * @param[in] func   Function name.
- * @param[in] line   Source line number.
- * @param[in] format Message body.
- */
-void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func, int line, const std::string& format);
+    char dateTimeBuf[32] = {0};
+    std::strftime(dateTimeBuf, sizeof(dateTimeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
+
+    int32_t millis = static_cast<int32_t>(ts.tv_nsec / A2A_NANOS_PER_MILLISECOND);
+
+    std::ostringstream oss;
+    oss << dateTimeBuf << '.' <<
+        std::setfill('0') << std::setw(A2A_TIMESTAMP_MILLIS_WIDTH) << millis;
+    timestamp = oss.str();
+}
+
+// Internal helper to reduce macro lines and handle C++ string formatting.
+template<typename... Args>
+inline void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func, int line,
+                        const std::string& format, Args&&... args)
+{
+    if (logCallback == nullptr) {
+        return;
+    }
+    if (level < GetLogLevel()) {
+        return;
+    }
+
+    std::string timestamp;
+    GetCurrentTimeStamp(timestamp);
+    const char* filename = strrchr(file, '/');
+    filename = filename ? filename + 1 : file;
+
+    std::string prefix = "[" + timestamp + "] [" + std::to_string(syscall(SYS_gettid)) + "] [" +
+                         std::string(GetLogLevelName(level)) + "] " + std::string(filename) + "::" +
+                         std::string(func) + ":[" + std::to_string(line) + "] ";
+
+    static_assert(sizeof...(Args) == 0,
+                  "A2A_LOG expects C++-style string composition");
+    logCallback(level, prefix + format);
+}
 
 } // namespace A2A::Log
 
 /**
- * @brief Log a pre-formatted message via @ref LogInternal (legacy).
+ * @brief Log a diagnostic message via @ref LogInternal.
  * @param level  One of @c A2A::Log::A2A_LOG_LEVEL values.
- * @param format Message body; **not** printf-interpolated (passed as-is).
+ * @param format Message body as a pre-composed @c std::string (not printf-style).
  */
 #define A2A_LOG_COMMON(logLevel, format, ...) \
-    ::A2A::Log::LogInternal(::A2A::Log::logLevel, __FILE__, __FUNCTION__, __LINE__, format)
+    ::A2A::Log::LogInternal(::A2A::Log::logLevel, __FILE__, __FUNCTION__, __LINE__, format, ##__VA_ARGS__)
 
 #define A2A_LOG(level, format, ...) A2A_LOG_COMMON(level, format, ##__VA_ARGS__)
-
-/**
- * @brief Log with stream concatenation; formats timestamp, tid, and location.
- * @param level   One of @c A2A::Log::A2A_LOG_LEVEL values.
- * @param message Expression streamed with @c << (e.g. @c "port " << port).
- * @note Filtered by @ref GetLogLevel; requires non-null @ref logCallback.
- */
-#define A2A_LOG_CONCAT(level, message) \
-    do { \
-        if ((::A2A::Log::level) >= ::A2A::Log::GetLogLevel() && ::A2A::Log::logCallback) { \
-            std::ostringstream oss; \
-            std::string ts; \
-            ::A2A::Log::GetCurrentTimeStamp(ts); \
-            oss << "[" << ts << "] [" << syscall(SYS_gettid) << "] " << \
-                __FILE__ << "::" << __FUNCTION__ << ":[" << __LINE__ << "] " << \
-                message; \
-            ::A2A::Log::logCallback((::A2A::Log::level), oss.str()); \
-        } \
-    } while (0)
 
 #endif

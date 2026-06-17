@@ -252,7 +252,7 @@ HttpServerTransport::~HttpServerTransport()
             httpServerMgr_->Stop();
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Exception in stopping http server: %s", e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in stopping http server: ") + e.what());
     } catch (...) {
         A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in stopping http server");
     }
@@ -262,7 +262,7 @@ HttpServerTransport::~HttpServerTransport()
             listenThread_.join();
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Exception in joining listen thread: %s", e.what());
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in joining listen thread: ") + e.what());
     } catch (...) {
         A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in joining listen thread");
     }
