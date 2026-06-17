@@ -38,15 +38,12 @@ void McpPrintfImpl(MCP_LOG_LEVEL logLevel, std::string message)
 int32_t SetLogCallback(McpLogCallback logCallback)
 {
     if (logCallback == nullptr) {
-        printf("log callback reset to default\n");
         g_logCallback = McpPrintfImpl;
         return 0;
     }
     if (logCallback == g_logCallback) {
-        printf("log callback is the same");
         return 0;
     }
-    printf("log callback changed\n");
     g_logCallback = logCallback;
     return 0;
 }

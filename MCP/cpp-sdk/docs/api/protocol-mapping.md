@@ -65,7 +65,7 @@
 
 | 概念 | API | 用途 |
 |------|-----|------|
-| SDK 诊断日志 | `MCP_LOG`、`SetLogCallback` | 调试 SDK 与应用程序 |
+| SDK 诊断日志 | `MCP_LOG`、`SetLogCallback` | 调试 SDK 与应用程序（默认 stdout，见 [logging.md](../logging.md)） |
 | MCP 协议日志 | `SetLoggingCallback`、`notifications/message` | 服务端推送给客户端的日志消息 |
 
 ## 示例索引
