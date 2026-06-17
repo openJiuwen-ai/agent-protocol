@@ -39,6 +39,8 @@ int32_t SetLogCallback(McpLogCallback logCallback);
 int32_t SetLogLevel(MCP_LOG_LEVEL logLevel);
 MCP_LOG_LEVEL GetLogLevel(void);
 
+const char* GetLogLevelName(MCP_LOG_LEVEL level);
+
 // Helper function to get current timestamp
 static inline void GetCurrentTimeStamp(std::string& timestamp)
 {
@@ -79,8 +81,9 @@ inline void LogInternal(MCP_LOG_LEVEL level, const char* file, const char* func,
     const char* filename = strrchr(file, '/');
     filename = filename ? filename + 1 : file;
 
-    std::string prefix = "[" + timestamp + "] [" + std::to_string(syscall(SYS_gettid)) + "] " +
-                         std::string(filename) + "::" + std::string(func) + ":[" + std::to_string(line) + "] ";
+    std::string prefix = "[" + timestamp + "] [" + std::to_string(syscall(SYS_gettid)) + "] [" +
+                         std::string(GetLogLevelName(level)) + "] " + std::string(filename) + "::" +
+                         std::string(func) + ":[" + std::to_string(line) + "] ";
 
     static_assert(sizeof...(Args) == 0,
                   "MCP_LOG expects C++-style string composition");

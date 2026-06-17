@@ -37,6 +37,16 @@ MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("server started on port ") + std::to_str
 
 `SetLogLevel` 设置全局阈值；**低于阈值的日志在 `MCP_LOG` 入口即被过滤**，自定义 callback 也会收到已过滤后的消息。
 
+### 输出格式
+
+通过 `MCP_LOG` 输出的每行前缀格式为：
+
+```text
+[YYYY-MM-DD HH:MM:SS.mmm] [tid] [LEVEL] file.cpp::Function:[line] message
+```
+
+其中 `LEVEL` 为 `DEBUG` / `INFO` / `WARN` / `ERROR` / `FATAL` 之一。级别名由 SDK 自动写入；`McpLogCallback` 的第一个参数仍为枚举值 `MCP_LOG_LEVEL`。
+
 ### 默认输出：stdout
 
 默认实现 `McpPrintfImpl` 写入 **stdout**（`printf`）。
