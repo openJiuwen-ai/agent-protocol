@@ -23,6 +23,7 @@ class ReqMethod(Enum):
     COMMAND_CONTEXT = "command.context"
     COMMAND_RECAP = "command.recap"
     COMMAND_DIFF = "command.diff"
+    COMMAND_SIMPLIFY = "command.simplify"
     COMMAND_MCP = "command.mcp"
     COMMAND_MODEL = "command.model"
     COMMAND_RESUME = "command.resume"
