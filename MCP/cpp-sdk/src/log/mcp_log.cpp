@@ -27,6 +27,24 @@ MCP_LOG_LEVEL GetLogLevel(void)
     return g_logLevel;
 }
 
+const char* GetLogLevelName(MCP_LOG_LEVEL logLevel)
+{
+    switch (logLevel) {
+        case MCP_LOG_LEVEL_DEBUG:
+            return "DEBUG";
+        case MCP_LOG_LEVEL_INFO:
+            return "INFO";
+        case MCP_LOG_LEVEL_WARN:
+            return "WARN";
+        case MCP_LOG_LEVEL_ERROR:
+            return "ERROR";
+        case MCP_LOG_LEVEL_FATAL:
+            return "FATAL";
+        default:
+            return "UNKNOWN";
+    }
+}
+
 void McpPrintfImpl(MCP_LOG_LEVEL logLevel, std::string message)
 {
     if (logLevel < GetLogLevel()) {

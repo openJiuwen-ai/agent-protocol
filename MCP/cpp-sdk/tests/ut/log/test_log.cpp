@@ -126,6 +126,17 @@ TEST_F(LogTestFixture, MacroLogOutput) {
     std::string output = testing::internal::GetCapturedStdout();
 
     EXPECT_TRUE(output.find("Test macro log with parameters") != std::string::npos);
+    EXPECT_TRUE(output.find("[INFO]") != std::string::npos);
+}
+
+TEST_F(LogTestFixture, GetLogLevelNameMapsKnownLevels)
+{
+    EXPECT_STREQ("DEBUG", GetLogLevelName(MCP_LOG_LEVEL_DEBUG));
+    EXPECT_STREQ("INFO", GetLogLevelName(MCP_LOG_LEVEL_INFO));
+    EXPECT_STREQ("WARN", GetLogLevelName(MCP_LOG_LEVEL_WARN));
+    EXPECT_STREQ("ERROR", GetLogLevelName(MCP_LOG_LEVEL_ERROR));
+    EXPECT_STREQ("FATAL", GetLogLevelName(MCP_LOG_LEVEL_FATAL));
+    EXPECT_STREQ("UNKNOWN", GetLogLevelName(static_cast<MCP_LOG_LEVEL>(0)));
 }
 
 TEST_F(LogTestFixture, CallbackSwitch) {
@@ -180,4 +191,5 @@ TEST_F(LogTestFixture, LogInternalFiltersBeforeCustomCallback)
     MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("delivered to callback"));
     EXPECT_TRUE(test_callback_invoked);
     EXPECT_TRUE(captured_message.find("delivered to callback") != std::string::npos);
+    EXPECT_TRUE(captured_message.find("[ERROR]") != std::string::npos);
 }
