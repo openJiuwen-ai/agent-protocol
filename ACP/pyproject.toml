@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openjiuwen-acp-sdk"
+version = "0.1.0"
+description = "ACP SDK for structured agent context generation and interaction on top of openJiuwen agent-core."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "openJiuwen Team" },
+]
+keywords = [
+    "agent",
+    "agent-context-protocol",
+    "acp",
+    "context",
+    "openjiuwen",
+    "sdk",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "openjiuwen>=0.1.12",
+]
+
+[project.optional-dependencies]
+openai = [
+    "openai>=1.108.0",
+]
+demo = [
+    "openai>=1.108.0",
+]
+test = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=7.0.0",
+]
+lint = [
+    "ruff>=0.11.2",
+    "mypy>=1.12.0",
+]
+dev = [
+    "openai>=1.108.0",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.11.2",
+    "mypy>=1.12.0",
+]
+
+[project.urls]
+Homepage = "https://openjiuwen.com"
+Documentation = "https://openjiuwen.com/docs-page"
+Repository = "https://gitcode.com/openJiuwen/agent-protocol.git"
+
+[tool.setuptools.packages.find]
+include = ["sdk_core*"]
+
+[tool.setuptools.package-data]
+sdk_core = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["-v"]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+extend-ignore = ["E203"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.mypy]
+python_version = "3.11"
+pythonpath = ["."]
+check_untyped_defs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+no_implicit_optional = false
+strict_optional = false
+show_error_codes = true

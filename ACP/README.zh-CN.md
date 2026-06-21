@@ -69,7 +69,7 @@
 ### 1. 创建 LLM Client
 ```python
 from openai import OpenAI
-from acp_sdk import ACPClient
+from sdk_core import ACPClient
 
 llm_client = OpenAI(
     api_key="your_api_key",
@@ -85,7 +85,7 @@ acp_client = ACPClient(
 
 ### 2. 生成 TaskContext
 ```python
-from acp_sdk import TaskContextBuilder
+from sdk_core import TaskContextBuilder
 
 builder = TaskContextBuilder(acp_client=acp_client)
 task_context_json = builder.build(
@@ -98,7 +98,7 @@ task_context_json = builder.build(
 
 ### 3. 主 agent 生成请求态 AgentContext
 ```python
-from acp_sdk import AgentContextBuilder
+from sdk_core import AgentContextBuilder
 
 builder = AgentContextBuilder(acp_client=acp_client, companies=["NIO", "Li Auto", "XPeng", "BYD"])
 request_agent_context_json = builder.build(
@@ -119,7 +119,7 @@ completed_agent_context_json = builder.build_completed(
 
 ### 5. 主 agent 评估并更新 TaskContext
 ```python
-from acp_sdk import ACPEvaluator, update_task_context_from_agent_context
+from sdk_core import ACPEvaluator, update_task_context_from_agent_context
 
 evaluator = ACPEvaluator(acp_client=acp_client)
 result = evaluator.evaluate(completed_agent_context_json)
@@ -221,7 +221,7 @@ AGENT_CORE_ROOT = REPO_ROOT / "agent-core"
 if str(AGENT_CORE_ROOT) not in sys.path:
     sys.path.insert(0, str(AGENT_CORE_ROOT))
 
-from acp_sdk import install_agent_core_acp_sdk_bridge
+from sdk_core import install_agent_core_acp_sdk_bridge
 
 install_agent_core_acp_sdk_bridge()
 
@@ -231,7 +231,7 @@ from openjiuwen.core.single_agent.legacy import ControllerAgent
 。
 
 ## Demo
-文件：`acp_sdk/acp_sdk_hierarchical_demo.py`
+文件：`ACP/acp_sdk_hierarchical_demo.py`
 
 这个 demo 展示了：
 - 1 个 controller agent
@@ -242,3 +242,38 @@ from openjiuwen.core.single_agent.legacy import ControllerAgent
 - 每个子 agent 执行完成后立刻评估
 - 评估通过后再根据返回结果更新 `TaskContext`
 - 全流程保留流式输出
+
+使用 OpenAI-compatible 模型运行：
+```bash
+export ACP_DEMO_API_KEY="your_api_key"
+export ACP_DEMO_MODEL="your_model"
+export ACP_DEMO_BASE_URL="your_openai_compatible_base_url"
+export ACP_DEMO_TEMPERATURE="0.1"
+export ACP_DEMO_TIMEOUT="60"
+python ACP/acp_sdk_hierarchical_demo.py
+```
+
+PowerShell 示例：
+```powershell
+$env:ACP_DEMO_API_KEY = "your_api_key"
+$env:ACP_DEMO_MODEL = "your_model"
+$env:ACP_DEMO_BASE_URL = "your_openai_compatible_base_url"
+$env:ACP_DEMO_TEMPERATURE = "0.1"
+$env:ACP_DEMO_TIMEOUT = "60"
+python ACP\acp_sdk_hierarchical_demo.py
+```
+
+环境变量说明：
+- `ACP_DEMO_API_KEY`：必填。
+- `ACP_DEMO_MODEL`：必填。
+- `ACP_DEMO_BASE_URL`：可选，OpenAI-compatible 服务地址。
+- `ACP_DEMO_TEMPERATURE`：可选，默认 `0.1`。
+- `ACP_DEMO_TIMEOUT`：可选，默认 `60` 秒。
+
+运行流程：
+1. controller 生成初始 `TaskContext`。
+2. controller 解析下一个未完成 goal，并生成请求态 `AgentContext`。
+3. 目标 worker workflow 将请求态上下文更新为完成态 `AgentContext`。
+4. controller 对完成态 `AgentContext` 执行评估。
+5. 如果评估通过，controller 更新 `TaskContext`，并继续调度下一个 worker。
+6. investment worker 完成后，demo 输出最终报告。
