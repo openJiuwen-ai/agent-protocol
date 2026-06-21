@@ -6,7 +6,7 @@ import json
 from typing import Any, Callable, Dict, Optional
 
 from .client import ACPClient
-from .models import EvaluationResult
+from .models import DecisionType, EvaluationResult
 from .utils import extract_json_object, ensure_list, parse_agent_context_json
 
 
@@ -39,6 +39,15 @@ class ACPEvaluator:
             "KeyInformation": ensure_list(context.get("KeyInformation")),
         }
 
+    @staticmethod
+    def _normalize_decision(value: str) -> DecisionType:
+        normalized = value.strip().lower()
+        if normalized == "pass":
+            return "pass"
+        if normalized == "force_pass":
+            return "force_pass"
+        return "retry"
+
     def evaluate(
         self,
         agent_context: Dict[str, Any] | str,
@@ -52,11 +61,11 @@ class ACPEvaluator:
         item_updates = ensure_list(eval_payload.get("ItemstateUpdates"))
         if any(isinstance(item, dict) and int(item.get("state", 0)) == 0 for item in item_updates):
             next_retry = retry_count + 1
-            decision = "retry"
+            decision: DecisionType = "retry"
             if next_retry >= self._max_retry:
                 decision = "force_pass"
             result = EvaluationResult(
-                decision=decision,  # type: ignore[arg-type]
+                decision=decision,
                 feedback="Some todo items are still unfinished. Complete all items before continuing.",
                 retry_count=0 if decision == "force_pass" else next_retry,
                 raw_eval="short_circuit_unfinished_items",
@@ -94,11 +103,11 @@ Output strict JSON:
             raw = self._client.complete(prompt, model=self._model, temperature=self._temperature)
         parsed = extract_json_object(raw)
 
-        decision = str(parsed.get("decision", "")).strip().lower() if parsed else ""
+        raw_decision = str(parsed.get("decision", "")).strip().lower() if parsed else ""
         feedback = str(parsed.get("feedback", "")).strip() if parsed else raw
 
-        if decision not in {"pass", "retry", "force_pass"}:
-            decision = "retry"
+        decision = self._normalize_decision(raw_decision)
+        if raw_decision not in {"pass", "retry", "force_pass"}:
             if not feedback:
                 feedback = raw
 
@@ -112,7 +121,7 @@ Output strict JSON:
             next_retry = 0
 
         result = EvaluationResult(
-            decision=decision,  # type: ignore[arg-type]
+            decision=decision,
             feedback=feedback,
             retry_count=next_retry,
             raw_eval=raw,

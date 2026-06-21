@@ -238,7 +238,17 @@ def _preflight_check(acp_client: ACPClient) -> None:
 
 async def _emit_custom(session: Any, payload: Dict[str, Any]) -> None:
     if hasattr(session, "write_custom_stream"):
-        await session.write_custom_stream(payload)
+        try:
+            await session.write_custom_stream(payload)
+        except Exception as exc:
+            _safe_print(f"Error emitting custom stream: {exc}")
+
+
+async def _drain_stream_tasks(tasks: List[asyncio.Task[Any]], *, label: str) -> None:
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            _safe_print(f"Error emitting {label} stream: {result}")
 
 
 def _chunk_to_dict(chunk: Any) -> Dict[str, Any]:
@@ -289,7 +299,7 @@ class ACPResearchWorkerComponent(WorkflowComponent):
             stream_handler=on_chunk,
         )
         if pending_streams:
-            await asyncio.gather(*pending_streams)
+            await _drain_stream_tasks(pending_streams, label="worker")
         return {"agent_context": agent_context}
 
 
@@ -354,7 +364,7 @@ class NewEnergyInvestmentController(BaseController):
             stream_handler=on_task_context_chunk,
         )
         if task_context_streams:
-            await asyncio.gather(*task_context_streams)
+            await _drain_stream_tasks(task_context_streams, label="task_context")
 
         results_by_goal: Dict[str, Dict[str, Any]] = {}
         await self._emit_status(session, "Controller generated TaskContext.", stage="task_context")
@@ -394,7 +404,7 @@ class NewEnergyInvestmentController(BaseController):
                     stream_handler=on_request_chunk,
                 )
                 if request_streams:
-                    await asyncio.gather(*request_streams)
+                    await _drain_stream_tasks(request_streams, label="request_agent_context")
 
                 await self._emit_status(
                     session,
@@ -435,7 +445,7 @@ class NewEnergyInvestmentController(BaseController):
                     stream_handler=on_evaluator_chunk,
                 )
                 if evaluator_streams:
-                    await asyncio.gather(*evaluator_streams)
+                    await _drain_stream_tasks(evaluator_streams, label="evaluator")
                 retry_count = int(eval_result.get("retry_count", retry_count))
                 await self._emit_status(
                     session,
