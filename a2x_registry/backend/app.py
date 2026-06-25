@@ -86,8 +86,16 @@ async def _llm_not_configured_handler(_request: Request, exc: LLMNotConfiguredEr
 
 @app.get("/api/warmup-status")
 async def warmup_status():
-    """Returns current warmup state for the frontend loading screen."""
-    return warmup_state
+    """Returns current warmup state for the frontend loading screen.
+
+    Only the public, JSON-serializable status fields are exposed.
+    ``warmup_state`` doubles as a stash for background-daemon handles
+    (``_heartbeat_sweeper`` / ``_cluster_*``) so shutdown logic can reach
+    them; those objects hold ``threading.Lock``s and would make
+    ``jsonable_encoder`` raise. Underscore-prefixed keys are internal —
+    filter them out so the endpoint can't 500.
+    """
+    return {k: v for k, v in warmup_state.items() if not k.startswith("_")}
 
 
 @app.on_event("startup")

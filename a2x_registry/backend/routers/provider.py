@@ -22,7 +22,7 @@ def _load_llm_config() -> dict:
         return json.loads(content)
 
 
-@router.get("/")
+@router.get("")
 async def list_providers():
     """List available LLM providers and the currently active one."""
     config = _load_llm_config()

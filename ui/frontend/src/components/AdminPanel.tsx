@@ -559,7 +559,6 @@ export default function AdminPanel() {
     return !!(fields.agentCardJson || defs?.a2a_json.agentCardJson);
   })();
 
-  const lastStep = preview[preview.length - 1];
   const bodyStr = preview.map((s) => s.body !== null ? JSON.stringify(s.body, null, 2) : "(no body)").join("\n---\n");
   const responseBodyStr = response?.body !== undefined ? JSON.stringify(response.body, null, 2) : "";
   const respStatus =
