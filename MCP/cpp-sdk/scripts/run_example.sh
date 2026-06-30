@@ -1,18 +1,46 @@
-#!/bin/bash
+#!/bin/sh
 
 # MCP C++ Example Runner Script
 # This script builds and runs MCP examples
 
 set -e
-set -o pipefail
+if (set -o pipefail) 2>/dev/null; then
+    set -o pipefail
+fi
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_DIR="$(dirname "${SCRIPT_DIR}")"
 EXAMPLE_DIR="${SOURCE_DIR}/example"
 MASTER_LOG="${SOURCE_DIR}/run_example.log"
+TEE_PID=""
+LOG_FIFO=""
 
-: > "${MASTER_LOG}"
-exec > >(tee -a "${MASTER_LOG}") 2>&1
+setup_master_log() {
+    : > "${MASTER_LOG}"
+
+    if ! [ -t 1 ]; then
+        exec >> "${MASTER_LOG}" 2>&1
+        return
+    fi
+
+    if command -v mkfifo >/dev/null 2>&1 && command -v tee >/dev/null 2>&1; then
+        if command -v mktemp >/dev/null 2>&1; then
+            LOG_FIFO=$(mktemp -u 2>/dev/null || mktemp -u -t run_example)
+        else
+            LOG_FIFO="/tmp/run_example_fifo.$$"
+        fi
+        rm -f "${LOG_FIFO}"
+        mkfifo "${LOG_FIFO}"
+        tee -a "${MASTER_LOG}" < "${LOG_FIFO}" &
+        TEE_PID=$!
+        exec > "${LOG_FIFO}" 2>&1
+        return
+    fi
+
+    exec >> "${MASTER_LOG}" 2>&1
+}
+
+setup_master_log
 echo "Overall log: ${MASTER_LOG}"
 
 # Default options
@@ -23,14 +51,27 @@ SERVER_PID=""
 SERVER_PORT="${SERVER_PORT:-8000}"
 FORCE_KILL_PORT=false
 
-# Cleanup function to kill background server
+# Cleanup function to kill background server and log tee
 cleanup() {
-    if [ -n "${SERVER_PID}" ] && ps -p ${SERVER_PID} > /dev/null 2>&1; then
+    if [ -n "${SERVER_PID}" ] && ps -p "${SERVER_PID}" > /dev/null 2>&1; then
         echo ""
         echo "Stopping background server (PID: ${SERVER_PID})..."
-        kill ${SERVER_PID}
-        wait ${SERVER_PID} 2>/dev/null
+        kill "${SERVER_PID}"
+        wait "${SERVER_PID}" 2>/dev/null
         echo "  ✓ Server stopped"
+    fi
+
+    if [ -n "${TEE_PID}" ]; then
+        # Close fifo write ends (stdout and stderr) so background tee receives EOF.
+        if [ -n "${LOG_FIFO}" ]; then
+            exec 1>&- 2>&-
+        fi
+        wait "${TEE_PID}" 2>/dev/null || true
+        TEE_PID=""
+    fi
+    if [ -n "${LOG_FIFO}" ] && [ -e "${LOG_FIFO}" ]; then
+        rm -f "${LOG_FIFO}"
+        LOG_FIFO=""
     fi
 }
 
@@ -74,14 +115,14 @@ free_port_if_occupied() {
     echo "Port ${port} is already in use. Stopping listener process(es):"
     echo "${pids}" | sed 's/^/  - PID: /'
 
-    echo "${pids}" | xargs -r kill 2>/dev/null || true
+    echo "${pids}" | xargs kill 2>/dev/null || true
     sleep 2
 
     pids="$(get_listening_pids_by_port "${port}" || true)"
     if [ -n "${pids}" ]; then
         echo "Port ${port} is still in use after SIGTERM. Forcing kill (SIGKILL):"
         echo "${pids}" | sed 's/^/  - PID: /'
-        echo "${pids}" | xargs -r kill -9 2>/dev/null || true
+        echo "${pids}" | xargs kill -9 2>/dev/null || true
         sleep 1
     fi
 
@@ -128,7 +169,7 @@ EOF
     exit 0
 }
 
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
     case $1 in
         -t|--type)
             EXAMPLE_TYPE="$2"
@@ -287,7 +328,7 @@ run_server_example() {
     sleep 2
 
     # Check if server is still running
-    if ps -p ${SERVER_PID} > /dev/null 2>&1; then
+    if ps -p "${SERVER_PID}" > /dev/null 2>&1; then
         echo "  Server is running"
     else
         echo "  Server failed to start. Check log file:"

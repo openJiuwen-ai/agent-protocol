@@ -40,31 +40,46 @@ MCP C++ SDK 是 [Model Context Protocol](https://modelcontextprotocol.io/) 的 C
 
 ## 快速入门
 
-在仓库 `MCP/cpp-sdk` 目录下，按以下顺序执行（约 5–15 分钟，视网络与编译环境而定）：
+在仓库 `MCP/cpp-sdk` 目录下，按以下顺序执行（约 5–15 分钟，视网络与编译环境而定）。
+
+**前置条件**：已安装 C++17 编译器（如 `gcc-c++`）和 CMake ≥ 3.15。`install_deps.sh` 仅安装 OpenSSL、libcurl 开发包，不包含编译器与 CMake（见 [依赖说明](docs/dependencies.md)）。
 
 ```bash
-# 1. 安装系统依赖（curl、openssl 等）
-./scripts/install_deps.sh
+cd MCP/cpp-sdk
+
+# 1. 安装 OpenSSL、libcurl 开发包
+bash scripts/install_deps.sh
 
 # 2. 编译 SDK（产物：output/lib/libmcp.so）
-./scripts/build.sh
+#    第三方库（含 nlohmann_json）优先使用系统包；系统没有时由 CMake 下载到 third_party/
+bash scripts/build.sh
 
-# 3. 一键启动 Server 并运行全部 Client 示例（推荐）
-./scripts/run_example.sh
+# 3. 构建并运行全部示例（须先完成步骤 2；-t all 会自动先起 Server）
+sh scripts/run_example.sh
 ```
+
+**脚本调用说明**：
+
+| 脚本 | 解释器 | 说明 |
+|------|--------|------|
+| `install_deps.sh` | `bash` | Bash 脚本，勿用 `sh` 调用 |
+| `build.sh` | `bash` | 同上 |
+| `run_example.sh` | `sh` | POSIX `sh` 脚本，可用 `sh` 或 `./`（需可执行权限） |
+
+**nlohmann_json**：主工程 `build.sh` 与示例构建均**优先使用系统** `nlohmann_json`；系统未安装时，`build.sh` 会拉取到 `third_party/nlohmann_json-src`，示例也会回退使用该目录。若系统已有 nlohmann 开发包，则不会生成 `third_party/nlohmann_json-src`，示例仍可直接编译。
 
 仅运行某一类示例：
 
 ```bash
-./scripts/run_example.sh -t server      # 后台启动 Server
-./scripts/run_example.sh -t tool        # Tool 客户端示例
-./scripts/run_example.sh -t sampling    # Sampling 示例
+sh scripts/run_example.sh -t server      # 后台启动 Server
+sh scripts/run_example.sh -t tool        # Tool 客户端示例
+sh scripts/run_example.sh -t sampling    # Sampling 示例
 ```
 
 默认 Server 端点：`http://127.0.0.1:8000/mcp`。指定端口示例：
 
 ```bash
-./scripts/run_example.sh -p 9000 -t all
+sh scripts/run_example.sh -p 9000 -t all
 ```
 
 **注意**：必须先有 Server 再跑 Client。`run_example.sh -t all` 会自动先起 Server。
