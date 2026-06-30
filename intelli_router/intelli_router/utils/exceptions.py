@@ -11,6 +11,22 @@ IntelliRouter 异常定义
 """
 from typing import Optional, Dict, Any
 
+
+def _rebuild_exception(cls, args, state):
+    """Reconstruct an exception without calling its (arg-specific) __init__.
+
+    Subclasses override __init__ with bespoke signatures (e.g. model+errors) but
+    only store a single message in BaseException.args. The default copy/pickle
+    protocol would call ``cls(*args)`` and fail. We instead build a bare instance
+    and restore its state, so every subclass becomes deep-copyable / picklable.
+    """
+    exc = cls.__new__(cls)
+    exc.args = args
+    if state:
+        exc.__dict__.update(state)
+    return exc
+
+
 class IntelliRouterError(Exception):
     """IntelliRouter 基础异常"""
 
@@ -18,6 +34,10 @@ class IntelliRouterError(Exception):
         self.message = message
         self.details = details or {}
         super().__init__(message)
+
+    def __reduce__(self):
+        # Bypass subclass __init__ during copy/pickle; restore args + __dict__.
+        return (_rebuild_exception, (type(self), self.args, self.__dict__))
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典 (用于日志/响应)"""
