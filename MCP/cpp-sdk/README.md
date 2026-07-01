@@ -29,7 +29,6 @@ MCP C++ SDK 是 [Model Context Protocol](https://modelcontextprotocol.io/) 的 C
 | [依赖说明](docs/dependencies.md) | 运行/编译依赖、版本、各发行版安装命令 |
 | [测试说明](docs/testing.md) | 单元测试、集成测试、覆盖率 |
 | [API 文档索引](docs/api/README.md) | Client / Server API、协议对照 |
-| [易用性评估报告](docs/MCP_CPP_USABILITY_REPORT.md) | 问题分析与整改路线 |
 
 ## 环境要求
 
@@ -70,11 +69,24 @@ sh scripts/run_example.sh
 
 仅运行某一类示例：
 
+**方式一：单终端一键（推荐首次验证）**
+
 ```bash
-sh scripts/run_example.sh -t server      # 后台启动 Server
-sh scripts/run_example.sh -t tool        # Tool 客户端示例
-sh scripts/run_example.sh -t sampling    # Sampling 示例
+sh scripts/run_example.sh              # 或 -t all：后台起 Server 并依次跑全部 Client
 ```
+
+**方式二：双终端（Server 常驻，便于反复调试 Client）**
+
+```bash
+# 终端 1：前台运行 Server（Ctrl+C 停止；不要用 nohup 包一层 scripts/run_example.sh）
+sh scripts/run_example.sh -t server
+
+# 终端 2：Server 已监听后再跑 Client
+sh scripts/run_example.sh -t tool
+sh scripts/run_example.sh -t sampling
+```
+
+也可用各子目录下的 `example/server_example/run_example.sh`（终端 1）与 `example/client_example/*/run_example.sh`（终端 2）。
 
 默认 Server 端点：`http://127.0.0.1:8000/mcp`。指定端口示例：
 
@@ -82,7 +94,11 @@ sh scripts/run_example.sh -t sampling    # Sampling 示例
 sh scripts/run_example.sh -p 9000 -t all
 ```
 
-**注意**：必须先有 Server 再跑 Client。`run_example.sh -t all` 会自动先起 Server。
+**注意**：
+
+- 必须先有 Server 再跑 Client。
+- `-t all` / 无参数：同一脚本内后台起 Server，结束后自动停止。
+- `-t server`：前台常驻，供另一终端连接；脚本退出时**不会**误杀 Server（旧版会在 EXIT 时 kill 后台进程，导致双终端流程失败）。
 
 ## 构建与安装
 

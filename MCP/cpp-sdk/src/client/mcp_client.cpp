@@ -15,6 +15,7 @@
 namespace Mcp {
 constexpr int MAX_URL_LENGTH = 2048;
 
+#if MCP_WITH_HTTP
 static void IsValidURL(const std::string& url)
 {
     if (url.length() > MAX_URL_LENGTH) {
@@ -25,6 +26,7 @@ static void IsValidURL(const std::string& url)
         throw std::runtime_error("url is not valid");
     }
 }
+#endif
 
 std::shared_ptr<McpClient> McpClientFactory::CreateStreamableHttpClient([[maybe_unused]] const ClientConfig& config,
     [[maybe_unused]] const StreamableHttpClientConfig& transportConfig,

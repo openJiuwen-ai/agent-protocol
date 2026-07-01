@@ -32,39 +32,125 @@ ctest --output-on-failure -V
 
 当 Client + Server + HTTP 均启用时，会自动打开 **ST 集成测试**（`tests/ut/st/`，`MCP_ENABLE_ST_TESTS`）。
 
+`stdio/` 目录下的测试需额外传入 `-s, --stdio`（`MCP_ENABLE_STDIO=ON`），且依赖 `MCP_BUILD_SERVER`。
+
 ## 覆盖率与报告
 
-```bash
-# 1. 带覆盖率编译
-./scripts/build.sh -t Debug --coverage
+覆盖率需要 **三步**：带覆盖率标志编译 → 运行测试（生成 `.gcda`）→ 用 **gcovr** 生成 HTML。仅 `ctest` 不会产生可浏览的覆盖率报告。
 
-# 2. 运行测试并生成 HTML 报告
-./scripts/run_ut.sh
+**完整示例**（在 `MCP/cpp-sdk` 下）：
+
+```bash
+bash scripts/build.sh -t Debug --coverage
+bash scripts/run_ut.sh
+mkdir -p test_output/coverage
+gcovr -r . --object-directory build \
+  --filter 'src/' --filter 'include/' \
+  --exclude 'tests/' --exclude 'third_party/' \
+  --html --html-details -o test_output/coverage/index.html
+# 浏览器打开 test_output/coverage/index.html
 ```
 
-报告默认输出目录：`test_output/`
+### 1. 带覆盖率编译
 
-| 文件 | 说明 |
+```bash
+cd MCP/cpp-sdk
+bash scripts/build.sh -t Debug --coverage
+```
+
+`--coverage` 隐含 `--with-tests`，会为 GCC/Clang 加上 `-fprofile-arcs -ftest-coverage`（见根目录 `CMakeLists.txt`）。
+
+### 2. 运行测试（写入覆盖率数据）
+
+任选其一：
+
+```bash
+# 方式 A：统一脚本（推荐，顺带生成测试结果 HTML）
+bash scripts/run_ut.sh
+
+# 方式 B：仅跑 CTest（集成测试建议串行）
+cd build
+ctest --output-on-failure -j1
+```
+
+测试执行后，`build/` 下会生成与目标对应的 `.gcda` 文件（需先完成步骤 1 的编译）。
+
+### 3. 生成覆盖率 HTML 报告
+
+`run_ut.sh` 会尝试安装 **gcovr**，但**不会**自动生成覆盖率 HTML，需在测试跑完后手动执行：
+
+```bash
+cd MCP/cpp-sdk
+mkdir -p test_output/coverage
+
+gcovr -r . \
+  --object-directory build \
+  --filter 'src/' \
+  --filter 'include/' \
+  --exclude 'tests/' \
+  --exclude 'third_party/' \
+  --html --html-details \
+  -o test_output/coverage/index.html
+```
+
+若未安装 gcovr：
+
+```bash
+pip3 install --user gcovr
+# 或：pip install --user gcovr
+```
+
+### 4. 查看报告
+
+| 产物 | 路径 | 说明 |
+|------|------|------|
+| 测试结果 HTML | `test_output/ut/ut_result.html` | 由 `run_ut.sh` 生成（需 ctest ≥ 3.21 与 junit2html） |
+| 覆盖率汇总 | `test_output/coverage/index.html` | 上一步 `gcovr` 生成，浏览器打开 |
+| 覆盖率分文件详情 | `test_output/coverage/*.html` | `--html-details` 生成的各源文件页面 |
+
+在机器上可用绝对路径打开，例如：
+
+```text
+file:///path/to/MCP/cpp-sdk/test_output/coverage/index.html
+```
+
+自定义输出目录（测试与覆盖率共用前缀）：
+
+```bash
+bash scripts/run_ut.sh -o my_report
+mkdir -p my_report/coverage
+gcovr -r . --object-directory build \
+  --filter 'src/' --filter 'include/' \
+  --exclude 'tests/' --exclude 'third_party/' \
+  --html --html-details -o my_report/coverage/index.html
+```
+
+### 依赖说明
+
+| 工具 | 用途 |
 |------|------|
-| `test_output/ut/ut_result.html` | 测试结果 |
-| `test_output/coverage/` | 覆盖率 HTML（需 gcovr） |
-
-`run_ut.sh` 会在缺少 gcovr 时尝试通过 pip 安装。
+| `gcov` / `lcov`（随 GCC 工具链） | 编译与链接覆盖率插桩、生成 `.gcno`/`.gcda` |
+| `gcovr` | 将 `.gcda` 聚合为 HTML |
+| `junit2html` | 将 CTest JUnit XML 转为 `ut_result.html`（`run_ut.sh` 按需 pip 安装） |
 
 ## 测试模块结构
 
 ```
 tests/ut/
-├── client/          # 客户端、HTTP 传输、TLS
-├── server/          # 服务端、Manager、HTTP Server
+├── client/          # 客户端、HTTP 传输、TLS（需 Client + Server + HTTP）
+├── server/          # 服务端、Manager、HTTP Server（需 Server + HTTP）
 ├── shared/          # jsonrpc、base_session
 ├── auth/            # 鉴权
-├── transport/       # stdio 传输
+├── http/            # HTTP 客户端/服务端底层（需 Client + HTTP）
+├── transport/       # stdio 传输层（需 Server）
+├── stdio/           # stdio 传输扩展 UT（需 -s/--stdio 且 Server）
 ├── net/             # 网络层
 ├── event/           # 事件系统
 ├── log/             # 日志模块
-└── st/              # 端到端集成（可选）
+└── st/              # 端到端集成（可选，需 Client + Server + HTTP）
 ```
+
+说明：`transport/` 与 `stdio/` 均覆盖 stdio 相关能力；默认 `--with-tests` 会编译 `transport/`，`stdio/` 仅在传入 `-s, --stdio` 时加入构建。
 
 ## 常见问题
 
@@ -82,11 +168,13 @@ Error: Build directory not found
 
 ### 集成测试端口冲突
 
-部分测试使用固定端口（如 8001）。并行运行或端口占用时可能失败，可单独运行模块测试：
+部分测试使用固定端口（如 8001）。并行运行或端口占用时可能失败；`mcp_client_tests` 中的集成用例建议串行执行：
 
 ```bash
 cd build
-ctest -R mcp_client_tests --output-on-failure
+ctest --output-on-failure -j1
+# 或单独跑某一模块：
+ctest -R mcp_client_tests --output-on-failure -j1
 ```
 
 ## 与示例的关系

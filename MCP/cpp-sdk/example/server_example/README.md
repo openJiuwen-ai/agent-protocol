@@ -33,28 +33,38 @@ cd example/server_example
 | `--port=<1-65535>` | 监听端口，默认 8000；endpoint 为 `http://127.0.0.1:<port>/mcp` |
 | `--stateless` | 无状态模式（限制部分会话相关 API） |
 | `--isJsonResponseDisable` | 禁用 JSON 响应模式 |
-| `--auth` | 启用 Bearer 鉴权，默认 endpoint `http://127.0.0.1:8001/mcp` |
+| `--auth` | 启用 Bearer 鉴权；未指定 `--port` 时 endpoint 为 `http://127.0.0.1:8001/mcp` |
 | `-h`, `--help` | 帮助 |
+
+`run_example.sh` 会将上述参数原样转发给 `ServerExample`。
 
 示例：
 
 ```bash
 ./run_example.sh --port=9000
+./run_example.sh --stateless --port=9000
 ./run_example.sh --auth
+./run_example.sh --auth --port=8001
 ```
 
-或使用统一脚本：
+也可使用 `run_auth_example.sh`（等价于 `./run_example.sh --auth`，仅保留鉴权场景的提示输出）。
+
+或使用统一脚本（`MCP/cpp-sdk` 目录）：
 
 ```bash
-cd MCP/cpp-sdk
-./scripts/run_example.sh -t server
-./scripts/run_example.sh -p 9000 -t server
+# 终端 1：前台 Server（保持运行）
+sh scripts/run_example.sh -t server
+sh scripts/run_example.sh -p 9000 -t server
+
+# 终端 2：Client
+sh scripts/run_example.sh -t tool
 ```
 
 ## 与 Client 联调
 
-1. 保持 Server 运行（默认 `http://127.0.0.1:8000/mcp`）
-2. 在另一终端运行 Client 示例：
+1. 在终端 1 运行 Server（`-t server` 为前台模式，不要用 `nohup sh scripts/run_example.sh -t server &`）
+2. 确认端口在监听：`lsof -iTCP:8000 -sTCP:LISTEN`（或你的 `--port`）
+3. 在终端 2 运行 Client 示例：
 
 ```bash
 ./scripts/run_example.sh -t tool
@@ -62,7 +72,17 @@ cd MCP/cpp-sdk
 cd example/client_example/tool_example && ./run_example.sh
 ```
 
-鉴权模式：Server 使用 `--auth` 后，Client 使用 `tool_example` 的 `--auth` 或对应 token。
+鉴权模式联调（端口 8001，token：`valid-token-12345`）：
+
+```bash
+# 终端 1
+cd example/server_example && ./run_example.sh --auth
+
+# 终端 2
+cd example/client_example/tool_example && ./run_example.sh --auth
+```
+
+也可使用 `run_auth_example.sh`（与 `./run_example.sh --auth` 等价）。
 
 ## 日志
 

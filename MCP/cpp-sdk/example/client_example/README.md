@@ -33,17 +33,20 @@ cd MCP/cpp-sdk
 
 2. MCP Server 已启动，默认端点：`http://127.0.0.1:8000/mcp`
 
-推荐一键启动（在 `MCP/cpp-sdk` 下）：
+**双终端（推荐调试 Client 时）**
 
 ```bash
-./scripts/run_example.sh -t server    # 终端 1：后台 Server
-./scripts/run_example.sh -t tool      # 终端 2：Client 示例
+# 终端 1（MCP/cpp-sdk 目录）
+sh scripts/run_example.sh -t server    # 前台常驻，Ctrl+C 停止
+
+# 终端 2
+sh scripts/run_example.sh -t tool
 ```
 
-或运行全部：
+**单终端一键**
 
 ```bash
-./scripts/run_example.sh -t all
+sh scripts/run_example.sh -t all
 ```
 
 ## 运行单个示例
@@ -59,6 +62,12 @@ cd sampling_example && ./run_example.sh
 
 ```bash
 ./run_example.sh --port=9000
+```
+
+`tool_example` 鉴权模式（Server 需以 `--auth` 启动，默认连 `http://127.0.0.1:8001/mcp`）：
+
+```bash
+cd tool_example && ./run_example.sh --auth
 ```
 
 ## 运行多个示例（不含 sampling）

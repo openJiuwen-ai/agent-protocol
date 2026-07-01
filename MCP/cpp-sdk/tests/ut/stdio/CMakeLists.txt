@@ -11,7 +11,6 @@ target_include_directories(mcp_stdio_tests
 )
 
 target_sources(mcp_stdio_tests PRIVATE $<TARGET_OBJECTS:mcp_transport>)
-target_sources(mcp_stdio_tests PRIVATE $<TARGET_OBJECTS:mcp_server>)
 
 target_link_libraries(mcp_stdio_tests
     PRIVATE
@@ -24,7 +23,6 @@ target_link_libraries(mcp_stdio_tests
         third_party_headers
         http_parser
         nlohmann_json::nlohmann_json
-        CURL::libcurl
         OpenSSL::SSL
         OpenSSL::Crypto
         event
