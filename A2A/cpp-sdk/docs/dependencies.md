@@ -8,12 +8,23 @@
 | **CMake 自动拉取** | http_parser、Google Test 等 | 构建时 `third_party/third_party.cmake`（系统包优先，否则 FetchContent） |
 | **测试专用** | Google Test、gcovr | 启用 `--with-tests` / `run_ut.sh` 时按需安装 |
 
+## 脚本解释器说明
+
+`scripts/` 下脚本均为 **Bash**（`#!/usr/bin/env bash`，含 `set -o pipefail` 等语法）。请使用 `bash scripts/...` 调用，**勿用 `sh`**；在 dash 等环境下 `sh scripts/build.sh` 会报错（如 `set: Illegal option -o pipefail`）。
+
+| 脚本 | 解释器 | 用途 |
+|------|--------|------|
+| `scripts/install_deps.sh` | **bash** | 安装 OpenSSL、libcurl、libevent 等系统开发包 |
+| `scripts/build.sh` | **bash** | 配置与编译 SDK、示例、单元测试 |
+| `scripts/run_ut.sh` | **bash** | 运行 CTest 并生成测试/覆盖率报告 |
+| `scripts/run_example.sh` | **bash** | 示例冒烟测试 |
+
 ## 版本要求
 
 | 依赖 | 最低版本 | 用途 |
 |------|----------|------|
 | C++ 编译器 | C++17 | 语言标准 |
-| CMake | 3.16 | 构建系统 |
+| CMake | 3.15 | 构建系统 |
 | OpenSSL | 1.1.1 | TLS、加密 |
 | libcurl | 7.x+ | HTTP Client 传输 |
 | nlohmann_json | 3.11.2 | JSON 序列化 |
@@ -26,7 +37,7 @@
 
 ```bash
 cd A2A/cpp-sdk
-./scripts/install_deps.sh
+bash scripts/install_deps.sh
 ```
 
 脚本会检测 Ubuntu/Debian、RHEL/CentOS/Fedora/EulerOS、Arch 等，并安装 **libcurl**、**OpenSSL**、**libevent**、**nlohmann_json** 等开发包。

@@ -4,6 +4,8 @@
 
 测试基于 **Google Test**，通过 **CTest** 发现与运行。测试源码位于 `tests/ut/`，默认**不编译**（需显式开启 `A2A_ENABLE_TESTS`）。
 
+构建与跑测脚本（`build.sh`、`run_ut.sh`、`install_deps.sh`）均为 **Bash**，请使用 `bash scripts/...` 调用，勿用 `sh`（详见 [依赖说明 - 脚本解释器](dependencies.md#脚本解释器说明)）。
+
 ## 快速运行
 
 ```bash
@@ -31,6 +33,7 @@ ctest --output-on-failure -V
 
 | 选项 | CMake 变量 | 说明 |
 |------|------------|------|
+| `-t, --type <type>` | `CMAKE_BUILD_TYPE` | 构建类型：`Debug`、`Release`、`RelWithDebInfo`、`MinSizeRel`（默认 `Release`） |
 | `-u, --with-tests` | `A2A_ENABLE_TESTS=ON` | 编译单元测试 |
 | `-c, --coverage` | `A2A_ENABLE_COVERAGE=ON` | 启用覆盖率（隐含 `--with-tests`） |
 | `--no-client` | `A2A_BUILD_CLIENT=OFF` | 跳过 Client 模块 |

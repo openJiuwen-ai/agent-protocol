@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.15)
 project(a2a_cpp LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)

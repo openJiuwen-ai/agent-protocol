@@ -32,7 +32,7 @@ print_help() {
 Usage: $0 [options]
 
 Options:
-  -t, --type <Debug|Release>   CMake build type (default: Release)
+  -t, --type <type>            CMake build type: Debug, Release, RelWithDebInfo, or MinSizeRel (default: Release)
   -e, --with-examples          Build examples target(s)
   -u, --with-tests             Build unit tests target(s) if available
   -c, --coverage               Enable code coverage (implies --with-tests)
@@ -82,7 +82,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --asan)
       WITH_ASAN=1;
-      BUILD_TYPE="Debug";
       shift;
       ;;
     --no-client)
@@ -137,6 +136,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="${SCRIPT_DIR}/.."
 BUILD_DIR_ABS="${SOURCE_DIR}/${BUILD_DIR}"
 
+# ASAN requires Debug; apply after type validation, before cmake configure
+if [[ ${WITH_ASAN} -eq 1 ]]; then
+  BUILD_TYPE="Debug"
+fi
+
 mkdir -p "${BUILD_DIR_ABS}"
 cd "${BUILD_DIR_ABS}"
 
@@ -162,9 +166,8 @@ else
   CMAKE_ARGS+=("-DA2A_ENABLE_COVERAGE=OFF")
 fi
 
-# ASAN default build type is Debug
+# ASAN compile/link flags (CMAKE_BUILD_TYPE already set above)
 if [[ ${WITH_ASAN} -eq 1 ]]; then
-  BUILD_TYPE="Debug"
   CMAKE_ARGS+=("-DASAN=enable")
 fi
 

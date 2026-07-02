@@ -82,4 +82,4 @@ endif()
 
 add_dependencies(a2a_ut_test a2a)
 
-gtest_discover_tests(a2a_ut_test DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(a2a_ut_test)
