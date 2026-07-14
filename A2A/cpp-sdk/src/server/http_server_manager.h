@@ -41,14 +41,14 @@ public:
     ~HttpServerManager();
 
     /**
-     * @brief Start the HTTP server(s) and enter event loop(s).
-     * @return OK on successful start, otherwise an error code.
-     */
+    * @brief Start the HTTP server(s) and enter event loop(s).
+    * @return OK on successful start, otherwise an error code.
+    */
     void Start();
 
     /**
-     * @brief Stop the HTTP server(s) and release resources.
-     */
+    * @brief Stop the HTTP server(s) and release resources.
+    */
     void Stop();
 
 private:

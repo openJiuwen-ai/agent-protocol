@@ -5,11 +5,9 @@
 #include "net/tcp_listener.h"
 
 #include <cerrno>
-#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #include <cstring>
@@ -23,7 +21,7 @@ static bool SetReusePort(int fd, bool on)
 {
     int v = on ? 1 : 0;
     if (::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &v, static_cast<socklen_t>(sizeof(v))) != 0) {
-        A2A_LOG(A2A_LOG_LEVEL_WARN, "SO_REUSEPORT failed: %s (%d)", std::strerror(errno), errno);
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SO_REUSEPORT failed, errno: " + std::to_string(errno));
         return false;
     }
     return true;
@@ -53,11 +51,9 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     hints.ai_flags = AI_PASSIVE;
     hints.ai_family = AF_UNSPEC;
 
-    char portStr[LISTENER_PORT_STRING_SIZE];
-    std::snprintf(portStr, sizeof(portStr), "%u", static_cast<unsigned>(port));
-
+    std::string portStr = std::to_string(port);
     addrinfo* res = nullptr;
-    int gai = ::getaddrinfo(host.empty() ? nullptr : host.c_str(), portStr, &hints, &res);
+    int gai = ::getaddrinfo(host.empty() ? nullptr : host.c_str(), portStr.c_str(), &hints, &res);
     if (gai != 0) {
         return false;
     }
@@ -66,30 +62,27 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
         fd = static_cast<int>(::socket(ai->ai_family, SOCK_STREAM, 0));
         if (fd < 0) {
-            A2A_LOG(A2A_LOG_LEVEL_ERROR, "socket() failed: %s (%d)", std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "socket() failed, errno: " + std::to_string(errno));
             continue;
-        }
-
-        int one = 1;
-        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, static_cast<socklen_t>(sizeof(one))) != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "setsockopt(SO_REUSEADDR) failed: %s (%d)", std::strerror(errno), errno);
         }
 
         if (reusePort) {
             if (!SetReusePort(fd, true)) {
-                A2A_LOG(A2A_LOG_LEVEL_INFO, "requested SO_REUSEPORT not available on this platform");
+                A2A_LOG(A2A_LOG_LEVEL::INFO, "requested SO_REUSEPORT not available on this platform");
             }
         }
 
         if (::bind(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen)) != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "bind() failed on fd %d: %s (%d)", fd, std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "bind() failed on fd " + std::to_string(fd) +
+                " errno: " + std::to_string(errno));
             ::close(fd);
             fd = -1;
             continue;
         }
 
         if (::listen(fd, backlog) != 0) {
-            A2A_LOG(A2A_LOG_LEVEL_WARN, "listen() failed on fd %d: %s (%d)", fd, std::strerror(errno), errno);
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "listen() failed on fd " + std::to_string(fd) +
+                " errno: " + std::to_string(errno));
             ::close(fd);
             fd = -1;
             continue;
@@ -104,7 +97,8 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     }
 
     if (!Socket::SetNonBlocking(fd)) {
-        A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed on fd %d: %s (%d)", fd, std::strerror(errno), errno);
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed on fd " + std::to_string(fd) +
+                " errno: " + std::to_string(errno));
         ::close(fd);
         return false;
     }

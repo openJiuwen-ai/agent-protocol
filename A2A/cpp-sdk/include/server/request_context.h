@@ -16,115 +16,94 @@
 
 namespace A2A::Server {
 
+/** @brief Opaque implementation of RequestContext (PIMPL). */
 class RequestContextImpl;
 
-struct RequestContextParam {
-    std::optional<A2A::MessageSendParams> request = std::nullopt;
-    std::optional<std::string> taskId = std::nullopt;
-    std::optional<std::string> contextId = std::nullopt;
-    std::optional<A2A::Task> task = std::nullopt;
-    std::vector<A2A::Task> relatedTasks;
-    std::shared_ptr<A2A::Server::ServerCallContext> callContext;
-};
-
+/**
+ * @brief Per-request context passed to AgentExecutor.
+ * @note 封装 message/send 请求的 message、task、扩展等信息。
+ */
 class RequestContext {
 public:
     /**
-     * @brief constructor
-     *
-     * @param[in] param params used to construct RequestContext
+     * @brief Construct from request parameters.
+     * @param[in] param Construction parameters.
      */
-    RequestContext(const RequestContextParam& param);
+    explicit RequestContext(const RequestContextParam& param);
+
+    /** @brief Destructor. */
+    ~RequestContext();
 
     /**
-     * @brief extracts text content from the users's message parts
-     *
-     * @param[in] delimiter the string to use when joining multiple text parts
-     * @return a single string containing akk text content from the user message
+     * @brief Extract text content from the user message parts.
+     * @param[in] delimiter String used when joining multiple text parts.
+     * @return Concatenated text from all user message parts.
      */
     std::string GetUserInput(const std::string& delimiter = "\n") const;
 
     /**
-     * @brief attach a related task to the context
-     *
-     * @param[in] task the 'Task' object to attach
+     * @brief Attach a related task to this context.
+     * @param[in] task Task to attach.
      */
     void AttachRelatedTask(const A2A::Task& task);
 
     /**
-     * @brief get the 'Message' object from the request, if available
-     *
-     * @return the 'Message' object from the request, if available
+     * @brief Get the inbound Message from the request, if present.
+     * @return Pointer to the message, or nullptr.
      */
     const A2A::Message* GetMessage() const;
 
     /**
-     * @brief get a list of other tasks related to the current request
-     *
-     * @return a list of other tasks related to the current request
+     * @brief Get tasks related to the current request.
+     * @return Reference to the related-task list.
      */
     const std::vector<A2A::Task>& GetRelatedTasks() const;
 
     /**
-     * @brief get the current 'Task' being processed
-     *
-     * @return the current 'Task' being processed
+     * @brief Get the task currently being processed.
+     * @return Shared pointer to the current task, or nullptr.
      */
-    const std::optional<A2A::Task>& GetCurrentTask() const;
+    std::shared_ptr<Task> GetCurrentTask() const;
 
     /**
-     * @brief set the current 'Task'
-     *
-     * @param[in] t the current 'Task' object
-     */
-    void SetCurrentTask(const A2A::Task& t);
-
-    /**
-     * @brief get the ID of the task associated with this task
-     *
-     * @return the ID of the task associated with this task
+     * @brief Get the task ID associated with this request.
+     * @return Task ID, or nullopt.
      */
     const std::optional<std::string>& GetTaskId() const;
 
     /**
-     * @brief get the ID of the context associated with this task
-     *
-     * @return the ID of the context associated with this task
+     * @brief Get the conversation context ID.
+     * @return Context ID, or nullopt.
      */
     const std::optional<std::string>& GetContextId() const;
 
     /**
-     * @brief get the 'MessageSendConfiguration' from the request, if available
-     *
-     * @return the 'MessageSendConfiguration' from the request
+     * @brief Get the MessageSendConfiguration from the request.
+     * @return Configuration, or nullptr.
      */
     std::shared_ptr<MessageSendConfiguration> GetConfiguration() const;
 
     /**
-     * @brief get server call context from the request, if available
-     *
-     * @return server call context from the request
+     * @brief Get the server call context for this request.
+     * @return Server call context, or nullptr.
      */
     std::shared_ptr<ServerCallContext> GetCallContext() const;
 
     /**
-     * @brief get metadate associated whit the request, if available
-     *
-     * @return metadate associated whit the request
+     * @brief Get request-level metadata JSON.
+     * @return Metadata string (may be empty).
      */
-    nlohmann::json GetMetadata() const;
+    std::string GetMetadata() const;
 
     /**
-     * @brief add an extension to the set of activated extensions for this request
-     *
-     * @param[in] uri uri of extension
+     * @brief Record an activated protocol extension URI.
+     * @param[in] uri Extension URI.
      */
     void AddActivatedExtension(const std::string& uri);
 
     /**
-     * @brief get the extensions that the client requested to activate
-     *
-     * @return a list of the extensions that the client requested to activate
+     * @brief Get extensions requested by the client.
+     * @return Set of requested extension URIs.
      */
     std::unordered_set<std::string> GetRequestedExtensions() const;
 

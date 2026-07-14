@@ -16,26 +16,26 @@ namespace A2A::Client {
 class ProtocolVersionInterceptorImpl {
 public:
     /**
-     * @brief constructor with no parameters; uses a fixed internal version.
-     */
+    * @brief constructor with no parameters; uses a fixed internal version.
+    */
     explicit ProtocolVersionInterceptorImpl();
 
     /**
-     * @brief destructor
-     */
-    ~ProtocolVersionInterceptorImpl() = default;
+    * @brief destructor
+    */
+    ~ProtocolVersionInterceptorImpl();
 
     /**
-     * @brief perform intercept with methodName
-     *
-     * @param[in] methodName method name to intercept
-     * @param[in] payload data payload
-     * @param[in] headers headers
-     * @param[in] agentCard agent card related to this intercept
-     * @param[in] context client call context
-     */
-    void Intercept(const std::string& methodName, nlohmann::json& payload, std::map<std::string, std::string>& headers,
-                   const A2A::AgentCard* agentCard, const ClientCallContext* context) const;
+    * @brief perform intercept with methodName
+    *
+    * @param[in] methodName method name to intercept
+    * @param[in] payload data payload
+    * @param[in] headers headers
+    * @param[in] agentCard agent card related to this intercept
+    * @param[in] context client call context
+    */
+    void Intercept(const std::string& methodName, std::string& payload, std::map<std::string, std::string>& headers,
+                    const A2A::AgentCard* agentCard, const ClientCallContext* context) const;
 
 private:
     std::string version_;

@@ -21,86 +21,86 @@ public:
     ~JSONRPCHandler() = default;
 
     /**
-     * @brief handle non-streaming request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
-    nlohmann::json OnMessageSend(const nlohmann::json& req);
+    * @brief handle non-streaming request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
+    nlohmann::json OnMessageSend(const nlohmann::json& req, StreamEmitter emit, const std::string& method);
 
     /**
-     * @brief handle get task request
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle get task request
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnGetTask(const nlohmann::json& req);
 
     /**
-     * @brief handle cancel task request
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle cancel task request
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnCancelTask(const nlohmann::json& req);
 
     /**
-     * @brief handle set or update push notification config request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle set or update push notification config request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnSetPushNotificationConfig(const nlohmann::json& req);
 
     /**
-     * @brief handle get push notification config request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle get push notification config request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnGetPushNotificationConfig(const nlohmann::json& req);
 
     /**
-     * @brief handle get all push notification config request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle get all push notification config request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnListPushNotificationConfig(const nlohmann::json& req);
 
     /**
-     * @brief handle delete push notification config request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle delete push notification config request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnDeletePushNotificationConfig(const nlohmann::json& req);
 
     /**
-     * @brief handle get agent card request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @return response json data
-     */
+    * @brief handle get agent card request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @return response json data
+    */
     nlohmann::json OnGetAgentCard(const nlohmann::json& req);
 
     /**
-     * @brief handle streaming request reveiced
-     *
-     * @param[in] req requset data in json format
-     * @param[in] emit emiter to call to update message status
-     * @return response json data
-     */
-    void OnMessageSendStreaming(const nlohmann::json& req, const RequestHandler::StreamEmitter& emit);
+    * @brief handle streaming request reveiced
+    *
+    * @param[in] req requset data in json format
+    * @param[in] emit emiter to call to update message status
+    * @return response json data
+    */
+    void OnMessageSendStreaming(const nlohmann::json& req, StreamEmitter emit);
 
     /**
-     * @brief handle resubscribe to task request
-     *
-     * @param[in] req requset data in json format
-     * @param[in] emit emiter to call to update message status
-     * @return response json data
-     */
-    void OnResubscribeToTask(const nlohmann::json& req, const RequestHandler::StreamEmitter& emit);
+    * @brief handle resubscribe to task request
+    *
+    * @param[in] req requset data in json format
+    * @param[in] emit emiter to call to update message status
+    * @return response json data
+    */
+    void OnResubscribeToTask(const nlohmann::json& req, StreamEmitter emit);
 
 private:
     std::shared_ptr<RequestHandler> handler_;
