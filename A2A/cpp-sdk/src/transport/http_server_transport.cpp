@@ -2,20 +2,33 @@
 * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <mutex>
 #include <algorithm>
 
+#include "transport_emitter.h"
 #include "stream_server_emitter.h"
 #include "a2a_log.h"
 #include "common_types.h"
+#include "http_server_manager.h"
 #include "http_common.h"
 #include "types.h"
-#include "jsonrpc.h"
 #include "http_server_transport.h"
 
 namespace A2A::Transport {
+
+struct EmptyEmitter : TransportEmitter {
+    void WriteData(const std::string& data) override
+    {
+        // Do nothing for non-streaming requests
+    }
+    void WriteDone() override
+    {
+        // Do nothing for non-streaming requests
+    }
+} g_emptyEmitter;
 
 void HttpServerTransport::SetHeader(const std::string& key, const std::string& value)
 {
@@ -55,7 +68,7 @@ int HttpServerTransport::Start()
     // Create server manager configuration
     Server::HttpServerManagerConfig config;
     config.host = config_.ip;
-    config.port = static_cast<uint16_t>(config_.port);
+    config.port = config_.port;
     config.ioThreadNum = config_.ioThreadNum;
 
     // Disable TLS for simple HTTP service
@@ -76,17 +89,14 @@ int HttpServerTransport::Start()
 
 void HttpServerTransport::SetupJsonRpcEndpoint(Server::RouteMap& routeMap)
 {
-    routeMap[jsonrpc_endpoint_] = [this](const Http::HttpRequest& req, const Http::HttpRequestContext& ctx) {
+    routeMap[JSONRPC_ENDPOINT] = [this](const Http::HttpRequest& req, const Http::HttpRequestContext& ctx) {
         HandleJsonRpcRequest(req, ctx);
     };
-    
-    A2A_LOG(A2A_LOG_LEVEL::INFO, "JSON-RPC endpoint setup at: " + jsonrpc_endpoint_);
 }
 
 void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
 {
-    routeMap[AGENT_CARD_ENDPOINT] = [this]([[maybe_unused]] const Http::HttpRequest& req,
-                                            const Http::HttpRequestContext& ctx) {
+    routeMap[AGENT_CARD_ENDPOINT] = [this](const Http::HttpRequest& req, const Http::HttpRequestContext& ctx) {
         Http::HttpResponse response;
 
         // Add global headers
@@ -105,7 +115,27 @@ void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
 void HttpServerTransport::HandleJsonRpcRequest(const Http::HttpRequest& req, const Http::HttpRequestContext& ctx)
 {
     // Parse the request to check if it's a streaming method
-    std::string contentType = A2A::Http::GetHeaderValue(req.headers, Http::CONTENT_TYPE_HEADER);
+    std::string contentType = req.headers.count(Http::CONTENT_TYPE_HEADER) ?
+                              req.headers.at(Http::CONTENT_TYPE_HEADER) : "";
+
+    if (!handler_) {
+        Http::HttpResponse response;
+        response.success = false;
+        response.statusCode = Http::HTTP_STATUS_INTERNAL_SERVER_ERROR;
+        A2A::MethodNotFoundError err;
+        response.body = "{\n"
+            "    \"jsonrpc\":\"2.0\",\n"
+            "    \"id\":null,\n"
+            "    \"error\": {\n"
+            "        \"code\":" + std::to_string(err.code) + ",\n"
+            "        \"message\":\n"
+            "        \"" + err.message.value() + "\"\n"
+            "    }\n"
+            "}\n";
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+        ctx.httpSendFunc(response, ctx);
+        return;
+    }
 
     // Determine if this is a streaming request by checking the method
     if (IsStreamingMethod(req.body)) {
@@ -115,13 +145,13 @@ void HttpServerTransport::HandleJsonRpcRequest(const Http::HttpRequest& req, con
     }
 }
 
-bool HttpServerTransport::IsStreamingMethod(const std::string& reqBody) const
+bool HttpServerTransport::IsStreamingMethod(const std::string& reqBody)
 {
     try {
         auto jsonReq = nlohmann::json::parse(reqBody);
         if (jsonReq.contains("method")) {
             std::string method = jsonReq["method"];
-            return method == METHOD_MESSAGE_STREAM || method == METHOD_TASK_RESUBSCRIBE;
+            return method == METHOD_MESSAGE_STREAM;
         }
     } catch (...) {
         // If parsing fails, treat as non-streaming
@@ -130,28 +160,31 @@ bool HttpServerTransport::IsStreamingMethod(const std::string& reqBody) const
 }
 
 void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
-    const std::map<std::string, std::string>& headersCopy)
+    const std::map<std::string, std::string>& headers_copy)
 {
     // Create a background thread to handle streaming request
-    std::thread workerThread([this, reqBody, ctx, headersCopy]() mutable {
+    std::thread workerThread([this, reqBody, ctx, headers_copy]() mutable {
         // Prepare initial response for streaming
         Http::HttpResponse response;
         SetCommonHeaders(response);
 
         // Add global headers
-        for (const auto& [key, value] : headersCopy) {
+        for (const auto& [key, value] : headers_copy) {
             response.headers[key] = value;
         }
         response.type = Http::HttpSendType::HTTPRESPONSESTART;
-        ctx.httpSendFunc(response, ctx);
 
         try {
-            auto emitter = std::make_shared<StreamServerEmitter>(ctx);
+            ctx.httpSendFunc(response, ctx);
+
+            StreamServerEmitter emitter(ctx);
             std::string unusedResp; // For streaming, response body is not used
             handler_(reqBody, unusedResp, emitter);
+
+            response.type = Http::HttpSendType::HTTPRESPONSEBODY;
+            ctx.httpSendFunc(response, ctx);
         } catch (const std::exception& e) {
-            std::string error_msg = e.what() ? e.what() : "Unknown exception";
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed: " + error_msg);
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SetNonBlocking failed: " + std::string(e.what()));
 
             // Send error as SSE event
             Http::HttpResponse error_response;
@@ -179,26 +212,37 @@ void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, con
 }
 
 void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
-    const std::map<std::string, std::string>& headersCopy)
+    const std::map<std::string, std::string>& headers_copy)
 {
     // Handle non-streaming request with a dedicated background thread
     // Create a background thread to handle the request
-    std::thread workerThread([this, reqBody, ctx, headersCopy]() mutable {
+    std::thread workerThread([this, reqBody, ctx, headers_copy]() mutable {
         std::string responseLocal;
-        auto emitter = std::make_shared<StreamServerEmitter>(ctx, headersCopy);
         try {
-            handler_(reqBody, responseLocal, emitter);
+            handler_(reqBody, responseLocal, g_emptyEmitter);
         } catch (const std::exception& e) {
-            nlohmann::json err;
-            err[JSON_FIELD_JSONRPC] = JSON_VERSION;
-            err[JSON_FIELD_ID] = "null";
-            err[JSON_FIELD_ERROR] = InternalError{};
-            responseLocal = err.dump();
+            responseLocal = "{\n"
+                "    \"jsonrpc\":\"2.0\",\n"
+                "    \"id\":null,\n"
+                "    \"error\": {\n"
+                "        \"code\":-32603,\n"
+                "        \"message\":\n"
+                "        \"" + std::string(e.what()) + "\"\n"
+                "    }\n"
+                "}\n";
         }
 
-        if (!responseLocal.empty()) {
-            emitter->WriteNonStreamingData(responseLocal);
+        // Prepare response
+        Http::HttpResponse response;
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+
+        // Add global headers
+        for (const auto& [key, value] : headers_copy) {
+            response.headers[key] = value;
         }
+
+        response.body = responseLocal;
+        ctx.httpSendFunc(response, ctx);
 
         // Clean up the thread from the vector when done
         {
@@ -238,8 +282,7 @@ void HttpServerTransport::Stop()
     }
 }
 
-int HttpServerTransport::SendData([[maybe_unused]] const std::string& url,
-    [[maybe_unused]] const std::string& data) const
+int HttpServerTransport::SendData(const std::string& url, const std::string& data) const
 {
     // Server does not send data to external URLs
     return -1;
@@ -252,9 +295,9 @@ HttpServerTransport::~HttpServerTransport()
             httpServerMgr_->Stop();
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in stopping http server: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Exception in stopping http server: %s", e.what());
     } catch (...) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in stopping http server");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Unknown exception in stopping http server");
     }
 
     try {
@@ -262,26 +305,24 @@ HttpServerTransport::~HttpServerTransport()
             listenThread_.join();
         }
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in joining listen thread: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Exception in joining listen thread: %s", e.what());
     } catch (...) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in joining listen thread");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Unknown exception in joining listen thread");
     }
 
     // Join all worker threads before destruction
-    std::vector<std::thread> threadsToJoin;
-    {
+    try {
         std::lock_guard<std::mutex> lock(workerThreadsMutex_);
         for (auto& worker_thread : workerThreads_) {
             if (worker_thread.joinable()) {
-                threadsToJoin.emplace_back(std::move(worker_thread));
+                worker_thread.join();
             }
         }
         workerThreads_.clear();
-    }
-    for (auto& t : threadsToJoin) {
-        if (t.joinable()) {
-            t.join();
-        }
+    } catch (const std::exception& e) {
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Exception in joining worker threads: %s", e.what());
+    } catch (...) {
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Unknown exception in joining worker threads");
     }
 }
 

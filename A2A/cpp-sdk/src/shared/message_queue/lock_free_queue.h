@@ -2,14 +2,14 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * LockFreeSPSCQueue Function Description
  * High-performance lock-free single producer single consumer queue for inter-thread communication
-*
-* Notes:
-* - Only supports single producer and single consumer, not thread-safe in multi-threaded scenarios
-* - Uses atomic operations for thread safety, avoiding locks
-* - Capacity must be power of 2 and at least 2
-* - Uses cache-line alignment to prevent false sharing
-* - Supports any copyable data type
-*/
+ *
+ * Notes:
+ * - Only supports single producer and single consumer, not thread-safe in multi-threaded scenarios
+ * - Uses atomic operations for thread safety, avoiding locks
+ * - Capacity must be power of 2 and at least 2
+ * - Uses cache-line alignment to prevent false sharing
+ * - Supports any copyable data type
+ */
 
 #ifndef A2A_LOCK_FREE_QUEUE_INCLUDE_H_
 #define A2A_LOCK_FREE_QUEUE_INCLUDE_H_
@@ -37,10 +37,10 @@ public:
     LockFreeSPSCQueue() : size_(0), mask_(0), buffer_(nullptr) {}
 
     /**
-    * @brief Constructor with runtime configuration
-    * @param size Queue capacity (must be power of 2 and at least 2)
-    */
-    explicit LockFreeSPSCQueue(size_t size) : size_(0), mask_(0), buffer_(nullptr)
+     * @brief Constructor with runtime configuration
+     * @param size Queue capacity (must be power of 2 and at least 2)
+     */
+    LockFreeSPSCQueue(size_t size) : size_(0), mask_(0), buffer_(nullptr)
     {
         // Validate size
         if (size < A2A_LFQ_MIN_CAPACITY) {
@@ -73,15 +73,14 @@ public:
     LockFreeSPSCQueue& operator=(LockFreeSPSCQueue&&) = delete;
 
     /**
-    * @brief Producer writes data
-    * @param item Data to write
-    * @return true if write successful (false when queue is full)
-    */
+     * @brief Producer writes data
+     * @param item Data to write
+     * @return true if write successful (false when queue is full)
+     */
     bool Push(const T& item)
     {
-        if (!buffer_) {
+        if (!buffer_)
             return false; // Not initialized
-        }
 
         size_t currentWrite = writePos.load(std::memory_order_relaxed);
         size_t nextWrite = (currentWrite + 1) & mask_;
@@ -96,15 +95,13 @@ public:
     }
 
     /**
-    * @brief Consumer reads data
-    * @param item Output parameter to store read data
-    * @return true if read successful (false when queue is empty)
-    */
+     * @brief Consumer reads data
+     * @param item Output parameter to store read data
+     * @return true if read successful (false when queue is empty)
+     */
     bool Pop(T& item)
     {
-        if (!buffer_) {
-            return false;  // Not initialized
-        }
+        if (!buffer_) return false;  // Not initialized
 
         size_t currentRead = readPos.load(std::memory_order_relaxed);
         if (currentRead == writePos.load(std::memory_order_acquire)) {
@@ -117,45 +114,41 @@ public:
     }
 
     /**
-    * @brief Get current element count in queue
-    * @return Number of elements
-    */
+     * @brief Get current element count in queue
+     * @return Number of elements
+     */
     size_t Size() const
     {
-        if (!buffer_) {
-            return 0;  // Not initialized
-        }
+        if (!buffer_) return 0;  // Not initialized
         size_t writeValue = writePos.load(std::memory_order_relaxed);
         size_t readValue = readPos.load(std::memory_order_relaxed);
         return (writeValue - readValue) & mask_;
     }
 
     /**
-    * @brief Check if queue is empty
-    * @return true if empty
-    */
+     * @brief Check if queue is empty
+     * @return true if empty
+     */
     bool Empty() const
     {
         return !buffer_ || (writePos.load(std::memory_order_relaxed) == readPos.load(std::memory_order_relaxed));
     }
 
     /**
-    * @brief Check if queue is full
-    * @return true if full
-    */
+     * @brief Check if queue is full
+     * @return true if full
+     */
     bool Full() const
     {
-        if (!buffer_) {
-            return false;  // Not initialized
-        }
+        if (!buffer_) return false;  // Not initialized
         size_t nextWrite = (writePos.load(std::memory_order_relaxed) + 1) & mask_;
         return nextWrite == readPos.load(std::memory_order_relaxed);
     }
 
     /**
-    * @brief Get queue capacity
-    * @return Queue capacity
-    */
+     * @brief Get queue capacity
+     * @return Queue capacity
+     */
     size_t Capacity() const { return size_; }
 
 private:
@@ -185,9 +178,9 @@ template <typename T>
 class MPSCQueue {
 public:
     /**
-    * @brief Constructor
-    * @param capacity Maximum capacity (must be power of 2)
-    */
+     * @brief Constructor
+     * @param capacity Maximum capacity (must be power of 2)
+     */
     explicit MPSCQueue(size_t capacity)
     {
         // Ensure capacity is power of 2
@@ -232,14 +225,14 @@ public:
     MPSCQueue& operator=(MPSCQueue&&) = delete;
 
     /**
-    * @brief Push an element (thread-safe for multiple producers)
-    * @param item Item to push
-    * @return true if successful, false if queue is full
-    */
+     * @brief Push an element (thread-safe for multiple producers)
+     * @param item Item to push
+     * @return true if successful, false if queue is full
+     */
     bool Push(const T& item)
     {
         if (Size() >= capacity_) {
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("MPSCQueue overflow detected, capacity=") +
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("MPSCQueue overflow detected, capacity=") +
                 std::to_string(capacity_));
             return false;
         }
@@ -263,10 +256,10 @@ public:
     }
 
     /**
-    * @brief Try to pop an element (NOT thread-safe for multiple consumers)
-    * @param result Reference to store the result
-    * @return true if successful, false if empty
-    */
+     * @brief Try to pop an element (NOT thread-safe for multiple consumers)
+     * @param result Reference to store the result
+     * @return true if successful, false if empty
+     */
     bool TryPop(T& result)
     {
         size_t tail = tail_.load(std::memory_order_relaxed);
@@ -295,27 +288,27 @@ public:
     }
 
     /**
-    * @brief Get current size
-    * @return Approximate number of elements
-    */
+     * @brief Get current size
+     * @return Approximate number of elements
+     */
     size_t Size() const
     {
         return size_.load(std::memory_order_acquire);
     }
 
     /**
-    * @brief Check if empty
-    * @return true if empty
-    */
+     * @brief Check if empty
+     * @return true if empty
+     */
     bool Empty() const
     {
         return size_.load(std::memory_order_acquire) == 0;
     }
 
     /**
-    * @brief Get capacity
-    * @return Maximum capacity
-    */
+     * @brief Get capacity
+     * @return Maximum capacity
+     */
     size_t Capacity() const
     {
         return capacity_;
@@ -327,10 +320,10 @@ private:
         alignas(A2A_LFQ_CACHELINE_SIZE) std::atomic<bool> ready{false};
     };
 
-    size_t capacity_{0};
-    size_t mask_{0};
     // Ring buffer storage
-    std::unique_ptr<Node[]> buffer_{nullptr};
+    std::unique_ptr<Node[]> buffer_;
+    size_t capacity_;
+    size_t mask_;
 
     // Producer positions
     alignas(A2A_LFQ_CACHELINE_SIZE) std::atomic<size_t> head_{0};

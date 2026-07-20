@@ -13,10 +13,10 @@
 namespace A2A {
 
 Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& contextId = std::nullopt,
-    const std::optional<std::string>& taskId = std::nullopt);
+                            const std::optional<std::string>& taskId = std::nullopt);
 
 Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional<std::string>& contextId = std::nullopt,
-    const std::optional<std::string>& taskId = std::nullopt);
+                             const std::optional<std::string>& taskId = std::nullopt);
 
 std::vector<std::string> GetTextParts(const std::vector<Part>& parts);
 

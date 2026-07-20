@@ -7,13 +7,18 @@
 #include <future>
 #include <string>
 
-#include "error.h"
 #include "uuid.h"
 #include "a2a_log.h"
 #include "jsonrpc.h"
 #include "http_card_resolver.h"
 
 namespace A2A::Client {
+
+namespace {
+constexpr int K_BAD_ALLOC = -32110;
+constexpr int K_TRANSPORT_EXCEPTION = -32102;
+constexpr int K_INVALID_FORMAT = -32106;
+} // namespace
 
 HttpCardResolver::HttpCardResolver(
     std::string baseUrl,
@@ -37,7 +42,7 @@ HttpCardResolver::HttpCardResolver(
         fullPath += path;
     }
     // create JSONRPC transport
-    transport_ = std::make_shared<JsonRpcTransport>(fullPath, AgentCard{}, ClientConfig{},
+    transport_ = std::make_shared<JsonRpcTransport>(fullPath, AgentCard{},
         std::vector<std::shared_ptr<ClientCallInterceptor>>{});
     // register callback
     transport_->SetTransportCallback([this](const std::string& id, const TransportEvent& ev) {
@@ -58,18 +63,18 @@ std::future<AgentCard> HttpCardResolver::GetAgentCard([[maybe_unused]] const std
         }
 
         // send request
-        transport_->GetCard(requestId, nullptr, 0);
+        transport_->GetCard(requestId, nullptr);
     } catch (const std::bad_alloc& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
         std::promise<AgentCard> fallbackPromise;
-        fallbackPromise.set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_BAD_ALLOC), e.what()));
+        fallbackPromise.set_exception(CreateExceptionPtr(K_BAD_ALLOC, e.what()));
         std::lock_guard<std::mutex> lock(callbackMutex_);
         pendingPromises_.erase(requestId);
         return fallbackPromise.get_future();
     } catch (const std::exception& e) {
         std::lock_guard<std::mutex> lock(callbackMutex_);
         pendingPromises_.erase(requestId);
-        promise->set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION), e.what()));
+        promise->set_exception(CreateExceptionPtr(K_TRANSPORT_EXCEPTION, e.what()));
     }
 
     return promise->get_future();
@@ -108,14 +113,14 @@ void HttpCardResolver::OnTransportEvent(const std::string& requestId, const Tran
         promise->set_value(*card);
     } else {
         // wrong type (i.e. Message, Task)
-        promise->set_exception(CreateExceptionPtr(static_cast<int>(A2AErrorCode::A2A_INVALID_FORMAT),
-            "invalid response format for GetCard"));
+        promise->set_exception(CreateExceptionPtr(K_INVALID_FORMAT, "invalid response format for GetCard"));
     }
 }
 
 std::exception_ptr HttpCardResolver::CreateExceptionPtr(int code, const std::string& msg) const
 {
-    return A2AClientException::Make(code, msg);
+    nlohmann::json error = {{"code", code}, {"message", msg}};
+    return std::make_exception_ptr(std::runtime_error(error.dump()));
 }
 
 } // namespace A2A::Client

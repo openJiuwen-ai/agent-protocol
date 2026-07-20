@@ -4,159 +4,217 @@
 
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 #include <chrono>
 #include <ctime>
-#include <mutex>
 #include <id_generator.h>
 #include <sstream>
-#include <iomanip>
+#include <set>
+#include <server/task_updater.h>
 
-#include "utils_helpers.h"
-#include "a2a_log.h"
-#include "task_manager.h"
-#include "task_updater_impl.h"
+#include "event_queue.h"
 
 namespace A2A::Server {
-TaskUpdaterImpl::TaskUpdaterImpl(std::string taskId, std::string contextId,
-    const std::shared_ptr<TaskManager>& taskManager)
-    : taskId_(std::move(taskId)),
-    contextId_(std::move(contextId)),
-    taskManager_(taskManager),
-    artifactIdGenerator_(std::make_shared<UUIDGenerator>()),
-    messageIdGenerator_(std::make_shared<UUIDGenerator>())
-{
-}
 
-void TaskUpdaterImpl::UpdateStatus(const TaskState state,
-    const std::optional<Message>& message,
-    const std::optional<std::string>& timestamp,
-    const std::optional<std::string>& metadata)
-{
-    if (terminalStateReached_) {
-        A2A_LOG(A2A_LOG_LEVEL::WARN, "Task " + taskId_ + " is already in a terminal state!");
-        return;
+// Private implementation class
+class TaskUpdaterImpl {
+public:
+    TaskUpdaterImpl(std::shared_ptr<EventQueue> eventQueue, std::string taskId, std::string contextId)
+        : eventQueue_(std::move(eventQueue)),
+        taskId_(std::move(taskId)),
+        contextId_(std::move(contextId)),
+        artifactIdGenerator_(std::make_shared<UUIDGenerator>()),
+        messageIdGenerator_(std::make_shared<UUIDGenerator>())
+    {
     }
 
-    if (IsFinal(state)) {
-        terminalStateReached_ = true;
+    ~TaskUpdaterImpl() = default;
+
+    void UpdateStatus(const TaskState state, const std::optional<Message>& message, bool final,
+                      const std::optional<std::string>& timestamp, const std::optional<nlohmann::json>& metadata)
+    {
+        if (terminalStateReached_) {
+            throw std::runtime_error("Task " + taskId_ + " is already in a terminal state.");
+        }
+        
+        if (terminalStates_.count(state)) {
+            terminalStateReached_ = true;
+            final = true;
+        }
+
+        std::string ts = timestamp.value_or(GetCurrentTimestamp());
+        
+        TaskStatusUpdateEvent event;
+        event.contextId = contextId_;
+        event.final = final;
+        event.metadata = metadata;
+        event.status = TaskStatus{message, state, ts};
+        event.taskId = taskId_;
+
+        eventQueue_->Enqueue(event);
     }
 
-    std::string ts = timestamp.value_or(GetCurrentTimestamp());
+    void AddArtifact(const TaskArtifactParam& artifactParam)
+    {
+        std::string aid = artifactParam.artifactId.value_or(artifactIdGenerator_->Generate({taskId_, contextId_}));
+        
+        Artifact artifact;
+        artifact.artifactId = aid;
+        artifact.parts = artifactParam.parts;
+        artifact.name = artifactParam.name;
+        artifact.metadata = artifactParam.metadata;
+        artifact.extensions = artifactParam.extensions;
 
-    TaskStatusUpdateEvent event;
-    event.contextId = contextId_;
-    event.metadata = metadata;
-    event.status = TaskStatus{message, state, ts};
-    event.taskId = taskId_;
+        TaskArtifactUpdateEvent event;
+        event.artifact = artifact;
+        event.contextId = contextId_;
+        event.taskId = taskId_;
+        event.append = artifactParam.append;
+        event.lastChunk = artifactParam.lastChunk;
+        event.metadata = artifactParam.metadata;
 
-    if (taskManager_) {
-        taskManager_->Process(taskId_, event);
+        eventQueue_->Enqueue(event);
     }
-}
 
-void TaskUpdaterImpl::AddArtifact(const TaskArtifactParam& artifactParam)
-{
-    if (terminalStateReached_) {
-        A2A_LOG(A2A_LOG_LEVEL::WARN, "Task " + taskId_ + " is already in a terminal state!");
-        return;
+    void Complete(std::optional<Message> message)
+    {
+        UpdateStatus(TaskState::COMPLETED, message, true, std::nullopt, std::nullopt);
     }
-    std::string aid = artifactParam.artifactId.value_or(artifactIdGenerator_->Generate({taskId_, contextId_}));
 
-    Artifact artifact;
-    artifact.artifactId = aid;
-    artifact.parts = artifactParam.parts;
-    artifact.name = artifactParam.name;
-    artifact.metadata = artifactParam.metadata;
-    artifact.extensions = artifactParam.extensions;
-
-    TaskArtifactUpdateEvent event;
-    event.artifact = artifact;
-    event.contextId = contextId_;
-    event.taskId = taskId_;
-    event.append = artifactParam.append;
-    event.lastChunk = artifactParam.lastChunk;
-    event.metadata = artifactParam.metadata;
-
-    if (taskManager_) {
-        taskManager_->Process(taskId_, event);
+    void Failed(std::optional<Message> message)
+    {
+        UpdateStatus(TaskState::FAILED, message, true, std::nullopt, std::nullopt);
     }
-}
 
-void TaskUpdaterImpl::Complete(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::COMPLETED, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::Failed(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::FAILED, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::Reject(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::REJECTED, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::Submit(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::SUBMITTED, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::StartWork(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::WORKING, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::Cancel(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::CANCELED, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::RequiresInput(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::INPUT_REQUIRED, message, std::nullopt, std::nullopt);
-}
-
-void TaskUpdaterImpl::RequiresAuth(const std::optional<Message>& message)
-{
-    UpdateStatus(TaskState::AUTH_REQUIRED, message, std::nullopt, std::nullopt);
-}
-
-Message TaskUpdaterImpl::NewAgentMessage(const std::vector<Part>& parts, const std::optional<std::string>& metadata)
-{
-    Message message;
-    message.parts = parts;
-    message.role = Role::AGENT;
-    message.messageId = messageIdGenerator_->Generate({taskId_, contextId_});
-    message.taskId = taskId_;
-    message.contextId = contextId_;
-    message.metadata = metadata;
-
-    return message;
-}
-
-void TaskUpdaterImpl::SendResponseMessage(const Message& message)
-{
-    if (taskManager_) {
-        taskManager_->Process(taskId_, message);
+    void Reject(std::optional<Message> message)
+    {
+        UpdateStatus(TaskState::REJECTED, message, true, std::nullopt, std::nullopt);
     }
-    terminalStateReached_ = true;
+
+    void Submit(std::optional<Message> message)
+    {
+        UpdateStatus(TaskState::SUBMITTED, message, false, std::nullopt, std::nullopt);
+    }
+
+    void StartWork(std::optional<Message> message)
+    {
+        UpdateStatus(TaskState::WORKING, message, false, std::nullopt, std::nullopt);
+    }
+
+    void Cancel(std::optional<Message> message)
+    {
+        UpdateStatus(TaskState::CANCELED, message, true, std::nullopt, std::nullopt);
+    }
+
+    void RequiresInput(std::optional<Message> message, bool final)
+    {
+        UpdateStatus(TaskState::INPUT_REQUIRED, message, final, std::nullopt, std::nullopt);
+    }
+
+    void RequiresAuth(std::optional<Message> message, bool final)
+    {
+        UpdateStatus(TaskState::AUTH_REQUIRED, message, final, std::nullopt, std::nullopt);
+    }
+
+    Message NewAgentMessage(const std::vector<Part>& parts, const std::optional<nlohmann::json> &metadata)
+    {
+        Message message;
+        message.parts = parts;
+        message.role = Role::AGENT;
+        message.messageId = messageIdGenerator_->Generate({taskId_, contextId_});
+        message.taskId = taskId_;
+        message.contextId = contextId_;
+        message.metadata = metadata;
+
+        return message;
+    }
+
+private:
+    static std::string GetCurrentTimestamp()
+    {
+        auto now = std::chrono::system_clock::now();
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::stringstream ss;
+        ss << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
+        return ss.str();
+    }
+
+    std::shared_ptr<EventQueue> eventQueue_;
+    std::string taskId_;
+    std::string contextId_;
+    bool terminalStateReached_ = false;
+    std::shared_ptr<IDGenerator> artifactIdGenerator_;
+    std::shared_ptr<IDGenerator> messageIdGenerator_;
+    std::set<TaskState> terminalStates_ = {
+        TaskState::COMPLETED,
+        TaskState::CANCELED,
+        TaskState::FAILED,
+        TaskState::REJECTED
+    };
+};
+
+// Public interface implementation
+TaskUpdater::TaskUpdater(std::shared_ptr<EventQueue> eventQueue, std::string taskId, std::string contextId)
+    : impl_(std::make_unique<TaskUpdaterImpl>(std::move(eventQueue), std::move(taskId), std::move(contextId)))
+{
 }
 
-std::string TaskUpdaterImpl::GetCurrentTimestamp()
+TaskUpdater::~TaskUpdater() = default;
+
+void TaskUpdater::UpdateStatus(TaskState state, std::optional<Message> message, bool final,
+    std::optional<std::string> timestamp, const Metadata& metadata)
 {
-    auto now = std::chrono::system_clock::now();
+    impl_->UpdateStatus(state, message, final, timestamp, metadata);
+}
 
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+void TaskUpdater::AddArtifact(const TaskArtifactParam& artifactParam)
+{
+    impl_->AddArtifact(artifactParam);
+}
 
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%S");
-    // '0' character for padding & integer 3 for width
-    ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-    return ss.str();
+void TaskUpdater::Complete(std::optional<Message> message)
+{
+    impl_->Complete(message);
+}
+
+void TaskUpdater::Failed(std::optional<Message> message)
+{
+    impl_->Failed(message);
+}
+
+void TaskUpdater::Reject(std::optional<Message> message)
+{
+    impl_->Reject(message);
+}
+
+void TaskUpdater::Submit(std::optional<Message> message)
+{
+    impl_->Submit(message);
+}
+
+void TaskUpdater::StartWork(std::optional<Message> message)
+{
+    impl_->StartWork(message);
+}
+
+void TaskUpdater::Cancel(std::optional<Message> message)
+{
+    impl_->Cancel(message);
+}
+
+void TaskUpdater::RequiresInput(std::optional<Message> message, const bool final)
+{
+    impl_->RequiresInput(message, final);
+}
+
+void TaskUpdater::RequiresAuth(std::optional<Message> message, const bool final)
+{
+    impl_->RequiresAuth(message, final);
+}
+
+Message TaskUpdater::NewAgentMessage(const std::vector<Part>& parts, const Metadata& metadata)
+{
+    return impl_->NewAgentMessage(parts, metadata);
 }
 
 } // namespace A2A::Server

@@ -8,28 +8,77 @@
 #include <stdexcept>
 #include <string>
 
-#include "mock_agent_executor.h"
-#include "mock_task_store.h"
-#include "test_agent_card.h"
 #include "server/http_server_builder.h"
+#include "server/agent_executor.h"
+#include "server/task_store.h"
 #include "types.h"
 
 using namespace A2A;
 using namespace A2A::Server;
-using namespace A2A::Test;
 
 namespace {
 
+class DummyAgentExecutor final : public AgentExecutor {
+public:
+    void Execute(std::shared_ptr<RequestContext>, std::shared_ptr<TaskUpdater>) override
+    {
+    }
+
+    void Cancel(std::shared_ptr<RequestContext>, std::shared_ptr<TaskUpdater>) override
+    {
+    }
+};
+
+class DummyTaskStore final : public TaskStore {
+public:
+    void Save(const Task&, std::shared_ptr<ServerCallContext>) override
+    {
+    }
+
+    std::shared_ptr<Task> Get(const std::string&, std::shared_ptr<ServerCallContext>) override
+    {
+        return nullptr;
+    }
+
+    void Delete(const std::string&, std::shared_ptr<ServerCallContext>) override
+    {
+    }
+};
+
+AgentCard MakeAgentCard(const std::string& url, const std::string& protocolBinding = "http")
+{
+    AgentCard card;
+    AgentInterface iface;
+    iface.url = url;
+    iface.protocolBinding = protocolBinding;
+    card.supportedInterfaces.push_back(iface);
+    return card;
+}
+
 AgentCard MakeExtendedAgentCard()
 {
-    return MakeAgentCard("http://127.0.0.1:0/jsonrpc", "JSONRPC");
+    AgentCard card;
+    AgentInterface iface;
+    iface.url = "http://127.0.0.1:8080/jsonrpc";
+    iface.protocolBinding = "http";
+    card.supportedInterfaces.push_back(iface);
+    return card;
+}
+
+HttpConfig MakeHttpConfig()
+{
+    HttpConfig cfg;
+    cfg.ip = "127.0.0.1";
+    cfg.port = 8080;
+    cfg.ioThreadNum = 1;
+    return cfg;
 }
 
 class HttpServerBuilderTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        config = MakeHttpConfig("127.0.0.1", 0, 1);
+        config = MakeHttpConfig();
         extendedAgentCard = MakeExtendedAgentCard();
         executor = std::make_shared<DummyAgentExecutor>();
         taskStore = std::make_shared<DummyTaskStore>();

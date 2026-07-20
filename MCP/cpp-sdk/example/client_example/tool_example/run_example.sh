@@ -2,13 +2,11 @@
 set -e
 
 print_help() {
-  echo "Usage: $0 [--auth] [--port=<1-65535>]"
+  echo "Usage: $0 [--port=<1-65535>]"
   echo ""
   echo "Examples:"
   echo "  $0"
   echo "  $0 --port=8000"
-  echo "  $0 --auth"
-  echo "  $0 --auth --port=8001"
 }
 
 APP_ARGS=()
@@ -28,8 +26,6 @@ for arg in "$@"; do
       print_help
       exit 1
     fi
-    APP_ARGS+=("$arg")
-  elif [ "$arg" = "--auth" ]; then
     APP_ARGS+=("$arg")
   else
     echo "Unknown argument: $arg"
@@ -57,17 +53,6 @@ echo ""
 echo "========================================="
 echo "Running Tool Example..."
 echo "========================================="
-
-for arg in "${APP_ARGS[@]}"; do
-  if [ "$arg" = "--auth" ]; then
-    echo ""
-    echo "Auth mode: connecting to http://127.0.0.1:8001/mcp (override with --port=)"
-    echo "Using token: valid-token-12345"
-    echo ""
-    break
-  fi
-done
-
 ./ToolExample "${APP_ARGS[@]}"
 
 echo ""

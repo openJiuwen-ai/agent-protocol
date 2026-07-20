@@ -15,13 +15,13 @@ std::shared_ptr<A2ACardResolver> HttpCardResolverBuilder::Build(std::string base
 {
     try {
         if (baseUrl.empty() || agentCardPath.empty()) {
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "HttpCardResolverBuilder::Build invalid parameter.");
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "HttpCardResolverBuilder::Build invalid parameter.");
             return nullptr;
         }
 
         return std::make_shared<HttpCardResolver>(std::move(baseUrl), std::move(agentCardPath), httpKwargs);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
     }
 }

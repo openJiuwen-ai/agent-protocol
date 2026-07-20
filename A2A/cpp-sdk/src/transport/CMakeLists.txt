@@ -9,8 +9,8 @@ target_include_directories(a2a_transport
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src/shared
         ${CMAKE_SOURCE_DIR}/src/log
-        ${CMAKE_SOURCE_DIR}/src/server
         ${CMAKE_SOURCE_DIR}/src/event
+        ${CMAKE_SOURCE_DIR}/src/server
 )
 
 set_target_properties(a2a_transport PROPERTIES
