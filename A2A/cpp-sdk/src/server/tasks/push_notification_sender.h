@@ -12,7 +12,7 @@ namespace A2A::Server {
 struct PushNotificationSender {
     virtual ~PushNotificationSender() = default;
 
-    virtual void SendNotification(const std::shared_ptr<Task>& task) = 0;
+    virtual void SendNotification(const A2A::Task& task) = 0;
 };
 
 } // namespace A2A::Server

@@ -11,6 +11,7 @@ target_include_directories(mcp_transport_tests
 )
 
 target_sources(mcp_transport_tests PRIVATE $<TARGET_OBJECTS:mcp_transport>)
+target_sources(mcp_transport_tests PRIVATE $<TARGET_OBJECTS:mcp_server>)
 
 target_link_libraries(mcp_transport_tests
     PRIVATE
@@ -23,6 +24,7 @@ target_link_libraries(mcp_transport_tests
         third_party_headers
         http_parser
         nlohmann_json::nlohmann_json
+        CURL::libcurl
         OpenSSL::SSL
         OpenSSL::Crypto
         event

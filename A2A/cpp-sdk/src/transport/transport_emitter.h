@@ -12,10 +12,10 @@ namespace A2A::Transport {
 class TransportEmitter {
 public:
     virtual ~TransportEmitter() = default;
-    virtual void WriteStreamingData(const std::string& data) = 0;
-    virtual void WriteNonStreamingData(const std::string& data) = 0;
+    virtual void WriteData(const std::string& data) = 0;
     virtual void WriteDone() = 0;
 };
+
 } // namespace A2A::Transport
 
 #endif

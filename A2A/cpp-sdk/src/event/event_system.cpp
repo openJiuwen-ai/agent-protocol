@@ -3,11 +3,13 @@
  */
 
 #include <event2/util.h>
+#include <fcntl.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <cerrno>
+#include <cstring>
 #include <memory>
 #include <thread>
 #include <type_traits>
@@ -25,10 +27,10 @@ constexpr long MS_PER_SECOND = 1000;
 constexpr long US_PER_MS = 1000;
 
 // Translate the internal EventType bitmask into libevent flags.
-int ToLibeventFlags(EventType events)
+short ToLibeventFlags(EventType events)
 {
     const EventMask mask = static_cast<EventMask>(events);
-    int flags = 0;
+    short flags = 0;
 
     if ((static_cast<uint32_t>(mask) & static_cast<EventMask>(EventType::READ)) != 0) {
         flags |= EV_READ;
@@ -95,7 +97,7 @@ struct EventSystem::Impl {
         {
             auto* data = static_cast<EventSystem::Impl::EventData*>(arg);
             if (data == nullptr) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, "EventSystem callback: data is null");
+                A2A_LOG(A2A_LOG_LEVEL_ERROR, "EventSystem callback: data is null");
                 return;
             }
 
@@ -103,18 +105,12 @@ struct EventSystem::Impl {
             bool savedPersistent = data->persistent;
             EventSystem* eventOwner = data->owner;
 
-            try {
-                if (data->callback != nullptr) {
-                    data->callback(static_cast<int>(eventFd), events, data->userArg);
-                }
-            } catch (const std::exception& e) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in event callback: ") + e.what());
-            } catch (...) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in event callback");
+            if (data->callback != nullptr) {
+                data->callback(static_cast<int>(eventFd), events, data->userArg);
             }
 
             if (!savedPersistent && eventOwner != nullptr) {
-                A2A_LOG(A2A_LOG_LEVEL::DEBUG,
+                A2A_LOG(A2A_LOG_LEVEL_ERROR,
                     std::string("EventSystem::eventCallbackAdapter: removing non-persistent event, eventId=") +
                     std::to_string(savedId));
                 eventOwner->RemoveEvent(savedId);
@@ -164,7 +160,7 @@ EventSystem::~EventSystem()
     if (eventBase_ != nullptr) {
         event_base_free(eventBase_);
         eventBase_ = nullptr;
-        A2A_LOG(A2A_LOG_LEVEL::INFO, "EventSystem destroyed");
+        A2A_LOG(A2A_LOG_LEVEL_INFO, "EventSystem destroyed");
     }
 }
 
@@ -186,7 +182,6 @@ bool EventSystem::Init()
 
 int EventSystem::ToEventFd(int eventId)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     auto it = impl_->events.find(eventId);
     if (it == impl_->events.end()) {
         return -1;
@@ -197,12 +192,12 @@ int EventSystem::ToEventFd(int eventId)
 int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void* arg, long timeoutMs)
 {
     if (eventBase_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "EventSystem not initialized");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "EventSystem not initialized");
         return -1;
     }
-    const short flags = static_cast<short>(ToLibeventFlags(events));
+    const short flags = ToLibeventFlags(events);
     if (flags == 0 || callback == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Invalid event flags or callback");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Invalid event flags or callback");
         return -1;
     }
 
@@ -213,48 +208,38 @@ int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void
     data->userArg = arg;
     data->owner = this;
     data->flags = flags;
-    data->persistent = (static_cast<unsigned short>(flags) & EV_PERSIST) != 0;
+    data->persistent = (flags & EV_PERSIST) != 0;
 
     event* ev = event_new(eventBase_, fd, flags, &Impl::EventData::eventCallbackAdapter, data.get());
     if (ev == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Failed to create event for fd=") + std::to_string(fd));
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("Failed to create event for fd=") + std::to_string(fd));
         return -1;
     }
 
     data->handle.reset(ev);
-    const int assignedId = data->id;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        impl_->events.emplace(assignedId, std::move(data));
-    }
 
     timeval tv{};
     if (event_add(ev, ToTimeval(timeoutMs, tv)) != 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to add event for fd=" + std::to_string(fd));
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = impl_->events.find(assignedId);
-        if (it != impl_->events.end()) {
-            if (it->second != nullptr && it->second->handle != nullptr) {
-                it->second->handle.reset();
-            }
-            impl_->events.erase(it);
-        }
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to add event for fd=" + std::to_string(fd));
+        data->handle.reset();
         return -1;
     }
 
+    const int assignedId = data->id;
+    impl_->events.emplace(assignedId, std::move(data));
     return assignedId;
 }
 
 int EventSystem::AddTimer(long timeoutMs, EventCallback callback, void* arg, bool repeat)
 {
     if (timeoutMs <= 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Invalid timer timeout: " +  std::to_string(timeoutMs) + " ms");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Invalid timer timeout: " +  std::to_string(timeoutMs) + " ms");
         return -1;
     }
 
     EventType type = EventType::TIMEOUT;
     if (repeat) {
-        type = static_cast<EventType>(static_cast<unsigned int>(type) | static_cast<unsigned int>(EventType::PERSIST));
+        type = static_cast<EventType>(static_cast<int>(type) | static_cast<int>(EventType::PERSIST));
     }
     // For pure timer, fd = -1 per libevent convention.
     return AddEvent(-1, type, std::move(callback), arg, timeoutMs);
@@ -263,26 +248,26 @@ int EventSystem::AddTimer(long timeoutMs, EventCallback callback, void* arg, boo
 int EventSystem::CreateNotifyEventId(EventCallback callback, void* arg, bool persist)
 {
     if (eventBase_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "The event system is not initialized.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "The event system is not initialized.");
         return -1;
     }
 
     // Create an eventfd with non-blocking and close-on-exec flags.
     int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (efd < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Create eventfd failed.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Create eventfd failed.");
         return -1;
     }
 
     // Register the eventfd for read events. Make it persistent by default unless caller says otherwise.
     EventType type = EventType::READ;
     if (persist) {
-        type = static_cast<EventType>(static_cast<unsigned int>(type) | static_cast<unsigned int>(EventType::PERSIST));
+        type = static_cast<EventType>(static_cast<int>(type) | static_cast<int>(EventType::PERSIST));
     }
 
     int eventId = AddEvent(efd, type, std::move(callback), arg, 0);
     if (eventId < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to add eventFd to the event system.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "Failed to add eventFd to the event system.");
         ::close(efd);
         return -1;
     }
@@ -298,7 +283,7 @@ bool EventSystem::NotifyEventId(int eventId, uint64_t increment)
 
     int eventFd = ToEventFd(eventId);
     if (eventFd == -1) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "The eventId not found.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "The eventId not found.");
         return false;
     }
     while (true) {
@@ -318,7 +303,7 @@ bool EventSystem::NotifyEventId(int eventId, uint64_t increment)
     }
 }
 
-bool EventSystem::ReadEventFd(int fd, uint64_t& outValue) const
+bool EventSystem::ReadEventFd(int fd, uint64_t& outValue)
 {
     uint64_t val = 0;
     ssize_t rd = 0;
@@ -342,34 +327,30 @@ bool EventSystem::ReadEventFd(int fd, uint64_t& outValue) const
 bool EventSystem::CloseNotifyEventId(int eventId)
 {
     if (eventId < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "The eventId is invalid.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "The eventId is invalid.");
         return false;
     }
 
     int eventFd = ToEventFd(eventId);
     if (eventFd == -1) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "The eventId not found.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "The eventId not found.");
         return false;
     }
 
     // Remove the libevent watcher and close the fd.
-    return RemoveEventInternal(eventId, true);
+    RemoveEvent(eventId);
+    ::close(eventFd);
+    return true;
 }
 
 bool EventSystem::RemoveEvent(int eventId)
 {
-    return RemoveEventInternal(eventId, false);
-}
-
-bool EventSystem::RemoveEventInternal(int eventId, bool closeFd)
-{
     std::unique_ptr<Impl::EventData> data;
     {
-        // Remove from map first so concurrent Notify fails immediately.
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = impl_->events.find(eventId);
         if (it == impl_->events.end()) {
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "The eventId not found.");
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "The eventId not found.");
             return false;
         }
         data = std::move(it->second);
@@ -381,17 +362,13 @@ bool EventSystem::RemoveEventInternal(int eventId, bool closeFd)
         data->handle.reset();
     }
 
-    if (closeFd && data != nullptr && data->fd >= 0) {
-        ::close(data->fd);
-    }
-
     return true;
 }
 
 void EventSystem::Start(bool runInBackground)
 {
     if (eventBase_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "The event system is not initialized.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "The event system is not initialized.");
         return;
     }
 
@@ -407,13 +384,7 @@ void EventSystem::Start(bool runInBackground)
 
         impl_->eventThread = std::thread([this]() {
             SetCurrentThreadName("A2A-Event-" + std::to_string(eventThreadIndex_));
-            try {
-                event_base_dispatch(eventBase_);
-            } catch (const std::exception& e) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Event loop exception: ") + e.what());
-            } catch (...) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in event loop");
-            }
+            event_base_dispatch(eventBase_);
             running_.store(false);
         });
     } else {
@@ -425,7 +396,7 @@ void EventSystem::Start(bool runInBackground)
 void EventSystem::Stop()
 {
     if (eventBase_ == nullptr) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "The event system is not initialized.");
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "The event system is not initialized.");
         return;
     }
 

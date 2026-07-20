@@ -27,10 +27,10 @@ Artifact NewTextArtifact(const std::string& name, const std::string& text, const
     return NewArtifact({p}, name, description);
 }
 
-Artifact NewDataArtifact(const std::string& name, const std::string& data, const std::string& description)
+Artifact NewDataArtifact(const std::string& name, const nlohmann::json& data, const std::string& description)
 {
     Part p;
-    p.data = data;
+    p.data = data.dump();
     p.mediaType = "application/octet-stream";
     return NewArtifact({p}, name, description);
 }

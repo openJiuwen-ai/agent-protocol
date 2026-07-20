@@ -4,36 +4,41 @@
 
 #include <fcntl.h>
 #include <arpa/inet.h>
+extern "C" {
+#include <http_parser.h>
+}
 #include <unistd.h>
-#include <netinet/in.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <sys/socket.h>
+
 #include <cerrno>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
-#include <vector>
-
-extern "C" {
-#include <http_parser.h>
-}
-#include <openssl/err.h>
-#include <openssl/ssl.h>
+#include <algorithm>
 
 #include "a2a_log.h"
 #include "shared/http_common.h"
 #include "shared/thread_utils.h"
 #include "http_server.h"
 
+
 namespace A2A::Server {
+
+constexpr int HTTP_TASK_QUEUE_CAPACITY = 1024;
+constexpr int HTTP_TASK_QUEUE_BATCH_SIZE = 64;
+constexpr int HTTPS_READ_BUFFER_SIZE = 4096;
+constexpr int HTTP_LISTEN_BACKLOG = 128;
 
 namespace {
 
 struct ParserContext {
-    Http::HttpRequest* request {nullptr};
-    std::string currentField {};
-    std::string currentValue {};
-    bool lastWasValue {false};
-    bool messageCompleted {false};
+    Http::HttpRequest* request;
+    std::string currentField;
+    std::string currentValue;
+    bool lastWasValue{false};
+    bool messageCompleted{false};
 };
 
 int HandleUrlCallback(http_parser* parser, const char* at, size_t length)
@@ -47,9 +52,11 @@ int HandleHeaderFieldCallback(http_parser* parser, const char* at, size_t length
 {
     auto* ctx = static_cast<ParserContext*>(parser->data);
     if (ctx->lastWasValue) {
-        A2A::Http::TrimInPlace(ctx->currentField);
-        A2A::Http::TrimInPlace(ctx->currentValue);
+        Http::TrimInPlace(ctx->currentField);
+        Http::TrimInPlace(ctx->currentValue);
         if (!ctx->currentField.empty()) {
+            // Convert header name to lowercase for consistent processing
+            std::transform(ctx->currentField.begin(), ctx->currentField.end(), ctx->currentField.begin(), ::tolower);
             ctx->request->headers[ctx->currentField] = ctx->currentValue;
         }
         ctx->currentField.clear();
@@ -79,9 +86,11 @@ int HandleHeadersCompleteCallback(http_parser* parser)
 {
     auto* ctx = static_cast<ParserContext*>(parser->data);
     if (!ctx->currentField.empty()) {
-        A2A::Http::TrimInPlace(ctx->currentField);
-        A2A::Http::TrimInPlace(ctx->currentValue);
+        Http::TrimInPlace(ctx->currentField);
+        Http::TrimInPlace(ctx->currentValue);
         if (!ctx->currentField.empty()) {
+            // Convert header name to lowercase for consistent processing
+            std::transform(ctx->currentField.begin(), ctx->currentField.end(), ctx->currentField.begin(), ::tolower);
             ctx->request->headers[ctx->currentField] = ctx->currentValue;
         }
         ctx->currentField.clear();
@@ -103,13 +112,13 @@ int HandleMessageCompleteCallback(http_parser* parser)
 
 HttpServer::HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes,
     size_t ioThreadIndex)
-    : eventSystem_(true, static_cast<int>(ioThreadIndex)),
-    listener_(std::make_unique<TcpListener>(eventSystem_)),
-    routes_(routes),
-    host_(host),
-    port_(port),
-    tlsConfig_(tlsConfig),
-    ioThreadIndex_(ioThreadIndex)
+    : eventSystem_(true, ioThreadIndex),
+      listener_(std::make_unique<TcpListener>(eventSystem_)),
+      routes_(routes),
+      host_(host),
+      port_(port),
+      tlsConfig_(tlsConfig),
+      ioThreadIndex_(ioThreadIndex)
 {
 }
 
@@ -137,9 +146,8 @@ void HttpServer::Run()
 
     // Initialize task queue
     if (taskQueue_ == nullptr) {
-        taskQueue_ =
-            std::make_unique<A2A::MPSCNotifyQueue<std::function<void()>>>(DEFAULT_MPSC_QUEUE_SIZE,
-                                                                            HTTP_QUEUE_MAX_BATCH_SIZE);
+        taskQueue_ = std::make_unique<A2A::MPSCNotifyQueue<std::function<void()>>>(HTTP_TASK_QUEUE_CAPACITY,
+            HTTP_TASK_QUEUE_BATCH_SIZE);
     }
     if (taskQueue_ != nullptr && !taskQueue_->IsInitialized()) {
         bool inited = taskQueue_->Initialize(&eventSystem_, [](const std::function<void()>& cmd) {
@@ -158,7 +166,7 @@ void HttpServer::Run()
     }
     listener_->OnError([](const SocketPtr& socket, int errorCode, const std::string& message) {
         int fileDescriptor = socket ? socket->Fd() : -1;
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "listener error fd=" + std::to_string(fileDescriptor) +
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "listener error fd=" + std::to_string(fileDescriptor) +
                 " err=" + std::to_string(errorCode) + " msg=" + message);
     });
 
@@ -167,7 +175,7 @@ void HttpServer::Run()
 
     if (!listener_->Listen(host_, port_, HTTP_LISTEN_BACKLOG, true)) {
         if (sslContext_ != nullptr) {
-            SSL_CTX_free(sslContext_);
+            SSL_CTX_free(reinterpret_cast<SSL_CTX*>(sslContext_));
             sslContext_ = nullptr;
         }
         running_ = false;
@@ -176,11 +184,17 @@ void HttpServer::Run()
 
     if (!listener_->Start()) {
         if (sslContext_ != nullptr) {
-            SSL_CTX_free(sslContext_);
+            SSL_CTX_free(reinterpret_cast<SSL_CTX*>(sslContext_));
             sslContext_ = nullptr;
         }
         running_ = false;
         throw std::runtime_error("start listener failed");
+    }
+
+    if (useTls) {
+        A2A_LOG(A2A_LOG_LEVEL_INFO, "HTTPS listening on " + host_ + ":" + std::to_string(port_));
+    } else {
+        A2A_LOG(A2A_LOG_LEVEL_INFO, "listening on " + host_ + ":" + std::to_string(port_));
     }
 
     eventThread_ = std::thread([this]() {
@@ -192,25 +206,9 @@ void HttpServer::Run()
 
 void HttpServer::Stop()
 {
-    const bool wasRunning = running_.exchange(false);
-
-    if (listener_ != nullptr) {
-        listener_->Stop();
-    }
-
-    std::vector<int> activeFds;
-    activeFds.reserve(connections_.size());
-    for (const auto& entry : connections_) {
-        activeFds.push_back(entry.first);
-    }
-    for (int fd : activeFds) {
-        CleanupConnection(fd);
-    }
-
-    if (!wasRunning) {
+    if (!running_.exchange(false)) {
         return;
     }
-
     if (taskQueue_ != nullptr) {
         taskQueue_->Cleanup();
     }
@@ -248,7 +246,7 @@ void HttpServer::HandleNewConnection(const TcpSocketPtr& connection)
     if (tlsConfig_.enabled) {
         SSL* ssl = SSL_new(sslContext_);
         if (ssl == nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_new failed for HTTPS connection");
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_new failed for HTTPS connection");
             connection->Close();
             return;
         }
@@ -256,7 +254,7 @@ void HttpServer::HandleNewConnection(const TcpSocketPtr& connection)
         BIO* rbio = BIO_new(BIO_s_mem());
         BIO* wbio = BIO_new(BIO_s_mem());
         if (rbio == nullptr || wbio == nullptr) {
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "BIO_new failed for HTTPS connection");
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "BIO_new failed for HTTPS connection");
             if (rbio != nullptr) {
                 BIO_free(rbio);
             }
@@ -321,7 +319,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
 
     int written = BIO_write(context.rbio, encryptedData.data(), static_cast<int>(encryptedData.size()));
     if (written <= 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "BIO_write failed for HTTPS connection, fd=" + std::to_string(fileDescriptor));
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, "BIO_write failed for HTTPS connection, fd=" + std::to_string(fileDescriptor));
         CleanupConnection(fileDescriptor);
         return;
     }
@@ -335,8 +333,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
             }
 
             if (!context.connection || !context.connection->Send(outBuffer, static_cast<size_t>(pending))) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, "failed to send TLS handshake data, fd=" +
-                        std::to_string(fileDescriptor));
+                A2A_LOG(A2A_LOG_LEVEL_ERROR, "failed to send TLS handshake data, fd=" + std::to_string(fileDescriptor));
                 CleanupConnection(fileDescriptor);
                 return false;
             }
@@ -348,7 +345,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
         int result = SSL_accept(context.ssl);
         if (result == 1) {
             context.handshaked = true;
-            A2A_LOG(A2A_LOG_LEVEL::INFO, "SSL_accept succeeded for HTTPS connection, fd=" +
+            A2A_LOG(A2A_LOG_LEVEL_INFO, "SSL_accept succeeded for HTTPS connection, fd=" +
                     std::to_string(fileDescriptor));
 
             if (!flushTlsPendingData()) {
@@ -357,10 +354,12 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
         } else {
             int errorCode = SSL_get_error(context.ssl, result);
             if (errorCode == SSL_ERROR_WANT_READ || errorCode == SSL_ERROR_WANT_WRITE) {
-                flushTlsPendingData();
+                if (!flushTlsPendingData()) {
+                    return;
+                }
                 return;
             }
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_accept failed for HTTPS connection, fd=" +
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_accept failed for HTTPS connection, fd=" +
                 std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
             CleanupConnection(fileDescriptor);
             return;
@@ -375,7 +374,7 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
             if (errorCode == SSL_ERROR_WANT_READ || errorCode == SSL_ERROR_WANT_WRITE) {
                 break;
             }
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_read returned " + std::to_string(bytesRead) +
+            A2A_LOG(A2A_LOG_LEVEL_INFO, "SSL_read returned " + std::to_string(bytesRead) +
                     " (err=" + std::to_string(errorCode) + "), closing HTTPS connection fd=" +
                     std::to_string(fileDescriptor));
             CleanupConnection(fileDescriptor);
@@ -388,48 +387,26 @@ void HttpServer::HandleRead(const TcpSocketPtr& connection)
 
 void HttpServer::HandleClose(const SocketPtr& socket)
 {
-    if (!socket) {
-        return;
-    }
-    const int fileDescriptor = socket->Fd();
-    A2A_LOG(A2A_LOG_LEVEL::INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
+    int fileDescriptor = socket ? socket->Fd() : -1;
+    A2A_LOG(A2A_LOG_LEVEL_INFO, "connection closed, fd=" + std::to_string(fileDescriptor));
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
-        return;
-    }
-    // Socket::Close() clears fd before OnClose; match by connection pointer.
-    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
-        if (it->second.connection == socket) {
-            CleanupConnection(it->first);
-            return;
-        }
     }
 }
 
 void HttpServer::HandleError(const SocketPtr& socket, int errorCode, const std::string& message)
 {
-    if (!socket) {
-        return;
-    }
-    const int fileDescriptor = socket->Fd();
-    A2A_LOG(A2A_LOG_LEVEL::ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
+    int fileDescriptor = socket ? socket->Fd() : -1;
+    A2A_LOG(A2A_LOG_LEVEL_ERROR, "conn error fd=" + std::to_string(fileDescriptor) +
             " err=" + std::to_string(errorCode) + " msg=" + message);
     if (fileDescriptor >= 0) {
         CleanupConnection(fileDescriptor);
-        return;
-    }
-    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
-        if (it->second.connection == socket) {
-            CleanupConnection(it->first);
-            return;
-        }
     }
 }
 
-int HttpServer::ParseRequest(const std::string& buffer, A2A::Http::HttpRequest& outRequest,
-    std::size_t& consumedBytes) const
+int HttpServer::ParseRequest(const std::string& buffer, Http::HttpRequest& outRequest, std::size_t& consumedBytes)
 {
-    outRequest = A2A::Http::HttpRequest{};
+    outRequest = Http::HttpRequest{};
 
     if (buffer.empty()) {
         return Http::HTTP_PARSE_NEED_MORE;
@@ -480,7 +457,7 @@ void HttpServer::OnRead(int connectionFd, const std::string& data)
             break; // need more data
         } else if (parseResult != Http::HTTP_PARSE_OK) {
             Http::HttpResponse response;
-            response.statusCode = Http::HTTP_STATUS_BAD_REQUEST;
+            response.statusCode = HTTP_STATUS_BAD_REQUEST;
             response.statusText = "Bad Request";
             response.body = "Failed to parse HTTP request";
             std::string rawResponse = BuildHttpResponse(response);
@@ -500,7 +477,14 @@ void HttpServer::OnRead(int connectionFd, const std::string& data)
 void HttpServer::HandleRequest(int fileDescriptor, ConnectionContext& context)
 {
     Http::HttpResponse response;
-    // Build a minimal Http::HttpRequestContext so the handler signature matches HttpHandler.
+    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Request Method: " + context.currentRequest.method);
+    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Request URL: " + context.currentRequest.url);
+    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Request Version: " + context.currentRequest.version);
+    for (const auto& header : context.currentRequest.headers) {
+        A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Request Header: " + header.first + ": " + header.second);
+    }
+    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Request Body: " + context.currentRequest.body);
+    // Build a minimal RequestContext so the handler signature matches HttpHandler.
     Http::HttpRequestContext requestContext{};
     requestContext.connectionId = static_cast<int>(fileDescriptor);
 
@@ -514,12 +498,12 @@ void HttpServer::HandleRequest(int fileDescriptor, ConnectionContext& context)
             // Some handlers may send directly via httpSendFunc;
             return;
         } catch (const std::exception& e) {
-            response.statusCode = Http::HTTP_STATUS_INTERNAL_SERVER_ERROR;
+            response.statusCode = HTTP_STATUS_INTERNAL_SERVER_ERROR;
             response.statusText = "Internal Server Error";
             response.body = std::string("Error: ") + e.what();
         }
     } else {
-        response.statusCode = Http::HTTP_STATUS_NOT_FOUND;
+        response.statusCode = HTTP_STATUS_NOT_FOUND;
         response.statusText = "Not Found";
         response.body = "Endpoint not found";
     }
@@ -555,11 +539,10 @@ std::string HttpServer::BuildchunkedResponse(const Http::HttpResponse& response,
 
     bool hasTransferEncoding = false;
     bool responseChunked = false;
-
-    std::string transferEncoding = GetHeaderValue(response, Http::TRANSFER_ENCODING_HEADER);
-    if (!transferEncoding.empty()) {
+    auto it = response.headers.find(Http::TRANSFER_ENCODING_HEADER);
+    if (it != response.headers.end()) {
         hasTransferEncoding = true;
-        if (transferEncoding.find(Http::TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
+        if (it->second.find(Http::TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
             responseChunked = true;
         }
     }
@@ -579,9 +562,9 @@ std::string HttpServer::BuildchunkedResponse(const Http::HttpResponse& response,
     if (chunkedEnabled) {
         if (response.type == Http::HttpSendType::HTTPRESPONSEBODY ||
             (response.type == Http::HttpSendType::HTTPRESPONSE && response.body.size() > 0)) {
-            output << std::hex << response.body.size() << "\r\n";
-            output << response.body << "\r\n";
-            }
+                output << std::hex << response.body.size() << "\r\n";
+                output << response.body << "\r\n";
+        }
     }
 
     return output.str();
@@ -611,7 +594,7 @@ bool HttpServer::SendRawResponse(int fileDescriptor, const std::string& response
     if (writeResult <= 0) {
         int errorCode = SSL_get_error(context.ssl, writeResult);
         if (errorCode != SSL_ERROR_WANT_READ && errorCode != SSL_ERROR_WANT_WRITE) {
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SSL_write failed for HTTPS response, fd=" +
+            A2A_LOG(A2A_LOG_LEVEL_ERROR, "SSL_write failed for HTTPS response, fd=" +
                     std::to_string(fileDescriptor) + " err=" + std::to_string(errorCode));
             CleanupConnection(fileDescriptor);
             return false;
@@ -643,14 +626,18 @@ bool HttpServer::SendResponse(int connectionFd, const Http::HttpResponse& respon
 
     ConnectionContext& context = iterator->second;
 
-    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Response Status: " + std::to_string(response.statusCode) + " " +
-            response.statusText);
+    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Response Status: " + std::to_string(response.statusCode) + " " + response.statusText);
+    for (const auto& header : response.headers) {
+        A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Response Header: " + header.first + ": " + header.second);
+    }
+
+    A2A_LOG(A2A_LOG_LEVEL_DEBUG, "Response Body: " + response.body);
 
     bool isChunked = false;
-    std::string transferEncoding = GetHeaderValue(response, Http::TRANSFER_ENCODING_HEADER);
-    if (!transferEncoding.empty() && transferEncoding.find(Http::TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
+    auto it = response.headers.find(Http::TRANSFER_ENCODING_HEADER);
+    if (it != response.headers.end() && it->second.find(Http::TRANSFER_ENCODING_CHUNKED) != std::string::npos) {
         isChunked = true;
-    } else if (response.streaming && context.sseChunked) {
+    } else if (context.sseChunked) {
         isChunked = true;
     }
 
@@ -666,27 +653,21 @@ bool HttpServer::SendResponse(int connectionFd, const Http::HttpResponse& respon
 void HttpServer::CleanupConnection(int fileDescriptor)
 {
     auto iterator = connections_.find(fileDescriptor);
-    if (iterator == connections_.end()) {
-        return;
-    }
-
-    ConnectionContext context = std::move(iterator->second);
-    connections_.erase(iterator);
-
-    if (context.ssl != nullptr) {
-        SSL_shutdown(context.ssl);
-        SSL_free(context.ssl);
-        context.ssl = nullptr;
-    }
-    // The rbio/wbio BIOs are owned by the SSL object after SSL_set_bio,
-    // so they are freed as part of SSL_free above. Just clear pointers.
-    context.rbio = nullptr;
-    context.wbio = nullptr;
-
-    if (context.connection) {
-        context.connection->OnClose(nullptr);
-        context.connection->OnError(nullptr);
-        context.connection->Close();
+    if (iterator != connections_.end()) {
+        ConnectionContext& context = iterator->second;
+        if (context.ssl != nullptr) {
+            SSL_shutdown(context.ssl);
+            SSL_free(context.ssl);
+            context.ssl = nullptr;
+        }
+        // The rbio/wbio BIOs are owned by the SSL object after SSL_set_bio,
+        // so they are freed as part of SSL_free above. Just clear pointers.
+        context.rbio = nullptr;
+        context.wbio = nullptr;
+        if (context.connection) {
+            context.connection->Close();
+        }
+        connections_.erase(iterator);
     }
 }
 

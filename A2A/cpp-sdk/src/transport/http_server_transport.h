@@ -9,27 +9,23 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <vector>
 #include <memory>
-#include <mutex>
 
-#include "http_common.h"
-#include "http_server.h"
 #include "http_server_manager.h"
 #include "server/http_server_builder.h"
 #include "server_transport.h"
 
 namespace A2A::Transport {
 
+constexpr const char* JSONRPC_ENDPOINT = "/jsonrpc";
 constexpr const char* AGENT_CARD_ENDPOINT = "/.well-known/agent-card.json";
 
 class HttpServerTransport : public ServerTransport {
 public:
     /**
-    * @brief constructor
-    */
-    explicit HttpServerTransport(const Server::HttpConfig& config)
-        : config_(config), jsonrpc_endpoint_(config.endpoint) {}
+     * @brief constructor
+     */
+    explicit HttpServerTransport(const Server::HttpConfig& config) : config_(config) {}
 
     ~HttpServerTransport() override;
 
@@ -39,32 +35,32 @@ public:
     void SetTimeoutMs(long connectMs, long readMs);
 
     /**
-    * @brief start to listen
-    *
-    * @return 0 on succeed
-    */
+     * @brief start to listen
+     *
+     * @return 0 on succeed
+     */
     int Start() override;
 
     /**
-    * @brief stop listen
-    */
+     * @brief stop listen
+     */
     void Stop() override;
 
     /**
-    * @brief send data to specific url
-    *
-    * @param[in] url url to send data to
-    * @param[in] data payload
-    * @return response data
-    */
+     * @brief send data to specific url
+     *
+     * @param[in] url url to send data to
+     * @param[in] data payload
+     * @return response data
+     */
     int SendData(const std::string& url, const std::string& data) const override;
 
     /**
-    * @brief set RPC handler
-    * handler will be called when server receive data (both streaming and non-streaming)
-    *
-    * @param[in] handler event handler
-    */
+     * @brief set RPC handler
+     * handler will be called when server receive data (both streaming and non-streaming)
+     *
+     * @param[in] handler event handler
+     */
     void SetRpcHandler(ServerTransportRpcHandler handler) override;
 
     void SetCardHandler(ServerTransportCardHandler handler) override;
@@ -86,8 +82,6 @@ private:
     ServerTransportRpcHandler handler_;
     ServerTransportCardHandler handlerCard_;
 
-    std::string jsonrpc_endpoint_;
-
     // Private helper methods for route handlers
     void SetupJsonRpcEndpoint(Server::RouteMap& routeMap);
     void SetupCardEndpoint(Server::RouteMap& routeMap);
@@ -96,7 +90,7 @@ private:
         const std::map<std::string, std::string>& headersCopy);
     void HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
         const std::map<std::string, std::string>& headersCopy);
-    bool IsStreamingMethod(const std::string& reqBody) const;
+    bool IsStreamingMethod(const std::string& reqBody);
 };
 
 } // namespace A2A::Transport

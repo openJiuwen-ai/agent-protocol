@@ -13,9 +13,7 @@ ProtocolVersionInterceptorImpl::ProtocolVersionInterceptorImpl() : version_(A2A:
 {
 }
 
-ProtocolVersionInterceptorImpl::~ProtocolVersionInterceptorImpl() = default;
-
-void ProtocolVersionInterceptorImpl::Intercept(const std::string& /* methodName */, std::string& /* payload */,
+void ProtocolVersionInterceptorImpl::Intercept(const std::string& /* methodName */, nlohmann::json& /* payload */,
     std::map<std::string, std::string>& headers, const A2A::AgentCard* /* agentCard */,
     const ClientCallContext* /* context */) const
 {

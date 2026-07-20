@@ -37,7 +37,12 @@ public:
     size_t WritableBytes() const;
     const char* Peek() const;
 
+    void Retrieve(size_t n);
+    void RetrieveAll();
     std::string RetrieveAllAsString();
+
+    void Append(const char* data, size_t len);
+    void Append(std::string_view sv);
 
     // Read data from the given fd. Returns number of bytes read,
     // 0 = EOF, -1 = error (errno).
@@ -74,7 +79,7 @@ public:
     bool Send(const char* data, size_t len) override;
 
     // Half-close / close the connection
-    void ShutdownWrite() const;
+    void ShutdownWrite();
     void Close() override;
 
     bool Send(std::string_view sv);
@@ -89,7 +94,7 @@ protected:
 private:
     enum class State { CONNECTING, CONNECTED, CLOSING, CLOSED };
 
-    void SetTcpOptions(const TcpSocketOptions& opts) const;
+    void SetTcpOptions(const TcpSocketOptions& opts);
     void HandleConnectWritable();
     void HandleConnectTimeout();
     void TransitionTo(State s);

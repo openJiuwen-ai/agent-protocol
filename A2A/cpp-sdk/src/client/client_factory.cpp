@@ -2,14 +2,10 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "client/client_factory.h"
-
 #include "a2a_log.h"
-#include "types.h"
-
 #include "default_client.h"
-#include "client/jsonrpc_transport.h"
-#include "protocol_version_interceptor.h"
+#include "jsonrpc_transport.h"
+#include "client/client_factory.h"
 
 namespace A2A::Client {
 
@@ -47,7 +43,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
             if (it == serverSet.end()) {
                 serverSet[itf.protocolBinding] = itf.url;
             } else {
-                A2A_LOG(A2A_LOG_LEVEL::WARN, "Duplicate protocolBinding:" + itf.protocolBinding);
+                A2A_LOG(A2A_LOG_LEVEL_WARN, "Duplicate protocolBinding:" + itf.protocolBinding);
             }
         }
 
@@ -78,21 +74,18 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
             return nullptr;
         }
 
-        std::vector<std::shared_ptr<ClientCallInterceptor>> finalInterceptors = interceptors;
-        finalInterceptors.push_back(std::make_shared<ProtocolVersionInterceptor>());
-
         std::shared_ptr<ClientTransport> transport = nullptr;
         if (chosenProtocol == JSONRPC_TRANSPORT) {
-            transport = std::make_shared<JsonRpcTransport>(chosenUrl, card, config, finalInterceptors);
+            transport = std::make_shared<JsonRpcTransport>(chosenUrl, card, interceptors);
         }
 
         if (transport == nullptr) {
             return nullptr;
         }
 
-        return std::make_shared<DefaultClient>(card, config, transport, consumers);
+        return std::make_shared<DefaultClient>(card, config, transport, consumers, interceptors);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
     }
 }
@@ -106,7 +99,7 @@ std::shared_ptr<Client> ClientFactory::Create(const AgentCard& card, const Clien
         }
         return std::make_shared<DefaultClient>(card, config, transport, consumers);
     } catch (const std::exception& e) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
+        A2A_LOG(A2A_LOG_LEVEL_ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
     }
 }

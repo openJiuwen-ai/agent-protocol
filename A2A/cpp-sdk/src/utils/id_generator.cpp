@@ -9,7 +9,7 @@
 
 namespace A2A {
 
-std::string UUIDGenerator::Generate([[maybe_unused]] const IDGeneratorContext& ctx)
+std::string UUIDGenerator::Generate(const IDGeneratorContext& ctx)
 {
     return GenerateUuid();
 }

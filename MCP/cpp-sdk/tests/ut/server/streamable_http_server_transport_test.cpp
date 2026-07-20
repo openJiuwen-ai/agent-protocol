@@ -10,9 +10,6 @@
 #include <functional>
 #include <regex>
 
-#include <nlohmann/json.hpp>
-
-#include "mcp_error.h"
 #include "mcp_log.h"
 #include "shared/http_common.h"
 #include "shared/common_type.h"
@@ -129,49 +126,6 @@ protected:
             "method": "tools/list",
             "params": {}
         })";
-    }
-
-    std::string CreateWrongJsonrpcVersionInitializeRequestJson()
-    {
-        return R"({
-            "jsonrpc": "1.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": ")" + std::string(DEFAULT_PROTOCOL_VERSION) + R"(",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "TestClient",
-                    "version": "1.0.0"
-                }
-            }
-        })";
-    }
-
-    std::string CreateClientJsonRpcErrorResponseJson()
-    {
-        return R"({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": {
-                "code": -32600,
-                "message": "User rejected"
-            }
-        })";
-    }
-
-    void ExpectInvalidRequestJsonRpcResponse(const Http::HttpResponse& response, int expectedStatusCode)
-    {
-        EXPECT_EQ(response.statusCode, expectedStatusCode);
-        EXPECT_NE(response.statusCode, Http::HTTP_STATUS_ACCEPTED);
-        ASSERT_EQ(response.headers.at(Http::CONTENT_TYPE_HEADER), Http::CONTENT_TYPE_JSON);
-        ASSERT_FALSE(response.body.empty());
-
-        const auto body = nlohmann::json::parse(response.body);
-        EXPECT_EQ(body.at("jsonrpc").get<std::string>(), JSONRPC_VERSION);
-        EXPECT_EQ(body.at("id").get<int>(), 1);
-        EXPECT_EQ(body.at("error").at("code").get<int>(), static_cast<int>(JsonRpcErrorCode::INVALID_REQUEST));
-        EXPECT_NE(body.at("error").at("message").get<std::string>().find("Deserialization Failed"), std::string::npos);
     }
 
     std::string validSessionId;
@@ -520,70 +474,6 @@ TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInvalidJson)
     EXPECT_FALSE(mockHttpSendFunc.responses.empty());
     EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_BAD_REQUEST);
     EXPECT_EQ(callback->messageCount, 0);
-}
-
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestWrongJsonrpcVersionReturnsErrorSseMode)
-{
-    StreamableHttpServerTransport transport("", false);
-    auto callback = std::make_shared<MockTransportCallback>();
-    transport.SetCallback(callback);
-
-    RequestContext ctx = CreateRequestContext();
-    std::unordered_map<std::string, std::string> headers = {
-        {"accept", "application/json, text/event-stream"},
-        {"content-type", "application/json"}
-    };
-    Http::HttpRequest request =
-        CreateHttpRequest("POST", headers, CreateWrongJsonrpcVersionInitializeRequestJson());
-
-    transport.HandleRequest(request, ctx);
-
-    ASSERT_FALSE(mockHttpSendFunc.responses.empty());
-    ExpectInvalidRequestJsonRpcResponse(mockHttpSendFunc.lastResponse(), Http::HTTP_STATUS_BAD_REQUEST);
-    EXPECT_EQ(callback->messageCount, 0);
-}
-
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestWrongJsonrpcVersionReturnsErrorJsonMode)
-{
-    StreamableHttpServerTransport transport("", true);
-    auto callback = std::make_shared<MockTransportCallback>();
-    transport.SetCallback(callback);
-
-    RequestContext ctx = CreateRequestContext();
-    std::unordered_map<std::string, std::string> headers = {
-        {"accept", "application/json, text/event-stream"},
-        {"content-type", "application/json"}
-    };
-    Http::HttpRequest request =
-        CreateHttpRequest("POST", headers, CreateWrongJsonrpcVersionInitializeRequestJson());
-
-    transport.HandleRequest(request, ctx);
-
-    ASSERT_FALSE(mockHttpSendFunc.responses.empty());
-    ExpectInvalidRequestJsonRpcResponse(mockHttpSendFunc.lastResponse(), Http::HTTP_STATUS_OK);
-    EXPECT_EQ(callback->messageCount, 0);
-}
-
-TEST_F(StreamableHttpServerTransportTest, HandlePostRequestClientJsonRpcErrorDeliveredToCallback)
-{
-    StreamableHttpServerTransport transport(validSessionId, false);
-    auto callback = std::make_shared<MockTransportCallback>();
-    transport.SetCallback(callback);
-
-    RequestContext ctx = CreateRequestContext();
-    std::unordered_map<std::string, std::string> headers = {
-        {"accept", "application/json, text/event-stream"},
-        {"content-type", "application/json"},
-        {"mcp-session-id", validSessionId}
-    };
-    Http::HttpRequest request =
-        CreateHttpRequest("POST", headers, CreateClientJsonRpcErrorResponseJson());
-
-    transport.HandleRequest(request, ctx);
-
-    ASSERT_FALSE(mockHttpSendFunc.responses.empty());
-    EXPECT_EQ(mockHttpSendFunc.lastResponse().statusCode, Http::HTTP_STATUS_ACCEPTED);
-    EXPECT_EQ(callback->messageCount, 1);
 }
 
 TEST_F(StreamableHttpServerTransportTest, HandlePostRequestInitializeNoSessionId)

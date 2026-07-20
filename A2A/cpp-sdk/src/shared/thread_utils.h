@@ -18,7 +18,7 @@ inline void SetCurrentThreadName(const std::string& name)
 {
     // pthread_setname_np limits thread names to 16 chars including null terminator
     std::string truncatedName = name.substr(0, 15);
-    (void)pthread_setname_np(pthread_self(), truncatedName.c_str());
+    pthread_setname_np(pthread_self(), truncatedName.c_str());
 }
 
 } // namespace A2A

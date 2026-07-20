@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -17,13 +18,13 @@ namespace A2A::Server {
 
 class InMemoryTaskStore : public TaskStore {
 public:
-    void Save(const A2A::Task& task, const std::shared_ptr<ServerCallContext> context) override;
+    void Save(const A2A::Task& task, std::shared_ptr<ServerCallContext> context) override;
 
     ~InMemoryTaskStore() override = default;
 
-    std::shared_ptr<Task> Get(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
+    std::optional<A2A::Task> Get(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
 
-    void Delete(const std::string& taskId, const std::shared_ptr<ServerCallContext> context) override;
+    void Delete(const std::string& taskId, std::shared_ptr<ServerCallContext> context) override;
 
 private:
     std::mutex mutex_;

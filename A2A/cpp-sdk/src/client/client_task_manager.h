@@ -6,6 +6,7 @@
 #define A2A_CLIENT_TASK_MANAGER
 
 #include <optional>
+#include <string>
 
 #include "types.h"
 
