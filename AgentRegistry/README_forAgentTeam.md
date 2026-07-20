@@ -10,11 +10,11 @@
 
 `pip install` **默认就是 Agent Team 精简版**——只装 SDK 必需的轻量包（`requests` / `httpx` / `fastapi` / `pydantic` / `python-multipart` / `uvicorn[standard]`），不附带 `numpy` / `sentence-transformers` / `chromadb` 等数百 MB 的搜索/索引依赖。
 
-从 GitCode 克隆 `agent-protocol` 的 `feature/Agentregistry` 分支安装：
+从 GitCode 克隆 `agent-protocol` 的 `develop` 分支安装：
 
 ```bash
-git clone -b feature/Agentregistry https://gitcode.com/openJiuwen/agent-protocol.git
-cd agent-protocol
+git clone -b develop https://gitcode.com/openJiuwen/agent-protocol.git
+cd agent-protocol/AgentRegistry
 pip install -e .
 ```
 

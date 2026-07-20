@@ -51,9 +51,9 @@ full = ["a2x-registry[vector,evaluation]"]
 dev = ["build>=1.0", "twine>=5.0", "pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry"
+Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/develop/AgentRegistry"
 Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
-Documentation = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry#readme"
+Documentation = "https://gitcode.com/openJiuwen/agent-protocol/tree/develop/AgentRegistry#readme"
 
 [project.scripts]
 a2x-registry = "a2x_registry.backend.__main__:main"

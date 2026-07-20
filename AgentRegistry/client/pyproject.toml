@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["httpx>=0.24"]
 
 [project.urls]
-Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry/client"
+Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/develop/AgentRegistry/client"
 Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
 
 [project.scripts]

@@ -14,10 +14,10 @@
 
 - 三个节点各是一台主机（或同机不同端口，见文末本地测试），记其地址为 `http://<A_IP>:8000`、`http://<B_IP>:8000`、`http://<C_IP>:8000`。
 - **网络**：节点之间要能互相访问对方的 HTTP 端口（防火墙/安全组放行）。全连接拓扑下每对成员都要互通。
-- 安装（三台都装）：从 GitCode 克隆 `feature/Agentregistry` 分支后安装：
+- 安装（三台都装）：从 GitCode 克隆 `develop` 分支后安装：
   ```bash
-  git clone -b feature/Agentregistry https://gitcode.com/openJiuwen/agent-protocol.git
-  cd agent-protocol && pip install -e .
+  git clone -b develop https://gitcode.com/openJiuwen/agent-protocol.git
+  cd agent-protocol/AgentRegistry && pip install -e .
   ```
 
 ---

@@ -368,9 +368,9 @@ curl http://127.0.0.1:8000/api/datasets/translators/services
 ### 3.1 [每个注册中心主机] 安装 + 启用集群
 
 ```bash
-# 从 GitCode 克隆 feature/Agentregistry 分支后安装
-git clone -b feature/Agentregistry https://gitcode.com/openJiuwen/agent-protocol.git
-cd agent-protocol && pip install -e .
+# 从 GitCode 克隆 develop 分支后安装
+git clone -b develop https://gitcode.com/openJiuwen/agent-protocol.git
+cd agent-protocol/AgentRegistry && pip install -e .
 
 # 启用集群：生成本实例的 node_id（写入 <A2X_REGISTRY_HOME>/cluster_state.json）
 a2x-registry cluster init
