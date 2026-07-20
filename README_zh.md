@@ -8,7 +8,7 @@
 当前，仓库包含三个软件开发工具包：
 - Model Context Protocol (MCP) CPP SDK
 - Agent2Agent Protocol (A2A) CPP SDK
-- [A2X registry](https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry)
+- A2X agent registry
 
 ## 参与贡献
 
