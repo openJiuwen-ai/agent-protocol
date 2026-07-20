@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2x-registry"
+dynamic = ["version"]
+description = "A2X Registry — hierarchical taxonomy service registry with LLM-based recursive search."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "A2X Registry" }]
+keywords = ["a2x", "registry", "agent", "taxonomy", "retrieval", "a2a"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Default install (== "agentteam" mode) — only what the SDK-facing slice
+# of the backend needs. Heavy ML/index deps are factored into the [vector]
+# and [evaluation] extras; install [full] to restore prior 0.1.5 default
+# behavior.
+dependencies = [
+    "requests>=2.28",
+    "httpx>=0.24",                   # cluster inter-node sync + CLI client
+    "fastapi>=0.104",
+    "pydantic>=2.0",
+    "python-multipart>=0.0.6",
+    "uvicorn[standard]>=0.24",       # bundles websockets
+]
+
+[project.optional-dependencies]
+# Vector search + A2X taxonomy build/search + traditional search backends.
+# Without this group, /api/search and POST /api/datasets/{ds}/build return
+# 503 with a structured install hint; SDK CRUD/registration/reservation
+# routes are unaffected.
+vector = [
+    "numpy>=1.23",
+    "sentence-transformers>=2.2",
+    "chromadb>=0.4",
+]
+# Progress bars used by the a2x-evaluate-* CLIs.
+evaluation = ["tqdm>=4.64"]
+# Convenience: equivalent to the pre-0.1.6 default install.
+full = ["a2x-registry[vector,evaluation]"]
+dev = ["build>=1.0", "twine>=5.0", "pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry"
+Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
+Documentation = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry#readme"
+
+[project.scripts]
+a2x-registry = "a2x_registry.backend.__main__:main"
+a2x-build = "a2x_registry.a2x.build.__main__:main"
+a2x-register = "a2x_registry.register.__main__:main"
+a2x-evaluate-a2x = "a2x_registry.a2x.evaluation.__main__:main"
+a2x-evaluate-vector = "a2x_registry.vector.evaluation.__main__:main"
+a2x-evaluate-traditional = "a2x_registry.traditional.evaluation.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "a2x_registry.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["a2x_registry*"]
+# auth_data is a runtime directory created on first ``a2x-registry auth
+# init`` — never package it into the wheel. ``packages.find`` is for code
+# packages anyway; this is belt-and-suspenders against an accidental ``pip
+# install .`` from a dev tree where the dir already exists.
+exclude = [
+    "reference*", "examples*", "tests*", "database*", "client*", "backup*",
+    "a2x_registry.auth.auth_data*",
+]
+
+[tool.setuptools.package-data]
+a2x_registry = ["llm_apikey.example.json"]

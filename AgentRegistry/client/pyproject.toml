@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2x-registry-client"
+dynamic = ["version"]                # read from a2x_registry_client.__version__
+description = "Python SDK for the A2X Registry — Agent Team registration and discovery."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "A2X Registry" }]
+keywords = ["a2x", "registry", "agent", "a2a", "sdk"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+dependencies = ["httpx>=0.24"]
+
+[project.urls]
+Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/feature/Agentregistry/client"
+Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
+
+[project.scripts]
+a2x-registry-client = "a2x_registry_client.cli:main"
+
+[tool.setuptools]
+packages = ["a2x_registry_client"]
+
+[tool.setuptools.dynamic]
+version = { attr = "a2x_registry_client.__version__" }
+
+[tool.setuptools.package-data]
+a2x_registry_client = ["py.typed"]

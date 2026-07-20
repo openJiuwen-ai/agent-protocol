@@ -1,0 +1,35 @@
+{
+    "services": [
+        {
+            "dataset": "default",
+            "type": "generic",
+            "service_id": "example_calculator",
+            "name": "Calculator Service",
+            "description": "Basic arithmetic operations: add, subtract, multiply, divide.",
+            "url": "https://calc.example.com"
+        },
+        {
+            "dataset": "default",
+            "type": "a2a",
+            "agent_card": {
+                "name": "Weather Agent",
+                "description": "Provides real-time weather information and forecasts.",
+                "version": "1.0.0",
+                "url": "https://weather.example.com/a2a",
+                "skills": [
+                    {
+                        "name": "get_forecast",
+                        "description": "Get weather forecast for a given city and date range.",
+                        "tags": ["weather", "forecast"],
+                        "examples": ["What's the weather in Tokyo tomorrow?"]
+                    }
+                ]
+            }
+        },
+        {
+            "dataset": "default",
+            "type": "a2a",
+            "agent_card_url": "https://example.com/.well-known/agent.json"
+        }
+    ]
+}
