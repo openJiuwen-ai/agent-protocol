@@ -5,48 +5,66 @@
 #ifndef A2A_TASK_MANAGER
 #define A2A_TASK_MANAGER
 
+#include <atomic>
 #include <memory>
-#include <optional>
 #include <string>
+#include <mutex>
 
-#include "../../../include/server/server_call_context.h"
+#include "server/server_call_context.h"
 #include "server/task_store.h"
+#include "utils_helpers.h"
 #include "types.h"
 
 namespace A2A::Server {
 using EventType = std::variant<Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent>;
+using EventCb = std::function<void(const StreamEvent&)>;
+
+struct TaskExecuteInfo {
+    mutable std::mutex callbackMutex;
+
+    // nonstreaming only: whether response message is already sent
+    std::atomic<bool> messageSent{false};
+
+    // callbacks on event processing (sending response)
+    std::vector<EventCb> eventCb = {};
+
+    // call context bound to task
+    std::shared_ptr<ServerCallContext> callContext;
+};
 
 class TaskManager {
 public:
-    TaskManager(std::optional<std::string> taskId, std::optional<std::string> contextId,
-                std::shared_ptr<TaskStore> taskStore, std::optional<Message> initialMessage,
-                std::shared_ptr<ServerCallContext> context = nullptr);
+    explicit TaskManager(const std::shared_ptr<TaskStore>& taskStore);
 
     ~TaskManager() = default;
 
-    std::optional<Task> GetTask();
+    void RegisterTask(const std::string& taskId, const std::shared_ptr<TaskExecuteInfo>& info);
 
-    void SaveTaskEvent(const EventType& event);
+    [[nodiscard]] std::shared_ptr<Task> GetTask(const std::string& taskId);
 
-    Task EnsureTask(const std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& event);
+    [[nodiscard]] std::string GetContextId(const std::string& taskId) const;
 
-    std::variant<Task, Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent> Process(
-        const std::variant<Task, Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent>& event);
+    void Process(const std::string& taskId, const StreamEvent& event);
 
     Task UpdateWithMessage(const Message& message, Task task);
 
-private:
-    std::shared_ptr<Task> InitTaskObj(const std::string& taskId, const std::string& contextId);
-    void SaveTaskContextId(const EventType &event);
-    void SaveTask(const Task& task);
-    Task EnsureTaskForEvent(const EventType& event);
+    bool ExchangeMessageSent(const std::string& taskId, bool value);
 
-    std::optional<std::string> taskId_;
-    std::optional<std::string> contextId_;
+    void AddEventCallback(const std::string& taskId, EventCb callback);
+
+    void CancelTask(const std::shared_ptr<Task>& task);
+
+private:
+    void SaveTask(const Task& task);
+    void SaveTaskContextId(const EventType &event);
+    void SaveTaskEvent(const EventType& event);
+    Task EnsureTaskForEvent(const EventType& event);
+    Task EnsureTask(const std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& event);
+    void HandleError(const std::string& taskId, const std::string& message,
+        int code = static_cast<int>(A2AErrorCode::JSONRPC_INTERNAL_ERROR)) const;
+
     std::shared_ptr<TaskStore> taskStore_;
-    std::optional<Message> initialMessage_;
-    std::shared_ptr<Task> currentTask_;
-    const std::shared_ptr<ServerCallContext> callContext_;
+    std::unordered_map<std::string, std::shared_ptr<TaskExecuteInfo>> taskExecuteMap_;
 };
 
 } // namespace A2A::Server

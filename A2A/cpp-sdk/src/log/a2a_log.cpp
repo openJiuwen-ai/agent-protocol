@@ -2,19 +2,21 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "a2a_log.h"
+#include <atomic>
+#include <cstdio>
 #include <iostream>
-#include <chrono>
-#include <cstdarg>
 
-// Legacy C interface global variables
-A2aLogCallback g_logCallback = A2aPrintfImpl;
-static A2A_LOG_LEVEL g_logLevel = A2A_LOG_LEVEL_INFO;
+#include "a2a_log.h"
 
-// Legacy C interface functions
+
+namespace A2A::Log {
+
+A2aLogCallback logCallback = A2aPrintfImpl;
+static A2A_LOG_LEVEL g_logLevel = A2A_LOG_LEVEL::INFO;
+
 int32_t SetLogLevel(const A2A_LOG_LEVEL logLevel)
 {
-    if (logLevel < A2A_LOG_LEVEL_DEBUG || logLevel > A2A_LOG_LEVEL_FATAL) {
+    if (logLevel < A2A_LOG_LEVEL::DEBUG || logLevel > A2A_LOG_LEVEL::FATAL) {
         return -1;
     }
     g_logLevel = logLevel;
@@ -26,6 +28,24 @@ A2A_LOG_LEVEL GetLogLevel()
     return g_logLevel;
 }
 
+const char* GetLogLevelName(A2A_LOG_LEVEL logLevel)
+{
+    switch (logLevel) {
+        case A2A_LOG_LEVEL::DEBUG:
+            return "DEBUG";
+        case A2A_LOG_LEVEL::INFO:
+            return "INFO";
+        case A2A_LOG_LEVEL::WARN:
+            return "WARN";
+        case A2A_LOG_LEVEL::ERROR:
+            return "ERROR";
+        case A2A_LOG_LEVEL::FATAL:
+            return "FATAL";
+        default:
+            return "UNKNOWN";
+    }
+}
+
 void A2aPrintfImpl(A2A_LOG_LEVEL logLevel, std::string message)
 {
     if (logLevel < GetLogLevel()) {
@@ -35,15 +55,15 @@ void A2aPrintfImpl(A2A_LOG_LEVEL logLevel, std::string message)
     printf("%s\n", message.c_str());
 }
 
-int32_t SetLogCallback(const A2aLogCallback logCallback)
+int32_t SetLogCallback(const A2aLogCallback a2aLogCallback)
 {
-    if (logCallback == nullptr) {
-        std::cout << "log callback is null" << std::endl;
+    static std::atomic<bool> isInitialized{false};
+    if (isInitialized.exchange(true)) {
+        std::cout << "log callback can only be set once" << std::endl;
         return -1;
     }
-    if (logCallback == g_logCallback) {
-        return 0;
-    }
-    g_logCallback = logCallback;
+    logCallback = a2aLogCallback;
     return 0;
 }
+
+} // namespace A2A::Log

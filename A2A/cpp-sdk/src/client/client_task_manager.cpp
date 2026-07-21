@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <algorithm>
 
 #include "client_task_manager.h"
 
@@ -31,19 +32,23 @@ static void AppendArtifactToTask(Task& task, const TaskArtifactUpdateEvent& even
     const bool appendParts = event.append.value_or(false);
 
     auto& list = *task.artifacts;
-    auto it = std::find_if(list.begin(), list.end(), [&](const Artifact& a) { return a.artifactId == id; });
+    auto it = std::find_if(list.begin(), list.end(), [&id](const Artifact& a) { return a.artifactId == id; });
 
-    if (!appendParts) {
+    if (appendParts) {
+        // 追加模式
+        if (it != list.end()) {
+            it->parts.insert(it->parts.end(), newArtifact.parts.begin(), newArtifact.parts.end());
+        } else {
+            // 没找到现有 artifact，创建新 artifact 并添加 parts
+            list.push_back(newArtifact);
+        }
+    } else {
+        // 替换模式
         if (it != list.end()) {
             *it = newArtifact;
         } else {
             list.push_back(newArtifact);
         }
-        return;
-    }
-
-    if (it != list.end()) {
-        it->parts.insert(it->parts.end(), newArtifact.parts.begin(), newArtifact.parts.end());
     }
 }
 
@@ -72,6 +77,7 @@ void ClientTaskManager::SaveTaskEvent(const std::variant<Task, TaskStatusUpdateE
             Task t;
             t.id = u.taskId;
             t.contextId = u.contextId;
+            t.status.state = TaskState::UNSPECIFIED;
             currentTask_ = t;
         }
     }
@@ -87,8 +93,8 @@ void ClientTaskManager::SaveTaskEvent(const std::variant<Task, TaskStatusUpdateE
             }
         }
         if (u.metadata && !task.metadata) {
-            task.metadata = nlohmann::json::object();
-            task.metadata->update(*u.metadata);
+            task.metadata = "";
+            task.metadata = *u.metadata;
         }
         task.status = u.status;
     } else {

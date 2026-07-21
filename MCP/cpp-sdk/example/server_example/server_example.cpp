@@ -69,13 +69,9 @@ void signalHandler(int signal)
 }
 
 // Use C++ style callback with std::string instead of C-style variadic function
-void FileLogCallback(MCP_LOG_LEVEL logLevel, std::string message)
+void FileLogCallback(MCP_LOG_LEVEL /* logLevel */, std::string message)
 {
     if (!g_logFile) {
-        return;
-    }
-
-    if (logLevel < GetLogLevel()) {
         return;
     }
 

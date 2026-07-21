@@ -5,19 +5,17 @@
 #ifndef A2A_HTTP_COMMON_INCLUDE_H_
 #define A2A_HTTP_COMMON_INCLUDE_H_
 
-#include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
 #include "common_types.h"
-#include "http_common.h"
 
 namespace A2A::Http {
 
 // A2A Header constants
 constexpr const char* CONTENT_TYPE_HEADER = "Content-Type";
 constexpr const char* ACCEPT_HEADER = "accept";
+constexpr const char* ACCEPT_ENCODING_HEADER = "Accept-Encoding";
 
 // Common HTTP Header names (wire-level; preserve conventional casing)
 constexpr const char* CACHE_CONTROL_HEADER = "Cache-Control";
@@ -118,6 +116,7 @@ struct HttpResponse {
     HttpSendType type = HttpSendType::HTTPRESPONSE;
     std::unordered_map<std::string, std::string> headers;
     std::string body;
+    bool streaming = true;
 
     HttpResponse() : statusCode(HTTP_STATUS_OK), statusText("OK")
     {
@@ -127,7 +126,7 @@ struct HttpResponse {
 
 struct HttpRequestContext;
 using HttpSendFunc = std::function<void(const HttpResponse& response, const HttpRequestContext& ctx)>;
-using HttpHandler = std::function<void(const HttpRequest& reqeust, HttpRequestContext& ctx)>;
+using HttpHandler = std::function<void(const HttpRequest& request, HttpRequestContext& ctx)>;
 
 struct HttpRequestContext {
     int connectionId;
@@ -161,13 +160,17 @@ void TrimInPlace(std::string& value);
 // - consumedBytes: on success, total bytes consumed (headers + separator + body).
 // Returns true if a complete message (including body) is present; false if incomplete.
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
-                         std::unordered_map<std::string, std::string>& headers, std::string& body,
-                         std::size_t& consumedBytes);
+    std::unordered_map<std::string, std::string>& headers, std::string& body,
+    std::size_t& consumedBytes);
 
+std::string GetHeaderValue(const HttpResponse& response, const std::string& headerName);
 
-std::string GetContentType(const HttpResponse& response);
+std::string GetHeaderValue(const std::unordered_map<std::string, std::string>& headers, const std::string& headerName);
 
 bool ParseSseLine(const std::string& line, ServerSentEvent& sseEvent);
+
+std::unordered_map<std::string, std::string>::const_iterator FindHeaderCaseInsensitive(
+    const std::unordered_map<std::string, std::string>& headers, const std::string& headerName);
 
 } // namespace A2A::Http
 

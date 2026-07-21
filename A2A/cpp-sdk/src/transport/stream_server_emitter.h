@@ -9,16 +9,22 @@
 #include "transport_emitter.h"
 
 namespace A2A::Transport {
-
 class StreamServerEmitter : public TransportEmitter {
 public:
-    explicit StreamServerEmitter(const Http::HttpRequestContext& ctx) : ctx_(ctx) {}
+    explicit StreamServerEmitter(const Http::HttpRequestContext& ctx,
+        const std::map<std::string, std::string>& headers = {})
+        : ctx_(ctx), headers_(headers), responseSent_(false)
+    {
+    }
     ~StreamServerEmitter() override = default;
-    void WriteData(const std::string& data) override;
+    void WriteStreamingData(const std::string& data) override;
+    void WriteNonStreamingData(const std::string& data) override;
     void WriteDone() override;
 
 private:
     Http::HttpRequestContext ctx_;
+    const std::map<std::string, std::string>& headers_;
+    std::atomic<bool> responseSent_;
 
     void BuildAndSend(const std::string &body) const;
 };

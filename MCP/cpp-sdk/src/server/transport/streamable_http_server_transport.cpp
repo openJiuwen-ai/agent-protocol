@@ -312,6 +312,15 @@ void StreamableHttpServerTransport::HandlePostRequest(RequestContext& ctx, const
     }
 
     JSONRPCMessage message = DeserializeJSONRPCMessage(request.body, deserializeMethod);
+    if (std::holds_alternative<JSONRPCError>(message) && messageJson.contains("method")) {
+        const int statusCode =
+            isJsonResponseEnabled_ ? Http::HTTP_STATUS_OK : Http::HTTP_STATUS_BAD_REQUEST;
+        HttpResponse response =
+            CreateJsonResponse(std::optional<JSONRPCMessage>(std::move(message)), statusCode, {}, ctx);
+        ctx.httpSendFunc(response, ctx);
+        return;
+    }
+
     bool isRequest = std::holds_alternative<JSONRPCRequest>(message);
     if (!isRequest) {
         HandleNonRequestMessage(ctx, message);

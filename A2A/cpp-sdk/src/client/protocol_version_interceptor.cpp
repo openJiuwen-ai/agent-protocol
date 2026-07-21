@@ -14,7 +14,7 @@ ProtocolVersionInterceptor::ProtocolVersionInterceptor()
 
 ProtocolVersionInterceptor::~ProtocolVersionInterceptor() = default;
 
-void ProtocolVersionInterceptor::Intercept(const std::string& methodName, nlohmann::json& payload,
+void ProtocolVersionInterceptor::Intercept(const std::string& methodName, std::string& payload,
     std::map<std::string, std::string>& headers,
     const A2A::AgentCard* agentCard, const ClientCallContext* context)
 {
