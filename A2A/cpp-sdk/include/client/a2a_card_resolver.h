@@ -13,29 +13,33 @@
 
 namespace A2A::Client {
 
+/**
+ * @brief Resolves AgentCard documents from a remote or local source.
+ * @note 代理卡片解析器抽象接口。
+ */
 class A2ACardResolver {
 public:
-    /**
-    * @brief destructor
-    */
+    /** @brief Virtual destructor. */
     virtual ~A2ACardResolver() = default;
 
     /**
-    * @brief get AgentCard from relative path
-    *
-    * @param[in] relativeCardPath relative card path
-    * @return future to valid AgentCard if read successful
-    */
+     * @brief Fetch an agent card from a relative path.
+     * @param[in] relativeCardPath Optional path relative to the resolver base URL.
+     * @return Future that completes with the resolved AgentCard.
+     * @throws A2AClientHTTPError on non-2xx HTTP status.
+     * @throws A2AClientJSONError on invalid card JSON.
+     */
     virtual std::future<AgentCard> GetAgentCard(
         const std::optional<std::string>& relativeCardPath = std::nullopt) const = 0;
 
     /**
-    * @brief get all AgentCard from local path
-    *
-    * @return future to vector of AgentCards
-    */
+     * @brief Fetch all agent cards from the resolver source.
+     * @return Future that completes with a vector of AgentCard objects.
+     * @throws A2AClientHTTPError on transport failure.
+     */
     virtual std::future<std::vector<AgentCard>> GetAllAgentCards() const = 0;
 };
+
 } // namespace A2A::Client
 
 #endif // A2A_CARD_RESOLVER

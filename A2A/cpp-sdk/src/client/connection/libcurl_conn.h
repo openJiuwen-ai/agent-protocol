@@ -75,14 +75,10 @@ struct RequestContext {
     struct curl_slist* headers = nullptr; // Store headers for cleanup
 
     RequestContext(const HttpRequest& req, HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback,
-        int timeout, UserData* userData)
-        : userData(*userData),
-          request(req),
-          responseHeaderCallback(responseHeaderCallback),
-          responseBodyCallback(responseBodyCallback),
-          timeoutMs(timeout),
-          startTime(std::chrono::steady_clock::now()),
-          headers(nullptr)
+        int timeout, const UserData& userData)
+        : userData(userData), request(req), responseHeaderCallback(responseHeaderCallback),
+        responseBodyCallback(responseBodyCallback), timeoutMs(timeout),
+        startTime(std::chrono::steady_clock::now()), headers(nullptr)
     {
     }
 
@@ -133,45 +129,47 @@ public:
     ~LibcurlConn() override;
 
     // Send message to server
-    void SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
-        UserData* userData) override;
-
-    void Connect() override;
+    int SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
+        std::shared_ptr<UserData> userData, int timeout) override;
 
     void Terminate() override;
 
     void SetCallback(std::shared_ptr<ConnCallback> callback) override;
 
+    void FinishRequest(int timerId) override;
+
+    void RefreshRequest(int timerId, int timeout) override;
+
 private:
     /**
-     * @brief Start the HTTP client service and initialize all components
-     * @return true if service started successfully, false otherwise
-     */
+    * @brief Start the HTTP client service and initialize all components
+    * @return true if service started successfully, false otherwise
+    */
     bool Start();
 
     /**
-     * @brief Stop the HTTP client service with graceful shutdown
-     */
+    * @brief Stop the HTTP client service with graceful shutdown
+    */
     void Stop();
 
     /**
-     * @brief Check if the HTTP client service is currently running
-     * @return true if service is active and accepting requests
-     */
+    * @brief Check if the HTTP client service is currently running
+    * @return true if service is active and accepting requests
+    */
     bool IsRunning() const
     {
         return state_.load(std::memory_order_acquire) == ConnState::RUNNING;
     }
 
     /**
-     * @brief Asynchronously send HTTP request
-     * @param request HTTP request structure with URL, method, headers, and body
-     * @param userData User data pointer
-     * @param timeoutMs Request timeout in milliseconds
-     * @param responseHeaderCallback Response header callback function called on completion
-     * @param responseBodyCallback Response body callback function called on completion
-     */
-    void Send(const HttpRequest& request, UserData* userData, int timeoutMs, HttpCallback responseHeaderCallback,
+    * @brief Asynchronously send HTTP request
+    * @param request HTTP request structure with URL, method, headers, and body
+    * @param userData User data pointer
+    * @param timeoutMs Request timeout in milliseconds
+    * @param responseHeaderCallback Response header callback function called on completion
+    * @param responseBodyCallback Response body callback function called on completion
+    */
+    int Send(const HttpRequest& request, UserData& userData, int timeoutMs, HttpCallback responseHeaderCallback,
         HttpCallback responseBodyCallback);
 
 private:
@@ -186,7 +184,7 @@ private:
     std::unordered_map<std::string, std::string> requestHeaders_;
 
     // Core components
-    LibcurlConnConfig config_ = {0}; // Service configuration parameters
+    LibcurlConnConfig config_{}; // Service configuration parameters
     CURLM* multiHandle_{nullptr}; // libcurl multi handle for concurrent transfers
     std::atomic<ConnState> state_{ConnState::STOPPED}; // Service state
     std::unique_ptr<EventSystem> eventSystem_; // Event system for async I/O
@@ -204,161 +202,159 @@ private:
     size_t ioThreadIndex_{0};  // Index for naming IO threads
 
     /**
-     * @brief Main I/O thread function for event-driven HTTP processing
-     */
+    * @brief Main I/O thread function for event-driven HTTP processing
+    */
     void IoThreadMain();
 
     /**
-     * @brief Handle error response for HTTP requests
-     * @param request Shared pointer to request context
-     * @param errorMessage Error message to send in response
-     */
-    void HandleErrorResponse(const std::shared_ptr<RequestContext>& request, const std::string& errorMessage);
+    * @brief Handle error response for HTTP requests
+    * @param request Shared pointer to request context
+    * @param errorMessage Error message to send in response
+    */
+    void HandleErrorResponse(const std::shared_ptr<RequestContext>& request, const std::string& errorMessage) const;
 
     /**
-     * @brief Handle finished HTTP response
-     * @param request Shared pointer to request context
-     */
-    void HandleFinishedResponse(const std::shared_ptr<RequestContext>& request);
+    * @brief Handle finished HTTP response
+    * @param request Shared pointer to request context
+    */
+    void HandleFinishedResponse(const std::shared_ptr<RequestContext>& request) const;
 
     /**
-     * @brief Handle request in I/O thread (called from queue callback)
-     * @param request Shared pointer to request context containing all request information
-     */
+    * @brief Handle request in I/O thread (called from queue callback)
+    * @param request Shared pointer to request context containing all request information
+    */
     void HandleRequestInIOThread(const std::shared_ptr<RequestContext>& request);
 
     /**
-     * @brief Handle stop request in I/O thread
-     * Processes remaining queue items and cancels active requests before stopping
-     */
+    * @brief Handle stop request in I/O thread
+    * Processes remaining queue items and cancels active requests before stopping
+    */
     void HandleStopRequestInIOThread();
 
     /**
-     * @brief Check for completed HTTP requests and process results
-     */
+    * @brief Check for completed HTTP requests and process results
+    */
     void CheckMultiInfo();
 
     /**
-     * @brief Cancel a single request and notify user
-     * @param request Shared pointer to request context to cancel
-     */
-    void CancelRequest(const std::shared_ptr<RequestContext>& request);
+    * @brief Cancel a single request and notify user
+    * @param request Shared pointer to request context to cancel
+    */
+    void CancelRequest(const std::shared_ptr<RequestContext>& request) const;
 
     /**
-     * @brief Cancel all active requests during shutdown
-     */
+    * @brief Cancel all active requests during shutdown
+    */
     void CancelAllActiveRequests();
 
     /**
-     * @brief libcurl socket callback
-     * @param easy CURL easy handle associated with this socket
-     * @param sockfd Socket file descriptor
-     * @param action Action type (CURL_POLL_IN, CURL_POLL_OUT, CURL_POLL_REMOVE)
-     * @param userp User data pointer (LibcurlConn instance)
-     * @param socketp Socket-specific data pointer (CurlSocketContext)
-     * @return 0 on success, -1 on error
-     */
+    * @brief libcurl socket callback
+    * @param easy CURL easy handle associated with this socket
+    * @param sockfd Socket file descriptor
+    * @param action Action type (CURL_POLL_IN, CURL_POLL_OUT, CURL_POLL_REMOVE)
+    * @param userp User data pointer (LibcurlConn instance)
+    * @param socketp Socket-specific data pointer (CurlSocketContext)
+    * @return 0 on success, -1 on error
+    */
     static int SocketCallback(CURL* easy, curl_socket_t sockfd, int action, void* userp, void* socketp);
 
     /**
-     * @brief libcurl timer callback
-     * @param multi CURL multi handle that triggered this timer callback
-     * @param timeoutMs Timeout in milliseconds (-1 to clear timer, 0 to trigger immediately)
-     * @param userp User data pointer (LibcurlConn instance)
-     * @return Always returns 0
-     */
+    * @brief libcurl timer callback
+    * @param multi CURL multi handle that triggered this timer callback
+    * @param timeoutMs Timeout in milliseconds (-1 to clear timer, 0 to trigger immediately)
+    * @param userp User data pointer (LibcurlConn instance)
+    * @return Always returns 0
+    */
     static int TimerCallback(CURLM* multi, long timeoutMs, void* userp);
 
     /**
-     * @brief Handle timeout event
-     * @param fd Timer file descriptor (unused for libcurl timeouts)
-     * @param events Event flags from EventSystem
-     * @param arg User argument (unused)
-     */
+    * @brief Handle timeout event
+    * @param fd Timer file descriptor (unused for libcurl timeouts)
+    * @param events Event flags from EventSystem
+    * @param arg User argument (unused)
+    */
     void OnTimeout(int fd, short events, void* arg);
 
     /**
-     * @brief Handle socket event
-     * @param fd Socket file descriptor
-     * @param events Event flags from EventSystem (EV_READ/EV_WRITE)
-     * @param arg User argument (CurlSocketContext)
-     */
+    * @brief Handle socket event
+    * @param fd Socket file descriptor
+    * @param events Event flags from EventSystem (EV_READ/EV_WRITE)
+    * @param arg User argument (CurlSocketContext)
+    */
     void OnSocketEvent(int fd, short events, void* arg);
 
     /**
-     * @brief Create socket context
-     * @param sockfd Socket file descriptor
-     * @return Shared pointer to created socket context
-     */
+    * @brief Create socket context
+    * @param sockfd Socket file descriptor
+    * @return Shared pointer to created socket context
+    */
     std::shared_ptr<CurlSocketContext> CreateSocketContext(curl_socket_t sockfd);
 
     /**
-     * @brief Destroy socket context
-     * Uses reference counting and delayed cleanup for thread safety
-     * @param context Shared pointer to socket context to destroy
-     */
+    * @brief Destroy socket context
+    * Uses reference counting and delayed cleanup for thread safety
+    * @param context Shared pointer to socket context to destroy
+    */
     void DestroySocketContext(const std::shared_ptr<CurlSocketContext>& context);
 
     /**
-     * @brief Configure CURL easy handle with HTTP request parameters
-     * @param easyHandle CURL easy handle to configure
-     * @param request Shared pointer to request context containing request data
-     */
+    * @brief Configure CURL easy handle with HTTP request parameters
+    * @param easyHandle CURL easy handle to configure
+    * @param request Shared pointer to request context containing request data
+    */
     void SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<RequestContext>& request);
 
     /**
-     * @brief Check for completed HTTP requests and process results
-     * Reads completion messages from libcurl multi interface and handles them
-     */
+    * @brief Check for completed HTTP requests and process results
+    * Reads completion messages from libcurl multi interface and handles them
+    */
     void CheckCompletedRequests();
 
     /**
-     * @brief Execute user callback with complete HTTP response
-     * @param request Shared pointer to request context
-     * @param response Complete HTTP response object with status, body, and headers
-     */
-    void ExecuteCallback(const std::shared_ptr<RequestContext>& request, const HttpResponse& response);
+    * @brief Execute user callback with complete HTTP response
+    * @param request Shared pointer to request context
+    * @param response Complete HTTP response object with status, body, and headers
+    */
+    void ExecuteCallback(const std::shared_ptr<RequestContext>& request, const HttpResponse& response) const;
 
     /**
-     * @brief libcurl callback for receiving HTTP response body data
-     * @param contents Pointer to received data
-     * @param size Size of each data element
-     * @param nmemb Number of elements received
-     * @param userp User data pointer (RequestContext responseData string)
-     * @return Number of bytes processed (size * nmemb)
-     */
+    * @brief libcurl callback for receiving HTTP response body data
+    * @param contents Pointer to received data
+    * @param size Size of each data element
+    * @param nmemb Number of elements received
+    * @param userp User data pointer (RequestContext responseData string)
+    * @return Number of bytes processed (size * nmemb)
+    */
     static size_t WriteCallback(char* contents, size_t size, size_t nmemb, void* userp);
 
     /**
-     * @brief libcurl callback for receiving HTTP header data
-     * @param contents Pointer to received header data
-     * @param size Size of each data element
-     * @param nmemb Number of elements received
-     * @param userp User data pointer (RequestContext headerData string)
-     * @return Number of bytes processed (size * nmemb)
-     */
+    * @brief libcurl callback for receiving HTTP header data
+    * @param contents Pointer to received header data
+    * @param size Size of each data element
+    * @param nmemb Number of elements received
+    * @param userp User data pointer (RequestContext headerData string)
+    * @return Number of bytes processed (size * nmemb)
+    */
     static size_t HeaderCallback(char* contents, size_t size, size_t nmemb, void* userp);
 
     /**
-     * @brief Parse raw HTTP header data into key-value pairs
-     * @param headerData Raw header data string from HTTP response
-     * @return Unordered map of header name to header value
-     */
+    * @brief Parse raw HTTP header data into key-value pairs
+    * @param headerData Raw header data string from HTTP response
+    * @return Unordered map of header name to header value
+    */
     static std::unordered_map<std::string, std::string> ParseHeaderData(const std::string& headerData);
 
     /**
-     * @brief init curl related resources
-     */
+    * @brief init curl related resources
+    */
     bool CurlInit();
 
+    void DoTerminate();
     void HandleJsonResponse(const HttpResponse& response);
     void HandleSseResponse(const HttpResponse& response);
     void SendSessionTerminatedError(const HttpResponse& response);
-
-    void SendError(const std::string& errorMsg, int errorCode, const UserData& userData) const;
-
-    void DoTerminate();
-    void HandleUnexpectedContentType(const HttpResponse& response);
+    void HandleUnexpectedContentType(const HttpResponse& response) const;
+    void SendError(const std::string& errorMsg, const int errorCode, const UserData& userData) const;
 
     // Handle response from server (called internally when response received, triggers session callback)
     void HandleResponse(const HttpResponse& response);

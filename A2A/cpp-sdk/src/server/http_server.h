@@ -37,6 +37,7 @@ struct TlsConfig {
 
 class HttpServer {
 public:
+    HttpServer();
     explicit HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes,
         size_t ioThreadIndex = 0);
 
@@ -75,19 +76,19 @@ private:
     bool SendRawResponse(int fileDescriptor, const std::string& response);
     void CleanupConnection(int fileDescriptor);
 
-    int ParseRequest(const std::string& buffer, Http::HttpRequest& outRequest, std::size_t& consumedBytes);
+    int ParseRequest(const std::string& buffer, Http::HttpRequest& outRequest, std::size_t& consumedBytes) const;
 
     void OnRead(int connectionFd, const std::string& data);
 
     void InitializeSslContext();
 
     EventSystem eventSystem_;
-    std::unique_ptr<MPSCNotifyQueue<std::function<void()>>> taskQueue_;  // Changed from MPSCNotifyQueue to MPSCQueue
+    std::unique_ptr<MPSCNotifyQueue<std::function<void()>>> taskQueue_;
     std::unique_ptr<TcpListener> listener_;
     std::thread eventThread_;
 
     std::unordered_map<std::string, Http::HttpHandler> routes_;
-    std::function<void(const Http::HttpRequest&, const Http::HttpRequestContext&)> onRecv_{nullptr};
+    Http::HttpHandler onRecv_{nullptr};
     std::unordered_map<int, ConnectionContext> connections_;
     std::atomic<bool> running_{false};
 
@@ -95,7 +96,7 @@ private:
     uint16_t port_{0};
     TlsConfig tlsConfig_;
     SSL_CTX* sslContext_{nullptr};
-    size_t ioThreadIndex_{0}; // Index for naming IO threads
+    size_t ioThreadIndex_{0};  // Index for naming IO threads
 };
 
 } // namespace A2A::Http

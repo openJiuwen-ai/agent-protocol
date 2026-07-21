@@ -14,21 +14,21 @@
 
 namespace A2A::Client {
 
+/**
+ * @brief Factory for HTTP-based A2ACardResolver instances.
+ */
 class HttpCardResolverBuilder final {
 public:
-    /**
-    * @brief destructor
-    */
+    /** @brief Destructor. */
     ~HttpCardResolverBuilder();
 
     /**
-    * @brief build card resolver
-    *
-    * @param[in] baseUrl base url
-    * @param[in] agentCardPath agent card path
-    * @param[in] httpKwargs http args
-    * @return A shared pointer to the created card resolver instance
-    */
+     * @brief Build an HTTP card resolver.
+     * @param[in] baseUrl        Server base URL (e.g. "http://host:port").
+     * @param[in] agentCardPath  Path to the agent card (default: /.well-known/agent-card.json).
+     * @param[in] httpKwargs     Extra HTTP headers or options.
+     * @return Shared pointer to the created resolver.
+     */
     static std::shared_ptr<A2ACardResolver> Build(std::string baseUrl, std::string agentCardPath,
         const std::map<std::string, std::string>& httpKwargs = {});
 };

@@ -1,18 +1,46 @@
-#!/bin/bash
+#!/bin/sh
 
 # MCP C++ Example Runner Script
 # This script builds and runs MCP examples
 
 set -e
-set -o pipefail
+if (set -o pipefail) 2>/dev/null; then
+    set -o pipefail
+fi
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_DIR="$(dirname "${SCRIPT_DIR}")"
 EXAMPLE_DIR="${SOURCE_DIR}/example"
 MASTER_LOG="${SOURCE_DIR}/run_example.log"
+TEE_PID=""
+LOG_FIFO=""
 
-: > "${MASTER_LOG}"
-exec > >(tee -a "${MASTER_LOG}") 2>&1
+setup_master_log() {
+    : > "${MASTER_LOG}"
+
+    if ! [ -t 1 ]; then
+        exec >> "${MASTER_LOG}" 2>&1
+        return
+    fi
+
+    if command -v mkfifo >/dev/null 2>&1 && command -v tee >/dev/null 2>&1; then
+        if command -v mktemp >/dev/null 2>&1; then
+            LOG_FIFO=$(mktemp -u 2>/dev/null || mktemp -u -t run_example)
+        else
+            LOG_FIFO="/tmp/run_example_fifo.$$"
+        fi
+        rm -f "${LOG_FIFO}"
+        mkfifo "${LOG_FIFO}"
+        tee -a "${MASTER_LOG}" < "${LOG_FIFO}" &
+        TEE_PID=$!
+        exec > "${LOG_FIFO}" 2>&1
+        return
+    fi
+
+    exec >> "${MASTER_LOG}" 2>&1
+}
+
+setup_master_log
 echo "Overall log: ${MASTER_LOG}"
 
 # Default options
@@ -22,15 +50,34 @@ RUN_ONLY=false
 SERVER_PID=""
 SERVER_PORT="${SERVER_PORT:-8000}"
 FORCE_KILL_PORT=false
+CLEANUP_SERVER_ON_EXIT=true
+PIPEFAIL_ENABLED=false
 
-# Cleanup function to kill background server
+if (set -o pipefail) 2>/dev/null; then
+    PIPEFAIL_ENABLED=true
+fi
+
+# Cleanup function to kill background server (when managed) and log tee
 cleanup() {
-    if [ -n "${SERVER_PID}" ] && ps -p ${SERVER_PID} > /dev/null 2>&1; then
+    if [ "${CLEANUP_SERVER_ON_EXIT}" = true ] && [ -n "${SERVER_PID}" ] && ps -p "${SERVER_PID}" > /dev/null 2>&1; then
         echo ""
         echo "Stopping background server (PID: ${SERVER_PID})..."
-        kill ${SERVER_PID}
-        wait ${SERVER_PID} 2>/dev/null
+        kill "${SERVER_PID}"
+        wait "${SERVER_PID}" 2>/dev/null
         echo "  ✓ Server stopped"
+    fi
+
+    if [ -n "${TEE_PID}" ]; then
+        # Close fifo write ends (stdout and stderr) so background tee receives EOF.
+        if [ -n "${LOG_FIFO}" ]; then
+            exec 1>&- 2>&-
+        fi
+        wait "${TEE_PID}" 2>/dev/null || true
+        TEE_PID=""
+    fi
+    if [ -n "${LOG_FIFO}" ] && [ -e "${LOG_FIFO}" ]; then
+        rm -f "${LOG_FIFO}"
+        LOG_FIFO=""
     fi
 }
 
@@ -74,14 +121,14 @@ free_port_if_occupied() {
     echo "Port ${port} is already in use. Stopping listener process(es):"
     echo "${pids}" | sed 's/^/  - PID: /'
 
-    echo "${pids}" | xargs -r kill 2>/dev/null || true
+    echo "${pids}" | xargs kill 2>/dev/null || true
     sleep 2
 
     pids="$(get_listening_pids_by_port "${port}" || true)"
     if [ -n "${pids}" ]; then
         echo "Port ${port} is still in use after SIGTERM. Forcing kill (SIGKILL):"
         echo "${pids}" | sed 's/^/  - PID: /'
-        echo "${pids}" | xargs -r kill -9 2>/dev/null || true
+        echo "${pids}" | xargs kill -9 2>/dev/null || true
         sleep 1
     fi
 
@@ -104,7 +151,7 @@ Usage: $0 [OPTIONS]
 Options:
   -t, --type <TYPE>     Specify example type to run:
                           all     - Run all examples (default)
-                          server  - Run server example only
+                          server  - Build and run server in foreground (keeps running)
                           client  - Run all client examples
                           tool    - Run tool client example
                           prompt  - Run prompt client example
@@ -117,18 +164,38 @@ Options:
   -h, --help            Show this help message
 
 Examples:
-  $0                    # Run all examples
-  $0 -t server          # Run server example only
+  $0                    # Run all examples (starts server in background, then clients)
+  $0 -t server          # Terminal 1: build and run server in foreground
+  $0 -t tool            # Terminal 2: run tool client (server must already be up)
   $0 -t client          # Run all client examples
-  $0 -t tool            # Run tool client example
   $0 -t sampling        # Run sampling client example
   $0 --build-only       # Build all examples without running
+
+Two-terminal workflow:
+  Terminal 1: $0 -t server
+  Terminal 2: $0 -t tool
 
 EOF
     exit 0
 }
 
-while [[ $# -gt 0 ]]; do
+# Run a command, mirror output to a log file, and propagate its exit status on POSIX sh.
+run_with_log() {
+    local log_file=$1
+    shift
+
+    if [ "${PIPEFAIL_ENABLED}" = true ]; then
+        "$@" 2>&1 | tee "${log_file}"
+        return $?
+    fi
+
+    "$@" > "${log_file}" 2>&1
+    local rc=$?
+    cat "${log_file}"
+    return "${rc}"
+}
+
+while [ $# -gt 0 ]; do
     case $1 in
         -t|--type)
             EXAMPLE_TYPE="$2"
@@ -170,6 +237,10 @@ case "${EXAMPLE_TYPE}" in
         exit 1
         ;;
 esac
+
+if [ "${EXAMPLE_TYPE}" = "server" ]; then
+    CLEANUP_SERVER_ON_EXIT=false
+fi
 
 echo "========================================"
 echo "  MCP C++ Example Runner"
@@ -218,6 +289,7 @@ run_example() {
     local example_name=$2
     local executable=$3
     local log_file=$4
+    shift 4
 
     if [ "${BUILD_ONLY}" = true ]; then
         return
@@ -240,12 +312,37 @@ run_example() {
 
     echo "  Output will be saved to: ${log_file}"
 
-    # Run example and capture output
-    ./${executable} | tee "${log_file}"
+    if ! run_with_log "${log_file}" ./"${executable}" "$@"; then
+        echo ""
+        echo "  Error: ${example_name} failed"
+        exit 1
+    fi
 
     echo ""
     echo "  ${example_name} completed"
     echo ""
+}
+
+client_port_args() {
+    if [ "${SERVER_PORT}" != "8000" ]; then
+        printf '%s' "--port=${SERVER_PORT}"
+    fi
+}
+
+run_client_example() {
+    local example_path=$1
+    local example_name=$2
+    local executable=$3
+    local log_file=$4
+    local port_arg
+
+    build_example "${example_path}" "${example_name}"
+    port_arg="$(client_port_args)"
+    if [ -n "${port_arg}" ]; then
+        run_example "${example_path}" "${example_name}" "${executable}" "${log_file}" "${port_arg}"
+    else
+        run_example "${example_path}" "${example_name}" "${executable}" "${log_file}"
+    fi
 }
 
 # Function to run server example (in background)
@@ -262,10 +359,6 @@ run_server_example() {
         return
     fi
 
-    echo "========================================="
-    echo "Running Server Example (in background)..."
-    echo "========================================="
-
     cd "${EXAMPLE_DIR}/server_example/build"
 
     if [ ! -f "ServerExample" ]; then
@@ -275,8 +368,29 @@ run_server_example() {
 
     free_port_if_occupied "${SERVER_PORT}"
 
-    # Run server in background
-    ./ServerExample > server_example.log 2>&1 &
+    if [ "${EXAMPLE_TYPE}" = "server" ]; then
+        echo "========================================="
+        echo "Running Server Example (foreground)..."
+        echo "========================================="
+        echo "  Endpoint: http://127.0.0.1:${SERVER_PORT}/mcp"
+        echo "  SDK log file: server_example.log (under build/)"
+        echo "  Press Ctrl+C to stop."
+        echo ""
+
+        if ! ./ServerExample --port="${SERVER_PORT}"; then
+            echo ""
+            echo "  Error: Server Example failed"
+            exit 1
+        fi
+        return
+    fi
+
+    echo "========================================="
+    echo "Running Server Example (in background)..."
+    echo "========================================="
+
+    # Run server in background for -t all / -t client workflows
+    ./ServerExample --port="${SERVER_PORT}" > server_example.log 2>&1 &
     SERVER_PID=$!
 
     echo "  Server started with PID: ${SERVER_PID}"
@@ -287,7 +401,7 @@ run_server_example() {
     sleep 2
 
     # Check if server is still running
-    if ps -p ${SERVER_PID} > /dev/null 2>&1; then
+    if ps -p "${SERVER_PID}" > /dev/null 2>&1; then
         echo "  Server is running"
     else
         echo "  Server failed to start. Check log file:"
@@ -296,7 +410,7 @@ run_server_example() {
     fi
 
     echo ""
-    echo "  Note: Server is running in background. Use 'kill ${SERVER_PID}' to stop it."
+    echo "  Note: Server will stop when this script exits."
     echo ""
 }
 
@@ -308,8 +422,8 @@ run_tool_example() {
     echo "========================================"
     echo ""
 
-    build_example "${EXAMPLE_DIR}/client_example/tool_example" "Tool Example"
-    run_example "${EXAMPLE_DIR}/client_example/tool_example" "Tool Example" "ToolExample" "${EXAMPLE_DIR}/client_example/tool_example/build/tool_example_output.log"
+    run_client_example "${EXAMPLE_DIR}/client_example/tool_example" "Tool Example" "ToolExample" \
+        "${EXAMPLE_DIR}/client_example/tool_example/build/tool_example_output.log"
 }
 
 # Function to run client prompt example
@@ -320,8 +434,8 @@ run_prompt_example() {
     echo "========================================"
     echo ""
 
-    build_example "${EXAMPLE_DIR}/client_example/prompt_example" "Prompt Example"
-    run_example "${EXAMPLE_DIR}/client_example/prompt_example" "Prompt Example" "PromptExample" "${EXAMPLE_DIR}/client_example/prompt_example/build/prompt_example_output.log"
+    run_client_example "${EXAMPLE_DIR}/client_example/prompt_example" "Prompt Example" "PromptExample" \
+        "${EXAMPLE_DIR}/client_example/prompt_example/build/prompt_example_output.log"
 }
 
 # Function to run client resource example
@@ -332,8 +446,8 @@ run_resource_example() {
     echo "========================================"
     echo ""
 
-    build_example "${EXAMPLE_DIR}/client_example/resource_example" "Resource Example"
-    run_example "${EXAMPLE_DIR}/client_example/resource_example" "Resource Example" "ResourceExample" "${EXAMPLE_DIR}/client_example/resource_example/build/resource_example_output.log"
+    run_client_example "${EXAMPLE_DIR}/client_example/resource_example" "Resource Example" "ResourceExample" \
+        "${EXAMPLE_DIR}/client_example/resource_example/build/resource_example_output.log"
 }
 
 # Function to run client sampling example (server-to-client sampling)
@@ -344,8 +458,8 @@ run_sampling_example() {
     echo "========================================"
     echo ""
 
-    build_example "${EXAMPLE_DIR}/client_example/sampling_example" "Sampling Example"
-    run_example "${EXAMPLE_DIR}/client_example/sampling_example" "Sampling Example" "SamplingExample" "${EXAMPLE_DIR}/client_example/sampling_example/build/sampling_example_output.log"
+    run_client_example "${EXAMPLE_DIR}/client_example/sampling_example" "Sampling Example" "SamplingExample" \
+        "${EXAMPLE_DIR}/client_example/sampling_example/build/sampling_example_output.log"
 }
 
 # Run examples based on type

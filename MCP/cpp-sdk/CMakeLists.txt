@@ -142,7 +142,7 @@ if(MCP_ENABLE_TESTS)
 endif()
 
 if(MCP_ENABLE_EXAMPLES)
-	add_subdirectory(examples)
+	message(STATUS "MCP_ENABLE_EXAMPLES is ON: build examples via scripts/run_example.sh or example/*/run_example.sh")
 endif()
 
 # Install rules

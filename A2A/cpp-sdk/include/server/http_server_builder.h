@@ -14,35 +14,43 @@
 
 namespace A2A::Server {
 
+/**
+ * @brief HTTP server binding and threading configuration.
+ */
 struct HttpConfig {
+    /** @brief Listen IP address. */
     std::string ip;
+    /** @brief Listen port. */
     int port;
+    /** @brief Number of I/O event-loop threads. */
     unsigned int ioThreadNum = 1;
+    /** @brief JSON-RPC endpoint path. */
     std::string endpoint = "/jsonrpc";
 };
 
+/**
+ * @brief Factory for creating HTTP-based A2A Server instances.
+ */
 class HttpServerBuilder {
 public:
-    /**
-    * @brief destructor
-    */
+    /** @brief Destructor. */
     ~HttpServerBuilder();
 
     /**
-    * @brief create http server
-    *
-    * @param[in] config http config
-    * @param[in] agentCard agent card object
-    * @param[in] extendedAgentCard extended agent card object
-    * @param[in] agentExecutor agent executor object
-    * @param[in] taskStore store object to store task object
-    * @return A shared pointer to the created server instance
-    */
+     * @brief Build and return a configured HTTP server.
+     * @param[in] config            HTTP listen configuration.
+     * @param[in] agentCard         Public agent card.
+     * @param[in] extendedAgentCard Authenticated extended card (may be empty).
+     * @param[in] agentExecutor     User agent logic implementation.
+     * @param[in] taskStore         Task persistence backend (nullptr = in-memory).
+     * @return Shared pointer to the started-ready Server instance.
+     * @throws std::runtime_error on invalid configuration.
+     */
     static std::shared_ptr<Server> Build(const HttpConfig& config, const AgentCard& agentCard,
         const AgentCard& extendedAgentCard, std::shared_ptr<AgentExecutor> agentExecutor,
         std::shared_ptr<TaskStore> taskStore = nullptr);
 };
 
-}
+} // namespace A2A::Server
 
 #endif

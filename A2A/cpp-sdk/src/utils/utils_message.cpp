@@ -7,8 +7,8 @@
 
 namespace A2A {
 
-Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& context_id,
-                            const std::optional<std::string>& task_id)
+Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& contextId,
+                            const std::optional<std::string>& taskId)
 {
     Part p;
     p.text = text;
@@ -17,20 +17,20 @@ Message NewAgentTextMessage(const std::string& text, const std::optional<std::st
     m.role = Role::AGENT;
     m.parts = {p};
     m.messageId = A2A::GenerateUuid();
-    m.taskId = task_id;
-    m.contextId = context_id;
+    m.taskId = taskId;
+    m.contextId = contextId;
     return m;
 }
 
-Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional<std::string>& context_id,
-                             const std::optional<std::string>& task_id)
+Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional<std::string>& contextId,
+    const std::optional<std::string>& taskId)
 {
     Message m;
     m.role = Role::AGENT;
     m.parts = parts;
     m.messageId = A2A::GenerateUuid();
-    m.taskId = task_id;
-    m.contextId = context_id;
+    m.taskId = taskId;
+    m.contextId = contextId;
     return m;
 }
 

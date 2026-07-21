@@ -93,7 +93,7 @@ TEST_F(LogTestFixture, LogCallbackInvocation) {
 
 TEST_F(LogTestFixture, McpPrintfImplFiltersByLogLevel) {
     testing::internal::CaptureStdout();
-    
+
     // Case 1: DEBUG < INFO (default), should NOT print
     McpPrintfImpl(MCP_LOG_LEVEL_DEBUG, "Debug message\n");
     std::string output = testing::internal::GetCapturedStdout();
@@ -122,10 +122,21 @@ TEST_F(LogTestFixture, MacroLogOutput) {
     SetLogLevel(MCP_LOG_LEVEL_DEBUG);
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("Test macro log with ") + "parameters");
-    
+
     std::string output = testing::internal::GetCapturedStdout();
 
     EXPECT_TRUE(output.find("Test macro log with parameters") != std::string::npos);
+    EXPECT_TRUE(output.find("[INFO]") != std::string::npos);
+}
+
+TEST_F(LogTestFixture, GetLogLevelNameMapsKnownLevels)
+{
+    EXPECT_STREQ("DEBUG", GetLogLevelName(MCP_LOG_LEVEL_DEBUG));
+    EXPECT_STREQ("INFO", GetLogLevelName(MCP_LOG_LEVEL_INFO));
+    EXPECT_STREQ("WARN", GetLogLevelName(MCP_LOG_LEVEL_WARN));
+    EXPECT_STREQ("ERROR", GetLogLevelName(MCP_LOG_LEVEL_ERROR));
+    EXPECT_STREQ("FATAL", GetLogLevelName(MCP_LOG_LEVEL_FATAL));
+    EXPECT_STREQ("UNKNOWN", GetLogLevelName(static_cast<MCP_LOG_LEVEL>(0)));
 }
 
 TEST_F(LogTestFixture, CallbackSwitch) {
@@ -160,8 +171,25 @@ TEST_F(LogTestFixture, LogLevelFiltering) {
 
     McpPrintfImpl(MCP_LOG_LEVEL_ERROR, "Error message\n");
     McpPrintfImpl(MCP_LOG_LEVEL_WARN, "Warn message\n");
-    
+
     std::string output = testing::internal::GetCapturedStdout();
     EXPECT_TRUE(output.find("Error message") != std::string::npos);
     EXPECT_TRUE(output.find("Warn message") == std::string::npos);
+}
+
+TEST_F(LogTestFixture, LogInternalFiltersBeforeCustomCallback)
+{
+    test_callback_invoked = false;
+    captured_message.clear();
+
+    EXPECT_EQ(0, SetLogCallback(test_log_callback));
+    SetLogLevel(MCP_LOG_LEVEL_ERROR);
+
+    MCP_LOG(MCP_LOG_LEVEL_INFO, std::string("filtered before callback"));
+    EXPECT_FALSE(test_callback_invoked);
+
+    MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("delivered to callback"));
+    EXPECT_TRUE(test_callback_invoked);
+    EXPECT_TRUE(captured_message.find("delivered to callback") != std::string::npos);
+    EXPECT_TRUE(captured_message.find("[ERROR]") != std::string::npos);
 }

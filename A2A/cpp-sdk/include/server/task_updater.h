@@ -6,133 +6,114 @@
 #define A2A_TASK_UPDATER
 
 #include <optional>
-#include <memory>
 #include <string>
 #include <vector>
-#include <map>
 
 #include "types.h"
 
 namespace A2A::Server {
 
-class TaskUpdaterImpl;
-class EventQueue;
-
-using Metadata = std::map<std::string, std::string>;
-
+/**
+ * @brief Parameters for publishing an artifact update.
+ */
 struct TaskArtifactParam {
-    std::vector<A2A::Part> parts;
+    std::vector<Part> parts;
     std::optional<std::string> artifactId = std::nullopt;
     std::optional<std::string> name = std::nullopt;
-    Metadata metadata;
+    std::optional<std::string> metadata;
     bool append = false;
     bool lastChunk = false;
     std::vector<std::string> extensions;
 };
 
+/**
+ * @brief Publishes task status and artifact events to the client.
+ * @note 在 AgentExecutor::Execute 中通过此接口推送流式更新。
+ */
 class TaskUpdater {
 public:
-    /**
-     * @brief constructor
-     *
-     * @param[in] eventQueue event queue
-     * @param[in] taskId task id
-     * @param[in] contextId context id
-     */
-    TaskUpdater(std::shared_ptr<A2A::Server::EventQueue> eventQueue, std::string taskId, std::string contextId);
+    /** @brief Virtual destructor. */
+    virtual ~TaskUpdater() = default;
 
     /**
-     * @brief destructor
+     * @brief Update the task status.
+     * @param[in] state     New task state.
+     * @param[in] message   Optional status message.
+     * @param[in] timestamp Optional ISO timestamp.
+     * @param[in] metadata  Optional metadata JSON.
      */
-    ~TaskUpdater();
+    virtual void UpdateStatus(TaskState state, const std::optional<Message>& message,
+        const std::optional<std::string>& timestamp = std::nullopt,
+        const std::optional<std::string>& metadata = std::nullopt) = 0;
 
     /**
-     * @brief update task status
-     *
-     * @param[in] state task state
-     * @param[in] message message object
-     * @param[in] final whether current updation is last updation
-     * @param[in] timestamp timestamp of response
-     * @param[in] metadata metadata of response
+     * @brief Append or publish an artifact chunk.
+     * @param[in] artifactParam Artifact content and chunk flags.
      */
-    void UpdateStatus(A2A::TaskState state, std::optional<A2A::Message> message = std::nullopt, bool final = false,
-        std::optional<std::string> timestamp = std::nullopt, const Metadata& metadata = {});
+    virtual void AddArtifact(const TaskArtifactParam& artifactParam) = 0;
 
     /**
-     * @brief add artifact to task
-     *
-     * @param[in] artifactParam params for artifact
+     * @brief Mark the task as completed and publish a final status update.
+     * @param[in] message Optional completion message.
      */
-    void AddArtifact(const TaskArtifactParam& artifactParam);
+    virtual void Complete(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as completed and publishes a final status update
-     *
-     * @param[in] message message object
+     * @brief Mark the task as failed and publish a final status update.
+     * @param[in] message Optional failure message.
      */
-    void Complete(std::optional<A2A::Message> message = std::nullopt);
+    virtual void Failed(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as failed and publishes a final status update
-     *
-     * @param[in] message message object
+     * @brief Mark the task as rejected and publish a final status update.
+     * @param[in] message Optional rejection message.
      */
-    void Failed(std::optional<A2A::Message> message = std::nullopt);
+    virtual void Reject(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as rejected and publishes a final status update
-     *
-     * @param[in] message message object
+     * @brief Mark the task as submitted and publish a status update.
+     * @param[in] message Optional status message.
      */
-    void Reject(std::optional<A2A::Message> message = std::nullopt);
+    virtual void Submit(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as submitted and publishes a status update
-     *
-     * @param[in] message message object
+     * @brief Mark the task as working and publish a status update.
+     * @param[in] message Optional status message.
      */
-    void Submit(std::optional<A2A::Message> message = std::nullopt);
+    virtual void StartWork(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as working and publishes a status update
-     *
-     * @param[in] message message object
+     * @brief Mark the task as canceled and publish a status update.
+     * @param[in] message Optional status message.
      */
-    void StartWork(std::optional<A2A::Message> message = std::nullopt);
+    virtual void Cancel(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as cancelled and publishes a status update
-     *
-     * @param[in] message message object
+     * @brief Mark the task as input-required and publish a status update.
+     * @param[in] message Optional prompt message.
      */
-    void Cancel(std::optional<A2A::Message> message = std::nullopt);
+    virtual void RequiresInput(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as input required and publishes a status update
-     *
-     * @param[in] message message object
-     * @param[in] final boolean flag indicating if this is the last chunk
+     * @brief Mark the task as auth-required and publish a status update.
+     * @param[in] message Optional auth challenge message.
      */
-    void RequiresInput(std::optional<A2A::Message> message = std::nullopt, bool final = false);
+    virtual void RequiresAuth(const std::optional<Message>& message = std::nullopt) = 0;
 
     /**
-     * @brief marks the task as auth required and publishes a status update
-     *
-     * @param[in] message message object
-     * @param[in] final boolean flag indicating if this is the last chunk
+     * @brief Create a new agent-role message for this task.
+     * @param[in] parts    Message content parts.
+     * @param[in] metadata Optional metadata JSON.
+     * @return Constructed Message with agent role.
      */
-    void RequiresAuth(std::optional<A2A::Message> message = std::nullopt, bool final = false);
+    virtual A2A::Message NewAgentMessage(const std::vector<Part>& parts,
+        const std::optional<std::string>& metadata = std::nullopt) = 0;
 
     /**
-     * @brief create a new message object sent by the agent for this task/context
-     *
-     * @param[in] parts a list of 'Part' object for the message content
-     * @param[in] metadata metadata for the message
+     * @brief Send a message directly to the event queue (non-task response).
+     * @param[in] message Message to emit.
      */
-    A2A::Message NewAgentMessage(const std::vector<A2A::Part>& parts, const Metadata& metadata);
-
-private:
-    std::unique_ptr<TaskUpdaterImpl> impl_;
+    virtual void SendResponseMessage(const Message& message) = 0;
 };
 
 } // namespace A2A::Server
