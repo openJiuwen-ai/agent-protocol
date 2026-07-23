@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from a2x_registry.common.auth_context import AuthContext
+from a2x_registry.common.db import Backend
+from a2x_registry.common.ids import now_iso
 
 from .agent_card import build_description, fetch_agent_card
-from .errors import RegistryNotFoundError
+from .errors import NotFoundError, RegistryNotFoundError, ValidationError
 from .models import (
     AgentCard,
     DeregisterResponse,
@@ -85,11 +87,9 @@ class RegistryService:
     def __init__(
         self,
         database_dir: Path,
-        global_config_path: Optional[Path] = None,
         allowed_a2a_versions: Optional[Set[str]] = None,
     ):
         self._database_dir = database_dir
-        self._global_config_path = global_config_path
         # Legacy knob kept for callers that still pass an a2a allow-list. When
         # set, it overrides the per-dataset register_config.json for a2a.
         self._allowed_a2a_versions = allowed_a2a_versions
@@ -138,9 +138,6 @@ class RegistryService:
         Startup is single-threaded (called once from app.py), so no lock
         contention. We still acquire _lock when writing shared state.
         """
-        if self._global_config_path and self._global_config_path.exists():
-            self._distribute_global_config()
-
         datasets = self._discover_datasets()
         logger.info("Discovered %d datasets with registration config: %s", len(datasets), datasets)
 
@@ -300,22 +297,6 @@ class RegistryService:
             agent_card=agent_card, agent_card_url=agent_card_url,
         )
         return self._do_register(dataset, entry, req.persistent)
-
-    def register_batch(self, entries: List[RegistryEntry], dataset: str, persistent: bool = True):
-        """Register multiple entries at once (single file write)."""
-        source = "api_config" if persistent else "ephemeral"
-        with self._lock:
-            ds = self._entries.setdefault(dataset, {})
-            for e in entries:
-                copy = e.model_copy(update={"source": source})
-                ds[copy.service_id] = copy
-            if persistent:
-                all_api = [e for e in ds.values() if e.source == "api_config"]
-
-        if persistent and all_api:
-            self._get_store(dataset).save_api_batch(all_api)
-        self._regenerate_output(dataset)
-        self._mark_taxonomy_stale(dataset)
 
     def register_skill(
         self,
@@ -1613,29 +1594,6 @@ class RegistryService:
             )
         )
 
-    def _distribute_global_config(self):
-        try:
-            with open(self._global_config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load global config %s: %s", self._global_config_path, e)
-            return
-
-        by_dataset: Dict[str, list] = {}
-        for svc in data.get("services", []):
-            ds = svc.pop("dataset", "default")
-            by_dataset.setdefault(ds, []).append(svc)
-
-        for dataset, services in by_dataset.items():
-            dataset_dir = self._database_dir / dataset
-            dataset_dir.mkdir(parents=True, exist_ok=True)
-            user_config_path = dataset_dir / USER_CONFIG_FILE
-            if not user_config_path.exists():
-                content = json.dumps({"services": services}, ensure_ascii=False, indent=2)
-                with open(user_config_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                logger.info("Created %s from global config (%d services)", user_config_path, len(services))
-
 
 # ---------------------------------------------------------------------------
 # Module-level utilities
@@ -1658,3 +1616,393 @@ def _read_build_hash(build_config_path: Path) -> Optional[str]:
             return json.load(f).get("service_hash")
     except (json.JSONDecodeError, OSError):
         return None
+
+
+# ===========================================================================
+# RegistryTableService — SQL-backed generic CRUD over named registries
+# ===========================================================================
+#
+# Routes each named registry to its physical table via registry_meta
+# (name → kind → table). Provides create_registry / register / patch /
+# deregister / query for the service / image / instance kinds.
+#
+# Pure recorder: no auth, no heartbeat, no external calls. Business logic
+# lives in the image / instance modules which call this service for
+# persistence. The existing RegistryService above remains the A2X
+# forward-compat layer (file-based multi-dataset); this class is the
+# internal SQL-backed CRUD surface used by image / instance management.
+
+# Valid kinds and their physical table names (table name == kind).
+_VALID_KINDS = frozenset(("service", "image", "instance"))
+
+# Promoted (hot) columns per kind — stored as real indexed columns.
+# Everything else in an entry goes into the `data` JSON blob.
+_KIND_PROMOTED: Dict[str, tuple] = {
+    "service": ("type", "source", "name", "description"),
+    "image": ("framework", "framework_version", "version_key", "is_default", "uploaded_by"),
+    "instance": ("kind", "framework", "framework_version", "node", "user"),
+}
+
+# Per-kind column layout for INSERT and ON-CONFLICT UPDATE.
+# insert_cols includes service_id + promoted + data (+ timestamps for service).
+# update_cols is the subset refreshed on upsert (excludes service_id and
+# created_at so the original creation time is preserved).
+_KIND_LAYOUT: Dict[str, Dict[str, tuple]] = {
+    "service": {
+        "insert_cols": (
+            "service_id", "type", "source", "name", "description",
+            "data", "created_at", "updated_at",
+        ),
+        "update_cols": (
+            "type", "source", "name", "description", "data", "updated_at",
+        ),
+    },
+    "image": {
+        "insert_cols": (
+            "service_id", "framework", "framework_version",
+            "version_key", "is_default", "uploaded_by", "data",
+        ),
+        "update_cols": (
+            "framework", "framework_version",
+            "version_key", "is_default", "uploaded_by", "data",
+        ),
+    },
+    "instance": {
+        "insert_cols": (
+            "service_id", "kind", "framework", "framework_version",
+            "node", "user", "data",
+        ),
+        "update_cols": (
+            "kind", "framework", "framework_version", "node", "user", "data",
+        ),
+    },
+}
+
+
+def _quote_col(col: str) -> str:
+    """Quote a column name for SQL (handles reserved words like 'user').
+
+    Double-quotes are standard SQL identifier quoting; SQLite accepts them.
+    """
+    return f'"{col}"'
+
+
+def _build_upsert_sql(table: str, insert_cols: tuple, update_cols: tuple) -> str:
+    """Build an INSERT ... ON CONFLICT DO UPDATE upsert statement.
+
+    The column names come from the internal _KIND_LAYOUT constant (never
+    from external input), so embedding them in SQL is safe. All values are
+    passed as parameterized placeholders by the caller.
+    """
+    col_list = ", ".join(_quote_col(c) for c in insert_cols)
+    placeholders = ", ".join("?" for _ in insert_cols)
+    set_clause = ", ".join(
+        f"{_quote_col(c)}=excluded.{_quote_col(c)}" for c in update_cols
+    )
+    return (
+        f"INSERT INTO {table} (registry, {col_list}) VALUES (?, {placeholders}) "
+        f"ON CONFLICT(registry, service_id) DO UPDATE SET {set_clause}"
+    )
+
+
+def _row_to_entry(row: dict) -> dict:
+    """Convert a raw DB row dict to an entry dict.
+
+    Drops the internal `registry` column and parses the `data` JSON string
+    back to a dict so callers see a clean merged entry.
+    """
+    entry = {k: v for k, v in row.items() if k != "registry"}
+    raw_data = entry.get("data")
+    if isinstance(raw_data, str):
+        entry["data"] = json.loads(raw_data)
+    return entry
+
+
+class RegistryTableService:
+    """SQL-backed generic CRUD over named registries.
+
+    Routes each named registry to its physical table via registry_meta
+    (name -> kind -> table). Provides create_registry / register / patch /
+    deregister / query for the service / image / instance kinds.
+
+    Pure recorder: no auth, no heartbeat, no external calls. The image and
+    instance modules inject this service for persistence and layer their own
+    business logic on top.
+    """
+
+    __slots__ = ("_backend",)
+
+    def __init__(self, backend: "Backend") -> None:
+        self._backend = backend
+
+    # ------------------------------------------------------------------
+    # registry_meta management
+    # ------------------------------------------------------------------
+
+    def create_registry(self, name: str, kind: str) -> None:
+        """Idempotently register (name -> kind) in registry_meta.
+
+        Re-registering the same (name, kind) is a no-op. An unknown kind
+        raises ValidationError.
+        """
+        if kind not in _VALID_KINDS:
+            raise ValidationError(f"unknown kind: {kind!r}")
+        self._backend.execute(
+            "INSERT OR IGNORE INTO registry_meta(registry, kind) VALUES (?, ?)",
+            (name, kind),
+        )
+
+    def list_registries(self) -> Dict[str, str]:
+        """Return {name: kind} for all registered registries."""
+        rows = self._backend.query(
+            "SELECT registry, kind FROM registry_meta"
+        )
+        return {r["registry"]: r["kind"] for r in rows}
+
+    def get_kind(self, name: str) -> Optional[str]:
+        """Return kind for name, or None if not registered."""
+        rows = self._backend.query(
+            "SELECT kind FROM registry_meta WHERE registry=?",
+            (name,),
+        )
+        return rows[0]["kind"] if rows else None
+
+    def _require_kind(self, name: str) -> str:
+        """Return kind for name; raise NotFoundError if not registered."""
+        kind = self.get_kind(name)
+        if kind is None:
+            raise NotFoundError(f"registry '{name}' not found")
+        return kind
+
+    # ------------------------------------------------------------------
+    # register (upsert)
+    # ------------------------------------------------------------------
+
+    def register(self, name: str, entry: dict) -> dict:
+        """Upsert entry by service_id in the registry's physical table.
+
+        Extracts promoted columns and the `data` JSON blob from the entry,
+        builds a parameterized upsert, then returns the stored row as a
+        merged entry dict. Raises NotFoundError if the registry is unknown,
+        ValidationError if the entry lacks service_id.
+        """
+        kind = self._require_kind(name)
+        sid = entry.get("service_id")
+        if not sid:
+            raise ValidationError("entry missing service_id")
+
+        layout = _KIND_LAYOUT[kind]
+        promoted = _KIND_PROMOTED[kind]
+        data_json = json.dumps(entry.get("data", {}), ensure_ascii=False)
+        ts = now_iso()
+
+        # Build column -> value for all insert columns (plus registry).
+        val_map: Dict[str, Any] = {
+            "registry": name,
+            "service_id": sid,
+            "data": data_json,
+        }
+        for col in promoted:
+            val_map[col] = entry.get(col)
+        if "created_at" in layout["insert_cols"]:
+            val_map["created_at"] = ts
+            val_map["updated_at"] = ts
+
+        insert_cols = layout["insert_cols"]
+        # Values: registry first, then insert_cols in order.
+        values = (val_map["registry"],) + tuple(
+            val_map[c] for c in insert_cols
+        )
+        sql = _build_upsert_sql(kind, insert_cols, layout["update_cols"])
+        self._backend.execute(sql, values)
+        return self._fetch_one(kind, name, sid)
+
+    # ------------------------------------------------------------------
+    # patch (partial update)
+    # ------------------------------------------------------------------
+
+    def patch(self, name: str, service_id: str, fields: dict) -> dict:
+        """Partially update a row's promoted columns and/or data.
+
+        Only keys in the kind's promoted set or `data` are accepted; unknown
+        keys raise ValidationError. For the service kind, updated_at is
+        refreshed. Raises NotFoundError if the registry or row is absent.
+        """
+        kind = self._require_kind(name)
+        if not fields:
+            raise ValidationError("fields must not be empty")
+
+        promoted = _KIND_PROMOTED[kind]
+        allowed = set(promoted) | {"data"}
+        for col in fields:
+            if col not in allowed:
+                raise ValidationError(f"cannot patch unknown column: {col!r}")
+
+        # Existence check (also covers NotFoundError for missing row).
+        self._fetch_one(kind, name, service_id)
+
+        set_parts = []
+        args: list = []
+        for col, val in fields.items():
+            if col == "data":
+                args.append(json.dumps(val, ensure_ascii=False))
+            else:
+                args.append(val)
+            set_parts.append(f"{_quote_col(col)}=?")
+
+        # Refresh updated_at for service kind (has timestamps).
+        if "created_at" in _KIND_LAYOUT[kind]["insert_cols"]:
+            set_parts.append('"updated_at"=?')
+            args.append(now_iso())
+
+        args.extend([name, service_id])
+        sql = (
+            f"UPDATE {kind} SET {', '.join(set_parts)} "
+            f"WHERE registry=? AND service_id=?"
+        )
+        self._backend.execute(sql, tuple(args))
+        return self._fetch_one(kind, name, service_id)
+
+    # ------------------------------------------------------------------
+    # deregister (idempotent delete)
+    # ------------------------------------------------------------------
+
+    def deregister(self, name: str, service_id: str) -> bool:
+        """Delete a row by service_id. Returns True if deleted, False if absent.
+
+        Unknown registry or missing row both yield False (idempotent).
+        """
+        kind = self.get_kind(name)
+        if kind is None:
+            return False
+        existing = self._backend.query(
+            f"SELECT 1 FROM {kind} WHERE registry=? AND service_id=?",
+            (name, service_id),
+        )
+        if not existing:
+            return False
+        self._backend.execute(
+            f"DELETE FROM {kind} WHERE registry=? AND service_id=?",
+            (name, service_id),
+        )
+        return True
+
+    # ------------------------------------------------------------------
+    # query (read with optional equality filter)
+    # ------------------------------------------------------------------
+
+    def query(self, name: str, filter: Optional[dict] = None) -> List[dict]:
+        """Return rows for the registry, optionally filtered by hot columns.
+
+        Filter keys must be in the kind's promoted set or `service_id`;
+        unknown keys raise ValidationError. An unknown registry yields an
+        empty list (no error). Each row is returned as a merged entry dict
+        (promoted columns + parsed data JSON).
+        """
+        kind = self.get_kind(name)
+        if kind is None:
+            return []
+
+        where, args = self._build_where(name, kind, filter)
+        sql = f"SELECT * FROM {kind} WHERE {where}"
+        rows = self._backend.query(sql, tuple(args))
+        return [_row_to_entry(r) for r in rows]
+
+    def query_paginated(
+        self,
+        name: str,
+        filter: Optional[dict] = None,
+        extra_where: str = "",
+        extra_args: tuple = (),
+        order_by: str = "",
+        limit: int = -1,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """Return (rows, total) with optional ordering and pagination.
+
+        ``order_by`` is a raw SQL ORDER BY clause (columns are from the
+        kind's promoted set or service_id, validated by the caller).
+
+        ``extra_where`` / ``extra_args`` are appended as raw SQL and
+        arguments after the filter clauses. Used for ``node NOT IN (...)``
+        push-down in instance unhealthy filtering.
+
+        When ``limit > 0``, ``LIMIT/OFFSET`` is appended and ``total`` is
+        the count of all rows matching the filter (before pagination).
+        When ``limit <= 0``, all rows are returned and ``total`` equals
+        ``len(rows)`` (no separate COUNT query).
+        """
+        kind = self.get_kind(name)
+        if kind is None:
+            return [], 0
+
+        where, args = self._build_where(name, kind, filter)
+        if extra_where:
+            where += f" AND {extra_where}"
+            args.extend(extra_args)
+
+        sql = f"SELECT * FROM {kind} WHERE {where}"
+        count_args = tuple(args)
+        if order_by:
+            sql += f" ORDER BY {order_by}"
+        if limit > 0:
+            sql += " LIMIT ? OFFSET ?"
+            args = args + [limit, offset]
+
+        rows = self._backend.query(sql, tuple(args))
+        entries = [_row_to_entry(r) for r in rows]
+
+        if limit > 0:
+            total = self._count_where(kind, where, count_args)
+        else:
+            total = len(entries)
+        return entries, total
+
+    def _count_where(
+        self, kind: str, where: str, args: tuple,
+    ) -> int:
+        """Return the count of rows matching the given WHERE clause."""
+        rows = self._backend.query(
+            f"SELECT COUNT(*) AS c FROM {kind} WHERE {where}",
+            args,
+        )
+        return rows[0]["c"] if rows else 0
+
+    def _build_where(
+        self, name: str, kind: str, filter: Optional[dict] = None,
+    ) -> tuple[str, list]:
+        """Build a WHERE clause string and args list from a filter dict.
+
+        Returns ``("registry=? AND col1=? ...", [name, val1, ...])``.
+        """
+        parts = ["registry=?"]
+        args: list = [name]
+        if filter:
+            allowed = set(_KIND_PROMOTED[kind]) | {"service_id"}
+            for col, val in filter.items():
+                if col not in allowed:
+                    raise ValidationError(
+                        f"cannot filter on unknown column: {col!r}"
+                    )
+                parts.append(f"{_quote_col(col)}=?")
+                args.append(val)
+        return " AND ".join(parts), args
+
+    # ------------------------------------------------------------------
+    # internal fetch
+    # ------------------------------------------------------------------
+
+    def _fetch_one(self, kind: str, name: str, sid: str) -> dict:
+        """Fetch a single row and return it as a merged entry dict.
+
+        Raises NotFoundError if the row does not exist.
+        """
+        rows = self._backend.query(
+            f"SELECT * FROM {kind} WHERE registry=? AND service_id=?",
+            (name, sid),
+        )
+        if not rows:
+            raise NotFoundError(
+                f"{kind} '{sid}' not found in registry '{name}'"
+            )
+        return _row_to_entry(rows[0])

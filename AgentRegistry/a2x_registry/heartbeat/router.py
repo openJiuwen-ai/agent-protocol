@@ -4,23 +4,42 @@ Mounted at app level (no prefix beyond the dataset path). Routes:
 
     POST   /api/datasets/{ds}/services/{sid}/heartbeat
            body: {status?: "online"|"busy"|"offline"}
-           → 200 {service_id, expires_at, state}
-           → 404 if no lease (service permanent / never registered with ttl)
+           -> 200 {service_id, expires_at, state}
+           -> 404 if no lease (service permanent / never registered with ttl)
 
     DELETE /api/datasets/{ds}/services/{sid}/heartbeat
            body: {permanent?: bool = false}
-           → 200 {service_id, deleted: bool}
+           -> 200 {service_id, deleted: bool}
            permanent=false: mark unhealthy, grace window starts
            permanent=true: hard-delete via RegistryService (same path as
                             an admin DELETE /services/{sid})
 
 Both endpoints respect ``Depends(authorize)`` for namespace + auth
 checks (mirrors the existing reservation endpoints in dataset.py).
+
+The ``node_router`` exposes the appliance-mode per-node heartbeat
+endpoints (no dataset prefix - these are global):
+
+    POST   /api/nodes/{node}/heartbeat
+           body: {status?: string} (optional)
+           -> 200 {node, state, ttl_seconds, expires_at}
+           -> 404 if per-node heartbeat module not assembled
+           -> 400 if lease config disabled
+
+    GET    /api/lease-config
+           -> 200 {enabled, min_ttl, max_ttl, grace_period}
+           -> 404 if per-node heartbeat module not assembled
+
+    POST   /api/lease-config
+           body: {enabled, min_ttl, max_ttl, grace_period}
+           -> 200 updated config
+           -> 404 if per-node heartbeat module not assembled
 """
 
 from __future__ import annotations
 
 import logging
+import time as _t
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,11 +48,13 @@ from pydantic import BaseModel
 from a2x_registry.auth.deps import authorize
 from a2x_registry.common.auth_context import AuthContext
 
-from .deps import get_heartbeat_store
+from .deps import get_heartbeat_store, get_node_heartbeat_manager
+from .errors import HeartbeatNotSupportedError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/datasets", tags=["heartbeat"])
+node_router = APIRouter(tags=["heartbeat"])
 
 
 class HeartbeatRequest(BaseModel):
@@ -100,7 +121,6 @@ async def send_heartbeat(
                 dataset, service_id, exc,
             )
 
-    import time as _t
     return {
         "service_id": service_id,
         "dataset": dataset,
@@ -142,3 +162,91 @@ async def revoke_heartbeat(
             detail=f"No heartbeat lease for service {service_id!r} in dataset {dataset!r}",
         )
     return {"service_id": service_id, "dataset": dataset, "permanent": False}
+
+
+# ── per-node heartbeat (appliance mode) ─────────────────────────
+
+
+class NodeHeartbeatRequest(BaseModel):
+    """``POST /api/nodes/{node}/heartbeat`` body (optional)."""
+
+    status: Optional[str] = None
+
+
+class LeaseConfigModel(BaseModel):
+    """``POST /api/lease-config`` body - matches OpenAPI LeaseConfig."""
+
+    enabled: bool
+    min_ttl: int
+    max_ttl: int
+    grace_period: int
+
+
+def _resolve_node_manager():
+    """Return the per-node HeartbeatManager, or 404 if not assembled.
+
+    404 (vs 503): from a non-appliance registry's perspective these
+    routes do not exist, matching the fallback semantics of the
+    per-service heartbeat router.
+    """
+    manager = get_node_heartbeat_manager()
+    if manager is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Per-node heartbeat module not assembled (non-appliance mode). "
+                "Set A2X_REGISTRY_MODE=appliance to enable."
+            ),
+        )
+    return manager
+
+
+@node_router.post("/api/nodes/{node}/heartbeat")
+async def node_heartbeat(node: str, req: Optional[NodeHeartbeatRequest] = None):
+    """Renew the per-node lease (caller: gateway). Covers all instances
+    on that node. First heartbeat installs the lease; subsequent ones
+    renew (soft recovery from UNHEALTHY within grace)."""
+    manager = _resolve_node_manager()
+    try:
+        lease = manager.heartbeat(node)
+    except HeartbeatNotSupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "node": node,
+        "state": lease.state.value,
+        "ttl_seconds": lease.ttl_seconds,
+        "expires_at": _t.time() + (lease.expires_at - _t.monotonic()),
+    }
+
+
+@node_router.get("/api/lease-config")
+async def get_lease_config():
+    """Read the global per-node lease configuration."""
+    manager = _resolve_node_manager()
+    cfg = manager.store.get_config()
+    return {
+        "enabled": cfg.enabled,
+        "min_ttl": cfg.min_ttl,
+        "max_ttl": cfg.max_ttl,
+        "grace_period": cfg.grace_period,
+    }
+
+
+@node_router.post("/api/lease-config")
+async def set_lease_config(req: LeaseConfigModel):
+    """Update the global per-node lease configuration."""
+    manager = _resolve_node_manager()
+    manager.store.update_config(
+        enabled=req.enabled,
+        min_ttl=req.min_ttl,
+        max_ttl=req.max_ttl,
+        grace_period=req.grace_period,
+    )
+    cfg = manager.store.get_config()
+    return {
+        "enabled": cfg.enabled,
+        "min_ttl": cfg.min_ttl,
+        "max_ttl": cfg.max_ttl,
+        "grace_period": cfg.grace_period,
+    }

@@ -395,49 +395,49 @@ def format_report_markdown(analysis: Dict[str, Any]) -> str:
 
     # Error Type Explanation
     lines.append("## Error Categories\n")
-    lines.append("- **Category A (Navigation Failure)**: 没有进入正确分类")
-    lines.append("- **Category B (Selection Failure)**: 进入正确分类但没有选择正确工具")
+    lines.append("- **Category A (Navigation Failure)**: did not enter the correct category")
+    lines.append("- **Category B (Selection Failure)**: entered the correct category but did not select the correct tool")
     lines.append("")
 
     # Category A Errors - Detailed
     cat_a_errors = [e for e in analysis['detailed_errors'] if e['error_type'] == 'A_navigation_failure']
     if cat_a_errors:
         lines.append("---")
-        lines.append("# Category A: 没有进入正确分类\n")
+        lines.append("# Category A: did not enter the correct category\n")
         for i, error in enumerate(cat_a_errors):
             lines.append(f"## {i+1}. {error['query_id']}\n")
-            lines.append(f"**请求内容**: {error['query']}\n")
+            lines.append(f"**Query**: {error['query']}\n")
 
-            # 正确工具
+            # correct tools
             for tool in error['correct_tools_detail']:
                 if not tool['was_found']:
-                    lines.append("**正确工具**:")
+                    lines.append("**Correct tool**:")
                     lines.append(f"- ID: `{tool['tool_id']}`")
-                    lines.append(f"- 名称: {tool['tool_name']}")
-                    lines.append(f"- 描述: {tool['tool_description']}")
+                    lines.append(f"- Name: {tool['tool_name']}")
+                    lines.append(f"- Description: {tool['tool_description']}")
                     lines.append("")
 
-                    # 正确工具分类：完整链条+描述
+                    # correct tool categories: full chain + description
                     if tool.get('category_paths'):
-                        lines.append("**正确工具分类**:")
+                        lines.append("**Correct tool category**:")
                         for cat_path in tool['category_paths']:
-                            lines.append(f"- 路径: {cat_path['path_str']}")
-                            lines.append(f"- 描述: {cat_path['description'][:300]}...")
+                            lines.append(f"- Path: {cat_path['path_str']}")
+                            lines.append(f"- Description: {cat_path['description'][:300]}...")
                         lines.append("")
 
-            # 进入的错误工具分类：完整链条+描述
+            # wrongly entered tool categories: full chain + description
             if error.get('visited_category_paths'):
-                lines.append("**进入的错误分类**:")
-                # 去重，只显示唯一的分类路径
+                lines.append("**Wrongly entered category**:")
+                # deduplicate, show only unique category paths
                 seen_cats = set()
                 for cat_path in error['visited_category_paths']:
                     if cat_path['cat_id'] not in seen_cats:
                         seen_cats.add(cat_path['cat_id'])
-                        lines.append(f"- 路径: {cat_path['path_str']}")
-                        lines.append(f"- 描述: {cat_path['description']}")
+                        lines.append(f"- Path: {cat_path['path_str']}")
+                        lines.append(f"- Description: {cat_path['description']}")
                         lines.append("")
             else:
-                lines.append("**进入的错误分类**: 无\n")
+                lines.append("**Wrongly entered category**: none\n")
 
             lines.append("---\n")
 
@@ -445,45 +445,45 @@ def format_report_markdown(analysis: Dict[str, Any]) -> str:
     cat_b_errors = [e for e in analysis['detailed_errors'] if e['error_type'] == 'B_selection_failure']
     if cat_b_errors:
         lines.append("---")
-        lines.append("# Category B: 进入正确分类但没有选择正确工具\n")
+        lines.append("# Category B: entered the correct category but did not select the correct tool\n")
         for i, error in enumerate(cat_b_errors):
             lines.append(f"## {i+1}. {error['query_id']}\n")
-            lines.append(f"**请求内容**: {error['query']}\n")
-            lines.append(f"**访问过的分类**: {error['visited_categories']}\n")
+            lines.append(f"**Query**: {error['query']}\n")
+            lines.append(f"**Visited categories**: {error['visited_categories']}\n")
 
-            # 正确工具
+            # correct tools
             for tool in error['correct_tools_detail']:
                 if not tool['was_found']:
-                    lines.append("**正确工具**:")
+                    lines.append("**Correct tool**:")
                     lines.append(f"- ID: `{tool['tool_id']}`")
-                    lines.append(f"- 名称: {tool['tool_name']}")
-                    lines.append(f"- 描述: {tool['tool_description']}")
+                    lines.append(f"- Name: {tool['tool_name']}")
+                    lines.append(f"- Description: {tool['tool_description']}")
                     lines.append("")
 
-                    # 正确工具分类
+                    # correct tool category
                     if tool['categories']:
-                        lines.append("**正确工具分类**:")
+                        lines.append("**Correct tool category**:")
                         for cat in tool['categories']:
                             lines.append(f"- ID: `{cat['id']}`")
-                            lines.append(f"- 名称: {cat['name']}")
-                            lines.append(f"- 描述: {cat['description'][:300]}...")
+                            lines.append(f"- Name: {cat['name']}")
+                            lines.append(f"- Description: {cat['description'][:300]}...")
                         lines.append("")
 
-            # 错误工具
+            # wrong tools
             if error['wrong_tools_detail']:
-                lines.append("**错误工具**:")
+                lines.append("**Wrong tool**:")
                 for tool in error['wrong_tools_detail'][:3]:
                     lines.append(f"- ID: `{tool['tool_id']}`")
-                    lines.append(f"- 名称: {tool['tool_name']}")
-                    lines.append(f"- 描述: {tool['tool_description']}")
+                    lines.append(f"- Name: {tool['tool_name']}")
+                    lines.append(f"- Description: {tool['tool_description']}")
                     if tool['categories']:
                         cat = tool['categories'][0]
-                        lines.append(f"- 分类: `{cat['id']}` ({cat['name']})")
+                        lines.append(f"- Category: `{cat['id']}` ({cat['name']})")
                     lines.append("")
                 if len(error['wrong_tools_detail']) > 3:
-                    lines.append(f"... 还有 {len(error['wrong_tools_detail']) - 3} 个错误工具\n")
+                    lines.append(f"... {len(error['wrong_tools_detail']) - 3} more wrong tool(s)\n")
             else:
-                lines.append("**错误工具**: 无\n")
+                lines.append("**Wrong tool**: none\n")
 
             lines.append("---\n")
 
@@ -491,51 +491,51 @@ def format_report_markdown(analysis: Dict[str, Any]) -> str:
     mixed_errors = [e for e in analysis['detailed_errors'] if e['error_type'] == 'mixed']
     if mixed_errors:
         lines.append("---")
-        lines.append("# Mixed: 混合错误 (部分A + 部分B)\n")
+        lines.append("# Mixed: mixed errors (partial A + partial B)\n")
         for i, error in enumerate(mixed_errors):
             lines.append(f"## {i+1}. {error['query_id']}\n")
-            lines.append(f"**请求内容**: {error['query']}\n")
+            lines.append(f"**Query**: {error['query']}\n")
 
             # Category A missed tools
             if error['missed_tools_A_navigation']:
-                lines.append("### A类错误 (没有进入正确分类):\n")
+                lines.append("### Category A error (did not enter the correct category):\n")
                 for tool in error['missed_tools_A_navigation']:
-                    lines.append("**正确工具**:")
+                    lines.append("**Correct tool**:")
                     lines.append(f"- ID: `{tool['tool_id']}`")
-                    lines.append(f"- 名称: {tool['tool_name']}")
-                    lines.append(f"- 描述: {tool['tool_description']}")
+                    lines.append(f"- Name: {tool['tool_name']}")
+                    lines.append(f"- Description: {tool['tool_description']}")
                     if tool['correct_categories']:
-                        lines.append("**正确工具分类**:")
+                        lines.append("**Correct tool category**:")
                         for cat in tool['correct_categories']:
                             lines.append(f"- ID: `{cat['id']}`")
-                            lines.append(f"- 名称: {cat['name']}")
+                            lines.append(f"- Name: {cat['name']}")
                     lines.append("")
 
             # Category B missed tools
             if error['missed_tools_B_selection']:
-                lines.append("### B类错误 (进入正确分类但没选择):\n")
+                lines.append("### Category B error (entered the correct category but did not select):\n")
                 for tool in error['missed_tools_B_selection']:
-                    lines.append("**正确工具**:")
+                    lines.append("**Correct tool**:")
                     lines.append(f"- ID: `{tool['tool_id']}`")
-                    lines.append(f"- 名称: {tool['tool_name']}")
-                    lines.append(f"- 描述: {tool['tool_description']}")
+                    lines.append(f"- Name: {tool['tool_name']}")
+                    lines.append(f"- Description: {tool['tool_description']}")
                     if tool['correct_categories']:
-                        lines.append("**正确工具分类**:")
+                        lines.append("**Correct tool category**:")
                         for cat in tool['correct_categories']:
                             lines.append(f"- ID: `{cat['id']}`")
-                            lines.append(f"- 名称: {cat['name']}")
-                    lines.append(f"**已访问的正确分类**: {tool['visited_correct_categories']}")
+                            lines.append(f"- Name: {cat['name']}")
+                    lines.append(f"**Visited correct category**: {tool['visited_correct_categories']}")
                     lines.append("")
 
-            # 错误工具
+            # wrong tools
             if error['wrong_tools_detail']:
-                lines.append("**错误工具**:")
+                lines.append("**Wrong tool**:")
                 for tool in error['wrong_tools_detail'][:3]:
                     lines.append(f"- ID: `{tool['tool_id']}`")
-                    lines.append(f"- 名称: {tool['tool_name']}")
+                    lines.append(f"- Name: {tool['tool_name']}")
                     if tool['categories']:
                         cat = tool['categories'][0]
-                        lines.append(f"- 分类: `{cat['id']}` ({cat['name']})")
+                        lines.append(f"- Category: `{cat['id']}` ({cat['name']})")
                     lines.append("")
 
             lines.append("---\n")

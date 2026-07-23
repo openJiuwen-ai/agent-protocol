@@ -16,7 +16,10 @@ from a2x_registry.backend.startup import warmup_state, run_warmup
 from a2x_registry.common.errors import FeatureNotInstalledError, LLMNotConfiguredError
 from a2x_registry.auth.router import router as auth_router
 from a2x_registry.heartbeat.router import router as heartbeat_router
+from a2x_registry.heartbeat.router import node_router as node_heartbeat_router
 from a2x_registry.cluster.router import router as cluster_router
+from a2x_registry.image.router import router as image_router
+from a2x_registry.instance.router import router as instance_router
 
 app = FastAPI(
     title="A2X Registry Demo",
@@ -42,9 +45,20 @@ app.include_router(auth_router)
 # Heartbeat endpoints. Same 404 fallback semantics when the heartbeat
 # module isn't initialized (e.g. lite mode without startup hook).
 app.include_router(heartbeat_router)
+# Per-node heartbeat endpoints (appliance mode). Same 404 fallback
+# semantics when the per-node heartbeat module isn't assembled.
+app.include_router(node_heartbeat_router)
 # Cluster (distributed sync) endpoints. Opt-in: every route 404s until the
 # cluster module is initialized (cluster_state.json present at startup).
 app.include_router(cluster_router)
+# Image management endpoints. Accessible only after appliance-mode
+# assembly; when not assembled, _resolve_service in the router returns
+# 404 (same fallback semantics as heartbeat/cluster).
+app.include_router(image_router)
+# Instance management endpoints. Accessible only after appliance-mode
+# assembly; when not assembled, _resolve_service in the router returns
+# 404 (same fallback semantics as heartbeat/cluster/image).
+app.include_router(instance_router)
 
 
 @app.exception_handler(FeatureNotInstalledError)
@@ -116,7 +130,10 @@ async def _shutdown():
     # sweeper tick can't submit to an already-shut-down pool or use a closed
     # HTTP client.
     from a2x_registry.backend.startup import warmup_state
-    for key in ("_cluster_anti_entropy", "_cluster_keepalive", "_heartbeat_sweeper"):
+    for key in (
+        "_cluster_anti_entropy", "_cluster_keepalive",
+        "_heartbeat_sweeper", "_node_heartbeat_sweeper",
+    ):
         sweeper = warmup_state.get(key)
         if sweeper is not None:
             try:
