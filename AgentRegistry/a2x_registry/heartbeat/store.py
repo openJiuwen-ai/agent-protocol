@@ -1,4 +1,4 @@
-"""HeartbeatStore — per-namespace lease tracking on top of the shared
+"""HeartbeatStore - per-namespace lease tracking on top of the shared
 ``LeaseTable`` state machine.
 
 Pure runtime store: no disk I/O, no FastAPI. The corresponding persisted
@@ -7,30 +7,34 @@ is wired into ``RegistryService`` via the ``set_unhealthy_check`` callback
 at backend startup; the sweeper invokes ``RegistryService.deregister``
 through the synthetic ``SYSTEM_CTX`` for hard deletion.
 
-This module owns the heartbeat-specific concerns — the per-namespace
-4-corner validation matrix and the ``(dataset, service_id)`` keying —
+This module owns the heartbeat-specific concerns - the per-namespace
+4-corner validation matrix and the ``(dataset, service_id)`` keying -
 and delegates the actual lease countdown / state transitions to
 ``a2x_registry.common.lease.LeaseTable``.
+
+``NodeHeartbeatStore`` is the appliance-mode per-node variant (key =
+node IP). It coexists with the per-service ``HeartbeatStore`` using a
+separate ``LeaseTable`` instance so the two key spaces never mix.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
-from a2x_registry.common.lease import LeaseTable
+from a2x_registry.common.lease import Lease, LeaseState, LeaseTable
 
 from .errors import (
     HeartbeatNotSupportedError,
     TTLOutOfRangeError,
     TTLRequiredError,
 )
-from .models import HeartbeatLease
+from .models import HeartbeatLease, NodeLeaseConfig
 
 logger = logging.getLogger(__name__)
 
 
-# (dataset, service_id) → HeartbeatLease
+# (dataset, service_id) -> HeartbeatLease
 _LeaseKey = Tuple[str, str]
 
 
@@ -255,4 +259,132 @@ class HeartbeatStore:
             )
         logger.info(
             "heartbeat: recovered %d leases from disk into grace window", len(entries),
+        )
+
+
+class NodeHeartbeatStore:
+    """Per-node lease store for appliance mode (key = node IP).
+
+    Coexists with the per-service ``HeartbeatStore`` (A2X). Uses its own
+    ``LeaseTable`` instance keyed by ``str`` (node IP) so the two key
+    spaces never mix. The gateway heartbeats once per node, covering all
+    instances on that node; ``is_expired`` drives instance status
+    derivation, and ``sweep_expired_nodes`` drives grace-expired eviction.
+
+    State machine (per node):
+        HEALTHY --TTL elapsed--> UNHEALTHY + grace window
+        UNHEALTHY --heartbeat within grace--> HEALTHY (soft recovery)
+        UNHEALTHY --grace elapsed--> disconnected -> on_expire deletes instances
+    """
+
+    def __init__(self, config: Optional[NodeLeaseConfig] = None) -> None:
+        self._config = config if config is not None else NodeLeaseConfig()
+        self._table: LeaseTable[str] = LeaseTable()
+
+    # ── config ──────────────────────────────────────────────────
+
+    def get_config(self) -> NodeLeaseConfig:
+        """Return the current lease config (mutable; callers must not abuse)."""
+        return self._config
+
+    def update_config(self, **fields: object) -> None:
+        """Mutate config fields in-place. Unknown keys are ignored so the
+        router can forward the full OpenAPI body without pre-filtering."""
+        for key in ("enabled", "min_ttl", "max_ttl", "grace_period"):
+            if key in fields:
+                setattr(self._config, key, fields[key])
+        logger.info(
+            "node-heartbeat: config updated (enabled=%s, min_ttl=%s, grace=%s)",
+            self._config.enabled, self._config.min_ttl, self._config.grace_period,
+        )
+
+    # ── heartbeat / is_expired ──────────────────────────────────
+
+    def node_heartbeat(self, node: str) -> Lease:
+        """Install (first beat) or renew (subsequent) the node's lease.
+
+        First heartbeat installs a HEALTHY lease. Subsequent heartbeats
+        renew via ``LeaseTable.renew``, which also performs soft recovery
+        from UNHEALTHY within the grace window.
+
+        Raises ``HeartbeatNotSupportedError`` when the config has
+        ``enabled=False``.
+        """
+        if not self._config.enabled:
+            raise HeartbeatNotSupportedError(
+                "Node heartbeat leases are disabled (lease-config.enabled=false)."
+            )
+        existing = self._table.get(node)
+        if existing is None:
+            lease = self._table.install(
+                node, self._config.min_ttl, self._config.grace_period,
+            )
+        else:
+            lease = self._table.renew(node)
+        logger.debug("node-heartbeat: renewed %s", node)
+        return lease
+
+    def is_expired(self, node: str) -> bool:
+        """True if a lease exists AND its state is UNHEALTHY.
+
+        Missing lease -> False (covers the pre-first-heartbeat window
+        where the instance was just registered but the gateway hasn't
+        sent a heartbeat yet). After restart recovery every node with
+        instances gets an UNHEALTHY+grace lease, so ``is_expired`` is
+        True until the gateway re-heartbeats.
+        """
+        return self._table.is_unhealthy(node)
+
+    def get_lease(self, node: str) -> Optional[Lease]:
+        """Snapshot read for routers / tests."""
+        return self._table.get(node)
+
+    def list_nodes(self) -> List[Tuple[str, Lease]]:
+        """All ``(node, lease)`` pairs - for tests / debug."""
+        return self._table.items()
+
+    def expired_nodes(self) -> set:
+        """Return the set of node IPs that are currently UNHEALTHY.
+
+        Read-only: does not modify leases. Used by instance query to
+        push ``node NOT IN (...)`` into SQL when ``include_unhealthy=False``,
+        so filtering and pagination both happen in the database.
+        """
+        return {node for node, lease in self._table.items()
+                if lease.state == LeaseState.UNHEALTHY}
+
+    # ── sweep ───────────────────────────────────────────────────
+
+    def sweep_expired_nodes(
+        self, now: Optional[float] = None,
+    ) -> List[str]:
+        """Single sweep pass; returns nodes whose grace window elapsed.
+
+        The returned nodes have their leases removed from the table. The
+        caller (``HeartbeatManager.sweep_once``) invokes ``on_expire`` for
+        each, which typically calls ``InstanceService.expire_node`` to
+        delete all instances on that node.
+        """
+        _newly_unhealthy, to_delete = self._table.sweep_tick(now)
+        return to_delete
+
+    # ── restart recovery ────────────────────────────────────────
+
+    def recover_from_persisted(self, nodes: Iterable[str]) -> None:
+        """Seed UNHEALTHY + grace leases for nodes that have instances.
+
+        Called once at startup with ``InstanceService.distinct_nodes()``.
+        Each node gets a lease in UNHEALTHY state with
+        ``grace_deadline = now + grace_period`` - the gateway has one
+        grace window to re-heartbeat after a registry restart. If it
+        doesn't, the sweeper evicts all instances on that node.
+        """
+        node_list = list(nodes)
+        for node in node_list:
+            self._table.install(
+                node, self._config.min_ttl, self._config.grace_period,
+                expired=True,
+            )
+        logger.info(
+            "node-heartbeat: recovered %d nodes into grace window", len(node_list),
         )
