@@ -27,21 +27,33 @@ from .errors import (
     TTLOutOfRangeError,
     TTLRequiredError,
 )
-from .models import HeartbeatLease, HBState
-from .store import HeartbeatStore
-from .sweeper import HeartbeatSweeper
-from .deps import get_heartbeat_store, set_heartbeat_store
+from .models import HeartbeatLease, HBState, NodeLeaseConfig
+from .store import HeartbeatStore, NodeHeartbeatStore
+from .sweeper import HeartbeatSweeper, NodeHeartbeatSweeper
+from .service import HeartbeatManager
+from .deps import (
+    get_heartbeat_store,
+    set_heartbeat_store,
+    get_node_heartbeat_manager,
+    set_node_heartbeat_manager,
+)
 from .system_ctx import SYSTEM_CTX
 
 __all__ = [
     "HeartbeatStore",
+    "NodeHeartbeatStore",
     "HeartbeatLease",
     "HBState",
+    "NodeLeaseConfig",
     "HeartbeatSweeper",
+    "NodeHeartbeatSweeper",
+    "HeartbeatManager",
     "HeartbeatNotSupportedError",
     "TTLOutOfRangeError",
     "TTLRequiredError",
     "get_heartbeat_store",
     "set_heartbeat_store",
+    "get_node_heartbeat_manager",
+    "set_node_heartbeat_manager",
     "SYSTEM_CTX",
 ]

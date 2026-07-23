@@ -1,9 +1,9 @@
-"""向量检索模块
+"""Vector retrieval module.
 
-模块结构（与 a2x 一致）:
-- build/: 索引构建 (IndexBuilder)
-- search/: 向量检索 (VectorSearch)
-- evaluation/: 评估框架 (VectorEvaluator, CLI: python -m a2x_registry.vector.evaluation)
-- utils/: 通用组件 (EmbeddingModel, ChromaStore, metrics)
-- data/: 向量数据库持久化目录
+Module structure (mirrors a2x):
+- build/: index building (IndexBuilder)
+- search/: vector retrieval (VectorSearch)
+- evaluation/: evaluation framework (VectorEvaluator, CLI: python -m a2x_registry.vector.evaluation)
+- utils/: common components (EmbeddingModel, ChromaStore, metrics)
+- data/: vector database persistence directory
 """

@@ -60,7 +60,7 @@ def _start_node(name: str, home: Path, port: int):
         pytest.skip(f"cluster init failed for {name}: {init.stderr or init.stdout}")
     log = open(home / "server.log", "w", encoding="utf-8")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "a2x_registry.backend", "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "a2x_registry.backend", "--port", str(port)],
         env=env, cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT,
     )
     return proc, log

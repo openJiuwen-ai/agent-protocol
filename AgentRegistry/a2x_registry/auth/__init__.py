@@ -3,7 +3,9 @@
 Per-namespace opt-in: a registry remains fully anonymous until
 ``a2x-registry auth init`` runs, and individual namespaces stay anonymous
 unless they were created with ``auth_required=true``. See
-``docs/auth_design.md`` for the full design.
+``reference/分析报告/auth_design_sequence.md`` for the full design
+(path contains non-ASCII characters and is retained as-is per the
+upstream reference tree layout).
 
 Public API:
     - ``AuthStore`` — file-backed credential store

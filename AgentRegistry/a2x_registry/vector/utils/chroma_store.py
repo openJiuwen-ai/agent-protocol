@@ -1,17 +1,17 @@
-"""通用 ChromaDB 向量存储"""
+"""General-purpose ChromaDB vector store."""
 
 from typing import List, Dict, Any, Optional
 import chromadb
 
 
 class ChromaStore:
-    """ChromaDB 向量存储封装
+    """ChromaDB vector store wrapper.
 
-    提供文档的存储和相似度查询功能。
+    Provides document storage and similarity-query functionality.
 
     Args:
-        collection_name: 集合名称
-        persist_dir: 持久化目录，默认 "database/chroma"
+        collection_name: collection name
+        persist_dir: persistence directory, default "database/chroma"
 
     Example:
         >>> store = ChromaStore("my_collection")
@@ -37,13 +37,13 @@ class ChromaStore:
         embeddings: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None
     ) -> None:
-        """添加文档到集合
+        """Add documents to the collection.
 
         Args:
-            ids: 文档 ID 列表
-            texts: 文档文本列表
-            embeddings: 向量列表
-            metadatas: 可选的元数据列表
+            ids: list of document IDs
+            texts: list of document texts
+            embeddings: list of vectors
+            metadatas: optional list of metadata
         """
         self.collection.add(
             ids=ids,
@@ -53,14 +53,14 @@ class ChromaStore:
         )
 
     def query(self, embedding: List[float], top_k: int) -> Dict[str, Any]:
-        """查询最相似的文档
+        """Query the most similar documents.
 
         Args:
-            embedding: 查询向量
-            top_k: 返回结果数量
+            embedding: query vector
+            top_k: number of results to return
 
         Returns:
-            包含 ids, documents, distances 的字典
+            dict containing ids, documents, distances
         """
         return self.collection.query(
             query_embeddings=[embedding],
@@ -68,11 +68,11 @@ class ChromaStore:
         )
 
     def count(self) -> int:
-        """返回集合中的文档数量"""
+        """Return the number of documents in the collection."""
         return self.collection.count()
 
     def get_all_docs(self) -> dict:
-        """返回集合中所有文档的 {id: document_text} 映射"""
+        """Return a {id: document_text} mapping of all documents in the collection."""
         result = self.collection.get()
         return dict(zip(result["ids"], result["documents"]))
 
@@ -83,7 +83,7 @@ class ChromaStore:
         embeddings: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """插入或更新文档（id 已存在则覆盖，不存在则新增）"""
+        """Insert or update documents (overwrite if id exists, insert otherwise)."""
         self.collection.upsert(
             ids=ids,
             documents=texts,
@@ -92,7 +92,7 @@ class ChromaStore:
         )
 
     def delete_ids(self, ids: List[str]) -> None:
-        """按 ID 删除文档"""
+        """Delete documents by ID."""
         if ids:
             self.collection.delete(ids=ids)
 
@@ -102,7 +102,7 @@ class ChromaStore:
         return (self.collection.metadata or {}).get("embedding_model")
 
     def clear(self) -> None:
-        """清空集合"""
+        """Clear the collection."""
         ids = self.collection.get()["ids"]
         if ids:
             self.collection.delete(ids=ids)

@@ -21,6 +21,49 @@ warmup_state: dict = {
 }
 
 
+# ── env var names (storage backend selection) ───────────────────────────
+_ENV_DB_KIND = "A2X_REGISTRY_DB_KIND"
+_ENV_DB_ENDPOINT = "A2X_REGISTRY_DB_ENDPOINT"
+_ENV_DB_AUTH = "A2X_REGISTRY_DB_AUTH"
+_VALID_DB_KINDS = ("sqlite", "memory", "rqlite")
+_RQLITE_DEFAULT_ENDPOINT = "http://127.0.0.1:4001"
+
+
+def _resolve_db_config() -> dict:
+    """Build the ``connect(cfg)`` dict from ``A2X_REGISTRY_DB_*`` env vars.
+
+    - ``A2X_REGISTRY_DB_KIND`` empty/missing → ``sqlite`` (production
+      single-node, file-persisted at ``<home>/database/registry.db``).
+    - ``memory`` → in-process ``:memory:`` backend (debug only, lost on
+      process exit); no ``path`` key.
+    - ``rqlite`` → Raft-replicated backend; ``A2X_REGISTRY_DB_ENDPOINT``
+      (default ``http://127.0.0.1:4001``) and ``A2X_REGISTRY_DB_AUTH``
+      (``user:pwd``, default empty) configure the rqlite HTTP API.
+
+    Raises ``ValueError`` on an unknown kind so a typo never silently
+    falls back to memory. Business code never branches on kind — it only
+    sees the ``Backend`` returned by ``connect``.
+    """
+    import os
+
+    kind = os.environ.get(_ENV_DB_KIND, "").strip() or "memory"
+    if kind not in _VALID_DB_KINDS:
+        raise ValueError(
+            f"unknown A2X_REGISTRY_DB_KIND={kind!r}; "
+            f"accepted values: {', '.join(_VALID_DB_KINDS)}"
+        )
+    if kind == "memory":
+        return {"kind": "memory"}
+    if kind == "rqlite":
+        endpoint = os.environ.get(_ENV_DB_ENDPOINT, "").strip() or _RQLITE_DEFAULT_ENDPOINT
+        auth = os.environ.get(_ENV_DB_AUTH, "") or ""
+        return {"kind": "rqlite", "endpoint": endpoint, "auth": auth}
+    # sqlite (default)
+    db_path = database_dir() / "registry.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return {"kind": "sqlite", "path": str(db_path)}
+
+
 def run_warmup() -> None:
     """Execute the full startup sequence (blocking — run in a thread pool)."""
     import logging
@@ -40,8 +83,100 @@ def run_warmup() -> None:
     try:
         t0 = time.time()
 
+        # 0. SQL backend + RegistryTableService (base assembly).
+        #    image/instance services pick up ``_table_service`` from
+        #    warmup_state instead of re-instantiating their own Backend.
+        #    Failure here is fatal — without the SQL layer image/instance
+        #    modules have no store to bind to.
+        _stage("Initializing SQL backend...", 2)
+        try:
+            import os
+            from a2x_registry.common.db import connect, init_schema
+            from a2x_registry.register.service import RegistryTableService
+
+            db_cfg = _resolve_db_config()
+            backend = connect(db_cfg)
+            init_schema(backend.conn)
+            table_svc = RegistryTableService(backend)
+
+            # Register the named registries per startup mode.
+            # Generic mode: only the A2X backward-compat ``default``
+            # service registry. Appliance mode: also create the image /
+            # instance registries so image/instance routes have a target.
+            mode = os.environ.get("A2X_REGISTRY_MODE", "").strip()
+            table_svc.create_registry("default", "service")
+            if mode == "appliance":
+                table_svc.create_registry("images", "image")
+                table_svc.create_registry("instances", "instance")
+
+            warmup_state["_table_service"] = table_svc
+            logger.info(
+                "  SQL backend ready (kind=%s, mode=%s)",
+                backend.kind, mode or "generic",
+            )
+
+            # Assemble ImageService only in appliance mode (image registry
+            # already created above). Non-appliance mode skips assembly;
+            # the router's _resolve_service then returns 404, matching the
+            # design that generic mode does not create image/instance
+            # tables. The image module picks up the already-assembled
+            # RegistryTableService from _table_service.
+            if mode == "appliance":
+                from a2x_registry.image.service import ImageService
+                from a2x_registry.image.deps import set_image_service
+                from a2x_registry.instance.service import InstanceService
+                from a2x_registry.instance.deps import set_instance_service
+
+                image_svc = ImageService(table_svc)
+                set_image_service(image_svc)
+                logger.info("  ImageService assembled (appliance mode)")
+
+                instance_svc = InstanceService(table_svc)
+                set_instance_service(instance_svc)
+                logger.info("  InstanceService assembled (appliance mode)")
+
+                # Per-node heartbeat assembly (appliance mode only).
+                # Creates the node lease store + manager, recovers leases
+                # for all nodes that have registered instances, starts the
+                # sweeper daemon (wires instance.expire_node as on_expire),
+                # and injects the manager into the instance service so
+                # _derive_status reflects node liveness. Non-fatal: if this
+                # fails, the instance module falls back to all-运行 status
+                # (set_heartbeat_service not called -> callback stays None).
+                try:
+                    from a2x_registry.heartbeat.store import NodeHeartbeatStore
+                    from a2x_registry.heartbeat.service import HeartbeatManager
+                    from a2x_registry.heartbeat.sweeper import NodeHeartbeatSweeper
+                    from a2x_registry.heartbeat.deps import set_node_heartbeat_manager
+
+                    node_store = NodeHeartbeatStore()
+                    node_mgr = HeartbeatManager(node_store)
+                    recovered_nodes = instance_svc.distinct_nodes()
+                    if recovered_nodes:
+                        node_mgr.recover_from_persisted(recovered_nodes)
+                    set_node_heartbeat_manager(node_mgr)
+                    instance_svc.set_heartbeat_service(node_mgr)
+                    node_sweeper = NodeHeartbeatSweeper(
+                        node_mgr, instance_svc=instance_svc, period=5.0,
+                    )
+                    node_sweeper.start()
+                    warmup_state["_node_heartbeat_sweeper"] = node_sweeper
+                    logger.info(
+                        "  Per-node heartbeat assembled (recovered %d nodes)",
+                        len(recovered_nodes),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "  Per-node heartbeat init failed: %s", exc, exc_info=True,
+                    )
+                    from a2x_registry.heartbeat.deps import set_node_heartbeat_manager
+                    set_node_heartbeat_manager(None)
+        except Exception as exc:
+            logger.error("  SQL backend init failed: %s", exc, exc_info=True)
+            raise
+
         # 1. Registry
-        _stage("注册服务加载...", 5)
+        _stage("Loading registry services...", 5)
         registry_svc = init_registry_service(DATABASE_DIR)
         init_build_service(registry_svc)  # share the same instance with build router
         registry_states = registry_svc.startup()
@@ -174,7 +309,7 @@ def run_warmup() -> None:
         logger.info("Warmup: registry done (%.1fs)", time.time() - t0)
 
         # 2. Taxonomy caches
-        _stage("加载分类树...", 20)
+        _stage("Loading taxonomy tree...", 20)
         from a2x_registry.backend.services.taxonomy_service import get_taxonomy_tree
         for ds in discover_datasets():
             try:
@@ -185,12 +320,12 @@ def run_warmup() -> None:
         logger.info("Warmup: taxonomy done (%.1fs)", time.time() - t0)
 
         # 3. A2X engines — pure LLM, runs on the lite install too.
-        _stage("加载 A2X 搜索引擎...", 35)
+        _stage("Loading A2X search engine...", 35)
         for ds in discover_datasets():
             paths = resolve_dataset_paths(ds)
             if paths["taxonomy_path"].exists():
                 for mode in ("get_one", "get_all", "get_important"):
-                    _stage(f"加载 A2X {mode} ({ds})...", 35)
+                    _stage(f"Loading A2X {mode} ({ds})...", 35)
                     try:
                         search_service._get_a2x(ds, mode)
                         logger.info("  A2X %s ready: %s", mode, ds)
@@ -202,7 +337,7 @@ def run_warmup() -> None:
         # sentence_transformers). On lite installs we skip them cleanly.
         if feature_flags.has("vector"):
             # 4. Clean stale ChromaDB collections
-            _stage("清理向量数据库...", 58)
+            _stage("Cleaning vector store...", 58)
             try:
                 import chromadb
                 chroma_dir = str(DATABASE_DIR / "chroma")
@@ -217,9 +352,9 @@ def run_warmup() -> None:
                 logger.warning("  ChromaDB cleanup failed: %s", e)
 
             # 5. Vector sync for registry-managed datasets
-            _stage("同步向量数据库...", 62)
+            _stage("Syncing vector store...", 62)
             for ds in registry_states:
-                _stage(f"同步向量数据库 ({ds})...", 62)
+                _stage(f"Syncing vector store ({ds})...", 62)
                 try:
                     search_service.sync_vector(ds)
                     logger.info("  Vector sync done: %s", ds)
@@ -228,9 +363,9 @@ def run_warmup() -> None:
             logger.info("Warmup: vector sync done (%.1fs)", time.time() - t0)
 
             # 5b. Vector engines
-            _stage("加载向量搜索引擎...", 75)
+            _stage("Loading vector search engine...", 75)
             for ds in discover_datasets():
-                _stage(f"加载向量引擎 ({ds})...", 75)
+                _stage(f"Loading vector engine ({ds})...", 75)
                 try:
                     search_service._get_vector(ds)
                     logger.info("  Vector ready: %s", ds)
@@ -239,7 +374,7 @@ def run_warmup() -> None:
             logger.info("Warmup: vector done (%.1fs)", time.time() - t0)
 
             # 6. Pre-heat embedding models (one per unique model across datasets)
-            _stage("预热向量模型...", 90)
+            _stage("Pre-heating embedding model...", 90)
             seen_models = set()
             for ds in discover_datasets():
                 model_name = search_service.read_vector_config(ds)
@@ -254,7 +389,7 @@ def run_warmup() -> None:
         else:
             logger.info("Warmup: lite install detected — skipping vector / chroma stages")
 
-        warmup_state["stage"] = "完成"
+        warmup_state["stage"] = "complete"
         warmup_state["progress"] = 100
         warmup_state["ready"] = True
         logger.info("Warmup [100%%] complete — total %.1fs", time.time() - t0)
