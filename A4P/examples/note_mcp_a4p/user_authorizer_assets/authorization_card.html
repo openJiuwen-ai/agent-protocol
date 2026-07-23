@@ -1,0 +1,22 @@
+<article data-authorization-id="$authorization_id" data-signing-options="$signing_options">
+  <div class="field">
+    <label>Authorization ID</label>
+    <code>$authorization_id</code>
+  </div>
+  <div class="field">
+    <label>Instruction</label>
+    <div class="instruction">$display_text</div>
+  </div>
+  <details>
+    <summary>完整授权对象</summary>
+    <pre>$authorization_json</pre>
+  </details>
+  <div class="actions">
+    <button class="approve" type="button" onclick="approveWithPasskey(this)">Approve with passkey</button>
+    <form method="post" action="/reject">
+      <input type="hidden" name="authorizationId" value="$authorization_id">
+      <button class="reject" type="submit">Reject</button>
+    </form>
+  </div>
+  <div class="status"></div>
+</article>
