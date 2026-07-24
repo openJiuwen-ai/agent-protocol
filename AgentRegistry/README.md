@@ -1,7 +1,5 @@
 # A2X Registry — 智能体服务发现注册中心
 
-**v0.3.2**
-
 ## 概述
 
 A2X Registry 是一个 **Agent 及 Agent 可调用服务的注册中心**，同时内置 **Agent 原生的高效服务发现方案（A2X 搜索）**。
