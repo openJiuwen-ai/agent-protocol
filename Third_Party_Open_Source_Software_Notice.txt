@@ -569,6 +569,35 @@ Copyright (c) 2019, Encode OSS Ltd. All rights reserved.
 BSD 3-Clause text is identical to the one shown above for numpy, with the
 copyright holder replaced by "Encode OSS Ltd."
 
+--------------------------------------------------------------------------------
+Software: rqlite 10.2.7
+
+License: MIT License
+
+Copyright (c) 2015-2026 Philip O'Toole
+
+Please see the full MIT License text at the end of this file.
+
+--------------------------------------------------------------------------------
+Software: hashicorp/raft (bundled in rqlite)
+
+License: Mozilla Public License 2.0 (MPL-2.0)
+
+Copyright (c) HashiCorp, Inc.
+
+Please see the full Mozilla Public License 2.0 text at the end of this file.
+
+--------------------------------------------------------------------------------
+Software: SQLite (bundled in rqlite)
+
+License: Public Domain
+
+SQLite is in the Public Domain. All of the code and documentation in SQLite has
+been dedicated to the public domain by the authors. Anyone is free to copy,
+modify, publish, use, compile, sell, or distribute the original SQLite code,
+either in source code form or as a compiled binary, for any purpose, commercial
+or non-commercial, and by any means. See https://www.sqlite.org/copyright.html
+
 ================================================================================
 APPENDIX A: APACHE LICENSE, VERSION 2.0
 ================================================================================
