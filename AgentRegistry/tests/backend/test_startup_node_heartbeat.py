@@ -124,6 +124,11 @@ def test_node_heartbeat_endpoint_available_in_appliance(monkeypatch, tmp_path):
 
     from fastapi.testclient import TestClient
     c = TestClient(app)
+    # Heartbeat is disabled by default; enable it first via lease-config API.
+    r = c.post("/api/lease-config", json={
+        "enabled": True, "min_ttl": 90, "max_ttl": 3600, "grace_period": 30,
+    })
+    assert r.status_code == 200
     r = c.post("/api/nodes/192.168.0.12/heartbeat")
     assert r.status_code == 200
     assert r.json()["node"] == "192.168.0.12"
@@ -152,4 +157,4 @@ def test_lease_config_endpoint_available_in_appliance(monkeypatch, tmp_path):
     r = c.get("/api/lease-config")
     assert r.status_code == 200
     body = r.json()
-    assert body["enabled"] is True
+    assert body["enabled"] is False

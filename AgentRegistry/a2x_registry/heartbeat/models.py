@@ -36,7 +36,7 @@ class NodeLeaseConfig:
     (informational, reserved for future client-supplied TTL support).
     """
 
-    enabled: bool = True
+    enabled: bool = False
     min_ttl: int = 90
     max_ttl: int = 3600
     grace_period: int = 30
