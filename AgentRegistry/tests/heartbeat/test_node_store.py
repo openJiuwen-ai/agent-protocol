@@ -21,10 +21,15 @@ from a2x_registry.heartbeat.models import NodeLeaseConfig
 from a2x_registry.heartbeat.store import NodeHeartbeatStore
 
 
+def _enabled_store() -> NodeHeartbeatStore:
+    """Create a store with heartbeat enabled (default is now disabled)."""
+    return NodeHeartbeatStore(NodeLeaseConfig(enabled=True))
+
+
 # ── node_heartbeat ─────────────────────────────────────────────
 
 def test_first_heartbeat_installs_healthy():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     lease = store.node_heartbeat("192.168.0.11")
     assert lease.state == LeaseState.HEALTHY
     assert lease.ttl_seconds == NodeLeaseConfig().min_ttl
@@ -34,7 +39,7 @@ def test_first_heartbeat_installs_healthy():
 
 
 def test_subsequent_heartbeat_renews():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     l1 = store.node_heartbeat("10.0.0.1")
     # Force expiry then renew -> soft recovery
     l1.expires_at = time.monotonic() - 1
@@ -47,7 +52,7 @@ def test_subsequent_heartbeat_renews():
 
 
 def test_heartbeat_different_nodes_independent():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     store.node_heartbeat("10.0.0.1")
     store.node_heartbeat("10.0.0.2")
     nodes = dict(store.list_nodes())
@@ -63,7 +68,7 @@ def test_is_expired_missing_node_returns_false():
 
 
 def test_is_expired_true_when_unhealthy():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     lease = store.node_heartbeat("10.0.0.1")
     lease.state = LeaseState.UNHEALTHY
     assert store.is_expired("10.0.0.1") is True
@@ -73,7 +78,7 @@ def test_is_expired_true_when_unhealthy():
 
 def test_recover_from_persisted_seeds_unhealthy_grace():
     """Restart recovery: each node gets UNHEALTHY + grace window."""
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     store.recover_from_persisted(["10.0.0.1", "10.0.0.2"])
     for node in ("10.0.0.1", "10.0.0.2"):
         lease = store.get_lease(node)
@@ -83,14 +88,14 @@ def test_recover_from_persisted_seeds_unhealthy_grace():
 
 
 def test_recover_from_persisted_empty_list_noop():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     store.recover_from_persisted([])
     assert store.list_nodes() == []
 
 
 def test_recover_then_heartbeat_restores_healthy():
     """After restart recovery, a heartbeat soft-recovers to HEALTHY."""
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     store.recover_from_persisted(["10.0.0.1"])
     assert store.is_expired("10.0.0.1") is True
 
@@ -99,17 +104,25 @@ def test_recover_then_heartbeat_restores_healthy():
     assert store.is_expired("10.0.0.1") is False
 
 
+def test_recover_skipped_when_disabled():
+    """When enabled=False, recover_from_persisted is a no-op."""
+    store = NodeHeartbeatStore()  # default: disabled
+    store.recover_from_persisted(["10.0.0.1", "10.0.0.2"])
+    assert store.list_nodes() == []
+    assert store.is_expired("10.0.0.1") is False
+
+
 # ── sweep_expired_nodes ────────────────────────────────────────
 
 def test_sweep_healthy_node_not_returned():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     lease = store.node_heartbeat("10.0.0.1")
     expired = store.sweep_expired_nodes(now=lease.expires_at - 1)
     assert expired == []
 
 
 def test_sweep_unhealthy_within_grace_not_returned():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     lease = store.node_heartbeat("10.0.0.1")
     # Past TTL but within grace
     now = lease.expires_at + 0.01
@@ -121,7 +134,7 @@ def test_sweep_unhealthy_within_grace_not_returned():
 
 
 def test_sweep_past_grace_returns_node_and_removes_lease():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     lease = store.node_heartbeat("10.0.0.1")
     expired = store.sweep_expired_nodes(now=lease.grace_deadline + 0.01)
     assert expired == ["10.0.0.1"]
@@ -130,7 +143,7 @@ def test_sweep_past_grace_returns_node_and_removes_lease():
 
 
 def test_sweep_multiple_nodes_only_expired_returned():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     l1 = store.node_heartbeat("10.0.0.1")
     l2 = store.node_heartbeat("10.0.0.2")
     # Both installed at nearly the same monotonic instant; extend l2's
@@ -151,14 +164,14 @@ def test_sweep_empty_store_noop():
 
 def test_default_config_values():
     cfg = NodeLeaseConfig()
-    assert cfg.enabled is True
+    assert cfg.enabled is False
     assert cfg.min_ttl > 0
     assert cfg.grace_period > 0
     assert cfg.max_ttl >= cfg.min_ttl
 
 
 def test_update_config_changes_ttl_and_grace():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     store.update_config(min_ttl=120, grace_period=60)
     lease = store.node_heartbeat("10.0.0.1")
     assert lease.ttl_seconds == 120
@@ -167,6 +180,7 @@ def test_update_config_changes_ttl_and_grace():
 
 def test_disabled_config_rejects_heartbeat():
     store = NodeHeartbeatStore()
+    # Default is already disabled; verify explicitly disabling too.
     store.update_config(enabled=False)
     with pytest.raises(HeartbeatNotSupportedError):
         store.node_heartbeat("10.0.0.1")
@@ -188,7 +202,7 @@ def test_get_lease_returns_none_for_missing():
 
 
 def test_get_lease_returns_lease_for_existing():
-    store = NodeHeartbeatStore()
+    store = _enabled_store()
     store.node_heartbeat("10.0.0.1")
     lease = store.get_lease("10.0.0.1")
     assert lease is not None

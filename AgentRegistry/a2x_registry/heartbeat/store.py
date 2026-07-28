@@ -379,6 +379,12 @@ class NodeHeartbeatStore:
         grace window to re-heartbeat after a registry restart. If it
         doesn't, the sweeper evicts all instances on that node.
         """
+        if not self._config.enabled:
+            logger.info(
+                "node-heartbeat: recovery skipped (disabled); "
+                "instances stay running until manually deregistered"
+            )
+            return
         node_list = list(nodes)
         for node in node_list:
             self._table.install(

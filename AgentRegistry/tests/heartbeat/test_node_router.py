@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from a2x_registry.heartbeat.deps import set_node_heartbeat_manager
+from a2x_registry.heartbeat.models import NodeLeaseConfig
 from a2x_registry.heartbeat.router import node_router
 from a2x_registry.heartbeat.service import HeartbeatManager
 from a2x_registry.heartbeat.store import NodeHeartbeatStore
@@ -29,7 +30,7 @@ def _make_app() -> FastAPI:
 
 @pytest.fixture
 def manager():
-    mgr = HeartbeatManager(NodeHeartbeatStore())
+    mgr = HeartbeatManager(NodeHeartbeatStore(NodeLeaseConfig(enabled=True)))
     set_node_heartbeat_manager(mgr)
     yield mgr
     set_node_heartbeat_manager(None)
@@ -90,14 +91,22 @@ def test_post_node_heartbeat_disabled_400(client, manager):
 
 # ── GET /api/lease-config ──────────────────────────────────────
 
-def test_get_lease_config_defaults(client):
-    r = client.get("/api/lease-config")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["enabled"] is True
-    assert "min_ttl" in body
-    assert "max_ttl" in body
-    assert "grace_period" in body
+def test_get_lease_config_defaults():
+    """Default config has heartbeat disabled."""
+    mgr = HeartbeatManager(NodeHeartbeatStore())
+    set_node_heartbeat_manager(mgr)
+    try:
+        app = _make_app()
+        c = TestClient(app)
+        r = c.get("/api/lease-config")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["enabled"] is False
+        assert "min_ttl" in body
+        assert "max_ttl" in body
+        assert "grace_period" in body
+    finally:
+        set_node_heartbeat_manager(None)
 
 
 def test_get_lease_config_not_assembled_404():

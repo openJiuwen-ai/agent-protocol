@@ -27,6 +27,7 @@ from a2x_registry.register.service import RegistryTableService
 from a2x_registry.instance.service import InstanceService
 from a2x_registry.instance.deps import set_instance_service
 from a2x_registry.heartbeat.service import HeartbeatManager
+from a2x_registry.heartbeat.models import NodeLeaseConfig
 from a2x_registry.heartbeat.store import NodeHeartbeatStore
 from a2x_registry.heartbeat.sweeper import NodeHeartbeatSweeper
 
@@ -50,7 +51,7 @@ def instance_svc(table_svc):
 
 @pytest.fixture
 def hb_manager():
-    return HeartbeatManager(NodeHeartbeatStore())
+    return HeartbeatManager(NodeHeartbeatStore(NodeLeaseConfig(enabled=True)))
 
 
 def _make_entry(user="alice", framework="langchain", node="192.168.0.11", **kw):
