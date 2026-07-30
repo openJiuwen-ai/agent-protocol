@@ -90,8 +90,13 @@ struct RequestContext {
 
     ~RequestContext()
     {
+        // Cleanup CURL easy handle if still owned (e.g. exception before explicit cleanup)
+        if (easyHandle != nullptr) {
+            curl_easy_cleanup(easyHandle);
+            easyHandle = nullptr;
+        }
         // Cleanup headers to prevent memory leak
-        if (headers) {
+        if (headers != nullptr) {
             curl_slist_free_all(headers);
             headers = nullptr;
         }

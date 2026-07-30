@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <mutex>
+#include <future>
 #include <algorithm>
 
 #include "stream_server_emitter.h"
@@ -66,10 +67,19 @@ int HttpServerTransport::Start()
     // Create and start the server manager
     httpServerMgr_ = std::make_unique<Server::HttpServerManager>(config);
 
-    // Start server in background thread
-    listenThread_ = std::thread([this]() {
-        httpServerMgr_->Start();
+    // Start server in background thread; wait until Start() finishes so Stop()
+    // cannot race with servers_ construction (ASAN SEGV in unique_ptr clear).
+    auto started = std::make_shared<std::promise<void>>();
+    auto startedFuture = started->get_future();
+    listenThread_ = std::thread([this, started]() {
+        try {
+            httpServerMgr_->Start();
+            started->set_value();
+        } catch (...) {
+            started->set_exception(std::current_exception());
+        }
     });
+    startedFuture.get();
 
     return 0;
 }

@@ -47,4 +47,6 @@ endif()
 
 target_compile_features(mcp_st_tests PRIVATE cxx_std_17)
 
-gtest_discover_tests(mcp_st_tests)
+gtest_discover_tests(mcp_st_tests
+  DISCOVERY_TIMEOUT 60
+)

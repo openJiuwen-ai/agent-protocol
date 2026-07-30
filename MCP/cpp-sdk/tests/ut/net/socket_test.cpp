@@ -201,6 +201,9 @@ TEST(TcpSocketTest, InputBufferAccess) {
     auto& buffer = conn->InputBuffer();
     EXPECT_EQ(buffer.ReadableBytes(), 0);
 
+    // Adopt() holds a self-reference until Close(); without it the socket leaks.
+    conn->Close();
+    EXPECT_FALSE(conn->Valid());
     ::close(sv[1]);
 }
 
@@ -629,6 +632,7 @@ TEST(TcpSocketTest, ApplyOptionsWithZeroBufferSize) {
     auto socket = TcpSocket::Adopt(es, sv[0], opts);
     EXPECT_NE(socket, nullptr);
 
+    socket->Close();
     ::close(sv[1]);
 }
 
@@ -974,14 +978,15 @@ TEST(TcpSocketTest, DestructorCleanupBehavior) {
 
         auto socket = TcpSocket::Adopt(es, sv[0], TcpSocketOptions{});
 
-        // Socket should be valid within scope
         EXPECT_NE(socket, nullptr);
         EXPECT_TRUE(socket->Valid());
 
-        // Destructor will be called when going out of scope
-        // Should clean up properly without crashing
-
-    } // Destructor called here
+        // Adopt() keeps a self-hold while events are active; Close() releases it
+        // so the shared_ptr can destroy the object when it leaves scope.
+        socket->Close();
+        EXPECT_FALSE(socket->Valid());
+        ::close(sv[1]);
+    }
 
     SUCCEED();
 }

@@ -20,12 +20,12 @@ HttpServerManager::~HttpServerManager()
 
 void HttpServerManager::Start()
 {
-    if (running_.exchange(true)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (running_) {
         return;
     }
 
     if (config_.ioThreadNum == 0) {
-        running_ = false;
         return;
     }
 
@@ -34,7 +34,7 @@ void HttpServerManager::Start()
 
     for (size_t i = 0; i < config_.ioThreadNum; ++i) {
         servers_.push_back(
-            std::make_unique<HttpServer>(config_.host, config_.port, config_.tlsConfig, config_.routeMap));
+            std::make_unique<HttpServer>(config_.host, config_.port, config_.tlsConfig, config_.routeMap, i));
     }
 
     for (auto& server : servers_) {
@@ -42,20 +42,29 @@ void HttpServerManager::Start()
             server->Run();
         }
     }
+
+    // Mark running only after servers_ is fully populated and Run() has returned,
+    // so concurrent Stop() cannot clear a half-built vector.
+    running_ = true;
 }
 
 void HttpServerManager::Stop()
 {
-    if (!running_.exchange(false)) {
-        return;
+    std::vector<std::unique_ptr<HttpServer>> serversToStop;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!running_) {
+            return;
+        }
+        running_ = false;
+        serversToStop.swap(servers_);
     }
 
-    for (auto& server : servers_) {
+    for (auto& server : serversToStop) {
         if (server != nullptr) {
             server->Stop();
         }
     }
-
-    servers_.clear();
+    serversToStop.clear();
 }
 } // namespace A2A::Server
