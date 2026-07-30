@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Register A4P browser key</title>
+  <link rel="stylesheet" href="/assets/authorizer.css">
+</head>
+<body>
+  <main>
+    <article>
+      <h1>Register A4P browser key</h1>
+      <p>Register a passkey for <code>$user_id</code>. Continue only if you initiated the Agent command.</p>
+      <button class="secondary" id="register" data-request-id="$request_id" data-options="$options">Register passkey</button>
+      <p class="status" id="status"></p>
+    </article>
+  </main>
+  <script src="/assets/webauthn.js"></script>
+  <script src="/assets/registration.js"></script>
+</body>
+</html>
