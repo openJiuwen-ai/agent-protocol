@@ -701,13 +701,13 @@ Intent 模式由 Agent 先取得 token，后续每次 `delete_note` 由 Tool Ser
 
 ```bash
 # 运行全部 pytest
-uv run --with pytest pytest -q
+uv run python -m pytest -q
 
 # 静态检查
 uv run --with ruff ruff check .
 
 # branch-aware coverage
-uv run --with pytest --with pytest-cov pytest --cov=a4p --cov-branch -q
+uv run --with pytest-cov python -m pytest --cov=a4p --cov-branch -q
 
 # Python 编译检查
 uv run python -m compileall -q src tests examples

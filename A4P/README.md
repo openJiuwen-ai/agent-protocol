@@ -39,7 +39,7 @@ A4P（Agentic Authentication, Authorization, and Audit Protocol）是一套面�
 环境要求：Python 3.10 或更高版本。安装命令：
 
 ```bash
-uv sync --locked
+uv sync
 ```
 
 | 运行环境 | 可运行示例 | 环境与交互要求 |
@@ -94,7 +94,7 @@ Windows Hello 登录方式（PIN、面部识别或指纹识别）。浏览器认
 运行 `examples/note_mcp_a4p` 中的笔记 MCP 服务器示例前，需要额外安装 demo 依赖：
 
 ```bash
-uv sync --locked --extra demo
+uv sync --extra demo
 ```
 
 运行示例需要三个终端。
@@ -146,7 +146,7 @@ Web UI，不需要 passkey、硬件认证器或人工确认。脚本使用临时
 先安装 demo 额外依赖：
 
 ```bash
-uv sync --locked --extra demo
+uv sync --extra demo
 ```
 
 然后在仓库根目录运行：
@@ -163,6 +163,12 @@ note_mcp_a4p smoke tests passed
 ```
 
 该示例可在 Windows、macOS、Linux 环境中运行。
+
+### 运行测试
+
+```bash
+uv run python -m pytest -q
+```
 
 ## 更多文档
 
