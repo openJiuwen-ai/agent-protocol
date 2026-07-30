@@ -41,6 +41,7 @@ def _load_browser_user_authorizer_class():
 
 
 def test_standalone_user_authorizer_returns_signed_mandate() -> None:
+    """浏览器授权器在用户批准并提交 WebAuthn 断言时，应返回包含用户签名的 mandate。"""
     async def run() -> None:
         browser_authorizer_cls = _load_browser_user_authorizer_class()
         trust_store = StaticA4PServerTrustStore(
@@ -94,6 +95,7 @@ def test_standalone_user_authorizer_returns_signed_mandate() -> None:
 
 
 def test_standalone_user_authorizer_overwrites_options_before_queuing() -> None:
+    """浏览器授权器收到包含不可信签名选项的请求时，应在入队前用服务端可信选项覆盖并正确提供页面静态资源。"""
     async def run() -> None:
         browser_authorizer_cls = _load_browser_user_authorizer_class()
         server = A4PServer(
@@ -153,6 +155,7 @@ def test_standalone_user_authorizer_overwrites_options_before_queuing() -> None:
 
 
 def test_standalone_user_authorizer_returns_registration_credential_to_agent() -> None:
+    """浏览器授权器完成 WebAuthn 凭据注册时，应将注册凭据返回给 Agent 并清理待处理注册记录。"""
     async def run() -> None:
         browser_authorizer_cls = _load_browser_user_authorizer_class()
         trust_store = StaticA4PServerTrustStore(

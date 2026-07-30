@@ -23,6 +23,7 @@ async def _prepare_and_complete_intent(server: A4PServer, request: dict):  # noq
 
 
 def test_prepare_complete_intent_preserves_agent_key_binding() -> None:
+    """准备并完成 intent 授权时，生成的 mandate 和 token 应保留并校验 Agent 公钥绑定。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         prepared = await server.prepare_intent_authorization(
@@ -117,6 +118,7 @@ def test_prepare_intent_rejects_missing_identity_and_invalid_validity(
     request_payload: dict[str, object],
     reason: str,
 ) -> None:
+    """准备 intent 授权时缺少身份字段或有效期非法，应拒绝请求并返回对应原因。"""
     prepared = asyncio.run(A4PServer().prepare_intent_authorization(request_payload))
 
     assert prepared.mandate is None
@@ -124,6 +126,7 @@ def test_prepare_intent_rejects_missing_identity_and_invalid_validity(
 
 
 def test_missing_user_signature_method_is_rejected() -> None:
+    """创建要求用户签名但未指定签名方法的 intent mandate 时，应立即拒绝。"""
     mandate = intent_mandate.create_intent_mandate(
         server="local://test",
         agent_id="agent-1",
@@ -143,6 +146,7 @@ def test_missing_user_signature_method_is_rejected() -> None:
 
 
 def test_complete_intent_rejects_mandate_from_another_pending_request() -> None:
+    """使用另一个待处理请求的 mandate 完成 intent 授权时，应因请求不匹配而拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         broad = await server.prepare_intent_authorization(
@@ -188,6 +192,7 @@ def test_complete_intent_rejects_mandate_from_another_pending_request() -> None:
 
 
 def test_complete_intent_rejects_unknown_mandate_id() -> None:
+    """使用未知 mandateId 完成 intent 授权时，应按失败关闭原则拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         prepared = await server.prepare_intent_authorization(
@@ -216,6 +221,7 @@ def test_complete_intent_rejects_unknown_mandate_id() -> None:
 
 
 def test_prepare_generates_independent_pending_mandate_ids() -> None:
+    """连续准备多个 intent 授权时，应为每个待处理请求生成互不相同的 mandateId。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         first = await server.prepare_intent_authorization(
@@ -250,6 +256,7 @@ def test_prepare_generates_independent_pending_mandate_ids() -> None:
 
 
 def test_intent_execution_policy_is_signed_and_copied_to_token() -> None:
+    """intent 包含执行策略时，该策略应受 mandate 签名保护并原样写入签发的 token。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         prepared = await server.prepare_intent_authorization(
@@ -293,6 +300,7 @@ def test_intent_execution_policy_is_signed_and_copied_to_token() -> None:
 
 
 def test_intent_execution_policy_ignores_unknown_fields() -> None:
+    """规范化 intent 执行策略时，应保留受支持字段并忽略未知字段。"""
     expected = {"maxExecutions": 2}
 
     assert (
@@ -313,6 +321,7 @@ def test_intent_execution_policy_ignores_unknown_fields() -> None:
 
 
 def test_intent_execution_policy_total_cap_is_consumed_by_server_verification() -> None:
+    """服务端验证带总执行次数上限的 intent token 时，应逐次消费配额并在超限后拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         auth = await _prepare_and_complete_intent(
@@ -364,6 +373,7 @@ def test_intent_execution_policy_total_cap_is_consumed_by_server_verification() 
 def test_intent_execution_policy_usage_persists_across_server_instances(
     tmp_path,
 ) -> None:
+    """多个服务实例共享 SQLite 用量库时，intent token 的已消费配额应跨实例持久化。"""
     async def run() -> None:
         path = tmp_path / "usage.sqlite3"
         first_server = A4PServer(
@@ -403,6 +413,7 @@ def test_intent_execution_policy_usage_persists_across_server_instances(
 
 
 def test_intent_usage_store_failure_is_fail_closed() -> None:
+    """intent 用量存储发生故障时，token 验证应失败关闭而不能绕过执行策略。"""
     class FailingUsageStore:
         def consume(self, **_kwargs):  # noqa: ANN003, ANN201
             raise IntentTokenUsageStoreError("database unavailable")
@@ -441,6 +452,7 @@ def test_intent_usage_store_failure_is_fail_closed() -> None:
 
 
 def test_intent_without_execution_policy_does_not_access_usage_store() -> None:
+    """intent 未配置执行策略时，token 验证应成功且不访问用量存储。"""
     class UnexpectedUsageStore:
         def consume(self, **_kwargs):  # noqa: ANN003, ANN201
             raise AssertionError("usage store must not be called")
@@ -478,6 +490,7 @@ def test_intent_without_execution_policy_does_not_access_usage_store() -> None:
 
 
 def test_invalid_intent_execution_policies_reject_mandate_creation() -> None:
+    """intent 执行策略包含非法上限或时间窗口时，mandate 创建应拒绝这些配置。"""
     async def run() -> None:
         cases = [
             {"maxExecutions": 0},
@@ -515,6 +528,7 @@ def test_invalid_intent_execution_policies_reject_mandate_creation() -> None:
 
 
 def test_intent_no_signature_prepare_and_complete_issues_token() -> None:
+    """服务端启用免用户签名模式时，准备并完成 intent 授权应成功签发 token。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test", require_user_signature=False)
         prepared = await server.prepare_intent_authorization(
@@ -544,6 +558,7 @@ def test_intent_no_signature_prepare_and_complete_issues_token() -> None:
 
 
 def test_intent_no_signature_approval_rejected_when_signature_required() -> None:
+    """服务端要求用户签名时，使用免签名方式批准 intent 应被拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         prepared = await server.prepare_intent_authorization(
@@ -573,6 +588,7 @@ def test_intent_no_signature_approval_rejected_when_signature_required() -> None
 
 
 def test_intent_no_signature_primitive_token_issue_requires_explicit_opt_out() -> None:
+    """底层接口为无用户签名的 intent mandate 签发 token 时，必须显式声明免签名模式。"""
     mandate = intent_mandate.create_intent_mandate(
         server="local://test",
         agent_id="agent-1",
@@ -595,6 +611,7 @@ def test_intent_no_signature_primitive_token_issue_requires_explicit_opt_out() -
 
 
 def test_intent_no_signature_mode_rejects_nonempty_user_signature() -> None:
+    """服务端启用免用户签名模式时，提交非空用户签名应被拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test", require_user_signature=False)
         prepared = await server.prepare_intent_authorization(
@@ -622,6 +639,7 @@ def test_intent_no_signature_mode_rejects_nonempty_user_signature() -> None:
 
 
 def test_intent_no_signature_still_rejects_tampered_mandate_core() -> None:
+    """即使启用免用户签名模式，篡改 mandate 核心字段的 intent 授权仍应被拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test", require_user_signature=False)
         prepared = await server.prepare_intent_authorization(
@@ -654,6 +672,7 @@ def test_intent_no_signature_still_rejects_tampered_mandate_core() -> None:
 
 
 def test_custom_intent_display_text_renderer_is_signed() -> None:
+    """使用自定义 intent 展示文本渲染器时，渲染结果应写入 mandate 并受到服务端签名保护。"""
     async def run() -> None:
         seen_mandates = []
 

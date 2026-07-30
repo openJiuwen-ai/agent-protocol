@@ -34,6 +34,7 @@ async def _prepare_signed(
 
 
 def test_complete_requires_current_operation_and_matches_all_three_copies() -> None:
+    """完成 operation 授权时必须提供当前操作，且请求、待处理记录和 mandate 中的三份操作应完全一致。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation, signed = await _prepare_signed(server)
@@ -72,6 +73,7 @@ def test_complete_requires_current_operation_and_matches_all_three_copies() -> N
 
 
 def test_concurrent_complete_approves_and_executes_only_once() -> None:
+    """并发完成同一 operation 授权时，只应有一次获得批准并执行。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation, signed = await _prepare_signed(server)
@@ -97,6 +99,7 @@ def test_concurrent_complete_approves_and_executes_only_once() -> None:
 
 
 def test_business_failure_does_not_restore_consumed_authorization() -> None:
+    """业务执行失败后，已经消费的 operation 授权不应恢复或允许重试使用。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation, signed = await _prepare_signed(server)
@@ -152,12 +155,14 @@ def test_business_failure_does_not_restore_consumed_authorization() -> None:
     ],
 )
 def test_prepare_rejects_missing_identity_and_invalid_validity(payload, reason) -> None:  # noqa: ANN001
+    """准备 operation 授权时缺少身份字段或有效期非法，应拒绝请求并返回对应原因。"""
     challenge = asyncio.run(A4PServer().prepare_operation_authorization(payload))
     assert challenge.mandate is None
     assert challenge.rejectReason == reason
 
 
 def test_expired_and_lost_pending_authorizations_fail_closed() -> None:
+    """待处理 operation 授权已过期或因服务重启丢失时，完成请求应失败关闭。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation, signed = await _prepare_signed(server)
@@ -182,6 +187,7 @@ def test_expired_and_lost_pending_authorizations_fail_closed() -> None:
 
 
 def test_legacy_direct_authorization_apis_are_removed() -> None:
+    """检查客户端和服务端公开接口时，已废弃的直接授权 API 应不存在。"""
     assert not hasattr(A4PClient, "request_intent_authorization")
     assert not hasattr(A4PServer, "authorize_intent")
     assert not hasattr(A4PClient, "request_operation_authorization")
