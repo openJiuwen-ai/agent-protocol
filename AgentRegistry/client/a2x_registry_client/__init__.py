@@ -82,4 +82,4 @@ __all__ = [
     "remove_cli_token",
 ]
 
-__version__ = "0.3.3"
+__version__ = "0.2.0"

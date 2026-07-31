@@ -4,7 +4,6 @@
 - 注册模块：[register_design.md](register_design.md)
 - 构建模块：[build_design.md](build_design.md)
 - 搜索模块：[search_design.md](search_design.md)
-- 增量构建模块：[incremental_design.md](incremental_design.md)
 - 前端：[frontend_design.md](frontend_design.md)
 
 ---
@@ -20,7 +19,6 @@ A2X Registry 由以下模块组成，围绕核心数据结构 **分类树** 和 
 | **注册模块** (`a2x_registry/register/`) | 服务注册/注销/查询，管理三类服务（Generic + A2A + Skill），输出 service.json | ✅ |
 | **构建模块** (`a2x_registry/a2x/build/`) | 从服务列表自动构建层次化分类树 | ✅ |
 | **搜索模块** (`a2x_registry/a2x/search/`) | 基于分类树执行两阶段 LLM 递归检索 | ✅ |
-| **增量构建** (`a2x_registry/a2x/incremental/`) | 将增量新服务插入已有分类树 | 待实现 |
 | **向量基线** (`a2x_registry/vector/`) | ChromaDB 向量检索（对比基线） | ✅ |
 | **传统基线** (`a2x_registry/traditional/`) | MCP 全上下文基线（对比基线） | ✅ |
 | **后端** (`a2x_registry/backend/`) | FastAPI，路由 + 服务编排 | ✅ |
@@ -39,7 +37,6 @@ A2X Registry 由以下模块组成，围绕核心数据结构 **分类树** 和 
 | **注册** | 配置文件 / HTTP API / CLI | service.json + taxonomy 状态 |
 | **构建** | service.json | 分类树（taxonomy.json + class.json） |
 | **搜索** | 查询 + 分类树 | 服务列表 + 搜索统计 |
-| **增量构建** | 新服务 + 分类树 | 更新后的分类树 |
 | **向量基线** | 查询 + service.json | 服务列表 |
 | **传统基线** | 查询 + service.json | 服务列表 |
 
@@ -90,9 +87,6 @@ graph TB
     RS -.->|taxonomy 状态| SEARCH
     RS -.->|变更回调| VEC
 
-    NEW([增量新服务]) --> INCR[增量构建]
-    TAX <--> INCR
-
     style TAX fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px
     style SJ fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px
     style RS fill:#fff3e0,stroke:#ff9800
@@ -100,7 +94,6 @@ graph TB
     style SEARCH fill:#e8f5e9,stroke:#4caf50
     style VEC fill:#e8f5e9,stroke:#4caf50
     style TRAD fill:#e8f5e9,stroke:#4caf50
-    style INCR fill:#e3f2fd,stroke:#2196f3
 ```
 
 ### 4. 顺序图
@@ -255,18 +248,11 @@ classDiagram
         +call_batch(prompts, system_prompt, max_workers) List
     }
 
-    class IncrementalBuilder {
-        <<待实现>>
-        +add_service(service) List~str~
-        +remove_service(service_id) bool
-    }
-
     RegistryService ..> TaxonomyBuilder : service.json → build
     TaxonomyBuilder ..> A2XSearch : taxonomy → search
     RegistryService ..> VectorSearch : 变更回调
     TaxonomyBuilder ..> LLMClient : uses
     A2XSearch ..> LLMClient : uses
-    IncrementalBuilder ..> LLMClient : uses
 ```
 
 ### 6. 目录结构
@@ -274,9 +260,9 @@ classDiagram
 ```
 a2x_registry/        # pip 包根（随 wheel 发布）
 ├── common/          # 共享工具（models, llm_client, paths, errors, feature_flags, evaluation, naming）
-├── a2x/             # A2X 分类树检索（build / search / evaluation / incremental）—— 需 [vector] extras
+├── a2x/             # A2X 分类树检索（build / search / evaluation）—— 纯 LLM，lite 可用
 ├── vector/          # 向量基线（ChromaDB 索引 / search / evaluation）—— 需 [vector] extras
-├── traditional/     # 传统基线（全上下文 search / evaluation）—— 需 [vector] extras
+├── traditional/     # 传统基线（全上下文 search / evaluation）—— 纯 LLM，lite 可用
 ├── register/        # 服务注册（generic / a2a / skill）
 └── backend/         # FastAPI 后端（routers: dataset, build, search, provider）
 

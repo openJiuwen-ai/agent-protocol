@@ -321,6 +321,20 @@ A2XError
 
 ---
 
+#### `create_principal(handle, role, namespaces=None, note=None)`
+
+创建 principal 并返回其第一把 API key 的明文。**仅 admin 可调**（本客户端的 `api_key` 必须是 admin token）。
+
+`role` 取 `"admin"` / `"provider"` / `"user"`；非 admin 角色**必须**用 `namespaces` 指定作用域数据集（且该数据集须已存在）。
+
+**输入**：`handle: str`、`role: str`、`namespaces: list[str] | None`、`note: str | None`
+**返回**：`PrincipalCreateResponse(handle, role, namespaces, token, ...)`
+**错误**：`ValidationError`（角色/namespace 不合法）、`A2XAuthError`（调用方不是 admin）
+
+> 返回的 `token` 是**明文且只出现这一次**——服务端之后只保留 sha256 哈希。请通过 vault / 密钥管理器 / 加密 IM 等带外渠道交付给对方。
+
+---
+
 #### `register_agent(dataset, agent_card, service_id=None, persistent=True)`
 
 注册 A2A Agent。`agent_card` dict 整体透传后端。`persistent=True` 时成功后写入 `_owned`。
@@ -546,6 +560,26 @@ with client.reserve_blank_agents("workers", n=1, extra_filters={"role":"image-en
 返回 `True` 如果有 lease 被释放，`False` 如果根本没 lease（idempotent）。
 
 `replace_agent_card` 默认会自动调用此方法 —— 一般不需要显式调。
+
+---
+
+#### 租约生命周期：`heartbeat` / `drain` / `shutdown`
+
+三个方法配合心跳保活使用。仅在注册时传了 `lease_ttl` 的服务上有意义；机制设计见 [heartbeat_design.md](../docs/heartbeat_design.md)。
+
+**`heartbeat(dataset, service_id, status=None)`** — 手动续约一次。`status` 可顺带更新 `agent_card.status`（服务端先合并再续约）。**多数调用方不需要它**：注册时传 `auto_renew=True` 由后台续约线程接管即可；手动调用适合自己排程的场景（如不想用 SDK 线程续约的 asyncio 应用）。
+返回续约后的租约信息 `dict`；`NotOwnedError`（非本客户端注册的 sid）、`A2XHeartbeatNotSupportedError`（该 namespace 未开租约）。
+
+**`drain(dataset, service_id, *, reason="drain")`** — 置 `status=offline` 停止接流量，但**保留注册**。用于 K8s preStop / 优雅退出：先 drain 停新活、做完在途请求，再调 `shutdown()` 彻底摘除。返回 `PatchResponse`。（`reason` 预留给审计日志，当前服务端未使用。）
+
+**`shutdown(*, sids=None, dataset=None, permanent=False, reason="explicit", timeout=2.0, raise_on_error=False)`** — 批量撤销租约（默认）或彻底注销（`permanent=True`）。选择范围：`sids=[(ds, sid), ...]` 显式列表 / `dataset="x"` 该数据集下全部自有 sid / 都不传则全部自有 sid。
+**best-effort**：单次调用受 `timeout` 限制，失败只打 warning，除非 `raise_on_error=True`；心跳 TTL 是最终兜底。返回 `{"ok": [...], "failed": [...]}`。
+
+---
+
+#### Agent Team 场景专用方法
+
+`register_blank_agent` / `list_idle_blank_agents` / `restore_to_blank` 是动态组队场景的封装（基于上面的 `register_agent` / `list_agents` / `replace_agent_card`），完整说明见 [README_agentteam.md](README_agentteam.md)。
 
 ---
 
