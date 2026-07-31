@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -16,7 +17,14 @@ from a2x_registry.common import feature_flags
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/search", tags=["search"])
 
-_executor = ThreadPoolExecutor(max_workers=4)
+_DEFAULT_SEARCH_WORKERS = 4
+try:
+    _SEARCH_WORKERS = int(os.environ.get("A2X_REGISTRY_SEARCH_WORKERS", "") or _DEFAULT_SEARCH_WORKERS)
+except ValueError:
+    logger.warning("ignoring invalid A2X_REGISTRY_SEARCH_WORKERS (using %s)", _DEFAULT_SEARCH_WORKERS)
+    _SEARCH_WORKERS = _DEFAULT_SEARCH_WORKERS
+
+_executor = ThreadPoolExecutor(max_workers=_SEARCH_WORKERS)
 
 
 @router.post("", response_model=SearchResponse)
