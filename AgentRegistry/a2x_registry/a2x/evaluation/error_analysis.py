@@ -18,34 +18,25 @@ logger = logging.getLogger(__name__)
 def load_taxonomy_and_services(results_dir: str) -> Tuple[Dict, Dict, Dict]:
     """Load taxonomy, class definitions, and service data.
 
-    Reads paths from config.json in the results directory.
-    Falls back to defaults if config doesn't contain path info.
+    Paths come from ``config.json`` in the results directory — the evaluator
+    records the dataset it ran against. There is no default: guessing a
+    dataset here would silently analyse the wrong data.
 
     Returns:
         (taxonomy, classes, services_dict)
     """
-    results_path = Path(results_dir)
-    config_path = results_path / 'config.json'
+    config_path = Path(results_dir) / 'config.json'
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
 
-    # Default paths
-    taxonomy_path = Path('database/ToolRet_clean/taxonomy/taxonomy.json')
-    class_path = Path('database/ToolRet_clean/taxonomy/class.json')
-    service_path = Path('database/ToolRet_clean/service.json')
-
-    if config_path.exists():
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-
-        # Read paths from config if available
-        if config.get('taxonomy_path'):
-            taxonomy_path = Path(config['taxonomy_path'])
-        if config.get('class_path'):
-            class_path = Path(config['class_path'])
-        elif config.get('taxonomy_path'):
-            # Derive class_path from taxonomy_path (same directory)
-            class_path = Path(config['taxonomy_path']).parent / 'class.json'
-        if config.get('service_path'):
-            service_path = Path(config['service_path'])
+    try:
+        taxonomy_path = Path(config['taxonomy_path'])
+        class_path = Path(config['class_path'])
+        service_path = Path(config['service_path'])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"{config_path} has no dataset paths ({exc}); rerun the evaluation"
+        ) from exc
 
     with open(taxonomy_path, 'r', encoding='utf-8') as f:
         taxonomy = json.load(f)

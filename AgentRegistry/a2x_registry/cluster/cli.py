@@ -3,13 +3,10 @@
 The primary, user-facing way to drive distributed sync. Dispatched from
 ``backend/__main__.py`` when argv starts with ``cluster``.
 
-Commands (M0):
-  init     — generate this instance's node id + cluster_state.json (opt-in
-             switch; the running server picks it up on next start).
-  status   — pretty-print GET /api/cluster/state from a running server.
-
-``add-peer`` / ``rm-peer`` arrive with the session milestone. ``status``
-talks to the local server over HTTP (cross-platform; no OS-specific IPC).
+Subcommands and their flags are declared in :func:`build_parser` — run
+``a2x-registry cluster --help`` for the current list. Commands that read
+live state talk to the local server over HTTP (cross-platform; no
+OS-specific IPC).
 """
 
 from __future__ import annotations

@@ -83,7 +83,8 @@ class LLMClient:
             raise LLMNotConfiguredError(
                 f"A2X build / search is unavailable: no valid LLM provider in "
                 f"{config_path!r}.\n\n"
-                f"Each entry under \"providers\" needs a non-empty \"api_keys\" list. "
+                f"The config needs a top-level \"providers\" array, and each entry "
+                f"needs \"base_url\", \"model\" and a non-empty \"api_keys\" list. "
                 f"Fill in a real API key and retry. A bundled template is at\n"
                 f"  {LLM_APIKEY_EXAMPLE_PATH}"
             )
@@ -167,39 +168,28 @@ class LLMClient:
 
     @staticmethod
     def _parse_providers(config: Dict[str, Any]) -> List[ProviderConfig]:
-        """Parse provider list from config, supporting both new and legacy formats.
+        """Parse the provider list from config.
 
-        New format: {"providers": [{"name", "base_url", "model", "api_keys"}, ...]}
-        Legacy format: {"base_url", "model", "api_key"/"api_keys"}
+        Format: {"providers": [{"name", "base_url", "model", "api_keys"}, ...]}
+        ``base_url`` and ``model`` are required per entry — there is no
+        default, so a misconfigured entry can never silently send your key
+        to some other vendor's endpoint.
         """
         providers = []
 
-        if "providers" in config and config["providers"]:
-            for i, p in enumerate(config["providers"]):
-                api_keys = p.get("api_keys") or []
-                if not api_keys and p.get("api_key"):
-                    api_keys = [p["api_key"]]
-                if not api_keys:
-                    logger.warning(f"Provider {p.get('name', i)} has no API keys, skipping")
-                    continue
-                providers.append(ProviderConfig(
-                    name=p.get("name", f"provider_{i}"),
-                    base_url=p["base_url"],
-                    model=p["model"],
-                    api_keys=api_keys,
-                ))
-        else:
-            # Legacy single-provider format
-            api_keys = config.get("api_keys") or []
-            if not api_keys and config.get("api_key"):
-                api_keys = [config["api_key"]]
-            if api_keys:
-                providers.append(ProviderConfig(
-                    name="default",
-                    base_url=config.get("base_url", "https://api.deepseek.com/chat/completions"),
-                    model=config.get("model", "deepseek-chat"),
-                    api_keys=api_keys,
-                ))
+        for i, p in enumerate(config.get("providers") or []):
+            api_keys = p.get("api_keys") or []
+            if not api_keys and p.get("api_key"):
+                api_keys = [p["api_key"]]
+            if not api_keys:
+                logger.warning(f"Provider {p.get('name', i)} has no API keys, skipping")
+                continue
+            providers.append(ProviderConfig(
+                name=p.get("name", f"provider_{i}"),
+                base_url=p["base_url"],
+                model=p["model"],
+                api_keys=api_keys,
+            ))
 
         return providers
 

@@ -27,6 +27,7 @@ To build the frontend for prod mode::
 
 import argparse
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -70,6 +71,13 @@ def _start_frontend_dev(backend_port: int) -> subprocess.Popen | None:
     if (FRONTEND_DIR / "dist").exists():
         print(f"  Frontend: http://127.0.0.1:{backend_port}  (serving from dist/)")
         return None
+
+    # Both npm calls below run through the shell, so a missing Node.js would
+    # surface only as "exit status 127" (npm run dev fails silently). Check up front.
+    if not shutil.which("npm"):
+        print("  [error] npm not found. Install Node.js from https://nodejs.org,")
+        print("          or rerun with --no-frontend to start the API only.")
+        sys.exit(1)
 
     if not (FRONTEND_DIR / "node_modules").exists():
         print("  [info] Installing frontend dependencies (first time)...")
