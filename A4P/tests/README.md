@@ -66,6 +66,13 @@ uv run --with pytest pytest -x -s
 uv run --with pytest pytest --collect-only -q
 ```
 
+计算测试覆盖率：
+
+```bash
+uv run --with pytest-cov python -m pytest \
+  --cov=a4p --cov-branch --cov-report=term -q
+```
+
 HTTP 集成测试仅监听本机回环地址，并使用操作系统分配的临时端口，不依赖外部
 A4P 服务。WebAuthn 用例通过 mock 验证协议输入输出，不要求真实浏览器或硬件
 认证器。

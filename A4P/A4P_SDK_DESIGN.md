@@ -706,7 +706,7 @@ uv run python -m pytest -q
 # 静态检查
 uv run --with ruff ruff check .
 
-# branch-aware coverage
+# 计算测试覆盖率
 uv run --with pytest-cov python -m pytest --cov=a4p --cov-branch -q
 
 # Python 编译检查
