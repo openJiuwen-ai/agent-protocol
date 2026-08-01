@@ -410,16 +410,20 @@ void HttpClientService::CheckMultiInfo()
                 continue;
             }
 
-            // Process response based on result
-            if (msg->data.result == CURLE_OK) {
-                HandleFinishedResponse(request);
-            } else {
-                HandleErrorResponse(request, curl_easy_strerror(msg->data.result));
-            }
-
-            // Cleanup resources
+            // CURLMsg lives inside the easy handle on some libcurl builds; copy result
+            // before cleanup. Free the handle before business callbacks so exceptions /
+            // early returns cannot skip curl_easy_cleanup (ASAN leak).
+            CURLcode result = msg->data.result;
             curl_multi_remove_handle(multiHandle_, easyHandle);
             curl_easy_cleanup(easyHandle);
+            request->easyHandle = nullptr;
+
+            // Process response based on result (statusCode already set in HeaderCallback)
+            if (result == CURLE_OK) {
+                HandleFinishedResponse(request);
+            } else {
+                HandleErrorResponse(request, curl_easy_strerror(result));
+            }
         }
     }
 }

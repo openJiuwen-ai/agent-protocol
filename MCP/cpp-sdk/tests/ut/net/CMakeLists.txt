@@ -23,4 +23,6 @@ target_link_libraries(mcp_net_tests
 
 target_compile_features(mcp_net_tests PRIVATE cxx_std_17)
 
-gtest_discover_tests(mcp_net_tests)
+gtest_discover_tests(mcp_net_tests
+  DISCOVERY_TIMEOUT 60
+)

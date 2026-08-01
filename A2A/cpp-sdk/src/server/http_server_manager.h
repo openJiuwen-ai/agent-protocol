@@ -5,8 +5,8 @@
 #ifndef A2A_HTTP_SERVER_MANAGER_H_
 #define A2A_HTTP_SERVER_MANAGER_H_
 
-#include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,8 +54,9 @@ public:
 private:
     HttpServerManagerConfig config_; // Configuration.
 
+    std::mutex mutex_;
     std::vector<std::unique_ptr<HttpServer>> servers_;
-    std::atomic<bool> running_{false};
+    bool running_{false};
 };
 
 } // namespace A2A::Server
