@@ -34,22 +34,22 @@ HTTP 协议适配，以及示例程序中的浏览器授权流程。
 执行全部测试：
 
 ```bash
-uv run --with pytest pytest
+uv run python -m pytest
 ```
 
 按分层执行：
 
 ```bash
-uv run --with pytest pytest tests/unit
-uv run --with pytest pytest tests/integration
-uv run --with pytest pytest tests/examples
+uv run python -m pytest tests/unit
+uv run python -m pytest tests/integration
+uv run python -m pytest tests/examples
 ```
 
 执行单个测试文件或单个用例：
 
 ```bash
-uv run --with pytest pytest tests/unit/test_intent_scope.py
-uv run --with pytest pytest \
+uv run python -m pytest tests/unit/test_intent_scope.py
+uv run python -m pytest \
   tests/unit/test_intent_scope.py::test_params_match_intent_token_glob_and_exact
 ```
 
@@ -57,13 +57,13 @@ uv run --with pytest pytest \
 
 ```bash
 # 输出更详细的用例名称
-uv run --with pytest pytest -vv
+uv run python -m pytest -vv
 
 # 首个失败后停止，并保留标准输出
-uv run --with pytest pytest -x -s
+uv run python -m pytest -x -s
 
 # 只收集并展示用例，不执行
-uv run --with pytest pytest --collect-only -q
+uv run python -m pytest --collect-only -q
 ```
 
 计算测试覆盖率：
