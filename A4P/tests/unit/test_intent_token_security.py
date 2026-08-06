@@ -47,6 +47,7 @@ def test_intent_token_rejects_invalid_signature_metadata(
     value: str,
     expected_reason: str,
 ) -> None:
+    """intent token 的签名算法或类型元数据非法时，应在验证阶段拒绝。"""
     token = _valid_token()
     token[field] = value
 
@@ -61,6 +62,7 @@ def test_intent_token_rejects_invalid_signature_metadata(
 
 
 def test_intent_token_rejects_signed_scope_tampering() -> None:
+    """intent token 的已签名 scope 被篡改时，应因签名无效而拒绝。"""
     token = _valid_token()
     token["intent"]["actions"][0]["params"]["note_id"] = "attacker-note"
 
@@ -87,6 +89,7 @@ def test_intent_token_rejects_invalid_expiration_after_signature_verification(
     expire_at: str,
     expected_reason: str,
 ) -> None:
+    """intent token 签名有效但过期时间非法或已过期时，应在时效校验阶段拒绝。"""
     monkeypatch.setattr("a4p.intent.token.ed25519_verify_text", lambda *args: True)
     token = _valid_token()
     token["expireAt"] = expire_at
@@ -122,6 +125,7 @@ def test_intent_token_rejects_identity_binding_mismatches(
     verification_kwargs: dict[str, str],
     expected_reason: str,
 ) -> None:
+    """intent token 与预期 Agent、用户或 Agent 密钥绑定不一致时，应拒绝验证。"""
     valid, reason = intent_token.verify_intent_token(
         _valid_token(),
         action="delete_note",
@@ -134,6 +138,7 @@ def test_intent_token_rejects_identity_binding_mismatches(
 
 
 def test_intent_token_rejects_non_canonical_json_values() -> None:
+    """intent token 包含 NaN 等非规范 JSON 值时，应拒绝签名或验证处理。"""
     token = _valid_token()
     token["intent"]["actions"][0]["params"]["amount"] = float("nan")
 
@@ -166,6 +171,7 @@ def test_intent_token_service_returns_stable_fail_closed_codes(
     expected: dict[str, Any],
     expected_code: str,
 ) -> None:
+    """token 服务遇到篡改、过期或 scope 不匹配等错误时，应返回稳定且失败关闭的错误码。"""
     monkeypatch.setattr("a4p.intent.token.ed25519_verify_text", lambda *args: True)
     token = copy.deepcopy(_valid_token())
     token.update(mutation)

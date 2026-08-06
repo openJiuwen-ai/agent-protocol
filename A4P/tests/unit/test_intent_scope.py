@@ -15,6 +15,7 @@ def _token_with_action_params(constraint):
 
 
 def test_params_match_intent_token_glob_and_exact() -> None:
+    """intent 参数约束包含整体通配符、字段通配符或精确值时，应按各自规则接受匹配参数并拒绝不匹配参数。"""
     cases = [
         # (constraint, actual_params, expected_ok, description)
         ("*", {"x": 1}, True, "whole-params wildcard allows anything"),
@@ -57,6 +58,7 @@ def test_params_match_intent_token_glob_and_exact() -> None:
 
 
 def test_params_match_intent_token_checks_all_same_name_candidates() -> None:
+    """intent 中存在多个同名 action 候选时，只要任一候选参数匹配就应验证成功。"""
     cases = [
         (
             [
@@ -101,6 +103,7 @@ def test_params_match_intent_token_checks_all_same_name_candidates() -> None:
 
 
 def test_params_match_intent_token_all_same_name_candidates_mismatch() -> None:
+    """intent 中多个同名 action 的参数均不匹配时，应返回所有候选均不匹配的失败结果。"""
     token = {
         "intent": {
             "actions": [
@@ -127,6 +130,7 @@ def _token_with_action(constraint, allow_extra=False):
 
 
 def test_params_match_intent_token_allow_extra() -> None:
+    """匹配 intent 参数时，应根据 allowExtraParams 配置决定是否接受约束之外的额外参数。"""
     cases = [
         # (constraint, allow_extra, actual_params, expected_ok, description)
         (
@@ -204,6 +208,7 @@ def test_params_match_intent_token_allow_extra() -> None:
 
 
 def test_allow_extra_params_field_is_signature_protected() -> None:
+    """签发 token 后篡改 allowExtraParams 字段时，签名校验应失败并拒绝扩展授权范围。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         prepared = await server.prepare_intent_authorization(

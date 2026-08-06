@@ -49,6 +49,7 @@ def _local_request(mandate: dict, *, signing_options: dict | None = None):
 
 
 def test_authorization_ids_are_32_byte_random_values() -> None:
+    """创建 intent 和 operation mandate 时，应生成可解码为 32 字节且彼此不同的随机授权 ID。"""
     intent_ids = {
         create_intent_mandate(
             server="local://security-test",
@@ -82,6 +83,7 @@ def test_authorization_ids_are_32_byte_random_values() -> None:
 
 
 def test_challenge_is_deterministic_and_binds_server_signed_mandate() -> None:
+    """同一服务端已签名 mandate 应派生稳定 challenge，而签名或内容变化应产生不同 challenge。"""
     _server, mandate = _prepared_operation()
     challenge = derive_user_authorization_challenge(mandate)
 
@@ -115,6 +117,7 @@ def test_challenge_is_deterministic_and_binds_server_signed_mandate() -> None:
 
 
 def test_local_authorizer_verifies_server_and_overwrites_untrusted_options() -> None:
+    """本地授权器处理可信服务端 mandate 时，应验证签名并以可信签名选项覆盖外部输入。"""
     server, mandate = _prepared_operation()
     trust_store = StaticA4PServerTrustStore(server.server_trust_config())
 
@@ -140,6 +143,7 @@ def test_local_authorizer_verifies_server_and_overwrites_untrusted_options() -> 
 
 
 def test_local_authorizer_rejects_untrusted_key_invalid_signature_and_expiry() -> None:
+    """本地授权器遇到不可信密钥、无效签名或过期 mandate 时，应全部拒绝。"""
     server, mandate = _prepared_operation()
     trust_store = StaticA4PServerTrustStore(server.server_trust_config())
 
@@ -191,6 +195,7 @@ def test_local_authorizer_rejects_untrusted_key_invalid_signature_and_expiry() -
 
 
 def test_mandate_user_authorization_has_no_independent_challenge_fields() -> None:
+    """mandate 的 userAuthorization 中不应包含可独立篡改的 challenge 或 challengeMethod 字段。"""
     _server, mandate = _prepared_operation()
     assert "challenge" not in mandate["userAuthorization"]
     assert "challengeMethod" not in mandate["userAuthorization"]
@@ -200,6 +205,7 @@ def test_mandate_user_authorization_has_no_independent_challenge_fields() -> Non
 def test_webauthn_uses_raw_derived_challenge_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """生成 WebAuthn 认证选项时，应将 mandate 派生 challenge 的原始字节传给 WebAuthn 库。"""
     captured: dict = {}
 
     class _Descriptor:

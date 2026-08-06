@@ -36,11 +36,27 @@ A4P（Agentic Authentication, Authorization, and Audit Protocol）是一套面�
 
 ## 快速开始
 
-环境要求：Python 3.10 或更高版本。
+环境要求：Python 3.10 或更高版本。安装命令：
 
 ```bash
-uv sync --locked
+uv sync
 ```
+
+| 运行环境 | 可运行示例 | 环境与交互要求 |
+| --- | --- | --- |
+| Windows | Ed25519 非交互示例；WebAuthn 笔记 demo；无 UI 冒烟测试 | WebAuthn 笔记 demo 需要配置 Windows Hello，并使用支持 WebAuthn 的浏览器（Chrome, Edge 等均支持） |
+| macOS | Ed25519 非交互示例；WebAuthn 笔记 demo；无 UI 冒烟测试 | WebAuthn 笔记 demo 需要浏览器能够调用 passkey 或兼容的安全密钥 |
+| Linux | Ed25519 非交互示例；无 UI 冒烟测试 | 示例不需要浏览器；由于无浏览器，暂时无法运行交互式 WebAuthn demo |
+
+三个示例的用途如下：
+
+- `examples/ed25519_authorization.py`：最小 Ed25519 注册与 operation 授权全链路，
+  只需基础依赖；
+- `examples/note_mcp_a4p`：带浏览器确认的 WebAuthn/passkey 桌面 demo，需要安装
+  `demo` 额外依赖；
+- `examples/note_mcp_a4p/smoke_test.py`：使用测试签名器覆盖笔记 MCP 的
+  prepare/complete 流程，不启动 Web UI，需要安装 `demo` 额外依赖。
+
 
 ### 最小 Ed25519 注册与授权全链路示例
 
@@ -50,22 +66,38 @@ uv sync --locked
 uv run python examples/ed25519_authorization.py
 ```
 
-该示例只生成临时私钥。生产私钥由调用方自己的密钥系统管理；SDK 不负责持久化或解锁。
+这是一条非交互链路，不需要桌面环境、浏览器或硬件认证器。
+脚本会在本机回环地址启动临时 A4P HTTP Server，生成临时
+Ed25519 私钥，依次完成凭据注册、operation mandate 准备、用户签名和授权完成，
+然后输出类似：
+
+```json
+{
+  "credentialId": "cred_xxx",
+  "approved": true,
+  "operationId": "op_xxx"
+}
+```
+
+进程执行完毕后会停止临时 HTTP Server。示例使用内存凭据存储且只生成临时私钥；
+生产私钥应由调用方自己的密钥系统管理，SDK 不负责持久化或解锁。
 
 
 ### 笔记 MCP 服务器示例（基于 WebAuthn 的签名）
-
-运行 `examples/note_mcp_a4p` 中的笔记 MCP 服务器示例前，需要额外安装 demo 依赖：
-
-```bash
-uv sync --locked --extra demo
-```
 
 在 Windows 上运行本示例前，请进入“设置 > 账户 > 登录选项”，至少配置一种
 Windows Hello 登录方式（PIN、面部识别或指纹识别）。浏览器认证器会使用该登录方式
 在调用用户私钥签名前确认用户身份。
 
-示例需要三个终端。
+仅有终端的 Linux 环境无法完成需要用户确认的浏览器 WebAuthn 签名过程。
+
+运行 `examples/note_mcp_a4p` 中的笔记 MCP 服务器示例前，需要额外安装 demo 依赖：
+
+```bash
+uv sync --extra demo
+```
+
+运行示例需要三个终端。
 
 终端 1，启动 A4P Server：
 
@@ -98,6 +130,45 @@ uv run python examples/note_mcp_a4p/agent_simulator.py --mode intent
 如需体验针对单次具体操作的精确授权，可将启动参数改为 `--mode operation`。
 
 > 示例和内置默认密钥仅用于本地开发。生产环境必须使用 HTTPS、匹配的 WebAuthn RP ID/origin、独立签名密钥、受保护的本地信任配置。
+
+### 笔记 MCP 服务器无 UI 冒烟测试
+
+该示例用于快速验证笔记 MCP Server 与 A4P 的 prepare/complete 集成，无需启动浏览器
+Web UI，不需要 passkey、硬件认证器或人工确认。脚本使用临时 Ed25519 测试凭据和
+本机 A4P HTTP Server，依次验证：
+
+- Operation Mandate 可以授权删除指定笔记；
+- 当前操作与已签名 mandate 参数不一致时拒绝删除；
+- 一个 Intent Token 可以按授权范围删除多条笔记；
+- Intent Token 缺少参数、包含额外参数或 action 不匹配时验证失败；
+- 未完成授权前不会执行删除。
+
+先安装 demo 额外依赖：
+
+```bash
+uv sync --extra demo
+```
+
+然后在仓库根目录运行：
+
+```bash
+uv run python examples/note_mcp_a4p/smoke_test.py
+```
+
+脚本会在 `127.0.0.1` 的 `18960` 至 `18962` 端口依次启动并停止临时服务，因此不依赖
+外部 A4P Server，但运行时这些端口需要可用。全部检查通过时，最后一行输出：
+
+```text
+note_mcp_a4p smoke tests passed
+```
+
+该示例可在 Windows、macOS、Linux 环境中运行。
+
+### 运行测试
+
+```bash
+uv run python -m pytest -q
+```
 
 ## 更多文档
 

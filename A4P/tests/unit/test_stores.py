@@ -18,6 +18,7 @@ from a4p.intent.usage_store import SQLiteIntentTokenUsageStore
 
 
 def test_json_file_credential_store_persists_records(tmp_path) -> None:
+    """JSON 凭据存储保存记录并重新打开后，应完整恢复凭据内容。"""
     path = tmp_path / "credentials.json"
     store = JsonFileCredentialStore(path)
     record = UserCredentialRecord(
@@ -44,6 +45,7 @@ def test_json_file_credential_store_persists_records(tmp_path) -> None:
 
 
 def test_json_file_credential_store_refreshes_cross_process_records(tmp_path) -> None:
+    """多个 JSON 凭据存储实例共享文件时，一个实例写入的记录应被另一个实例刷新读取。"""
     path = tmp_path / "credentials.json"
     server_store = JsonFileCredentialStore(path)
     authorizer_store = JsonFileCredentialStore(path)
@@ -77,6 +79,7 @@ def test_json_file_credential_store_rejects_legacy_format(
     tmp_path,
     legacy_payload,
 ) -> None:
+    """JSON 凭据存储读取旧版或非法顶层格式时，应明确拒绝而不是静默迁移。"""
     path = tmp_path / "credentials.json"
     path.write_text(json.dumps(legacy_payload), encoding="utf-8")
 
@@ -88,6 +91,7 @@ def test_json_file_credential_store_rejects_legacy_format(
 
 
 def test_sqlite_usage_store_consumes_atomically_across_connections(tmp_path) -> None:
+    """多个 SQLite 用量存储连接并发消费同一 token 配额时，应原子计数且不超过上限。"""
     path = tmp_path / "usage.sqlite3"
     stores = [SQLiteIntentTokenUsageStore(path), SQLiteIntentTokenUsageStore(path)]
     expire_at_epoch = int(time.time()) + 60
@@ -107,6 +111,7 @@ def test_sqlite_usage_store_consumes_atomically_across_connections(tmp_path) -> 
 
 
 def test_sqlite_usage_store_removes_expired_records(tmp_path) -> None:
+    """SQLite 用量存储清理过期数据时，应删除过期记录并保留仍有效记录。"""
     path = tmp_path / "usage.sqlite3"
     store = SQLiteIntentTokenUsageStore(path)
     future = int(time.time()) + 60

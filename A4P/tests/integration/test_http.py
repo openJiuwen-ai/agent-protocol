@@ -23,6 +23,7 @@ async def _raw_http_request(port: int, request: bytes) -> bytes:
 
 
 def test_dispatch_returns_404_for_unknown_path() -> None:
+    """HTTP 分发器收到未知路径时，应返回 404 状态码和 not_found 错误。"""
     server = A4PHTTPServer(object())  # type: ignore[arg-type]
 
     status, payload = asyncio.run(server._dispatch("/missing", {}))
@@ -32,6 +33,7 @@ def test_dispatch_returns_404_for_unknown_path() -> None:
 
 
 def test_a4p_http_port_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A4P_SERVER_PORT 配置为非整数时，端口解析应抛出明确的 ValueError。"""
     monkeypatch.setenv("A4P_SERVER_PORT", "not-a-port")
 
     with pytest.raises(ValueError, match="A4P_SERVER_PORT must be an integer"):
@@ -39,10 +41,12 @@ def test_a4p_http_port_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_a4p_http_port_uses_default_when_unset() -> None:
+    """未配置 A4P_SERVER_PORT 时，HTTP 服务应使用默认端口 8961。"""
     assert a4p_http_port() == 8961
 
 
 def test_http_prepare_complete_operation_endpoint() -> None:
+    """通过 HTTP 接口准备并完成已签名的操作授权时，应返回批准结果和对应的 operationId。"""
     async def run() -> None:
         server = A4PHTTPServer(
             A4PServer(server_id="local://test"), host="127.0.0.1", port=0
@@ -75,6 +79,7 @@ def test_http_prepare_complete_operation_endpoint() -> None:
 
 
 def test_http_verify_intent_token_consumes_execution_policy_quota() -> None:
+    """通过 HTTP 连续验证受单次执行策略约束的 intent token 时，首次应成功且再次使用应返回配额耗尽错误。"""
     async def run() -> None:
         server = A4PHTTPServer(
             A4PServer(server_id="local://test"), host="127.0.0.1", port=0
@@ -126,6 +131,7 @@ def test_http_verify_intent_token_consumes_execution_policy_quota() -> None:
 def test_a4p_client_uses_real_http_server_for_public_authorization_apis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A4P 客户端连接真实本地 HTTP 服务时，应完成公开授权与凭据注册 API 调用并正确映射协议错误。"""
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
 
@@ -247,6 +253,7 @@ def test_a4p_client_uses_real_http_server_for_public_authorization_apis(
 
 
 def test_real_http_server_returns_protocol_error_statuses() -> None:
+    """真实 HTTP 服务收到不支持的方法、非法 JSON 或未知路径时，应分别返回 405、400 和 404。"""
     async def run() -> None:
         http_server = A4PHTTPServer(
             A4PServer(server_id="local://http-status-test"),

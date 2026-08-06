@@ -75,6 +75,7 @@ def _operation_request(user_id: str = "user-1") -> dict:
 
 
 def test_server_requires_an_explicit_method_for_signed_mode() -> None:
+    """服务端要求用户签名但未配置签名方法时，应在初始化阶段抛出错误。"""
     with pytest.raises(ValueError, match="user_signature_method is required"):
         A4PServer()
 
@@ -88,6 +89,7 @@ def test_server_requires_an_explicit_method_for_signed_mode() -> None:
 
 
 def test_webauthn_dependency_exports_are_loadable() -> None:
+    """加载 WebAuthn 可选依赖时，应获得注册、认证和验证流程所需的全部导出对象。"""
     _load_webauthn.cache_clear()
     exports = _load_webauthn()
 
@@ -96,6 +98,7 @@ def test_webauthn_dependency_exports_are_loadable() -> None:
 
 
 def test_server_rejects_invalid_signature_method_identifier() -> None:
+    """签名方法标识符包含大写等非规范格式时，服务端应拒绝配置。"""
     method = SimpleNamespace(signature_method="WebAuthn")
     with pytest.raises(ValueError, match="lowercase identifier"):
         A4PServer(user_signature_method=method)  # type: ignore[arg-type]
@@ -117,6 +120,7 @@ def test_ed25519_registration_rejects_invalid_jwk(
     public_key_mutation: dict[str, str],
     error: str,
 ) -> None:
+    """注册 Ed25519 凭据时提供类型、曲线或公钥值非法的 JWK，应拒绝注册。"""
     method = RegisteredEd25519Method(InMemoryCredentialStore())
     public_key = ed25519_public_jwk(Ed25519PrivateKey.generate())
     public_key.update(public_key_mutation)
@@ -126,6 +130,7 @@ def test_ed25519_registration_rejects_invalid_jwk(
 
 
 def test_ed25519_registration_is_random_idempotent_and_conflict_safe() -> None:
+    """注册 Ed25519 凭据时，应生成随机 ID、对同用户同密钥保持幂等并拒绝跨用户密钥冲突。"""
     method = RegisteredEd25519Method(InMemoryCredentialStore())
     public_key = ed25519_public_jwk(Ed25519PrivateKey.generate())
     first = method.register(
@@ -174,11 +179,13 @@ def test_ed25519_registration_rejects_invalid_request_shape(
     request_payload: dict,
     error: str,
 ) -> None:
+    """Ed25519 注册请求缺少用户或公钥字段时，应返回对应的参数错误。"""
     with pytest.raises(ValueError, match=error):
         RegisteredEd25519Method(InMemoryCredentialStore()).register(request_payload)
 
 
 def test_ed25519_method_rejects_malformed_registered_proofs() -> None:
+    """Ed25519 已注册凭据提交缺失字段或格式错误的签名 proof 时，应拒绝验证。"""
     server, method, _private_key, signer = _ed25519_server()
     prepared = asyncio.run(server.prepare_operation_authorization(_operation_request()))
     assert prepared.mandate is not None
@@ -222,6 +229,7 @@ def test_ed25519_method_rejects_malformed_registered_proofs() -> None:
 
 
 def test_registration_endpoint_must_match_configured_method() -> None:
+    """调用与服务端当前签名方法不匹配的凭据注册接口时，应返回签名方法未启用错误。"""
     ed_server, _method, _key, _signer = _ed25519_server()
     with pytest.raises(SignatureMethodNotEnabledError) as webauthn_error:
         ed_server.webauthn_registration_options({"userId": "user-1"})
@@ -240,6 +248,7 @@ def test_registration_endpoint_must_match_configured_method() -> None:
 
 
 def test_prepare_fails_stably_without_registered_credential_and_adds_no_pending() -> None:
+    """用户没有已注册凭据时，准备授权应稳定失败且不得新增待处理记录。"""
     method = RegisteredEd25519Method(InMemoryCredentialStore())
     server = A4PServer(user_signature_method=method)
 
@@ -252,6 +261,7 @@ def test_prepare_fails_stably_without_registered_credential_and_adds_no_pending(
 
 
 def test_ed25519_operation_and_intent_use_common_envelope() -> None:
+    """Ed25519 对 operation 和 intent 授权签名时，应使用相同的用户签名信封结构并通过验证。"""
     async def run() -> None:
         server, _method, _key, signer = _ed25519_server()
         operation_request = _operation_request()
@@ -335,6 +345,7 @@ def test_ed25519_authorization_rejects_wrong_proof_fields(
     mutation,
     reason: str,
 ) -> None:
+    """Ed25519 授权签名的方法、算法、凭据 ID 或签名值被替换时，应拒绝完成授权。"""
     async def run() -> None:
         server, _method, _key, signer = _ed25519_server()
         prepared = await server.prepare_operation_authorization(_operation_request())
@@ -357,6 +368,7 @@ def test_ed25519_authorization_rejects_wrong_proof_fields(
 
 
 def test_ed25519_authorization_rejects_wrong_user_and_mandate_tampering() -> None:
+    """使用其他用户凭据签名或篡改 mandate 后提交 Ed25519 授权时，应因身份或待处理内容不匹配而拒绝。"""
     async def run() -> None:
         server, method, _key, _signer = _ed25519_server()
         attacker_key = Ed25519PrivateKey.generate()
@@ -405,6 +417,7 @@ def test_ed25519_authorization_rejects_wrong_user_and_mandate_tampering() -> Non
 
 
 def test_ed25519_signing_options_include_multiple_credentials() -> None:
+    """同一用户注册多个 Ed25519 凭据时，签名选项应列出全部允许的凭据 ID。"""
     method = RegisteredEd25519Method(InMemoryCredentialStore())
     server = A4PServer(user_signature_method=method)
     credential_ids = []
@@ -500,6 +513,7 @@ def _mock_webauthn(monkeypatch: pytest.MonkeyPatch) -> dict:
 def test_webauthn_registration_options_verify_and_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """WebAuthn 注册使用有效 challenge 完成后应保存凭据，而重复使用同一注册请求应被拒绝。"""
     captured = _mock_webauthn(monkeypatch)
     store = InMemoryCredentialStore()
     method = WebAuthnSignatureMethod(
@@ -545,6 +559,7 @@ def test_webauthn_registration_options_verify_and_replay(
 def test_webauthn_registration_rejects_invalid_state_and_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """WebAuthn 注册缺少必要字段、用户不匹配或缺少凭据时，应分别拒绝请求。"""
     _mock_webauthn(monkeypatch)
     method = WebAuthnSignatureMethod(InMemoryCredentialStore())
 
@@ -578,6 +593,7 @@ def test_webauthn_registration_rejects_invalid_state_and_payload(
 def test_webauthn_prepare_requires_registered_method_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """用户仅注册其他签名方法的凭据时，生成 WebAuthn 签名选项应失败。"""
     _mock_webauthn(monkeypatch)
     method = WebAuthnSignatureMethod(
         InMemoryCredentialStore(
@@ -607,6 +623,7 @@ def test_webauthn_prepare_requires_registered_method_credential(
 def test_webauthn_signing_options_assertion_and_sign_count_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """WebAuthn 使用已注册凭据完成断言验证时，应生成正确签名选项并更新签名计数器。"""
     captured = _mock_webauthn(monkeypatch)
     credential_id = b64url_encode(b"credential-id")
     store = InMemoryCredentialStore(
@@ -671,6 +688,7 @@ def test_webauthn_signing_options_assertion_and_sign_count_update(
 def test_webauthn_verify_rejects_credential_binding_and_verifier_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """WebAuthn 验证遇到凭据缺失、方法或用户绑定错误、断言失败或未验证用户时，应全部拒绝。"""
     captured = _mock_webauthn(monkeypatch)
     credential_id = b64url_encode(b"credential-id")
     mandate = create_operation_mandate(
@@ -738,6 +756,7 @@ def test_webauthn_verify_rejects_credential_binding_and_verifier_failures(
 
 
 def test_webauthn_user_signer_requires_assertion_and_credential_id() -> None:
+    """WebAuthn 用户签名器缺少 assertion 或 credentialId 时，应拒绝生成签名。"""
     mandate = create_operation_mandate(
         operation={"action": "read_note", "params": {}},
         server_url="local://test",
@@ -755,6 +774,7 @@ def test_webauthn_user_signer_requires_assertion_and_credential_id() -> None:
 def test_webauthn_rejects_rp_origin_uv_and_bad_assertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """WebAuthn 凭据的 RP ID、来源、用户验证要求或断言内容不符合策略时，应拒绝验证。"""
     _mock_webauthn(monkeypatch)
     credential_id = b64url_encode(b"credential-id")
     record = UserCredentialRecord(
@@ -803,6 +823,7 @@ def test_webauthn_rejects_rp_origin_uv_and_bad_assertion(
 
 
 def test_no_signature_mode_rejects_nonempty_user_signature() -> None:
+    """operation 处于免用户签名模式但提交了非空用户签名时，应拒绝完成授权。"""
     async def run() -> None:
         server = A4PServer(require_user_signature=False)
         request = _operation_request()

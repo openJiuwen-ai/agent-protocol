@@ -59,9 +59,19 @@ WebAuthn RP ID 为 `localhost`，预期 origin 为 `http://localhost:8970`。如
 User Authorizer 的地址，必须同步修改 A4P Server 中的 `expected_origin`；如果连
 hostname 也发生变化，还必须同步修改 RP ID。
 
+### Windows 环境
+
 在 Windows 上运行本示例前，请进入“设置 > 账户 > 登录选项”，至少配置一种
-Windows Hello 登录方式（PIN、面部识别或指纹识别）。浏览器认证器会使用该登录方式
-在调用用户私钥签名前确认用户身份。
+Windows Hello 登录方式（PIN、面部识别或指纹识别）。浏览器认证器会使用该登录方式在调用用户私钥签名前确认用户身份。
+
+### Linux 环境
+
+仅有终端的 Linux 环境无法完成需要用户确认的浏览器 WebAuthn 签名过程，可在仓库根目录改为运行 Ed25519 非交互示例或 MCP 笔记服务器的无 UI 冒烟测试：
+
+```bash
+uv run python examples/ed25519_authorization.py
+uv run python examples/note_mcp_a4p/smoke_test.py
+```
 
 ## 启动 A4P Server 和 User Authorizer
 

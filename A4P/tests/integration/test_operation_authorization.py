@@ -20,6 +20,7 @@ from tests.support import sign_user_mandate
 
 
 def test_custom_operation_display_text_renderer_is_signed() -> None:
+    """使用自定义 operation 展示文本渲染器时，渲染结果应写入 mandate 并受到服务端签名保护。"""
     async def run() -> None:
         operation = {"action": "delete_note", "params": {"note_id": "note-1"}}
 
@@ -57,6 +58,7 @@ def test_custom_operation_display_text_renderer_is_signed() -> None:
 
 
 def test_complete_operation_rejects_mandate_from_another_pending_request() -> None:
+    """使用另一个待处理请求的 mandate 完成 operation 授权时，应因请求不匹配而拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation = {"action": "delete_note", "params": {"note_id": "note-1"}}
@@ -99,6 +101,7 @@ def test_complete_operation_rejects_mandate_from_another_pending_request() -> No
 
 
 def test_prepare_complete_operation_rejects_replay() -> None:
+    """已完成的 operation 授权被重复提交时，应识别重放并拒绝再次批准。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation = {"action": "delete_note", "params": {"note_id": "note-1"}}
@@ -129,6 +132,7 @@ def test_prepare_complete_operation_rejects_replay() -> None:
 
 
 def test_operation_no_signature_prepare_and_complete_returns_operation_id() -> None:
+    """服务端启用免用户签名模式时，准备并完成 operation 授权应成功返回 operationId。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test", require_user_signature=False)
         operation = {"action": "delete_note", "params": {"note_id": "note-1"}}
@@ -155,6 +159,7 @@ def test_operation_no_signature_prepare_and_complete_returns_operation_id() -> N
 
 
 def test_operation_no_signature_approval_rejected_when_signature_required() -> None:
+    """服务端要求用户签名时，使用免签名方式批准 operation 应被拒绝。"""
     async def run() -> None:
         server = A4PServer(server_id="local://test")
         operation = {"action": "delete_note", "params": {"note_id": "note-1"}}
@@ -185,6 +190,7 @@ def test_operation_no_signature_approval_rejected_when_signature_required() -> N
 def test_operation_webauthn_user_signature_path_is_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """operation 使用有效 WebAuthn 用户签名完成授权时，应调用验证器并批准请求。"""
     calls = 0
 
     def fake_verify(self, context, signature):  # noqa: ANN001

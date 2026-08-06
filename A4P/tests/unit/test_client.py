@@ -24,6 +24,7 @@ class _Response:
 
 
 def test_client_defaults_are_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """客户端从环境变量读取基础地址和超时时间时，应去除多余路径分隔符并转换为规范类型。"""
     monkeypatch.setenv("A4P_SERVER_BASE_URL", "http://a4p.example/")
     monkeypatch.setenv("A4P_HTTP_TIMEOUT_S", "0.5")
 
@@ -46,6 +47,7 @@ def test_client_maps_http_errors(
     body: bytes,
     expected: str,
 ) -> None:
+    """客户端收到包含或不包含 JSON 错误体的 HTTP 异常时，应生成包含状态和原因的 RuntimeError。"""
     def raise_http_error(*args: object, **kwargs: object) -> None:
         raise urllib.error.HTTPError(
             url="http://a4p.example/test",
@@ -63,6 +65,7 @@ def test_client_maps_http_errors(
 
 
 def test_client_maps_transport_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """客户端遇到网络传输异常时，应将底层错误映射为稳定的 RuntimeError。"""
     def raise_url_error(*args: object, **kwargs: object) -> None:
         raise urllib.error.URLError("connection refused")
 
@@ -80,6 +83,7 @@ def test_client_normalizes_empty_and_non_object_responses(
     monkeypatch: pytest.MonkeyPatch,
     body: bytes,
 ) -> None:
+    """客户端收到空响应或非对象 JSON 响应时，应将结果规范化为可用的字典结构。"""
     monkeypatch.setattr(
         "urllib.request.urlopen",
         lambda *args, **kwargs: _Response(body),
