@@ -1,41 +1,71 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
-"""SSH 认证结果/条目数据类。
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-背景：gateway 侧 SSH 通道（``channel_manager/protocol/ssh``）校验 SSH 公钥指纹，
-KeyRegistry/认证实现属 jiuwenswarm 仓的 agentos 扩展。拆分后 gateway 不再 import
-``extensions.agentos.auth.*``，改为依赖跨仓共享的 ``SshAuthPort`` 接口
-（接口定义由各仓实现侧持有，本包只保留跨仓消费的数据形状）。
-
-来源参考：``jiuwenswarm/extensions/agentos/auth/ssh_authenticator.py``
-（SshPublicKeyAuthenticator.verify / lookup_entry）与 ``ssh_key_registry.py``
-（KeyRegistryEntry）。结果形状与 AuthResult 对齐，仅保留跨仓消费字段。
-"""
+"""Verify SSH public-key fingerprints via KeyRegistry."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from jiuwenswarm.extensions.agentos.auth.credential_authenticator import (
+    AuthContext,
+    AuthResult,
+    CredentialAuthenticator,
+)
+from jiuwenswarm.extensions.agentos.auth.ssh_key_registry import KeyRegistry, KeyRegistryEntry
 
 
-@dataclass(frozen=True)
-class SshKeyEntry:
-    """KeyRegistry 中登记的一条 SSH 公钥身份（跨仓只读视图）."""
+class SshPublicKeyAuthenticator(CredentialAuthenticator):
+    """Look up an SSH fingerprint (+ username) and return AuthResult."""
 
-    fingerprint: str
-    username: str
-    user_id: str
-    source: str = ""
-    session_id: str = ""
+    def __init__(self, registry: KeyRegistry) -> None:
+        self._registry = registry
 
+    @property
+    def registry(self) -> KeyRegistry:
+        return self._registry
 
-@dataclass(frozen=True)
-class SshAuthResult:
-    """SSH 认证结果（与 agentos AuthResult 的消费字段子集对齐）."""
+    def lookup_entry(self, fingerprint: str) -> KeyRegistryEntry | None:
+        return self._registry.lookup(fingerprint)
 
-    success: bool
-    user_id: str = ""
-    error: str = ""
-    extensions: dict[str, Any] = field(default_factory=dict)
+    def verify(self, *, fingerprint: str, username: str = "") -> AuthResult:
+        """Sync verify for SSHServer callbacks that cannot await."""
+        fingerprint = str(fingerprint or "").strip()
+        username = str(username or "").strip()
+        if not fingerprint:
+            return AuthResult(
+                success=False,
+                error="缺少 SSH fingerprint",
+                extensions={"error_code": "MISSING_FINGERPRINT"},
+            )
+        entry = self._registry.lookup(fingerprint)
+        if entry is None:
+            return AuthResult(
+                success=False,
+                error="未登记的 SSH 公钥",
+                extensions={"error_code": "UNKNOWN_FINGERPRINT"},
+            )
+        if username and username != entry.username:
+            return AuthResult(
+                success=False,
+                error="SSH username 与登记身份不一致",
+                extensions={
+                    "error_code": "USERNAME_MISMATCH",
+                    "expected_username": entry.username,
+                },
+            )
+        return AuthResult(
+            success=True,
+            user_id=entry.user_id,
+            extensions={
+                "username": entry.username,
+                "auth_method": "ssh_public_key",
+                "source": entry.source,
+                "session_id": entry.session_id,
+                "fingerprint": entry.fingerprint,
+            },
+        )
 
-
-__all__ = ["SshAuthResult", "SshKeyEntry"]
+    async def authenticate(self, context: AuthContext) -> AuthResult:
+        credentials = context.credentials or {}
+        return self.verify(
+            fingerprint=str(credentials.get("fingerprint") or ""),
+            username=str(credentials.get("username") or ""),
+        )
