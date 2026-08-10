@@ -12,6 +12,8 @@ Listen address comes from ``registry.env`` (env vars), NOT a CLI flag:
     A2X_REGISTRY_PORT        empty -> 8000
     A2X_REGISTRY_HA_MEMBERS  must be empty (single-node SQLite only)
     A2X_REGISTRY_DB_KIND     empty -> sqlite | "memory" (debug) | "rqlite"
+    A2X_REGISTRY_TLS_CERTFILE / _KEYFILE / _CA_CERTS
+                             all empty -> http ; all three set -> mutual TLS
 
 Auth admin subcommands (no server needed):
     a2x-registry auth init                       # bootstrap first admin key
@@ -37,6 +39,9 @@ _ENV_BIND = "A2X_REGISTRY_BIND"
 _ENV_PORT = "A2X_REGISTRY_PORT"
 _ENV_HA_MEMBERS = "A2X_REGISTRY_HA_MEMBERS"
 _ENV_DB_KIND = "A2X_REGISTRY_DB_KIND"
+_ENV_TLS_CERTFILE = "A2X_REGISTRY_TLS_CERTFILE"
+_ENV_TLS_KEYFILE = "A2X_REGISTRY_TLS_KEYFILE"
+_ENV_TLS_CA_CERTS = "A2X_REGISTRY_TLS_CA_CERTS"
 
 _VALID_MODES = ("", "appliance")
 _VALID_DB_KINDS = ("sqlite", "memory", "rqlite")
@@ -60,6 +65,10 @@ class RuntimeConfig:
       file-persisted), ``memory`` (debug only, in-process, lost on exit),
       or ``rqlite`` (Raft-replicated cluster; endpoint/auth read in
       ``startup.py``). Empty env var defaults to ``sqlite``.
+    - ``tls_certfile`` / ``tls_keyfile`` / ``tls_ca_certs``: mTLS material.
+      All empty -> plain http. All three set -> mutual TLS (the server
+      requires + verifies the caller's client cert). Partial config is
+      rejected in ``parse_runtime_config``.
     """
 
     mode: str
@@ -67,6 +76,9 @@ class RuntimeConfig:
     port: int
     ha_members: Tuple[str, ...]
     db_kind: str
+    tls_certfile: str = ""
+    tls_keyfile: str = ""
+    tls_ca_certs: str = ""
 
 
 def parse_runtime_config() -> RuntimeConfig:
@@ -121,9 +133,28 @@ def parse_runtime_config() -> RuntimeConfig:
             f"accepted values: {', '.join(_VALID_DB_KINDS)}"
         )
 
+    tls_certfile = os.environ.get(_ENV_TLS_CERTFILE, "").strip()
+    tls_keyfile = os.environ.get(_ENV_TLS_KEYFILE, "").strip()
+    tls_ca_certs = os.environ.get(_ENV_TLS_CA_CERTS, "").strip()
+    _tls_set = (bool(tls_certfile), bool(tls_keyfile), bool(tls_ca_certs))
+    if any(_tls_set) and not all(_tls_set):
+        raise ValueError(
+            "A2X_REGISTRY_TLS_CERTFILE / _KEYFILE / _CA_CERTS must all be set "
+            "together (enables mutual TLS) or all empty (plain http)"
+        )
+    for _name, _path in (
+        (_ENV_TLS_CERTFILE, tls_certfile),
+        (_ENV_TLS_KEYFILE, tls_keyfile),
+        (_ENV_TLS_CA_CERTS, tls_ca_certs),
+    ):
+        if _path and not os.path.isfile(_path):
+            raise ValueError(f"{_name}={_path!r} file not found")
+
     return RuntimeConfig(
         mode=mode, bind=bind, port=port,
         ha_members=ha_members, db_kind=db_kind,
+        tls_certfile=tls_certfile, tls_keyfile=tls_keyfile,
+        tls_ca_certs=tls_ca_certs,
     )
 
 
@@ -169,9 +200,21 @@ def _serve(argv) -> None:
     # CLI --port is a dev fallback; env var (already in cfg) wins when set.
     port = cfg.port if os.environ.get(_ENV_PORT, "").strip() else (args.port or cfg.port)
 
+    scheme = "https" if cfg.tls_certfile else "http"
     print(f"\n  A2X Registry")
-    print(f"  http://{cfg.bind}:{port}")
-    print(f"  Docs: http://{cfg.bind}:{port}/docs\n")
+    print(f"  {scheme}://{cfg.bind}:{port}")
+    print(f"  Docs: {scheme}://{cfg.bind}:{port}/docs\n")
+
+    ssl_kwargs = {}
+    if cfg.tls_certfile:
+        import ssl
+        # Mutual TLS: require + verify the caller's client certificate.
+        ssl_kwargs = dict(
+            ssl_certfile=cfg.tls_certfile,
+            ssl_keyfile=cfg.tls_keyfile,
+            ssl_ca_certs=cfg.tls_ca_certs,
+            ssl_cert_reqs=ssl.CERT_REQUIRED,
+        )
 
     import uvicorn
     uvicorn.run(
@@ -180,6 +223,7 @@ def _serve(argv) -> None:
         port=port,
         reload=args.reload,
         timeout_keep_alive=args.keep_alive,
+        **ssl_kwargs,
     )
 
 
