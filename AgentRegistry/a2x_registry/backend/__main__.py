@@ -14,6 +14,10 @@ Listen address comes from ``registry.env`` (env vars), NOT a CLI flag:
     A2X_REGISTRY_DB_KIND     empty -> sqlite | "memory" (debug) | "rqlite"
     A2X_REGISTRY_TLS_CERTFILE / _KEYFILE / _CA_CERTS
                              all empty -> http ; all three set -> mutual TLS
+    A2X_REGISTRY_LOG_DIR     empty -> stderr only (journalctl) ; else daily files here
+                             (a2x-registry-YYYY-MM-DD.log, rotated -> .log.gz)
+    A2X_REGISTRY_LOG_RETENTION_DAYS
+                             daily-rotated .gz files to keep (default 7)
 
 Auth admin subcommands (no server needed):
     a2x-registry auth init                       # bootstrap first admin key
@@ -27,10 +31,14 @@ Cluster subcommands (distributed sync):
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Tuple
+
+from a2x_registry.common.log import DailyCompressedFileHandler
 
 
 # ── env var names ────────────────────────────────────────────────────────
@@ -42,6 +50,8 @@ _ENV_DB_KIND = "A2X_REGISTRY_DB_KIND"
 _ENV_TLS_CERTFILE = "A2X_REGISTRY_TLS_CERTFILE"
 _ENV_TLS_KEYFILE = "A2X_REGISTRY_TLS_KEYFILE"
 _ENV_TLS_CA_CERTS = "A2X_REGISTRY_TLS_CA_CERTS"
+_ENV_LOG_DIR = "A2X_REGISTRY_LOG_DIR"
+_ENV_LOG_RETENTION_DAYS = "A2X_REGISTRY_LOG_RETENTION_DAYS"
 
 _VALID_MODES = ("", "appliance")
 _VALID_DB_KINDS = ("sqlite", "memory", "rqlite")
@@ -69,6 +79,11 @@ class RuntimeConfig:
       All empty -> plain http. All three set -> mutual TLS (the server
       requires + verifies the caller's client cert). Partial config is
       rejected in ``parse_runtime_config``.
+    - ``log_dir``: directory for daily-rotating log files; empty disables
+      file logging (logs still go to stderr, so journalctl keeps working).
+      File names are fixed as ``a2x-registry-YYYY-MM-DD.log`` (current day)
+      and ``a2x-registry-YYYY-MM-DD.log.gz`` (rotated days).
+    - ``log_retention_days``: how many daily-rotated files to keep.
     """
 
     mode: str
@@ -79,6 +94,8 @@ class RuntimeConfig:
     tls_certfile: str = ""
     tls_keyfile: str = ""
     tls_ca_certs: str = ""
+    log_dir: str = ""
+    log_retention_days: int = 7
 
 
 def parse_runtime_config() -> RuntimeConfig:
@@ -150,11 +167,24 @@ def parse_runtime_config() -> RuntimeConfig:
         if _path and not os.path.isfile(_path):
             raise ValueError(f"{_name}={_path!r} file not found")
 
+    log_dir = os.environ.get(_ENV_LOG_DIR, "").strip()
+    retention_raw = os.environ.get(_ENV_LOG_RETENTION_DAYS, "").strip() or "7"
+    try:
+        log_retention_days = int(retention_raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"A2X_REGISTRY_LOG_RETENTION_DAYS={retention_raw!r} is not an integer"
+        ) from exc
+    if log_retention_days < 1:
+        raise ValueError("A2X_REGISTRY_LOG_RETENTION_DAYS must be >= 1")
+
     return RuntimeConfig(
         mode=mode, bind=bind, port=port,
         ha_members=ha_members, db_kind=db_kind,
         tls_certfile=tls_certfile, tls_keyfile=tls_keyfile,
         tls_ca_certs=tls_ca_certs,
+        log_dir=log_dir,
+        log_retention_days=log_retention_days,
     )
 
 
@@ -184,6 +214,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="HTTP keep-alive timeout in seconds (default 75; must be >= heartbeat interval)",
     )
     return parser
+
+
+def _configure_logging(cfg: RuntimeConfig) -> None:
+    """Route all logs (uvicorn + app) to stderr AND a daily-rotating file.
+
+    The stderr handler keeps systemd/journalctl working exactly as before.
+    When ``cfg.log_dir`` is set, a ``DailyCompressedFileHandler`` writes a
+    date-stamped file each day (``a2x-registry-YYYY-MM-DD.log``), gzips the
+    previous day's file on rotation, and keeps ``log_retention_days`` old
+    compressed files. ``uvicorn.run(log_config=None)`` leaves this root-level
+    config in place, so uvicorn's own loggers (``uvicorn`` / ``uvicorn.error``
+    / ``uvicorn.access``) propagate here and land in both sinks.
+    """
+    handlers: list = [logging.StreamHandler(sys.stderr)]
+    if cfg.log_dir:
+        log_dir = Path(cfg.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            DailyCompressedFileHandler(log_dir, "a2x-registry", cfg.log_retention_days)
+        )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=handlers,
+        force=True,
+    )
 
 
 def _serve(argv) -> None:
@@ -217,12 +273,14 @@ def _serve(argv) -> None:
         )
 
     import uvicorn
+    _configure_logging(cfg)
     uvicorn.run(
         "a2x_registry.backend.app:app",
         host=cfg.bind,
         port=port,
         reload=args.reload,
         timeout_keep_alive=args.keep_alive,
+        log_config=None,  # keep our root-level config (stderr + optional file)
         **ssl_kwargs,
     )
 
