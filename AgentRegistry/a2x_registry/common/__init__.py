@@ -4,11 +4,13 @@
 # - llm_client: LLMClient, LLMResponse, parse_json_response
 # - evaluation: compute_set_metrics
 # - naming: generate_output_dir
+# - log: DailyCompressedFileHandler
 
 from .models import SearchResult
 from .llm_client import LLMClient, LLMResponse, parse_json_response
 from .evaluation import compute_set_metrics
 from .naming import generate_output_dir
+from .log import DailyCompressedFileHandler
 from .errors import (
     A2XRegistryError,
     VectorSearchUnavailableError,
@@ -22,6 +24,7 @@ __all__ = [
     'LLMClient', 'LLMResponse', 'parse_json_response',
     'compute_set_metrics',
     'generate_output_dir',
+    'DailyCompressedFileHandler',
     'A2XRegistryError', 'VectorSearchUnavailableError', 'LLMNotConfiguredError',
     'FeatureNotInstalledError',
     'feature_flags',
