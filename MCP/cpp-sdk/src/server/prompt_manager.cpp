@@ -6,6 +6,8 @@
 
 #include <stdexcept>
 
+#include "mcp_log.h"
+
 namespace Mcp {
 
 void PromptManager::AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler)
@@ -17,8 +19,12 @@ void PromptManager::AddPrompt(const PromptInfo& prompt, RenderPromptFunc handler
     if (prompt.name.empty()) {
         throw std::invalid_argument("Prompt name cannot be empty");
     }
-    if (!overwrite_ && prompts_.find(prompt.name) != prompts_.end()) {
-        throw std::runtime_error("Prompt already exists: " + prompt.name);
+    auto it = prompts_.find(prompt.name);
+    if (it != prompts_.end()) {
+        if (!overwrite_) {
+            throw std::runtime_error("Prompt already exists: " + prompt.name);
+        }
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "Prompt '" + prompt.name + "' already exists, overwriting");
     }
     prompts_[prompt.name] = PromptEntry{prompt, handler};
 }
