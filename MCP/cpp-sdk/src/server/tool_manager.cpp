@@ -35,8 +35,11 @@ void ToolManager::AddTool(const ServerTool& tool)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tools_.find(tool.name);
-    if (it != tools_.end() && !overwrite_) {
-        throw std::runtime_error("Tool '" + tool.name + "' already exists");
+    if (it != tools_.end()) {
+        if (!overwrite_) {
+            throw std::runtime_error("Tool '" + tool.name + "' already exists");
+        }
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "Tool '" + tool.name + "' already exists, overwriting");
     }
     tools_[tool.name] = tool;
 }
