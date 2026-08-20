@@ -138,6 +138,17 @@ TEST(McpServerImplementTest, Constructor_InvalidName)
     }, std::invalid_argument);
 }
 
+TEST(McpServerImplementTest, Constructor_WhitespaceOnlyName)
+{
+    ServerConfig config;
+    config.name = "   ";
+    config.version = "1.0.0";
+
+    EXPECT_THROW({
+        McpServerImplement server(config);
+    }, std::invalid_argument);
+}
+
 TEST(McpServerImplementTest, Constructor_InvalidVersion)
 {
     ServerConfig config;
@@ -434,16 +445,16 @@ TEST(McpServerImplementTest, ResourceTemplateManagement_RemoveTemplate) {
     EXPECT_NO_THROW(server.RemoveResourceTemplate(resTemplate.uriTemplate));
 }
 
-// 测试特殊字符配置
+// Server name with spaces should be allowed (e.g. default "MCP Server")
 TEST(McpServerImplementTest, SpecialCharacters_SpacesInName)
 {
     ServerConfig config;
     config.name = "Test Server";
     config.version = "1.0.0";
 
-    EXPECT_THROW({
+    EXPECT_NO_THROW({
         McpServerImplement server(config);
-    }, std::invalid_argument);
+    });
 }
 
 TEST(McpServerImplementTest, SpecialCharacters_SpacesInEndpoint)
