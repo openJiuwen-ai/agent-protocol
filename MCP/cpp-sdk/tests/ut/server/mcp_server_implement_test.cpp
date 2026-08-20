@@ -12,6 +12,7 @@
 #include <thread>
 #include <string>
 #include <functional>
+#include <vector>
 
 #include "server/mcp_server_implement.h"
 #include "mcp_type.h"
@@ -158,6 +159,49 @@ TEST(McpServerImplementTest, Constructor_InvalidEndpoint)
     EXPECT_THROW({
         McpServerImplement server(config, transport);
     }, std::invalid_argument);
+}
+
+TEST(McpServerImplementTest, Constructor_InvalidEndpointFormat)
+{
+    ServerConfig config = CreateValidHttpConfig();
+    StreamableHttpServerConfig transport = CreateValidTransportConfig();
+
+    const std::vector<std::string> invalidEndpoints = {
+        "not-a-url",
+        "http://local#host:8080",
+        "http://localhost:8080/path#frag",
+        "ftp://localhost:8080",
+        "http://localhost:99999",
+        "http://localhost:0",
+    };
+
+    for (const auto& endpoint : invalidEndpoints) {
+        transport.endpoint = endpoint;
+        EXPECT_THROW({
+            McpServerImplement server(config, transport);
+        }, std::invalid_argument) << "endpoint=" << endpoint;
+    }
+}
+
+TEST(McpServerImplementTest, Constructor_ValidEndpointFormats)
+{
+    ServerConfig config = CreateValidHttpConfig();
+    StreamableHttpServerConfig transport = CreateValidTransportConfig();
+
+    const std::vector<std::string> validEndpoints = {
+        "http://localhost:8080",
+        "https://127.0.0.1:8001/mcp",
+        "http://example.com:443/path?x=1",
+        "http://localhost",
+        "https://example.com/mcp",
+    };
+
+    for (const auto& endpoint : validEndpoints) {
+        transport.endpoint = endpoint;
+        EXPECT_NO_THROW({
+            McpServerImplement server(config, transport);
+        }) << "endpoint=" << endpoint;
+    }
 }
 
 TEST(McpServerImplementTest, Lifecycle_StopWithoutStart)
