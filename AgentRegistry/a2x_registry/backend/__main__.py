@@ -15,7 +15,7 @@ Listen address comes from ``registry.env`` (env vars), NOT a CLI flag:
     A2X_REGISTRY_TLS_CERTFILE / _KEYFILE / _CA_CERTS
                              all empty -> http ; all three set -> mutual TLS
     A2X_REGISTRY_LOG_DIR     empty -> stderr only (journalctl) ; else daily files here
-                             (a2x-registry-YYYY-MM-DD.log, rotated -> .log.gz)
+                             (a2x-registry.log for today; rotated -> a2x-registry-YYYY-MM-DD.log.gz)
     A2X_REGISTRY_LOG_RETENTION_DAYS
                              daily-rotated .gz files to keep (default 7)
 
@@ -81,8 +81,8 @@ class RuntimeConfig:
       rejected in ``parse_runtime_config``.
     - ``log_dir``: directory for daily-rotating log files; empty disables
       file logging (logs still go to stderr, so journalctl keeps working).
-      File names are fixed as ``a2x-registry-YYYY-MM-DD.log`` (current day)
-      and ``a2x-registry-YYYY-MM-DD.log.gz`` (rotated days).
+      The current day's file is fixed as ``a2x-registry.log``; rotated days
+      are archived as ``a2x-registry-YYYY-MM-DD.log.gz``.
     - ``log_retention_days``: how many daily-rotated files to keep.
     """
 
@@ -220,10 +220,11 @@ def _configure_logging(cfg: RuntimeConfig) -> None:
     """Route all logs (uvicorn + app) to stderr AND a daily-rotating file.
 
     The stderr handler keeps systemd/journalctl working exactly as before.
-    When ``cfg.log_dir`` is set, a ``DailyCompressedFileHandler`` writes a
-    date-stamped file each day (``a2x-registry-YYYY-MM-DD.log``), gzips the
-    previous day's file on rotation, and keeps ``log_retention_days`` old
-    compressed files. ``uvicorn.run(log_config=None)`` leaves this root-level
+    When ``cfg.log_dir`` is set, a ``DailyCompressedFileHandler`` writes the
+    fixed-name file ``a2x-registry.log`` for the current day, gzips the
+    finished day's file to ``a2x-registry-YYYY-MM-DD.log.gz`` on rotation,
+    and keeps ``log_retention_days`` old compressed files.
+    ``uvicorn.run(log_config=None)`` leaves this root-level
     config in place, so uvicorn's own loggers (``uvicorn`` / ``uvicorn.error``
     / ``uvicorn.access``) propagate here and land in both sinks.
     """
