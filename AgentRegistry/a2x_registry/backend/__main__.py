@@ -11,7 +11,10 @@ Listen address comes from ``registry.env`` (env vars), NOT a CLI flag:
     A2X_REGISTRY_BIND        empty -> 127.0.0.1 ; concrete IP ; 0.0.0.0 forbidden
     A2X_REGISTRY_PORT        empty -> 8000
     A2X_REGISTRY_HA_MEMBERS  must be empty (single-node SQLite only)
-    A2X_REGISTRY_DB_KIND     empty -> sqlite | "memory" (debug) | "rqlite"
+    A2X_REGISTRY_DB_KIND     empty -> sqlite | "memory" (debug) | "etcd" (appliance only)
+    A2X_REGISTRY_DB_ENDPOINT http(s):// URL — required when DB_KIND=etcd
+    A2X_REGISTRY_ETCD_NAMESPACE         key prefix; default a2x-registry
+    A2X_REGISTRY_ETCD_TLS_CA / _CERT / _KEY — all set -> mTLS, all empty -> no auth
     A2X_REGISTRY_TLS_CERTFILE / _KEYFILE / _CA_CERTS
                              all empty -> http ; all three set -> mutual TLS
     A2X_REGISTRY_LOG_DIR     empty -> stderr only (journalctl) ; else daily files here
@@ -38,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
+from a2x_registry.backend.startup import VALID_DB_KINDS
 from a2x_registry.common.log import DailyCompressedFileHandler
 
 
@@ -54,7 +58,6 @@ _ENV_LOG_DIR = "A2X_REGISTRY_LOG_DIR"
 _ENV_LOG_RETENTION_DAYS = "A2X_REGISTRY_LOG_RETENTION_DAYS"
 
 _VALID_MODES = ("", "appliance")
-_VALID_DB_KINDS = ("sqlite", "memory", "rqlite")
 _DEFAULT_BIND = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _FORBIDDEN_BIND = "0.0.0.0"
@@ -70,11 +73,13 @@ class RuntimeConfig:
       to a specific interface or loopback only).
     - ``port``: listen port.
     - ``ha_members``: tuple of peer addresses; must be empty
-      (single-node SQLite only). Non-empty indicates a later rqlite release.
-    - ``db_kind``: storage backend kind — ``sqlite`` (production single-node,
-      file-persisted), ``memory`` (debug only, in-process, lost on exit),
-      or ``rqlite`` (Raft-replicated cluster; endpoint/auth read in
-      ``startup.py``). Empty env var defaults to ``sqlite``.
+      (single-node only). Non-empty indicates a later distributed
+      (etcd) release.
+    - ``db_kind``: storage backend kind - ``sqlite`` (production single-node,
+      file-persisted) or ``memory`` (debug only, in-process, lost on exit).
+      ``etcd`` (distributed shared-store) is appliance-only; endpoint /
+      namespace / TLS for it are validated in ``startup._resolve_db_config``.
+      Empty env var defaults to ``sqlite``.
     - ``tls_certfile`` / ``tls_keyfile`` / ``tls_ca_certs``: mTLS material.
       All empty -> plain http. All three set -> mutual TLS (the server
       requires + verifies the caller's client cert). Partial config is
@@ -106,7 +111,7 @@ def parse_runtime_config() -> RuntimeConfig:
       - ``A2X_REGISTRY_BIND=0.0.0.0`` (wildcard forbidden)
       - non-integer ``A2X_REGISTRY_PORT``
       - non-empty ``A2X_REGISTRY_HA_MEMBERS`` (single-node only)
-      - unknown ``A2X_REGISTRY_DB_KIND`` (only sqlite / memory / rqlite)
+      - unknown ``A2X_REGISTRY_DB_KIND`` (only sqlite / memory)
     """
     mode = os.environ.get(_ENV_MODE, "").strip()
     if mode not in _VALID_MODES:
@@ -140,14 +145,18 @@ def parse_runtime_config() -> RuntimeConfig:
     if ha_members:
         raise ValueError(
             "A2X_REGISTRY_HA_MEMBERS is non-empty but current build is "
-            "single-node SQLite; rqlite HA is a later release"
+            "single-node; distributed etcd backend is a later release"
         )
 
     db_kind = os.environ.get(_ENV_DB_KIND, "").strip() or "sqlite"
-    if db_kind not in _VALID_DB_KINDS:
+    if db_kind not in VALID_DB_KINDS:
         raise ValueError(
             f"unknown A2X_REGISTRY_DB_KIND={db_kind!r}; "
-            f"accepted values: {', '.join(_VALID_DB_KINDS)}"
+            f"accepted values: {', '.join(VALID_DB_KINDS)}"
+        )
+    if db_kind == "etcd" and mode != "appliance":
+        raise ValueError(
+            "A2X_REGISTRY_DB_KIND=etcd requires A2X_REGISTRY_MODE=appliance"
         )
 
     tls_certfile = os.environ.get(_ENV_TLS_CERTFILE, "").strip()

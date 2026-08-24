@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from a2x_registry.common.auth_context import AuthContext
 from a2x_registry.common.db import Backend
@@ -21,6 +21,7 @@ from a2x_registry.common.ids import now_iso
 
 from .agent_card import build_description, fetch_agent_card
 from .errors import NotFoundError, RegistryNotFoundError, ValidationError
+from .table_repo import TableRepo
 from .models import (
     AgentCard,
     DeregisterResponse,
@@ -1687,6 +1688,27 @@ def _quote_col(col: str) -> str:
     return f'"{col}"'
 
 
+def _sql_order_item(item: str) -> str:
+    """Translate a ``"<field> <asc|desc>"`` order item to an SQL ORDER BY fragment.
+
+    ``field`` is a promoted column or a ``data.<key>`` reference (mapped to
+    ``json_extract(data, '$.<key>')``, mirroring the etcd backend which reads
+    the key from the flattened row dict). A missing / unrecognised direction
+    falls back to ASC. Safe because callers pass fixed per-kind constants,
+    never user input.
+    """
+    parts = item.split()
+    field = parts[0]
+    direction = parts[1].upper() if len(parts) > 1 else "ASC"
+    if direction not in ("ASC", "DESC"):
+        direction = "ASC"
+    if field.startswith("data."):
+        field_sql = f"json_extract(data, '$.{field[len('data.'):]}')"
+    else:
+        field_sql = _quote_col(field)
+    return f"{field_sql} {direction}"
+
+
 def _build_upsert_sql(table: str, insert_cols: tuple, update_cols: tuple) -> str:
     """Build an INSERT ... ON CONFLICT DO UPDATE upsert statement.
 
@@ -1718,7 +1740,7 @@ def _row_to_entry(row: dict) -> dict:
     return entry
 
 
-class RegistryTableService:
+class RegistryTableService(TableRepo):
     """SQL-backed generic CRUD over named registries.
 
     Routes each named registry to its physical table via registry_meta
@@ -1728,6 +1750,10 @@ class RegistryTableService:
     Pure recorder: no auth, no heartbeat, no external calls. The image and
     instance modules inject this service for persistence and layer their own
     business logic on top.
+
+    Satisfies the ``TableRepo`` interface structurally; ``image`` / ``instance``
+    depend only on that interface, so an ``EtcdTableRepo`` can be injected
+    instead without touching them.
     """
 
     __slots__ = ("_backend",)
@@ -1891,7 +1917,7 @@ class RegistryTableService:
     # query (read with optional equality filter)
     # ------------------------------------------------------------------
 
-    def query(self, name: str, filter: Optional[dict] = None) -> List[dict]:
+    def query(self, name: str, query_filter: Optional[dict] = None) -> List[dict]:
         """Return rows for the registry, optionally filtered by hot columns.
 
         Filter keys must be in the kind's promoted set or `service_id`;
@@ -1903,7 +1929,7 @@ class RegistryTableService:
         if kind is None:
             return []
 
-        where, args = self._build_where(name, kind, filter)
+        where, args = self._build_where(name, kind, query_filter)
         sql = f"SELECT * FROM {kind} WHERE {where}"
         rows = self._backend.query(sql, tuple(args))
         return [_row_to_entry(r) for r in rows]
@@ -1911,21 +1937,22 @@ class RegistryTableService:
     def query_paginated(
         self,
         name: str,
-        filter: Optional[dict] = None,
-        extra_where: str = "",
-        extra_args: tuple = (),
-        order_by: str = "",
+        query_filter: Optional[dict] = None,
+        exclude_nodes: Optional[list] = None,
+        order_by: Sequence[str] = (),
         limit: int = -1,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
         """Return (rows, total) with optional ordering and pagination.
 
-        ``order_by`` is a raw SQL ORDER BY clause (columns are from the
-        kind's promoted set or service_id, validated by the caller).
+        ``order_by`` is a structured sequence of ``"<field> <asc|desc>"`` items
+        (callers pass fixed per-kind constants, never user input). A
+        ``data.<key>`` field is translated to ``json_extract(data, '$.key')``
+        for the SQL backend; the etcd backend reads it from the flattened row.
 
-        ``extra_where`` / ``extra_args`` are appended as raw SQL and
-        arguments after the filter clauses. Used for ``node NOT IN (...)``
-        push-down in instance unhealthy filtering.
+        ``exclude_nodes`` excludes instances running on those node IPs by
+        compiling a ``node NOT IN (...)`` push-down (used for the
+        "include_unhealthy" filter). ``None`` (default) keeps all rows.
 
         When ``limit > 0``, ``LIMIT/OFFSET`` is appended and ``total`` is
         the count of all rows matching the filter (before pagination).
@@ -1936,15 +1963,17 @@ class RegistryTableService:
         if kind is None:
             return [], 0
 
-        where, args = self._build_where(name, kind, filter)
-        if extra_where:
-            where += f" AND {extra_where}"
-            args.extend(extra_args)
+        where, args = self._build_where(name, kind, query_filter)
+        if exclude_nodes:
+            placeholders = ",".join("?" for _ in exclude_nodes)
+            where += f" AND node NOT IN ({placeholders})"
+            args.extend(exclude_nodes)
 
         sql = f"SELECT * FROM {kind} WHERE {where}"
         count_args = tuple(args)
         if order_by:
-            sql += f" ORDER BY {order_by}"
+            order_clause = ", ".join(_sql_order_item(o) for o in order_by)
+            sql += f" ORDER BY {order_clause}"
         if limit > 0:
             sql += " LIMIT ? OFFSET ?"
             args = args + [limit, offset]
