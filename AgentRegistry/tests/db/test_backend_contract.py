@@ -1,16 +1,15 @@
 """common/db.py 契约测试。
 
-三种后端共用同一组断言：
-- sqlite  —— 文件持久化（生产默认）
-- memory  —— ``:memory:`` 调试
-- rqlite  —— Raft 复制（本地单节点 rqlited）
+两种后端共用同一组断言：
+- sqlite  -- 文件持久化（生产默认）
+- memory  -- ``:memory:`` 调试
 
 契约要点：
-- SCHEMA_SQL / init_schema(conn)      —— schema 真源 + 启动建表（三后端共用）
-- connect(cfg) -> Backend             —— kind 选项 sqlite / memory / rqlite
-- Backend.kind == "sqlite"|"memory"|"rqlite"
-- Backend.execute(sql, args)          —— 单语句事务语义（sqlite/memory）、Raft 提交（rqlite）
-- Backend.query(sql, args) -> list[dict] —— 读返回 list[dict]
+- SCHEMA_SQL / init_schema(conn)      -- schema 真源 + 启动建表（双后端共用）
+- connect(cfg) -> Backend             -- kind 选项 sqlite / memory
+- Backend.kind == "sqlite"|"memory"
+- Backend.execute(sql, args)          -- 单语句事务语义
+- Backend.query(sql, args) -> list[dict] -- 读返回 list[dict]
 """
 
 from __future__ import annotations
@@ -98,7 +97,7 @@ def test_init_schema_is_idempotent(tmp_path):
         conn.close()
 
 
-# ── connect 三后端分支 ─────────────────────────────────────────
+# ── connect 双后端分支 ─────────────────────────────────────────
 
 def test_connect_returns_sqlite_backend(tmp_path):
     """connect({kind:sqlite}) 返回 Backend(kind='sqlite', conn=sqlite3.Connection)。"""
@@ -117,25 +116,6 @@ def test_connect_returns_memory_backend():
     assert isinstance(backend.conn, sqlite3.Connection)
 
 
-def test_connect_returns_rqlite_backend():
-    """connect({kind:rqlite}) 返回 Backend(kind='rqlite', conn=RqliteConnection)。"""
-    from a2x_registry.common import db as db_module
-    from a2x_registry.common.db import RqliteConnection
-    backend = db_module.connect(
-        {"kind": "rqlite", "endpoint": "http://127.0.0.1:4001"}
-    )
-    assert backend.kind == "rqlite"
-    assert isinstance(backend.conn, RqliteConnection)
-    assert backend.conn.endpoint == "http://127.0.0.1:4001"
-
-
-def test_connect_rqlite_default_endpoint():
-    """connect({kind:rqlite}) 不传 endpoint 时默认 http://127.0.0.1:4001。"""
-    from a2x_registry.common import db as db_module
-    backend = db_module.connect({"kind": "rqlite"})
-    assert backend.conn.endpoint == "http://127.0.0.1:4001"
-
-
 def test_connect_rejects_unknown_kind():
     """未知 kind 抛 ValueError。"""
     from a2x_registry.common import db as db_module
@@ -150,9 +130,9 @@ def test_connect_sqlite_requires_path():
         db_module.connect({"kind": "sqlite"})
 
 
-# ── 三后端参数化契约 ──────────────────────────────────────────
-# 所有三后端都通过 `backend_factory` fixture 提供已 init_schema 的 Backend。
-# 每个测试函数跑 3 次（sqlite / memory / rqlite）。
+# ── 双后端参数化契约 ──────────────────────────────────────────
+# 两种后端都通过 `backend_factory` fixture 提供已 init_schema 的 Backend。
+# 每个测试函数跑 2 次（sqlite / memory）。
 
 
 def test_backend_kind_matches_param(backend_factory):
@@ -205,7 +185,7 @@ def test_backend_execute_rollback_on_exception(backend_factory):
 
 
 def test_backend_parameterized_args_preserved(backend_factory):
-    """多参数化查询的值顺序与类型正确（参数化 SQL 三后端共用）。"""
+    """多参数化查询的值顺序与类型正确（参数化 SQL 双后端共用）。"""
     _, backend = backend_factory
     backend.execute("CREATE TABLE t(a TEXT, b INTEGER, c REAL)")
     backend.execute(
@@ -216,22 +196,14 @@ def test_backend_parameterized_args_preserved(backend_factory):
     assert rows == [{"a": "foo", "b": 10, "c": 3.14}]
 
 
-# ── init_schema 在三后端上的建表验证 ─────────────────────────
+# ── init_schema 在双后端上的建表验证 ─────────────────────────
 
 def test_init_schema_creates_four_tables_on_all_backends(backend_factory):
-    """init_schema 在三后端上都建齐 4 表。"""
-    from a2x_registry.common.db import RqliteConnection
-
+    """init_schema 在双后端上都建齐 4 表。"""
     _, backend = backend_factory
-    if isinstance(backend.conn, RqliteConnection):
-        # rqlite: 用 sqlite_master 查表
-        rows = backend.query(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-    else:
-        rows = backend.query(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+    rows = backend.query(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
     tables = {r["name"] for r in rows}
     assert {"registry_meta", "service", "image", "instance"}.issubset(tables)
 

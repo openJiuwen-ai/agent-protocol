@@ -194,8 +194,8 @@ def test_resolve_db_config_defaults_sqlite(monkeypatch, tmp_path):
     """No A2X_REGISTRY_DB_KIND -> sqlite cfg with registry.db path."""
     startup = _reload_startup_only(monkeypatch, tmp_path)
     cfg = startup._resolve_db_config()
-    assert cfg["kind"] == "memory"
-    # assert cfg["path"].endswith("registry.db")
+    assert cfg["kind"] == "sqlite"
+    assert cfg["path"].endswith("registry.db")
 
 
 def test_resolve_db_config_memory(monkeypatch, tmp_path):
@@ -204,28 +204,6 @@ def test_resolve_db_config_memory(monkeypatch, tmp_path):
     monkeypatch.setenv("A2X_REGISTRY_DB_KIND", "memory")
     cfg = startup._resolve_db_config()
     assert cfg == {"kind": "memory"}
-
-
-def test_resolve_db_config_rqlite_defaults_endpoint(monkeypatch, tmp_path):
-    """rqlite kind without endpoint -> default http://127.0.0.1:4001."""
-    startup = _reload_startup_only(monkeypatch, tmp_path)
-    monkeypatch.setenv("A2X_REGISTRY_DB_KIND", "rqlite")
-    cfg = startup._resolve_db_config()
-    assert cfg["kind"] == "rqlite"
-    assert cfg["endpoint"] == "http://127.0.0.1:4001"
-    assert cfg["auth"] == ""
-
-
-def test_resolve_db_config_rqlite_custom_endpoint_and_auth(monkeypatch, tmp_path):
-    """rqlite kind honors A2X_REGISTRY_DB_ENDPOINT / A2X_REGISTRY_DB_AUTH."""
-    startup = _reload_startup_only(monkeypatch, tmp_path)
-    monkeypatch.setenv("A2X_REGISTRY_DB_KIND", "rqlite")
-    monkeypatch.setenv("A2X_REGISTRY_DB_ENDPOINT", "http://10.0.0.5:4001")
-    monkeypatch.setenv("A2X_REGISTRY_DB_AUTH", "admin:s3cret")
-    cfg = startup._resolve_db_config()
-    assert cfg["kind"] == "rqlite"
-    assert cfg["endpoint"] == "http://10.0.0.5:4001"
-    assert cfg["auth"] == "admin:s3cret"
 
 
 def test_resolve_db_config_rejects_unknown_kind(monkeypatch, tmp_path):
