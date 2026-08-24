@@ -23,9 +23,9 @@ NOW = "2026-07-13T10:00:00Z"
 # ── create_registry：幂等登记 ────────────────────────────────
 
 def test_create_registry_idempotent(fresh_conn):
-    """同 (registry, kind) 重复登记 → registry_meta 只 1 行。
+    """同 (registry, kind) 重复登记 -> registry_meta 只 1 行。
 
-    SQL 模式：INSERT OR IGNORE（rqlite 同样支持）。
+    SQL 模式：INSERT OR IGNORE。
     """
     sql = "INSERT OR IGNORE INTO registry_meta(registry, kind, config) VALUES (?, ?, ?)"
     fresh_conn.execute(sql, (REGISTRY, "service", None))
@@ -196,7 +196,7 @@ def test_query_equality_filter_on_hot_column(fresh_conn):
 # ── data JSON 提取（SQLite JSON1） ───────────────────────────
 
 def test_query_filter_by_json_field(fresh_conn):
-    """data 是 JSON，可用 json_extract 做条件过滤（rqlite 同支持）。"""
+    """data 是 JSON，可用 json_extract 做条件过滤。"""
     _register_service(fresh_conn, "s1", data={"endpoint": "http://a"})
     _register_service(fresh_conn, "s2", data={"endpoint": "http://b"})
 

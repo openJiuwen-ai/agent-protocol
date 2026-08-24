@@ -109,7 +109,7 @@ def test_parse_mode_unknown_rejected(monkeypatch, tmp_path):
 
 
 def test_parse_ha_members_must_be_empty_in_730(monkeypatch, tmp_path):
-    """Non-empty HA members indicate a later (rqlite) release; 730 rejects."""
+    """Non-empty HA members indicate a later distributed (etcd) release; rejected."""
     main_mod = _reload_main(monkeypatch, tmp_path)
     monkeypatch.setenv("A2X_REGISTRY_HA_MEMBERS", "node1,node2")
     with pytest.raises(ValueError, match="HA"):
@@ -136,10 +136,9 @@ def test_cli_no_host_flag(monkeypatch, tmp_path):
 
 
 # ── A2X_REGISTRY_DB_KIND ────────────────────────────────────────
-# 730 default is sqlite (single-node, file-persisted). ``memory`` is a
-# debug-only in-process backend. ``rqlite`` selects the Raft-replicated
-# backend (endpoint/auth come from separate env vars, read in startup.py).
-# Any other value is rejected so a typo doesn't silently fall back.
+# Default is sqlite (single-node, file-persisted). ``memory`` is a
+# debug-only in-process backend. Any other value -- including the
+# removed ``rqlite`` -- is rejected so a typo doesn't silently fall back.
 
 def test_parse_db_kind_defaults_sqlite(monkeypatch, tmp_path):
     """No A2X_REGISTRY_DB_KIND -> 'sqlite' (production single-node default)."""
@@ -171,12 +170,12 @@ def test_parse_db_kind_memory(monkeypatch, tmp_path):
     assert cfg.db_kind == "memory"
 
 
-def test_parse_db_kind_rqlite(monkeypatch, tmp_path):
-    """rqlite kind: Raft-replicated backend (endpoint read in startup.py)."""
+def test_parse_db_kind_rqlite_removed_rejected(monkeypatch, tmp_path):
+    """rqlite backend has been removed; explicit config must fail loudly."""
     main_mod = _reload_main(monkeypatch, tmp_path)
     monkeypatch.setenv("A2X_REGISTRY_DB_KIND", "rqlite")
-    cfg = main_mod.parse_runtime_config()
-    assert cfg.db_kind == "rqlite"
+    with pytest.raises(ValueError, match="DB_KIND"):
+        main_mod.parse_runtime_config()
 
 
 def test_parse_db_kind_unknown_rejected(monkeypatch, tmp_path):
