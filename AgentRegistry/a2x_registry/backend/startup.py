@@ -24,44 +24,123 @@ warmup_state: dict = {
 # ── env var names (storage backend selection) ───────────────────────────
 _ENV_DB_KIND = "A2X_REGISTRY_DB_KIND"
 _ENV_DB_ENDPOINT = "A2X_REGISTRY_DB_ENDPOINT"
-_ENV_DB_AUTH = "A2X_REGISTRY_DB_AUTH"
-_VALID_DB_KINDS = ("sqlite", "memory", "rqlite")
-_RQLITE_DEFAULT_ENDPOINT = "http://127.0.0.1:4001"
+_ENV_ETCD_NAMESPACE = "A2X_REGISTRY_ETCD_NAMESPACE"
+_ENV_ETCD_TLS_CA = "A2X_REGISTRY_ETCD_TLS_CA"
+_ENV_ETCD_TLS_CERT = "A2X_REGISTRY_ETCD_TLS_CERT"
+_ENV_ETCD_TLS_KEY = "A2X_REGISTRY_ETCD_TLS_KEY"
+# Single source of truth for valid storage kinds — ``backend.__main__``
+# (CLI pre-validation) imports this instead of redefining its own tuple.
+VALID_DB_KINDS = ("sqlite", "memory", "etcd")
 
 
 def _resolve_db_config() -> dict:
-    """Build the ``connect(cfg)`` dict from ``A2X_REGISTRY_DB_*`` env vars.
+    """Build the ``connect(cfg)`` dict from ``A2X_REGISTRY_DB_KIND``.
 
-    - ``A2X_REGISTRY_DB_KIND`` empty/missing → ``sqlite`` (production
-      single-node, file-persisted at ``<home>/database/registry.db``).
-    - ``memory`` → in-process ``:memory:`` backend (debug only, lost on
+    - empty/missing -> ``sqlite`` (production single-node, file-persisted at
+      ``<home>/database/registry.db``).
+    - ``memory`` -> in-process ``:memory:`` backend (debug only, lost on
       process exit); no ``path`` key.
-    - ``rqlite`` → Raft-replicated backend; ``A2X_REGISTRY_DB_ENDPOINT``
-      (default ``http://127.0.0.1:4001``) and ``A2X_REGISTRY_DB_AUTH``
-      (``user:pwd``, default empty) configure the rqlite HTTP API.
+    - ``etcd`` -> distributed shared-store backend. Requires
+      ``A2X_REGISTRY_DB_ENDPOINT`` (single ``http(s)://`` URL); key prefix from
+      ``A2X_REGISTRY_ETCD_NAMESPACE`` (default ``a2x-registry``). TLS: set
+      ``A2X_REGISTRY_ETCD_TLS_CA/CERT/KEY`` together -> HTTPS + mutual TLS;
+      leave all empty -> plain HTTP, no auth. The endpoint scheme must match:
+      certs configured -> ``https://``, none -> ``http://`` (mismatch is an
+      error).
 
-    Raises ``ValueError`` on an unknown kind so a typo never silently
-    falls back to memory. Business code never branches on kind — it only
-    sees the ``Backend`` returned by ``connect``.
+    Raises ``ValueError`` on an unknown kind or invalid etcd config so a typo
+    never silently falls back. Business code never branches on kind - it only
+    sees the repo returned by ``build_table_repo``.
     """
     import os
 
-    kind = os.environ.get(_ENV_DB_KIND, "").strip() or "memory"
-    if kind not in _VALID_DB_KINDS:
+    kind = os.environ.get(_ENV_DB_KIND, "").strip() or "sqlite"
+    if kind not in VALID_DB_KINDS:
         raise ValueError(
             f"unknown A2X_REGISTRY_DB_KIND={kind!r}; "
-            f"accepted values: {', '.join(_VALID_DB_KINDS)}"
+            f"accepted values: {', '.join(VALID_DB_KINDS)}"
         )
     if kind == "memory":
         return {"kind": "memory"}
-    if kind == "rqlite":
-        endpoint = os.environ.get(_ENV_DB_ENDPOINT, "").strip() or _RQLITE_DEFAULT_ENDPOINT
-        auth = os.environ.get(_ENV_DB_AUTH, "") or ""
-        return {"kind": "rqlite", "endpoint": endpoint, "auth": auth}
+    if kind == "etcd":
+        # Lazy import: pulls the (heavy) register package, so only pay it on
+        # the etcd path; DEFAULT_NAMESPACE is the canonical default the
+        # EtcdClient itself falls back to.
+        from a2x_registry.register.etcd_client import DEFAULT_NAMESPACE
+
+        endpoint = os.environ.get(_ENV_DB_ENDPOINT, "").strip()
+        if not endpoint:
+            raise ValueError(
+                "A2X_REGISTRY_DB_ENDPOINT is required when DB_KIND=etcd"
+            )
+        if not endpoint.startswith(("http://", "https://")):
+            raise ValueError(f"A2X_REGISTRY_DB_ENDPOINT must be http(s)://, got {endpoint!r}")
+        namespace = (
+            os.environ.get(_ENV_ETCD_NAMESPACE, "").strip()
+            or DEFAULT_NAMESPACE
+        )
+        ca = os.environ.get(_ENV_ETCD_TLS_CA, "").strip()
+        cert = os.environ.get(_ENV_ETCD_TLS_CERT, "").strip()
+        key = os.environ.get(_ENV_ETCD_TLS_KEY, "").strip()
+        tls_set = (bool(ca), bool(cert), bool(key))
+        if any(tls_set) and not all(tls_set):
+            raise ValueError(
+                "A2X_REGISTRY_ETCD_TLS_CA / _CERT / _KEY must all be set "
+                "together (mutual TLS) or all empty (no auth)"
+            )
+        if all(tls_set) and not endpoint.startswith("https://"):
+            raise ValueError(
+                "etcd certs configured but A2X_REGISTRY_DB_ENDPOINT is not "
+                "https://; certs require TLS"
+            )
+        return {
+            "kind": "etcd",
+            "endpoint": endpoint,
+            "namespace": namespace,
+            "ca": ca, "cert": cert, "key": key,
+        }
     # sqlite (default)
     db_path = database_dir() / "registry.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return {"kind": "sqlite", "path": str(db_path)}
+
+
+def build_table_repo(cfg: dict):
+    """Build the storage repo (``TableRepo``) for the resolved config.
+
+    - ``sqlite`` / ``memory``: connect the backend, initialise the schema, wrap
+      in ``RegistryTableService``.
+    - ``etcd``: build ``EtcdTableRepo`` on an ``EtcdClient``; **fail-fast** by
+      probing connectivity at startup (unreachable/etc/misconfigured etcd
+      aborts warmup rather than starting with a broken store), matching the
+      SQL layer's fatal-on-failure behaviour.
+
+    Raises on backend connect / schema / connectivity failure; the caller
+    decides how to surface it.
+    """
+    if cfg.get("kind") == "etcd":
+        from a2x_registry.register.etcd_client import (
+            DEFAULT_NAMESPACE,
+            EtcdClient,
+        )
+        from a2x_registry.register.etcd_repo import EtcdTableRepo
+
+        client = EtcdClient(
+            endpoint=cfg["endpoint"],
+            namespace=cfg.get("namespace", DEFAULT_NAMESPACE),
+            ca=cfg.get("ca", ""),
+            cert=cfg.get("cert", ""),
+            key=cfg.get("key", ""),
+        )
+        client.ping()  # fail-fast: unreachable etcd aborts startup
+        return EtcdTableRepo(client)
+
+    from a2x_registry.common.db import connect, init_schema
+    from a2x_registry.register.service import RegistryTableService
+
+    backend = connect(cfg)
+    init_schema(backend.conn)
+    return RegistryTableService(backend)
 
 
 def run_warmup() -> None:
@@ -91,13 +170,9 @@ def run_warmup() -> None:
         _stage("Initializing SQL backend...", 2)
         try:
             import os
-            from a2x_registry.common.db import connect, init_schema
-            from a2x_registry.register.service import RegistryTableService
 
             db_cfg = _resolve_db_config()
-            backend = connect(db_cfg)
-            init_schema(backend.conn)
-            table_svc = RegistryTableService(backend)
+            table_svc = build_table_repo(db_cfg)
 
             # Register the named registries per startup mode.
             # Generic mode: only the A2X backward-compat ``default``
@@ -112,7 +187,7 @@ def run_warmup() -> None:
             warmup_state["_table_service"] = table_svc
             logger.info(
                 "  SQL backend ready (kind=%s, mode=%s)",
-                backend.kind, mode or "generic",
+                db_cfg.get("kind"), mode or "generic",
             )
 
             # Assemble ImageService only in appliance mode (image registry

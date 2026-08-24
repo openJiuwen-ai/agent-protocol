@@ -24,7 +24,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from a2x_registry.common.ids import image_sid, now_iso
-from a2x_registry.register.service import RegistryTableService
+from a2x_registry.register.table_repo import TableRepo
 
 from .errors import ImageInUseError, ImageNotFoundError, ImageValidationError
 from .version_key import version_key
@@ -37,10 +37,11 @@ INSTANCE_REGISTRY = "instances"
 # Image repo deletion env var.
 _ENV_REPO_BASE = "A2X_REGISTRY_REPO_BASE"
 
-# SQL sort order for image queries (flat, framework ASC, version_key DESC).
+# Structured sort spec for image queries (flat, framework ASC, version_key DESC).
 _IMAGE_ORDER = (
-    'framework ASC, version_key DESC, '
-    "json_extract(data, '$.created_at') DESC"
+    "framework asc",
+    "version_key desc",
+    "data.created_at desc",
 )
 
 
@@ -49,7 +50,7 @@ class ImageService:
 
     __slots__ = ("_table_svc",)
 
-    def __init__(self, table_svc: RegistryTableService) -> None:
+    def __init__(self, table_svc: TableRepo) -> None:
         self._table_svc = table_svc
 
     # ------------------------------------------------------------------
@@ -151,7 +152,7 @@ class ImageService:
         offset = max(0, (page - 1) * size) if size > 0 else 0
         rows, total = self._table_svc.query_paginated(
             IMAGE_REGISTRY,
-            filter=flt or None,
+            query_filter=flt or None,
             order_by=_IMAGE_ORDER,
             limit=size if size > 0 else -1,
             offset=offset,

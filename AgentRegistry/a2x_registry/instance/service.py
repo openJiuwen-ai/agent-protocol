@@ -25,7 +25,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from a2x_registry.common.ids import now_iso
-from a2x_registry.register.service import RegistryTableService
+from a2x_registry.register.table_repo import TableRepo
 
 from .errors import InstanceNotFoundError, InstanceValidationError
 
@@ -46,7 +46,11 @@ _REQUIRED_FIELDS = (
 NodeExpiredCheck = Callable[[str], bool]
 
 # Deterministic sort order for instance listing (V2).
-_INSTANCE_ORDER = 'framework ASC, "user" ASC, service_id ASC'
+_INSTANCE_ORDER = (
+    "framework asc",
+    "user asc",
+    "service_id asc"
+)
 
 
 class InstanceService:
@@ -54,7 +58,7 @@ class InstanceService:
 
     __slots__ = ("_table_svc", "_is_node_expired", "_expired_nodes_provider")
 
-    def __init__(self, table_svc: RegistryTableService) -> None:
+    def __init__(self, table_svc: TableRepo) -> None:
         self._table_svc = table_svc
         self._is_node_expired: Optional[NodeExpiredCheck] = None
         # Optional provider returning a set of expired node IPs (read-only)
@@ -175,28 +179,23 @@ class InstanceService:
         """Query instances with optional filters, pagination, and status.
 
         When ``include_unhealthy=False`` (default), unhealthy instances are
-        excluded via SQL push-down: ``node NOT IN (expired_nodes())``.
-        This ensures ``LIMIT/OFFSET`` and ``X-Total-Count`` are correct.
+        excluded via the ``exclude_nodes`` push-down, so ``LIMIT/OFFSET`` and
+        ``X-Total-Count`` stay correct across backends.
 
         Returns ``(entries, total)`` — total is the filtered count before
         pagination.
         """
-        extra_where = ""
-        extra_args: tuple = ()
+        exclude_nodes: Optional[List[str]] = None
         if not include_unhealthy and self._expired_nodes_provider is not None:
             dead = self._expired_nodes_provider()
             if dead:
-                dead_list = sorted(dead)
-                placeholders = ",".join("?" for _ in dead_list)
-                extra_where = f"node NOT IN ({placeholders})"
-                extra_args = tuple(dead_list)
+                exclude_nodes = sorted(dead)
 
         offset = max(0, (page - 1) * size) if size > 0 else 0
         rows, total = self._table_svc.query_paginated(
             INSTANCE_REGISTRY,
-            filter=filter or None,
-            extra_where=extra_where,
-            extra_args=extra_args,
+            query_filter=filter or None,
+            exclude_nodes=exclude_nodes,
             order_by=_INSTANCE_ORDER,
             limit=size if size > 0 else -1,
             offset=offset,
