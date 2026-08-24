@@ -6,6 +6,8 @@
 
 #include <stdexcept>
 
+#include "mcp_log.h"
+
 namespace Mcp {
 
 void ResourceManager::AddResource(const ResourceInfo& resource, ReadResourceFunc readFunc)
@@ -23,8 +25,11 @@ void ResourceManager::AddResource(const ResourceInfo& resource, ReadResourceFunc
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = resources_.find(resource.uri);
-    if (it != resources_.end() && !overwrite_) {
-        throw std::runtime_error("Resource '" + resource.uri + "' already exists");
+    if (it != resources_.end()) {
+        if (!overwrite_) {
+            throw std::runtime_error("Resource '" + resource.uri + "' already exists");
+        }
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "Resource '" + resource.uri + "' already exists, overwriting");
     }
 
     ResourceEntry entry;
@@ -60,8 +65,12 @@ void ResourceManager::AddResourceTemplate(const ResourceTemplate& resourceTempla
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = resourceTemplates_.find(resourceTemplate.uriTemplate);
-    if (it != resourceTemplates_.end() && !overwrite_) {
-        throw std::runtime_error("Resource template '" + resourceTemplate.uriTemplate + "' already exists");
+    if (it != resourceTemplates_.end()) {
+        if (!overwrite_) {
+            throw std::runtime_error("Resource template '" + resourceTemplate.uriTemplate + "' already exists");
+        }
+        MCP_LOG(MCP_LOG_LEVEL_WARN,
+                "Resource template '" + resourceTemplate.uriTemplate + "' already exists, overwriting");
     }
 
     resourceTemplates_[resourceTemplate.uriTemplate] = resourceTemplate;
