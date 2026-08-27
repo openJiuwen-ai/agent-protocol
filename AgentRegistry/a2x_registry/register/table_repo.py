@@ -23,8 +23,8 @@ Semantics (per-kind upsert / timestamp rules):
 - Every row is stored with its ``registry`` name; ``service_id`` is the
   primary key within that registry. ``data`` is a free-form JSON dict.
 - ``query`` / ``query_paginated`` filter on the promoted (hot) columns of
-  the registry's kind (e.g. ``framework``, ``framework_version``,
-  ``uploaded_by`` for image; ``node``, ``user``, ``kind`` for instance).
+  the registry's kind (e.g. ``name``, ``framework``, ``uploaded_by``
+  for image; ``node``, ``user``, ``kind`` for instance).
 
 The interface is **structural** (a Protocol): any class with these methods
 satisfies it automatically; no explicit inheritance required.

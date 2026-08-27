@@ -1640,7 +1640,7 @@ _VALID_KINDS = frozenset(("service", "image", "instance"))
 # Everything else in an entry goes into the `data` JSON blob.
 _KIND_PROMOTED: Dict[str, tuple] = {
     "service": ("type", "source", "name", "description"),
-    "image": ("framework", "framework_version", "version_key", "is_default", "uploaded_by"),
+    "image": ("name", "framework", "version", "version_key", "is_default", "uploaded_by"),
     "instance": ("kind", "framework", "framework_version", "node", "user"),
 }
 
@@ -1660,11 +1660,11 @@ _KIND_LAYOUT: Dict[str, Dict[str, tuple]] = {
     },
     "image": {
         "insert_cols": (
-            "service_id", "framework", "framework_version",
+            "service_id", "name", "framework", "version",
             "version_key", "is_default", "uploaded_by", "data",
         ),
         "update_cols": (
-            "framework", "framework_version",
+            "name", "framework", "version",
             "version_key", "is_default", "uploaded_by", "data",
         ),
     },
