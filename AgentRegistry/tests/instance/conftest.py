@@ -42,14 +42,16 @@ def make_entry(
     node: str = "192.168.0.11",
     address: str = "10.244.1.7:4096",
     kind: str = "三方",
+    instance_id: str | None = None,
 ) -> dict:
     """构造一个最小可用的注册请求 dict。
 
     service_id 默认由 (user, framework) 派生（与生产口径一致）。
+    instance_id 为可选的元戎实例 ID（非元戎拉起可空）。
     """
     if service_id is None:
         service_id = instance_sid(user, framework)
-    return {
+    entry = {
         "service_id": service_id,
         "kind": kind,
         "framework": framework,
@@ -58,3 +60,6 @@ def make_entry(
         "address": address,
         "user": user,
     }
+    if instance_id is not None:
+        entry["instance_id"] = instance_id
+    return entry

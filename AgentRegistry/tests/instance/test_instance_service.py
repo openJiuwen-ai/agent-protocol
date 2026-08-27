@@ -281,3 +281,97 @@ def test_distinct_nodes(instance_svc: InstanceService):
 def test_distinct_nodes_empty(instance_svc: InstanceService):
     """无实例时返回空列表。"""
     assert instance_svc.distinct_nodes() == []
+
+
+# ── instance_id（元戎实例 ID，可选、不作为主键）────────────────
+
+def test_register_with_instance_id(instance_svc: InstanceService):
+    """注册带 instance_id → 存入 data JSON 并在条目中返回。"""
+    result = instance_svc.register_instance(
+        make_entry(instance_id="yr-inst-7f3a92")
+    )
+    assert result["instance_id"] == "yr-inst-7f3a92"
+
+
+def test_register_without_instance_id_defaults_empty(instance_svc: InstanceService):
+    """注册不带 instance_id → 条目返回空串（非元戎拉起可空）。"""
+    result = instance_svc.register_instance(make_entry())
+    assert result["instance_id"] == ""
+
+
+def test_register_upsert_overwrites_instance_id(instance_svc: InstanceService):
+    """同 service_id 重注册 → instance_id 覆盖为最新值。"""
+    instance_svc.register_instance(make_entry(instance_id="yr-inst-old"))
+    result = instance_svc.register_instance(
+        make_entry(instance_id="yr-inst-new")
+    )
+    assert result["instance_id"] == "yr-inst-new"
+
+
+def test_update_instance_id_only(instance_svc: InstanceService):
+    """PATCH 只改 instance_id（元戎迁移后回填）→ 其他字段不动。"""
+    instance_svc.register_instance(make_entry(address="10.0.0.1:80"))
+    sid = make_entry()["service_id"]
+    result = instance_svc.update_instance(sid, {"instance_id": "yr-inst-9d1e07"})
+    assert result["instance_id"] == "yr-inst-9d1e07"
+    assert result["address"] == "10.0.0.1:80"      # 保留
+    assert result["status"] == "运行"               # 保留
+
+
+# ── status 落库（gateway 据元戎 List 写入）────────────────────
+
+def test_register_status_defaults_running(instance_svc: InstanceService):
+    """注册即 运行（status 落库在 data JSON）。"""
+    instance_svc.register_instance(make_entry())
+    rows, _ = instance_svc.list_instances(include_unhealthy=True)
+    assert rows[0]["status"] == "运行"
+
+
+def test_update_status_stopped(instance_svc: InstanceService):
+    """PATCH status=停止 → 落库并在 include_unhealthy=true 时可见。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    result = instance_svc.update_instance(sid, {"status": "停止"})
+    assert result["status"] == "停止"
+
+    # 默认查询（只回运行）不含该实例；include_unhealthy=true 可见
+    rows, _ = instance_svc.list_instances()
+    assert rows == []
+    rows, _ = instance_svc.list_instances(include_unhealthy=True)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "停止"
+
+
+def test_update_status_back_to_running(instance_svc: InstanceService):
+    """PATCH status=运行 可恢复默认可见性。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    instance_svc.update_instance(sid, {"status": "异常"})
+    result = instance_svc.update_instance(sid, {"status": "运行"})
+    assert result["status"] == "运行"
+    rows, _ = instance_svc.list_instances()
+    assert len(rows) == 1
+
+
+def test_update_invalid_status_rejected(instance_svc: InstanceService):
+    """status 非法值（不在 运行/停止/异常 枚举）→ ValidationError。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    with pytest.raises(InstanceValidationError, match="status"):
+        instance_svc.update_instance(sid, {"status": "running"})
+
+
+def test_heartbeat_overrides_persisted_status(instance_svc: InstanceService):
+    """node 心跳 UNHEALTHY → 派生 异常，覆盖落库的 停止。"""
+    instance_svc.register_instance(make_entry(node="192.168.0.11"))
+    sid = make_entry(node="192.168.0.11")["service_id"]
+    instance_svc.update_instance(sid, {"status": "停止"})
+    instance_svc.set_heartbeat_check(lambda node: node == "192.168.0.11")
+
+    rows, _ = instance_svc.list_instances(include_unhealthy=True)
+    assert rows[0]["status"] == "异常"               # 心跳活性优先
+
+    # 心跳恢复后回到落库值（停止）
+    instance_svc.set_heartbeat_check(None)
+    rows, _ = instance_svc.list_instances(include_unhealthy=True)
+    assert rows[0]["status"] == "停止"

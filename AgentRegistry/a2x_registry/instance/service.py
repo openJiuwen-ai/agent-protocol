@@ -5,18 +5,23 @@ Does not invoke the runtime (元戎) or make decisions for the gateway.
 
 Persistence goes through ``RegistryTableService`` (SQL backend); this
 service does not hold a backend/store directly. The ``data`` JSON column
-holds ``{address, created_at, last_active_at}`` — these are not promoted
-columns, so ``update_instance`` must merge ``address`` into the existing
-``data`` dict before patching.
+holds ``{address, instance_id, created_at, last_active_at, status}`` —
+these are not promoted columns, so ``update_instance`` must merge
+``address`` / ``instance_id`` / ``status`` into the existing ``data``
+dict before patching.
 
-``status`` (运行 / 异常) is never persisted — it is derived per-query
-from a node-heartbeat callback injected via ``set_heartbeat_check``.
-When no callback is injected (standalone, or heartbeat module not
-loaded), all instances are considered healthy (运行).
+``status`` (运行 / 停止 / 异常) is persisted inside ``data`` — written by
+the gateway via PATCH (据元戎 List), defaulting to 运行 on register. At
+query time a node-heartbeat callback injected via ``set_heartbeat_check``
+can still override it to 异常 when the node's lease is UNHEALTHY (see
+InstanceService._derive_status); when no callback is injected
+(standalone, or heartbeat module not loaded) the persisted value is
+shown as-is.
 
 ``list_instances`` supports pagination (``size``/``page``),
 deterministic ordering (``framework, "user", service_id``), and SQL-side
-push-down for ``include_unhealthy=False`` via ``expired_nodes()``.
+push-down for ``include_unhealthy=False`` via ``only_status`` /
+``expired_nodes()``.
 """
 
 from __future__ import annotations
@@ -35,6 +40,10 @@ INSTANCE_REGISTRY = "instances"
 
 # Accepted instance kinds (OpenAPI enum).
 _VALID_KINDS = ("三方", "九问")
+
+# Accepted lifecycle status values (OpenAPI enum). Persisted inside the
+# ``data`` JSON and written by the gateway via PATCH (据元戎 List).
+_VALID_STATUSES = ("运行", "停止", "异常")
 
 # Required fields for register_instance.
 _REQUIRED_FIELDS = (
@@ -100,6 +109,8 @@ class InstanceService:
         else:
             created_at = now
 
+        # instance_id is the 元戎 instance ID (optional, never a key);
+        # status starts at 运行 (registered = launched, per OpenAPI).
         db_entry = {
             "service_id": sid,
             "kind": entry["kind"],
@@ -109,8 +120,10 @@ class InstanceService:
             "user": entry["user"],
             "data": {
                 "address": entry["address"],
+                "instance_id": entry.get("instance_id") or "",
                 "created_at": created_at,
                 "last_active_at": now,
+                "status": "运行",
             },
         }
         stored = self._table_svc.register(INSTANCE_REGISTRY, db_entry)
@@ -126,9 +139,17 @@ class InstanceService:
     ) -> Dict[str, Any]:
         has_node = fields.get("node") is not None
         has_address = fields.get("address") is not None
-        if not has_node and not has_address:
+        has_instance_id = fields.get("instance_id") is not None
+        has_status = fields.get("status") is not None
+        if not (has_node or has_address or has_instance_id or has_status):
             raise InstanceValidationError(
-                "at least one of node/address must be provided"
+                "at least one of node/address/instance_id/status "
+                "must be provided"
+            )
+        if has_status and fields["status"] not in _VALID_STATUSES:
+            raise InstanceValidationError(
+                f"invalid status: {fields['status']!r}, "
+                f"must be one of {_VALID_STATUSES}"
             )
 
         existing = self._table_svc.query(
@@ -145,9 +166,14 @@ class InstanceService:
         patch_fields: Dict[str, Any] = {}
         if has_node:
             patch_fields["node"] = fields["node"]
+        if has_instance_id:
+            data["instance_id"] = fields["instance_id"]
+        if has_status:
+            data["status"] = fields["status"]
         if has_address:
             data["address"] = fields["address"]
             data["last_active_at"] = now_iso()
+        if has_instance_id or has_status or has_address:
             patch_fields["data"] = data
 
         updated = self._table_svc.patch(INSTANCE_REGISTRY, service_id, patch_fields)
@@ -179,8 +205,13 @@ class InstanceService:
         """Query instances with optional filters, pagination, and status.
 
         When ``include_unhealthy=False`` (default), unhealthy instances are
-        excluded via the ``exclude_nodes`` push-down, so ``LIMIT/OFFSET`` and
-        ``X-Total-Count`` stay correct across backends.
+        excluded via two push-downs so ``LIMIT/OFFSET`` and
+        ``X-Total-Count`` stay correct across backends:
+        - ``only_status='运行'`` — rows whose persisted ``data.status`` was
+          set to 停止/异常 by the gateway are dropped (legacy rows without
+          a stored status default to 运行);
+        - ``exclude_nodes`` — instances on heartbeat-UNHEALTHY nodes are
+          dropped (derived 异常).
 
         Returns ``(entries, total)`` — total is the filtered count before
         pagination.
@@ -191,11 +222,14 @@ class InstanceService:
             if dead:
                 exclude_nodes = sorted(dead)
 
+        only_status: Optional[str] = None if include_unhealthy else "运行"
+
         offset = max(0, (page - 1) * size) if size > 0 else 0
         rows, total = self._table_svc.query_paginated(
             INSTANCE_REGISTRY,
             query_filter=filter or None,
             exclude_nodes=exclude_nodes,
+            only_status=only_status,
             order_by=_INSTANCE_ORDER,
             limit=size if size > 0 else -1,
             offset=offset,
@@ -204,7 +238,8 @@ class InstanceService:
 
         # Fallback: when _expired_nodes_provider is not set but
         # _is_node_expired is (e.g. tests using set_heartbeat_check
-        # directly), filter unhealthy entries in memory.
+        # directly), filter heartbeat-unhealthy entries in memory.
+        # (Persisted 停止/异常 rows are already excluded by only_status.)
         if (not include_unhealthy
                 and self._expired_nodes_provider is None
                 and self._is_node_expired is not None):
@@ -234,10 +269,16 @@ class InstanceService:
     # internal helpers
     # ------------------------------------------------------------------
 
-    def _derive_status(self, node: str) -> str:
+    def _derive_status(self, node: str, persisted: Optional[str]) -> str:
+        """Merge heartbeat liveness with the persisted lifecycle status.
+
+        A heartbeat-UNHEALTHY node always shows 异常 (liveness wins);
+        otherwise the gateway-written persisted status is shown (运行 /
+        停止 / 异常, defaulting to 运行 for legacy rows).
+        """
         if self._is_node_expired is not None and self._is_node_expired(node):
             return "异常"
-        return "运行"
+        return persisted or "运行"
 
     @staticmethod
     def _validate_entry(entry: Dict[str, Any]) -> None:
@@ -262,8 +303,9 @@ class InstanceService:
             "framework_version": row["framework_version"],
             "node": node,
             "address": data.get("address", ""),
+            "instance_id": data.get("instance_id", "") or "",
             "user": row["user"],
             "created_at": data.get("created_at", ""),
             "last_active_at": data.get("last_active_at", ""),
-            "status": self._derive_status(node),
+            "status": self._derive_status(node, data.get("status")),
         }
