@@ -8,16 +8,15 @@
 
 - 成功响应只列关键字段，完整形状见 OpenAPI schema。
 - 错误路径在每个接口末尾标注典型一种。
-- 联调场景见末尾 §6。
+- 联调场景见末尾 §4。
 - **数据库验证（SQLite）**：每个 curl 步骤后给出 `sqlite3` 命令，直接查 `$A2X_REGISTRY_DB` 验证落库效果。环境变量约定：
   ```bash
   # 730 单机 SQLite，路径由 registry.env 的 A2X_REGISTRY_HOME 决定
   export A2X_REGISTRY_DB="${A2X_REGISTRY_HOME:-/var/lib/a2x-registry}/registry.db"
   ```
 - 表结构真源：[a2x_registry/common/db.py](../../a2x_registry/common/db.py) 的 `SCHEMA_SQL`（4 表：`registry_meta` / `service` / `image` / `instance`）。
-- **实例 status 落库（data JSON）**：`instance` 表无 `status` 列，status 存在行内 `data` JSON（`data.status`，注册默认 `运行`，gateway 经 PATCH 写入 `停止`/`异常`/`运行`）；查询时 node 心跳 UNHEALTHY 会把该 node 实例派生覆盖为 `异常`。
-- **心跳活性不入库**（内存态）：§3 的验证只能查 `instance` 表是否被 sweeper 剔除，不能直接查心跳本身。
-- **租约配置不入库**（内存态）：§4 的 `lease-config` 仅存进程内存（`NodeHeartbeatStore._config`），重启后恢复默认值；验证只能通过 API 读对照，不能用 `sqlite3` 查 `registry_meta`。
+- **实例 status 落库（data JSON）**：`instance` 表无 `status` 列，status 存在行内 `data` JSON（`data.status`，注册默认 `运行`，gateway 据元戎 List 经 PATCH 写入 `停止`/`异常`/`运行`）。
+- **注册中心不收心跳**：节点心跳 `/api/nodes/{node}/heartbeat` 与全局 `/api/lease-config` 已移除；实例存活由 gateway 轮询元戎 List、经 `PATCH` 写 `status`，注册中心不派生、不自动剔除。
 
 ## 构建二进制
 以下命令在代码仓根目录执行。
@@ -352,7 +351,7 @@ curl http://127.0.0.1:8000/api/instances
 curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
 ```
 
-**效果**：`status` 为落库字段（`data.status`：运行 / 停止 / 异常，gateway 经 PATCH 写入），node 心跳 UNHEALTHY 时派生覆盖为 `异常`；`include_unhealthy=false` 默认只回 `运行`（`停止`/`异常` 均被过滤，SQL 下推 `COALESCE(json_extract(data,'$.status'),'运行')='运行'`）。
+**效果**：`status` 为落库字段（`data.status`：运行 / 停止 / 异常，gateway 据元戎 List 经 PATCH 写入，注册中心不派生）；`include_unhealthy=false` 默认只回 `运行`（`停止`/`异常` 均被过滤，SQL 下推 `COALESCE(json_extract(data,'$.status'),'运行')='运行'`）。
 **支持的 filter key**：`include_unhealthy` / `node` / `framework` / `kind` / `user`（白名单，其他 key 返回 `400`）。
 
 **数据库验证**：
@@ -363,7 +362,7 @@ sqlite3 "$A2X_REGISTRY_DB" \
           json_extract(data,'\$.address') AS address,
           json_extract(data,'\$.status') AS status
    FROM instance WHERE registry='instances' AND node='192.168.0.12';"
-# 预期：列出该 node 全部实例（含 data.status='停止'/'异常' 但默认查询被过滤的行；超 grace_period 被剔除后此处为空）
+# 预期：列出该 node 全部实例（含 data.status='停止'/'异常' 但默认查询被过滤的行）
 
 # 索引命中校验（EXPLAIN QUERY PLAN 应走 idx_instance_node）
 sqlite3 "$A2X_REGISTRY_DB" \
@@ -447,196 +446,19 @@ curl -s -X DELETE http://127.0.0.1:8000/api/instances/generic_3f9a1b2c
 
 ---
 
-## 3. node 心跳 `/api/nodes/{node}/heartbeat`
+## 3. 节点心跳（已移除）
 
-> **心跳活性不入库**（内存态）：租约存进程内存 `_node_leases`（`NodeHeartbeatStore`）。
-> 数据库验证只能间接验证：①心跳续租期间该 node 实例仍在 `instance` 表内；②超 `ttl + grace_period` 未续时 `NodeHeartbeatSweeper` 调 `instance.expire_node` 删除该 node 全部实例（写副作用落库）。
->
-> **状态机**：`HEALTHY` --超 ttl--> `UNHEALTHY`（实例派生 `异常`，覆盖落库的 `data.status`）--超 grace_period--> 断连 -> sweeper 剔除该 node 全部实例。
-> node 恢复心跳（软恢复）后回到落库的 `data.status`。
-> 默认 `ttl=90s`（`min_ttl` 兼作节点租约 TTL）、`grace_period=30s`，可通过 §4 调整。
+注册中心**不再接收节点心跳**：`POST /api/nodes/{node}/heartbeat` 与 `GET/POST /api/lease-config` 已移除（调用返回 `404`）。
 
-### 3.1 node 心跳续租（空 body）
-
-**接口**：`POST /api/nodes/{node}/heartbeat`
-**场景**：一体机周期性续租，节点级——一次覆盖该 node 全部实例。
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-**预期响应** `200`：
-```json
-{"node": "192.168.0.12", "state": "healthy", "ttl_seconds": 90, "expires_at": 1751800000.0}
-```
-
-**效果**：首次心跳装租约（HEALTHY）；续租刷新 ttl。超 `ttl` 未续 -> node 转 UNHEALTHY -> 该 node 实例派生 `异常`；超 `ttl + grace_period` 未续 -> sweeper 调 `expire_node` 删除该 node 全部实例。
-**错误**：非 appliance 模式（心跳模块未装配）-> `404`；`lease-config.enabled=false` -> `400`。
-
-**数据库验证**：
-```bash
-# 心跳本身不入库 —— 验证 instance 表中该 node 实例仍存在（未被剔除）
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT service_id, node FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期（续租期间）：列出该 node 全部实例，例如 generic_3f9a1b2c|192.168.0.12
-
-# 若停止心跳超过 ttl + grace_period（默认 90+30=120s，见 §4）后再查：
-#   NodeHeartbeatSweeper 调 instance.expire_node -> 该 node 全部实例行被删除
-# 预期（超宽限）：无行返回
-```
-
-### 3.2 node 心跳（带状态透传）
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" \
-  -d '{"status": "loaded"}'
-```
-
-**效果**：可选 `status` 字段透传业务状态，不影响租约本身（当前版本仅接收不写库）。
-
-**数据库验证**：
-```bash
-# 同 §3.1 -- 心跳活性不入库；透传 status 字段不写库
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期：与 §3.1 一致（仅受 ttl + grace_period / 剔除影响）
-```
-
-### 3.3 心跳全生命周期（异常 -> 剔除）
-
-**场景**：验证 node 从 HEALTHY -> UNHEALTHY（异常）-> 超宽限剔除的完整链路。为缩短等待时间，先用 §4 设短 ttl + grace。
-
-```bash
-# 0. 前置：已注册实例（见 §2.1），node=192.168.0.12
-
-# 1. 设短租约（ttl=10, grace=5，总等待 15s 即可触发剔除）
-curl -X POST http://127.0.0.1:8000/api/lease-config \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 10, "max_ttl": 3600, "grace_period": 5}'
-
-# 2. 发一次心跳，装 HEALTHY 租约
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" -d '{}'
-
-# 3. 等 10s（超过 ttl，未超 grace）-> node 转 UNHEALTHY
-sleep 11
-# 查实例（include_unhealthy=true 才能看到异常项）
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
-# 预期：status="异常"（node UNHEALTHY，实例仍存在）
-
-# 默认查询（不含异常）应无返回
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12'
-# 预期：[]
-
-# 4. 再等 6s（超过 grace_period，总超 15s+）-> sweeper 调 expire_node 剔除
-sleep 6
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
-# 预期：[]（实例已被 sweeper 删除）
-
-# 5. 恢复默认租约
-curl -X POST http://127.0.0.1:8000/api/lease-config \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 30}'
-```
-
-**数据库验证**：
-```bash
-# 步骤 3（超 ttl 未超 grace）：instance 表行仍在（status 不落库，但 API 返回异常）
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期：1（或该 node 实例数）
-
-# 步骤 4（超 grace）：sweeper 已调 expire_node，行被删除
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期：0
-```
-
-### 3.4 软恢复（宽限内重新心跳）
-
-**场景**：node 超 ttl 转 UNHEALTHY 后，在 grace_period 内重新心跳 -> 恢复 HEALTHY -> 实例回到运行。
-
-```bash
-# 0. 前置：设短租约（ttl=10, grace=30），已注册实例 node=192.168.0.12
-curl -X POST http://127.0.0.1:8000/api/lease-config \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 10, "max_ttl": 3600, "grace_period": 30}'
-
-# 1. 发心跳 -> HEALTHY
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat -d '{}' -H "Content-Type: application/json"
-
-# 2. 等 11s（超 ttl，进入 UNHEALTHY + grace 窗口）
-sleep 11
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
-# 预期：status="异常"
-
-# 3. 宽限内重新心跳 -> 软恢复 HEALTHY
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat -d '{}' -H "Content-Type: application/json"
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12'
-# 预期：status="运行"（默认查询即可见，因为已恢复 HEALTHY）
-```
+实例存活由 gateway 周期轮询**元戎 List** 掌握：不在运行的实例经 `PATCH /api/instances/{service_id}` 置 `停止` / `异常`（见 §2.4 场景 B）；注册中心不派生状态、不自动剔除。
 
 ---
 
-## 4. 心跳租约配置 `/api/lease-config`（全局）
-
-> **存储位置说明**：全局租约策略存进程内存（`NodeHeartbeatStore._config`，`NodeLeaseConfig` 数据类），**不入库**。重启后恢复默认值（`enabled=true, min_ttl=90, max_ttl=3600, grace_period=30`）。
-> `min_ttl` 兼作节点租约 TTL（gateway 不发 client TTL，故用 `min_ttl` 作为具体租约时长）；`max_ttl` 为上界（预留，当前未做范围校验）。
-> 验证方式：通过 API 读对照，不能用 `sqlite3` 查 `registry_meta`。
-
-### 4.1 读全局租约策略
-
-**接口**：`GET /api/lease-config`
-
-```bash
-curl http://127.0.0.1:8000/api/lease-config
-```
-
-**预期响应** `200`：
-```json
-{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 30}
-```
-
-**验证**（配置不入库，通过 API 对照）：
-```bash
-# 再读一次 API 确认一致性
-curl -s http://127.0.0.1:8000/api/lease-config | python3 -m json.tool
-# 预期：{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 30}
-```
-
-### 4.2 改全局租约策略
-
-**接口**：`POST /api/lease-config`
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/lease-config \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 60}'
-```
-
-**效果**：调整 `grace_period` 后，后续超宽限时间随之变化；已发的租约按新策略续期。配置仅存内存，重启后恢复默认值。
-
-**验证**（配置不入库，通过 API 对照）：
-```bash
-# 再读 API 对照（端到端一致性）
-curl -s http://127.0.0.1:8000/api/lease-config | python3 -m json.tool
-# 预期响应：{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 60}
-```
-
----
-
-## 5. 分布式高可用 `/api/ha/*`（后续版本，730 不实现）
+## 4. 分布式高可用 `/api/ha/*`（后续版本，730 不实现）
 
 > 730 单机 SQLite 不实现 HA；接口契约已在 OpenAPI 标注 `[后续版本]`，与开发计划 P1-2「`ha/` 模块整体不建」一致。下列命令仅供后续版本联调参考。
 
-### 5.1 查询当前成员集
+### 4.1 查询当前成员集
 
 ```bash
 curl http://127.0.0.1:8000/api/ha/members
@@ -647,7 +469,7 @@ curl http://127.0.0.1:8000/api/ha/members
 {"members": ["192.168.0.11", "192.168.0.12", "192.168.0.13"]}
 ```
 
-### 5.2 变更成员集（奇偶校验）
+### 4.2 变更成员集（奇偶校验）
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/ha/members \
@@ -662,7 +484,7 @@ curl -X POST http://127.0.0.1:8000/api/ha/members \
 
 **效果**：偶数成员集自动去尾 + 告警，保证 Raft 多数派为奇数。
 
-### 5.3 查询当前主（leader）
+### 4.3 查询当前主（leader）
 
 ```bash
 curl http://127.0.0.1:8000/api/ha/leader
@@ -679,7 +501,7 @@ curl http://127.0.0.1:8000/api/ha/leader
 
 ---
 
-## 6. 典型联调场景
+## 5. 典型联调场景
 
 ### 场景 A：gateway 拉起一个新实例（端到端）
 
@@ -689,43 +511,44 @@ curl http://127.0.0.1:8000/api/images/opencode/launch-spec
 
 # 2. gateway 调元戎拉起（注册中心不参与），得到 address=10.244.1.7:4096
 
-# 3. 注册实例
+# 3. 注册实例（含元戎返回的 instance_id）
 curl -X POST http://127.0.0.1:8000/api/instances \
   -H "Content-Type: application/json" \
   -d '{
     "service_id": "generic_3f9a1b2c",
     "kind": "三方", "framework": "opencode", "framework_version": "v0.2.0",
-    "node": "192.168.0.12", "address": "10.244.1.7:4096", "user": "user-01"
+    "node": "192.168.0.12", "instance_id": "yr-inst-7f3a92",
+    "address": "10.244.1.7:4096", "user": "user-01"
   }'
 
-# 4. 周期性 node 心跳（period = ttl/3）
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" -d '{}'
+# 4. gateway 周期轮询元戎 List 维持 status（注册中心不收心跳）：
+#    发现实例不在运行时经 PATCH 置 停止/异常（见 §2.4 场景 B）
 ```
 
 **数据库验证（场景 A）**：
 ```bash
-# 端到端落库校验：实例入库 + 心跳未触发剔除
+# 端到端落库校验：实例入库（status 默认 运行）
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT service_id, kind, framework, node,
-          json_extract(data,'\$.address') AS address
+          json_extract(data,'\$.address') AS address,
+          json_extract(data,'\$.instance_id') AS instance_id,
+          json_extract(data,'\$.status') AS status
    FROM instance
    WHERE registry='instances' AND service_id='generic_3f9a1b2c';"
-# 预期：generic_3f9a1b2c|三方|opencode|192.168.0.12|10.244.1.7:4096
+# 预期：generic_3f9a1b2c|三方|opencode|192.168.0.12|10.244.1.7:4096|yr-inst-7f3a92|运行
 ```
 
 ### 场景 B：实例落点迁移
 
 ```bash
-# 1. gateway 检测到元戎迁移、新 address
+# 1. gateway 检测到元戎迁移、新 address + 新 instance_id
 # 2. 更新实例条目（service_id 不变）
 curl -X PATCH http://127.0.0.1:8000/api/instances/generic_3f9a1b2c \
   -H "Content-Type: application/json" \
-  -d '{"node": "192.168.0.20", "address": "10.244.3.9:4096"}'
+  -d '{"node": "192.168.0.20", "address": "10.244.3.9:4096", "instance_id": "yr-inst-9d1e07"}'
 
-# 3. 新 node 立即心跳，避免被误判异常
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.20/heartbeat \
-  -H "Content-Type: application/json" -d '{}'
+# 3. gateway 后续轮询元戎 List 发现实例仍运行 -> status 保持 运行
+#    （注册中心不收心跳、不自动剔除，无需任何额外调用）
 ```
 
 **数据库验证（场景 B）**：
@@ -775,118 +598,80 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 预期（成功下线后）：0（镜像可删的前提就是无在用实例）
 ```
 
-### 场景 D：node 故障 -> 实例自动异常 -> 超宽限剔除
+### 场景 D：实例停止（gateway 据元戎 List 置 停止/异常）
+
+> 注册中心不收心跳、不派生状态、不自动剔除。gateway 轮询元戎
+> List 发现实例不在运行时，经 PATCH 写 `status`；`instance` 行**不会**被自动删除。
 
 ```bash
-# 1. 设短租约加速验证（ttl=10, grace=5），然后发一次心跳
-curl -X POST http://127.0.0.1:8000/api/lease-config \
+# 1. 前置：generic_3f9a1b2c 已注册且 status=运行（见场景 A）
+
+# 2. gateway 轮询元戎 List 发现实例已停 -> PATCH 置 停止
+curl -X PATCH http://127.0.0.1:8000/api/instances/generic_3f9a1b2c \
   -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 10, "max_ttl": 3600, "grace_period": 5}'
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" -d '{}'
+  -d '{"status": "停止"}'
 
-# 2. 等 11s（超 ttl，进入 UNHEALTHY + grace）-> 查实例（含异常）
-sleep 11
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
-# 预期：status="异常"（实例仍存在）
-
-# 3. 再等 6s（超 grace_period）-> NodeHeartbeatSweeper 自动调 expire_node 剔除，无需手工调用
-sleep 6
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
+# 3. 默认查询（只回运行）应无该实例
+curl 'http://127.0.0.1:8000/api/instances'
 # 预期：[]
 
-# 4. 恢复默认租约
-curl -X POST http://127.0.0.1:8000/api/lease-config \
+# 4. 运维诊断用 include_unhealthy=true -> 可见，status="停止"，条目仍在
+curl 'http://127.0.0.1:8000/api/instances?include_unhealthy=true'
+# 预期：含 generic_3f9a1b2c，status="停止"
+
+# 5. 元戎侧实例恢复（或 gateway 重新拉起并注册同 service_id）-> PATCH 置回 运行
+curl -X PATCH http://127.0.0.1:8000/api/instances/generic_3f9a1b2c \
   -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 30}'
+  -d '{"status": "运行"}'
+curl 'http://127.0.0.1:8000/api/instances'
+# 预期：generic_3f9a1b2c 再次出现在默认列表
 ```
 
 **数据库验证（场景 D）**：
 ```bash
-# 1. grace_period 策略不入库，通过 API 对照确认（配置仅存内存）
-curl -s http://127.0.0.1:8000/api/lease-config
-# 预期（步骤 1 后）：{"enabled":true,"min_ttl":10,"max_ttl":3600,"grace_period":5}
-
-# 2. 等 ttl + grace_period 后查 instance 表：NodeHeartbeatSweeper 调 expire_node 应已删除该 node 全部实例
+# status 落库在 data JSON；条目不会被自动删除
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期（超宽限后）：0
-
-# 3. 其他 node 上的实例不受影响（横向校验）
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT DISTINCT node FROM instance WHERE registry='instances';"
-# 预期：故障 node 不在列表中；其他 node 仍列出
+  "SELECT service_id, json_extract(data,'\$.status') AS status
+   FROM instance WHERE registry='instances' AND service_id='generic_3f9a1b2c';"
+# 预期（步骤 2 后）：generic_3f9a1b2c|停止
+# 预期（步骤 5 后）：generic_3f9a1b2c|运行
 ```
 
-### 场景 E：注册中心重启 -> node 心跳重建
+### 场景 E：注册中心重启 -> 实例数据不丢
 
-**场景**：注册中心重启后，实例数据在 SQLite 中不丢；心跳活性（内存态）清空。启动时 `recover_from_persisted(distinct_nodes)` 从 `instance` 表取 distinct node，为每个 node 装 UNHEALTHY + grace 租约。gateway 重新心跳则恢复 HEALTHY；不心跳则超 grace 后剔除。
+**场景**：注册中心重启后，实例数据在 SQLite 中不丢；`status` 为落库字段，重启后保持重启前的值（无内存态需要恢复——心跳活性已不存在）。
 
 ```bash
-# 0. 前置：node 192.168.0.12 上有注册实例，设短租约加速验证
-curl -X POST http://127.0.0.1:8000/api/lease-config \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 10}'
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" -d '{}'
+# 0. 前置：generic_3f9a1b2c 已注册，status=运行（见场景 A）
 
 # 1. 重启注册中心（Ctrl+C 停止后重新启动）
 #    ./build_test/a2x-registry
 
-# 2. 重启后立即查实例 -- 实例仍在库中，但 node 租约已重建为 UNHEALTHY
-#    status 应为 "异常"（recover_from_persisted 装的是 UNHEALTHY + grace 租约）
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
-# 预期：status="异常"（node 处于宽限期 UNHEALTHY，等 gateway 重新心跳）
-
-# 3. gateway 重新心跳 -> 软恢复 HEALTHY
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat \
-  -H "Content-Type: application/json" -d '{}'
+# 2. 重启后查询：实例仍在，status 保持落库值（运行）
 curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12'
-# 预期：status="运行"（已恢复 HEALTHY，默认查询即可见）
-
-# 4. 若重启后 gateway 未在 grace_period 内重新心跳（此处 grace=10s）
-#    等 11s 后 -> sweeper 调 expire_node 删除该 node 全部实例
-sleep 11
-curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
-# 预期：[]（实例已被 sweeper 删除）
-
-# 5. 恢复默认租约
-curl -X POST http://127.0.0.1:8000/api/lease-config \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 90, "max_ttl": 3600, "grace_period": 30}'
+# 预期：含 generic_3f9a1b2c，status="运行"
 ```
 
 **数据库验证（场景 E）**：
 ```bash
-# 1. 重启后实例仍在库中（SQLite 持久化，不受重启影响）
+# 重启后实例仍在库中（SQLite 持久化，不受重启影响）
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT service_id, node FROM instance
+  "SELECT service_id, node, json_extract(data,'\$.status') AS status
+   FROM instance
    WHERE registry='instances' AND node='192.168.0.12';"
-# 预期（步骤 2）：列出该 node 全部实例
-
-# 2. 若 gateway 重新心跳（步骤 3）-> 实例仍在，status 恢复运行
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期（步骤 3 后）：1（或该 node 实例数，未变）
-
-# 3. 若 gateway 未在 grace 内重新心跳（步骤 4）-> sweeper 剔除，行被删除
-sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND node='192.168.0.12';"
-# 预期（步骤 4 后）：0
+# 预期：列出该 node 全部实例，status 与重启前一致
 ```
 
 ---
 
-## 7. 错误码速查
+## 6. 错误码速查
 
 | HTTP | 场景 | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / node 心跳 `enabled=false` | `{"detail":"..."}` |
-| `404` | 取不存在的 framework launch-spec / PATCH 不存在的 service_id / 非 appliance 模式调 node 心跳或 lease-config | `{"detail":"..."}` |
+| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `404` | 取不存在的 framework launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
 
 > `401` / `403` 鉴权错误不在 730 范围（不启鉴权），后续版本启用 `auth/` 模块后补充。
+> 注：`/api/nodes/{node}/heartbeat` 与 `/api/lease-config` 已移除，调用返回 `404`。

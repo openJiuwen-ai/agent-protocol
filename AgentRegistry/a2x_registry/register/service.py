@@ -1938,7 +1938,6 @@ class RegistryTableService(TableRepo):
         self,
         name: str,
         query_filter: Optional[dict] = None,
-        exclude_nodes: Optional[list] = None,
         only_status: Optional[str] = None,
         order_by: Sequence[str] = (),
         limit: int = -1,
@@ -1950,10 +1949,6 @@ class RegistryTableService(TableRepo):
         (callers pass fixed per-kind constants, never user input). A
         ``data.<key>`` field is translated to ``json_extract(data, '$.key')``
         for the SQL backend; the etcd backend reads it from the flattened row.
-
-        ``exclude_nodes`` excludes instances running on those node IPs by
-        compiling a ``node NOT IN (...)`` push-down (used for the
-        "include_unhealthy" filter). ``None`` (default) keeps all rows.
 
         ``only_status`` keeps only rows whose persisted ``data.status``
         equals the value; a missing ``data.status`` (legacy schema) defaults
@@ -1970,10 +1965,6 @@ class RegistryTableService(TableRepo):
             return [], 0
 
         where, args = self._build_where(name, kind, query_filter)
-        if exclude_nodes:
-            placeholders = ",".join("?" for _ in exclude_nodes)
-            where += f" AND node NOT IN ({placeholders})"
-            args.extend(exclude_nodes)
         if only_status is not None:
             where += " AND COALESCE(json_extract(data, '$.status'), '运行') = ?"
             args.append(only_status)
