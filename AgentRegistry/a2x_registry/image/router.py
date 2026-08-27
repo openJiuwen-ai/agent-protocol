@@ -1,15 +1,17 @@
-"""FastAPI router for image management endpoints.
+"""FastAPI router for image management endpoints (name 主键).
 
 Routes (mounted at app level, prefix ``/api/images``):
 
-    POST   /api/images                       register_image (image-processing module)
-    GET    /api/images                       query (user; flat, ?framework / ?uploaded_by / ?size / ?page)
-    GET    /api/images/{framework}/launch-spec  resolve_launch_spec (gateway)
-    PUT    /api/images/{framework}/default   set_default (user)
-    DELETE /api/images/{framework}/{version} deregister (user; 409 if in use)
+    POST   /api/images                        register_image (image-processing module)
+    GET    /api/images                        query (user; flat, ?name / ?framework / ?uploaded_by / ?size / ?page)
+    GET    /api/images/{name}/launch-spec     resolve_launch_spec (gateway)
+    PUT    /api/images/{name}/default          set_default (user)
+    DELETE /api/images/{name}/{version}       deregister (user; 409 if in use)
 
-query returns flat rows (not grouped by framework). Pagination headers
-(``X-Total-Count`` etc.) are set when ``size > 0``.
+``name`` is the image primary key (the old ``{framework}`` paths are gone);
+``framework`` remains a plain display filter. query returns flat rows (not
+grouped by name). Pagination headers (``X-Total-Count`` etc.) are set when
+``size > 0``.
 """
 
 from __future__ import annotations
@@ -58,16 +60,23 @@ def _resolve_service():
 @router.post("", response_model=ImageRegisterResponse)
 async def register_image(req: RegisterImageRequest):
     svc = _resolve_service()
+    # 过渡期兼容：version 缺省时回退 deprecated framework_version。
+    version = req.version or req.framework_version
     try:
         result = svc.register_image(
-            framework=req.framework,
-            framework_version=req.framework_version,
+            name=req.name,
+            version=version,
             runtime_spec=req.runtime_spec,
+            uploaded_by=req.uploaded_by,
+            framework=req.framework,
+            description=req.description,
+            package_path=req.package_path,
+            image_archive_path=req.image_archive_path,
+            access_mode=[am.model_dump() for am in req.access_mode],
             env_vars=req.env_vars,
             workspace=req.workspace,
             mounts=req.mounts,
             image_module_version=req.image_module_version,
-            uploaded_by=req.uploaded_by,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -76,15 +85,17 @@ async def register_image(req: RegisterImageRequest):
 
 @router.get("", response_model=list[ImageEntry])
 async def list_images(
-    framework: Optional[str] = Query(None),
+    name: Optional[str] = Query(None, description="按镜像主键 name 筛选"),
+    framework: Optional[str] = Query(None, description="按 framework 展示字段筛选"),
     uploaded_by: Optional[str] = Query(None),
     size: int = Query(-1, description="Page size; -1 = no pagination"),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     response: Response = None,  # noqa: B008 - FastAPI injected
 ):
-    """Query images (flat, one row per framework version)."""
+    """Query images (flat, one row per name version)."""
     svc = _resolve_service()
     rows, total = svc.query(
+        name=name,
         framework=framework,
         uploaded_by=uploaded_by,
         size=size,
@@ -100,32 +111,37 @@ async def list_images(
     return rows
 
 
-@router.get("/{framework}/launch-spec", response_model=LaunchSpecResponse)
+@router.get("/{name}/launch-spec", response_model=LaunchSpecResponse)
 async def get_launch_spec(
-    framework: str,
+    name: str,
     version: Optional[str] = Query(None),
 ):
     svc = _resolve_service()
     try:
-        return svc.resolve_launch_spec(framework, version=version)
+        return svc.resolve_launch_spec(name, version=version)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.put("/{framework}/default", response_model=SetDefaultResponse)
-async def set_default(framework: str, req: SetDefaultRequest):
+@router.put("/{name}/default", response_model=SetDefaultResponse)
+async def set_default(name: str, req: SetDefaultRequest):
     svc = _resolve_service()
+    version = req.version or req.framework_version
+    if not version:
+        raise HTTPException(
+            status_code=400, detail="version must not be empty"
+        )
     try:
-        return svc.set_default(framework, req.framework_version)
+        return svc.set_default(name, version)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.delete("/{framework}/{version}", response_model=DeregisterResponse)
-async def deregister_image(framework: str, version: str):
+@router.delete("/{name}/{version}", response_model=DeregisterResponse)
+async def deregister_image(name: str, version: str):
     svc = _resolve_service()
     try:
-        return svc.deregister(framework, version)
+        return svc.deregister(name, version)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ImageInUseError as exc:
