@@ -1939,6 +1939,7 @@ class RegistryTableService(TableRepo):
         name: str,
         query_filter: Optional[dict] = None,
         exclude_nodes: Optional[list] = None,
+        only_status: Optional[str] = None,
         order_by: Sequence[str] = (),
         limit: int = -1,
         offset: int = 0,
@@ -1954,6 +1955,11 @@ class RegistryTableService(TableRepo):
         compiling a ``node NOT IN (...)`` push-down (used for the
         "include_unhealthy" filter). ``None`` (default) keeps all rows.
 
+        ``only_status`` keeps only rows whose persisted ``data.status``
+        equals the value; a missing ``data.status`` (legacy schema) defaults
+        to ``运行`` via ``COALESCE`` (used for the instance
+        ``include_unhealthy=False`` push-down). ``None`` keeps all rows.
+
         When ``limit > 0``, ``LIMIT/OFFSET`` is appended and ``total`` is
         the count of all rows matching the filter (before pagination).
         When ``limit <= 0``, all rows are returned and ``total`` equals
@@ -1968,6 +1974,9 @@ class RegistryTableService(TableRepo):
             placeholders = ",".join("?" for _ in exclude_nodes)
             where += f" AND node NOT IN ({placeholders})"
             args.extend(exclude_nodes)
+        if only_status is not None:
+            where += " AND COALESCE(json_extract(data, '$.status'), '运行') = ?"
+            args.append(only_status)
 
         sql = f"SELECT * FROM {kind} WHERE {where}"
         count_args = tuple(args)

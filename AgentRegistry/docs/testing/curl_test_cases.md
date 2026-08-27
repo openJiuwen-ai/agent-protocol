@@ -1,6 +1,6 @@
 # 注册中心 API · 手工测试 curl 命令合集
 
-> 基于 [registry_openapi.yaml](../../registry_openapi.yaml) (v0.1.0)，覆盖一体机场景全部接口。
+> 基于 registry_openapi.yaml，覆盖一体机场景全部接口。
 > 默认服务器：`http://127.0.0.1:8000`。
 > 命令可直接复制到 bash 运行；每个接口选 1-2 个典型参数组合。
 
@@ -15,6 +15,7 @@
   export A2X_REGISTRY_DB="${A2X_REGISTRY_HOME:-/var/lib/a2x-registry}/registry.db"
   ```
 - 表结构真源：[a2x_registry/common/db.py](../../a2x_registry/common/db.py) 的 `SCHEMA_SQL`（4 表：`registry_meta` / `service` / `image` / `instance`）。
+- **实例 status 落库（data JSON）**：`instance` 表无 `status` 列，status 存在行内 `data` JSON（`data.status`，注册默认 `运行`，gateway 经 PATCH 写入 `停止`/`异常`/`运行`）；查询时 node 心跳 UNHEALTHY 会把该 node 实例派生覆盖为 `异常`。
 - **心跳活性不入库**（内存态）：§3 的验证只能查 `instance` 表是否被 sweeper 剔除，不能直接查心跳本身。
 - **租约配置不入库**（内存态）：§4 的 `lease-config` 仅存进程内存（`NodeHeartbeatStore._config`），重启后恢复默认值；验证只能通过 API 读对照，不能用 `sqlite3` 查 `registry_meta`。
 
@@ -269,6 +270,7 @@ curl -X POST http://127.0.0.1:8000/api/instances \
     "framework": "opencode",
     "framework_version": "v0.2.0",
     "node": "192.168.0.12",
+    "instance_id": "yr-inst-7f3a92",
     "address": "10.244.1.7:4096",
     "user": "user-01"
   }'
@@ -280,24 +282,28 @@ curl -X POST http://127.0.0.1:8000/api/instances \
   "service_id": "generic_3f9a1b2c",
   "kind": "三方", "framework": "opencode", "framework_version": "v0.2.0",
   "address": "10.244.1.7:4096", "node": "192.168.0.12", "user": "user-01",
+  "instance_id": "yr-inst-7f3a92",
   "created_at": "2026-07-06T10:00:00Z",
   "last_active_at": "2026-07-06T10:00:00Z",
   "status": "运行"
 }
 ```
 
-**效果**：`service_id` 幂等 upsert；重发即覆盖。`service_id` 由 `instance_sid(user, framework)` 派生（每用户每框架一个实例）。
+**效果**：`service_id` 幂等 upsert；重发即覆盖。`service_id` 由 `instance_sid(user, framework)` 派生（每用户每框架一个实例）。`instance_id` 为元戎实例 ID（gateway 拉起后回填；非元戎拉起可空、不做主键）；`status` 注册即 `运行`（落库 `data.status`）。
+**错误**：缺 `node` 等必填字段 -> `400`（pydantic `422`）；`kind` 非 `三方`/`九问` -> `400`。
 
 **数据库验证**：
 ```bash
-# 1. instance 表新增一行（registry='instances'），data JSON 含 address
+# 1. instance 表新增一行（registry='instances'），data JSON 含 address/instance_id/status
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT service_id, kind, framework, framework_version, node, \"user\",
           json_extract(data,'\$.address') AS address,
+          json_extract(data,'\$.instance_id') AS instance_id,
+          json_extract(data,'\$.status') AS status,
           json_extract(data,'\$.created_at') AS created_at
    FROM instance
    WHERE registry='instances' AND service_id='generic_3f9a1b2c';"
-# 预期：generic_3f9a1b2c|三方|opencode|v0.2.0|192.168.0.12|user-01|10.244.1.7:4096|2026-07-06T10:00:00Z
+# 预期：generic_3f9a1b2c|三方|opencode|v0.2.0|192.168.0.12|user-01|10.244.1.7:4096|yr-inst-7f3a92|运行|2026-07-06T10:00:00Z
 
 # 2. registry_meta 已登记 'instances'
 sqlite3 "$A2X_REGISTRY_DB" \
@@ -316,20 +322,22 @@ curl -X POST http://127.0.0.1:8000/api/instances \
     "framework": "jiuwen-report",
     "framework_version": "v1.0.0",
     "node": "192.168.0.11",
+    "instance_id": "yr-inst-2b5c41",
     "address": "10.244.2.3:8080",
     "user": "user-02"
   }'
 ```
 
-**效果**：九问流程与三方一致，仅 `kind=九问`、framework 来自一体机预置镜像注册表。
+**效果**：九问流程与三方一致，仅 `kind=九问`、framework 来自一体机预置镜像注册表。不带 `instance_id`（非元戎拉起）也可注册，回执 `instance_id` 为空串。
 
 **数据库验证**：
 ```bash
 # instance 表中 kind='九问' 行
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT service_id, framework, framework_version, node, \"user\"
+  "SELECT service_id, framework, framework_version, node, \"user\",
+          json_extract(data,'\$.instance_id') AS instance_id
    FROM instance WHERE registry='instances' AND kind='九问';"
-# 预期：generic_9c21d4e5|jiuwen-report|v1.0.0|192.168.0.11|user-02
+# 预期：generic_9c21d4e5|jiuwen-report|v1.0.0|192.168.0.11|user-02|yr-inst-2b5c41
 ```
 
 ### 2.3 查询实例（按 node 过滤 + 含异常）
@@ -344,17 +352,18 @@ curl http://127.0.0.1:8000/api/instances
 curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=true'
 ```
 
-**效果**：`status` 由 node 心跳派生（运行 / 异常），不落库；`include_unhealthy=false` 默认只回运行。
+**效果**：`status` 为落库字段（`data.status`：运行 / 停止 / 异常，gateway 经 PATCH 写入），node 心跳 UNHEALTHY 时派生覆盖为 `异常`；`include_unhealthy=false` 默认只回 `运行`（`停止`/`异常` 均被过滤，SQL 下推 `COALESCE(json_extract(data,'$.status'),'运行')='运行'`）。
 **支持的 filter key**：`include_unhealthy` / `node` / `framework` / `kind` / `user`（白名单，其他 key 返回 `400`）。
 
 **数据库验证**：
 ```bash
-# 对照 instance 表中该 node 上的全部实例（status 不落库，需结合内存态心跳派生）
+# 对照 instance 表中该 node 上的全部实例（status 落库在 data JSON）
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT service_id, kind, framework, node, \"user\",
-          json_extract(data,'\$.address') AS address
+          json_extract(data,'\$.address') AS address,
+          json_extract(data,'\$.status') AS status
    FROM instance WHERE registry='instances' AND node='192.168.0.12';"
-# 预期：列出该 node 全部实例（含已派生为'异常'但未剔除的行；超 grace_period 被剔除后此处为空）
+# 预期：列出该 node 全部实例（含 data.status='停止'/'异常' 但默认查询被过滤的行；超 grace_period 被剔除后此处为空）
 
 # 索引命中校验（EXPLAIN QUERY PLAN 应走 idx_instance_node）
 sqlite3 "$A2X_REGISTRY_DB" \
@@ -363,33 +372,49 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 预期：SEARCH ... USING INDEX idx_instance_node (registry=? AND node=?)
 ```
 
-### 2.4 变更实例（元戎迁移后）
+### 2.4 变更实例（元戎迁移后 / 状态更新）
 
 **接口**：`PATCH /api/instances/{service_id}`
-**场景**：gateway 在元戎迁移、node/address 改变时更新；service_id 不变。
+**场景**：gateway 在元戎迁移、node/address/instance_id 改变时更新；或据元戎 List 置 `status`（`停止`/`异常`/`运行`）。四个字段至少给一个；`service_id` 不变。
 
 ```bash
+# 场景 A：元戎迁移（node + address + instance_id 回填）
 curl -X PATCH http://127.0.0.1:8000/api/instances/generic_3f9a1b2c \
   -H "Content-Type: application/json" \
-  -d '{"node": "192.168.0.20", "address": "10.244.3.9:4096"}'
+  -d '{"node": "192.168.0.20", "address": "10.244.3.9:4096", "instance_id": "yr-inst-9d1e07"}'
 ```
 
-**预期响应** `200`：返回更新后的 InstanceEntry（新 node + address，service_id 不变）。
-**错误**：service_id 不存在 → `404`。
+```bash
+# 场景 B：状态更新（gateway 据元戎 List 置 停止）
+curl -X PATCH http://127.0.0.1:8000/api/instances/generic_3f9a1b2c \
+  -H "Content-Type: application/json" \
+  -d '{"status": "停止"}'
+```
+
+**预期响应** `200`：返回更新后的 InstanceEntry（service_id 不变）。
+**错误**：service_id 不存在 → `404`；四个字段一个都不给 → `400`；`status` 不在 `运行`/`停止`/`异常` 枚举 → `400`。
 
 **数据库验证**：
 ```bash
-# instance 表中该 service_id 的 node 列 + data.address 已更新
+# 场景 A：instance 表中该 service_id 的 node 列 + data.address/instance_id 已更新
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT service_id, node, json_extract(data,'\$.address') AS address
+  "SELECT service_id, node,
+          json_extract(data,'\$.address') AS address,
+          json_extract(data,'\$.instance_id') AS instance_id
    FROM instance WHERE registry='instances' AND service_id='generic_3f9a1b2c';"
-# 预期：generic_3f9a1b2c|192.168.0.20|10.244.3.9:4096
+# 预期：generic_3f9a1b2c|192.168.0.20|10.244.3.9:4096|yr-inst-9d1e07
 
-# 旧 node='192.168.0.12' 下应已无该实例
+# 场景 B：data.status 已落库
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT COUNT(*) FROM instance
-   WHERE registry='instances' AND service_id='generic_3f9a1b2c' AND node='192.168.0.12';"
-# 预期：0
+  "SELECT service_id, json_extract(data,'\$.status') AS status
+   FROM instance WHERE registry='instances' AND service_id='generic_3f9a1b2c';"
+# 预期：generic_3f9a1b2c|停止
+
+# 场景 B 后：默认查询（只回运行）应无该实例；include_unhealthy=true 可见
+curl 'http://127.0.0.1:8000/api/instances'
+# 预期：[]（generic_3f9a1b2c 已置 停止）
+curl 'http://127.0.0.1:8000/api/instances?include_unhealthy=true'
+# 预期：含 generic_3f9a1b2c，status="停止"
 ```
 
 ### 2.5 注销实例
@@ -427,7 +452,8 @@ curl -s -X DELETE http://127.0.0.1:8000/api/instances/generic_3f9a1b2c
 > **心跳活性不入库**（内存态）：租约存进程内存 `_node_leases`（`NodeHeartbeatStore`）。
 > 数据库验证只能间接验证：①心跳续租期间该 node 实例仍在 `instance` 表内；②超 `ttl + grace_period` 未续时 `NodeHeartbeatSweeper` 调 `instance.expire_node` 删除该 node 全部实例（写副作用落库）。
 >
-> **状态机**：`HEALTHY` --超 ttl--> `UNHEALTHY`（实例派生 `异常`）--超 grace_period--> 断连 -> sweeper 剔除该 node 全部实例。
+> **状态机**：`HEALTHY` --超 ttl--> `UNHEALTHY`（实例派生 `异常`，覆盖落库的 `data.status`）--超 grace_period--> 断连 -> sweeper 剔除该 node 全部实例。
+> node 恢复心跳（软恢复）后回到落库的 `data.status`。
 > 默认 `ttl=90s`（`min_ttl` 兼作节点租约 TTL）、`grace_period=30s`，可通过 §4 调整。
 
 ### 3.1 node 心跳续租（空 body）
