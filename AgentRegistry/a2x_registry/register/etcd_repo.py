@@ -231,6 +231,7 @@ class EtcdTableRepo:
         name: str,
         query_filter: Optional[dict] = None,
         exclude_nodes: Optional[List[str]] = None,
+        only_status: Optional[str] = None,
         order_by: Sequence[str] = (),
         limit: int = -1,
         offset: int = 0,
@@ -251,6 +252,13 @@ class EtcdTableRepo:
         # exclude unhealthy nodes
         if exclude_nodes:
             rows = [r for r in rows if (r.get("node") or "") not in set(exclude_nodes)]
+
+        # keep only rows with the given persisted data.status (missing → 运行)
+        if only_status is not None:
+            rows = [
+                r for r in rows
+                if ((r.get("data") or {}).get("status") or "运行") == only_status
+            ]
 
         total = len(rows)
 

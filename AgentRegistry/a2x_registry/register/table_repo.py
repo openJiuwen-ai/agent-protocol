@@ -86,6 +86,7 @@ class TableRepo(Protocol):
         name: str,
         query_filter: Optional[dict] = None,
         exclude_nodes: Optional[List[str]] = None,
+        only_status: Optional[str] = None,
         order_by: Sequence[str] = (),
         limit: int = -1,
         offset: int = 0,
@@ -94,6 +95,10 @@ class TableRepo(Protocol):
 
         - ``exclude_nodes``: instances listed on these node IPs are excluded
           (used for the "include_unhealthy" push-down). ``None`` = keep all.
+        - ``only_status``: keep only rows whose persisted ``data.status``
+          equals this value; a row without ``data.status`` (legacy schema)
+          defaults to ``运行``. Used by the instance list's
+          ``include_unhealthy=False`` push-down. ``None`` = keep all.
         - ``order_by``: a structured sequence of ``"<field> <asc|desc>"``
           items (e.g. ``["framework asc", "data.created_at desc"]``). Field is
           either a promoted column or a ``data.<key>`` reference (JSON-internal
