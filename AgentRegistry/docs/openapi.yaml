@@ -1,0 +1,760 @@
+openapi: 3.0.3
+info:
+  title: 一体机 Agent OS 注册中心 API
+  version: 0.1.0
+  description: >
+    一体机场景下九问 Agent 注册中心的对外 REST API —— Agent（三方 / 九问）镜像与实例管理
+    统一约定：
+    - 路径：镜像 / 实例为**固定命名注册表**（/api/images、/api/instances，数据落「镜像注册表」「实例注册表」）；ha 为全局。
+    - 响应体：回执 {…, status:"registered"|"updated"|"deregistered"} 或 {…, deleted:bool} 风格
+      （镜像 / 实例不分 dataset，回执不含 dataset 字段）。
+    - 错误：404 不存在、400 校验、409 冲突（镜像在用 / 实例在途 in_progress）、501 元戎未配置、502 元戎失败、504 元戎超时。
+    - 传输：内部组件间 **mTLS 双向认证** + HTTP/1.1 keep-alive（未配证书则纯 http）。
+
+servers:
+  - url: http://{host}:{port}
+    description: 单机 = 本机地址；分布式 = 经 nginx 转发到当前主（注册中心保持 nginx 指向主）
+    variables:
+      host:
+        default: "127.0.0.1"
+      port:
+        default: "8000"
+
+tags:
+  - name: images
+    description: 三方框架镜像 —— 注册 / 查询 / 注销（校验无在用实例）/ 默认版本
+  - name: instances
+    description: Agent 实例 —— 创建 / 查询 / 变更状态 / 用户删除（三方 / 九问统一，service_id 幂等）
+  - name: ha
+    description: 分布式高可用 —— 成员 / leader（后续版本）
+
+paths:
+  # ── 镜像 ──────────────────────────────────────────────────────────────
+  /api/images:
+    get:
+      tags: [images]
+      summary: 查询镜像（扁平列表，一条目 = 一个 name 的一个版本）
+      description: >
+        一条目 = 镜像注册表的一行（一个 name 的一个 version），返回扁平数组、不按 name 分组。
+        排序 name ASC → version_key DESC（新版本在前），同 name 各版本因此相邻，
+        前端要「name → 版本」的树按 name 就地 group 即可；一个 name 的版本集可以跨页，
+        这是扁平分页的正常行为。
+        分页单位 = 行，故 X-Total-Count 是过滤后的版本行数。
+        筛选直接作用在行上、命中即返回该行，不存在 name 级与行级字段不一致的歧义。
+        （framework 已降级为普通展示字段，仍可按其筛选。）
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: 按镜像主键 name 筛选
+          schema: { type: string, example: openclaw }
+        - name: framework
+          in: query
+          required: false
+          description: 按 framework 展示字段筛选（非主键）
+          schema: { type: string, example: opencode }
+        - name: uploaded_by
+          in: query
+          required: false
+          description: 按上传者筛选（九问预置条目为 system）
+          schema: { type: string, example: user-01 }
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: 镜像条目列表（扁平，一元素 = 一个框架版本）
+          headers:
+            X-Total-Count:
+              description: 过滤后的**框架版本行**总数；仅 size>0 时设置
+              schema: { type: integer, example: 12 }
+            X-Page: { $ref: '#/components/headers/XPage' }
+            X-Total-Pages: { $ref: '#/components/headers/XTotalPages' }
+            X-Page-Size: { $ref: '#/components/headers/XPageSize' }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ImageEntry' }
+    post:
+      tags: [images]
+      summary: 注册镜像（登记适配镜像引用 + 元戎运行规格）
+      description: 适配镜像由外部镜像处理模块产出、存入镜像仓后由其调用本接口登记引用 + 运行规格（注册中心不做适配）。同一 name 多次注册按 version 合并。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterImageRequest' }
+      responses:
+        '200':
+          description: 已注册
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImageOpResponse' }
+              example: { name: openclaw, framework: openclaw, version: v0.2.0, status: registered }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/images/{name}/default:
+    parameters:
+      - $ref: '#/components/parameters/Name'
+    put:
+      tags: [images]
+      summary: 设默认版本（按 name；同一 name 有且只有一个默认版本）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: string, example: v0.2.0 }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImageOpResponse' }
+              example: { name: openclaw, default: v0.2.0, status: updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/images/{name}/launch-spec:
+    parameters:
+      - $ref: '#/components/parameters/Name'
+    get:
+      tags: [images]
+      summary: 取运行规格（按 name；gateway 拉起前查询 / Switch 用）
+      description: >
+        gateway 拉起实例前查此拿元戎运行规格（name/version + Docker 沙箱字段 + access_mode）；
+        不带 version 取该 name 的默认版本。镜像管理据 name 默认版本组合返回。
+      parameters:
+        - name: version
+          in: query
+          required: false
+          description: 缺省取该 name 的默认版本
+          schema: { type: string, example: v0.2.0 }
+      responses:
+        '200':
+          description: 元戎运行规格
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LaunchSpec' }
+              example: { name: openclaw, framework: openclaw, version: v0.2.0, runtime_spec: { imageurl: harbor.local/adapted/openclaw:v0.2.0-mod1.3, cpu: 1000, memory: 2048 }, access_mode: [ { name: tui, port: "2222", cmd: openclaw }, { name: web, port: "18789", cmd: "openclaw gateway --port 18789" } ], env_vars: { A2X_LLM_KEY: "${A2X_LLM_KEY}" } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/images/{name}/{version}:
+    parameters:
+      - $ref: '#/components/parameters/Name'
+      - name: version
+        in: path
+        required: true
+        description: 镜像版本 version
+        schema: { type: string, example: v0.2.0 }
+    patch:
+      tags: [images]
+      summary: 更新镜像字段（部分更新；不含主键 name/version 与 is_default）
+      description: 部分更新一行镜像的可变字段（如 description）；至少给一个字段；主键 name/version 不可改，默认版本走 PUT …/default。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateImageRequest' }
+            example: { description: "更新后的描述", package_path: "/new/path/" }
+      responses:
+        '200':
+          description: 已更新（返回更新后的行）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImageEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [images]
+      summary: 注销镜像（按 name + version；校验无在用实例 → 删镜像仓文件 + 删条目）
+      responses:
+        '200':
+          description: 已注销
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImageOpResponse' }
+              example: { name: openclaw, version: v0.2.0, status: deregistered }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/ImageInUse' }
+
+  # ── 实例 ──────────────────────────────────────────────────────────────
+  /api/instances:
+    get:
+      tags: [instances]
+      summary: 查询实例（status 落库；分页单位 = 实例）
+      description: >
+        按 framework 升序 → user 升序 → service_id 升序返回（service_id 为主键，兜底保证全序）。
+        status 为落库字段（运行 / 停止 / 异常）。
+        过滤先于分页：先按筛选条件（含 include_unhealthy 决定的状态可见性）筛出全集再分页，
+        故 X-Total-Count 是过滤后的总数。
+      parameters:
+        - name: include_unhealthy
+          in: query
+          required: false
+          description: 默认 false 只回 运行；true 含 停止 / 异常
+          schema: { type: boolean, default: false }
+        - name: node
+          in: query
+          required: false
+          schema: { type: string, example: 192.168.0.12 }
+        - name: framework
+          in: query
+          required: false
+          schema: { type: string, example: opencode }
+        - name: kind
+          in: query
+          required: false
+          schema: { type: string, enum: [三方, 九问] }
+        - name: user
+          in: query
+          required: false
+          description: 按用户 ID 查该用户的实例
+          schema: { type: string, example: user-01 }
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: 实例列表
+          headers:
+            X-Total-Count:
+              description: 过滤后的**实例**总数；仅 size>0 时设置
+              schema: { type: integer, example: 134 }
+            X-Page: { $ref: '#/components/headers/XPage' }
+            X-Total-Pages: { $ref: '#/components/headers/XTotalPages' }
+            X-Page-Size: { $ref: '#/components/headers/XPageSize' }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/InstanceEntry' }
+    post:
+      tags: [instances]
+      summary: 创建 / 注册实例（模式 B 调元戎 + 模式 A 仅登记）
+      description: >
+        **按请求体形状判模式**：带 `runtime_spec` → **模式 B**（registry 调元戎 `create_sandbox` 创建、
+        拿 `instance_id` 后再 `get_agent_info` 取落点，全部拿齐后写条目）；无 `runtime_spec`、带 `node`/`address`
+        → **模式 A**（向前兼容，仅登记）。模式 B：`service_id = name = "user+framework"`（首个 `+` 拆 user/framework）、
+        `kind` 由 `framework == "jiuwenswarm"` 判、`node`/`address`/`instance_id` 元戎回填、`version` 必填。
+        同 `service_id` 在途操作互斥（`409 in_progress`）；条目已存在且实例存活则**幂等回现有条目、不二次拉起**。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/CreateInstanceRuntimeRequest'   # 模式 B（有 runtime_spec）
+                - $ref: '#/components/schemas/RegisterInstanceRequest'         # 模式 A（无 runtime_spec，向前兼容）
+            examples:
+              模式B:
+                summary: 模式 B —— registry 调元戎创建（入参 = 元戎 payload + version）
+                value:
+                  name: user-01+opencode
+                  workspace: /app
+                  version: v0.2.0
+                  runtime_spec:
+                    runtime: python3.11
+                    sandbox_type: docker
+                    rootfs: { imageurl: harbor.local/adapted/opencode:v0.2.0-mod1.3, user: agentos }
+                    cpu: 1000
+                    memory: 2048
+                  env_vars: { A2X_LLM_KEY: "${A2X_LLM_KEY}" }
+                  mounts: [ { source: /data/agent, target: /data, readonly: false } ]
+              模式A:
+                summary: 模式 A —— 仅登记条目（向前兼容，实例已由 gateway 拉起）
+                value:
+                  service_id: user-01+opencode
+                  kind: 三方
+                  framework: opencode
+                  framework_version: v0.2.0
+                  node: 192.168.0.12
+                  instance_id: yr-inst-7f3a92
+                  address: 10.244.1.7:4096
+                  user: user-01
+      responses:
+        '200':
+          description: 实例条目（status 落库，注册即 运行；模式 B 的 node/address/instance_id 由元戎回填）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstanceEntry' }
+              example:
+                service_id: user-01+opencode
+                kind: 三方
+                framework: opencode
+                framework_version: v0.2.0
+                address: 10.244.1.7:4096
+                node: 192.168.0.12
+                instance_id: yr-inst-7f3a92
+                user: user-01
+                created_at: "2026-07-06T10:00:00Z"
+                last_active_at: "2026-07-06T10:00:00Z"
+                status: 运行
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/InProgress' }
+        '501': { $ref: '#/components/responses/RuntimeNotConfigured' }
+        '502': { $ref: '#/components/responses/YuanrongFailed' }
+        '504': { $ref: '#/components/responses/YuanrongTimeout' }
+
+  /api/instances/{service_id}:
+    parameters:
+      - name: service_id
+        in: path
+        required: true
+        description: 实例主键（= `user+framework`）；**DELETE 可传 `ALL`** 表示全部（暂不提供过滤）
+        schema: { type: string, example: user-01+opencode }
+    patch:
+      tags: [instances]
+      summary: 变更实例 / 状态更新（node / address / instance_id / status）
+      description: gateway 在落点变化（元戎迁移，node/address/instance_id）或据元戎 List 置 status（停止 / 异常）时更新条目；至少给一个字段；service_id 不变。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateInstanceRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstanceEntry' }
+              example: { service_id: generic_3f9a1b2c, kind: 三方, framework: opencode, framework_version: v0.2.0, address: 10.244.3.9:4096, node: 192.168.0.20, instance_id: yr-inst-9d1e07, user: user-01, status: 运行 }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [instances]
+      summary: 删除实例（模式 B 调元戎删除 + 模式 A 仅删条目；支持 ALL 批量）
+      description: >
+        **带 `with_runtime=true` → 模式 B**（先按条目 `instance_id` 调元戎 `delete_sandbox`，成功后删条目）；
+        无 → **模式 A**（仅删条目，向前兼容）。`{service_id}` = 具体 id 删一个；= `ALL` 删**全部**（暂不提供过滤）。
+        批量部分失败**不回滚、逐条报结果**。幂等：条目不存在 `deleted=false`。
+      parameters:
+        - name: with_runtime
+          in: query
+          required: false
+          description: true → 同步调元戎删除实例；缺省仅删条目
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: 单个 → InstanceDeleteResponse；ALL / 批量 → BatchDeleteResponse
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/InstanceDeleteResponse'
+                  - $ref: '#/components/schemas/BatchDeleteResponse'
+              examples:
+                单个:
+                  value: { service_id: user-01+opencode, deleted: true, runtime_deleted: true }
+                批量:
+                  value:
+                    total: 3
+                    deleted: 2
+                    results:
+                      - { service_id: user-01+opencode, deleted: true }
+                      - { service_id: user-02+aider, deleted: true }
+                      - { service_id: user-03+crewai, deleted: false, error: "yuanrong timeout" }
+        '409': { $ref: '#/components/responses/InProgress' }
+        '501': { $ref: '#/components/responses/RuntimeNotConfigured' }
+        '502': { $ref: '#/components/responses/YuanrongFailed' }
+        '504': { $ref: '#/components/responses/YuanrongTimeout' }
+
+  # ── 分布式高可用（后续版本）──────────────────────────────────────────
+  /api/ha/members:
+    get:
+      tags: [ha]
+      summary: '[后续版本] 当前成员列表'
+      responses:
+        '200':
+          description: 成员
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HAMembers' }
+              example: { members: [192.168.0.11, 192.168.0.12, 192.168.0.13] }
+    post:
+      tags: [ha]
+      summary: '[后续版本] 变更成员集（奇偶校验，偶数去尾 + 告警）'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [members]
+              properties:
+                members:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: 生效成员集
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HAMembers' }
+              example: { members: [192.168.0.11], warning: "偶数台，未激活 192.168.0.12" }
+
+  /api/ha/leader:
+    get:
+      tags: [ha]
+      summary: '[后续版本] 当前主（leader）地址 —— 客户端发现用'
+      description: 返回当前主地址（任一节点据 Raft 权威回主）；注册中心据此把 nginx 指向主，gateway 不直接调用。
+      responses:
+        '200':
+          description: leader
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HALeader' }
+              example: { leader: 192.168.0.11 }
+
+components:
+  parameters:
+    Name:
+      name: name
+      in: path
+      required: true
+      description: 镜像主键 name（取代原 framework 的定位作用；同一 name 一个默认版本）
+      schema: { type: string, example: openclaw }
+    # 分页参数 —— 与通用服务列表 GET /api/datasets/{dataset}/services 完全一致（见 https://github.com/Weizheng96/A2X-registry/blob/main/docs/backend_api.md）
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 分页大小；-1 返回全部（不分页）。保留参数，不参与筛选
+      schema: { type: integer, default: -1, minimum: -1, example: 20 }
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 页码（从 1 开始），仅 size>0 时生效。保留参数，不参与筛选
+      schema: { type: integer, default: 1, minimum: 1, example: 2 }
+
+  headers:
+    XTotalCount:
+      description: 匹配总数；仅 size>0 时设置
+      schema: { type: integer }
+    XPage:
+      description: 当前页码（从 1 开始）；仅 size>0 时设置
+      schema: { type: integer, example: 2 }
+    XTotalPages:
+      description: 总页数 = max(1, ceil(X-Total-Count / X-Page-Size))；空结果集时为 1 而非 0。仅 size>0 时设置
+      schema: { type: integer, minimum: 1, example: 4 }
+    XPageSize:
+      description: 当前页大小；仅 size>0 时设置
+      schema: { type: integer, example: 20 }
+
+  responses:
+    BadRequest:
+      description: 校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { detail: "spec.imageurl 缺失" }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ImageInUse:
+      description: 镜像仍有在用实例，拒绝注销
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ImageInUseError' }
+          example: { code: image_in_use, detail: "2 个实例仍在用", instances: [inst_3f9a, inst_5b2c] }
+    InProgress:
+      description: 同 service_id 有在途创建 / 删除，拒绝并发（模式 B）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: in_progress, detail: "service_id user-01+opencode 正在创建 / 删除" }
+    RuntimeNotConfigured:
+      description: 模式 B 请求但未配置元戎连接
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: runtime_not_configured, detail: "未配置元戎 frontend_endpoint" }
+    YuanrongFailed:
+      description: 元戎创建 / 删除失败（外部依赖）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: yuanrong_failed, detail: "agent API failed: code=500" }
+    YuanrongTimeout:
+      description: 元戎创建 / 删除超时
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: yuanrong_timeout, detail: "yuanrong timeout after 300s" }
+
+  schemas:
+    # ── 镜像运行规格（元戎 Docker 沙箱）──
+    Mount:
+      type: object
+      required: [source, target]
+      properties:
+        source: { type: string, example: /data/agent }
+        target: { type: string, example: /data }
+        readonly: { type: boolean, default: false }
+    Port:
+      type: object
+      required: [port]
+      description: >
+        此模型先前仅在ImageSpec中被使用，现在已不再使用
+      properties:
+        port: { type: integer, example: 8080 }
+        protocol: { type: string, example: tcp }
+    ImageSpec:
+      type: object
+      required: [imageurl]
+      description: >
+        此模型已不再使用，spec改为透传 JSON 对象。
+        元戎 Docker 沙箱运行规格，**扁平**——镜像注册表一行 = 一个框架版本，故不再包 rootfs 层。
+        调元戎时由适配层重新组装成其 API 要求的 rootfs 嵌套结构（type 恒为 image）。
+      properties:
+        imageurl: { type: string, example: harbor.local/adapted/opencode:v0.2.0-mod1.3 }
+        workspace: { type: string, example: /app }
+        mounts:
+          type: array
+          items: { $ref: '#/components/schemas/Mount' }
+        cpu: { type: integer, description: 毫核, example: 1000 }
+        memory: { type: integer, description: MB, example: 2048 }
+        ports:
+          type: array
+          items: { $ref: '#/components/schemas/Port' }
+        env:
+          type: object
+          additionalProperties: { type: string }
+          example: { A2X_LLM_KEY: "${A2X_LLM_KEY}" }
+        image_module_version: { type: string, example: v1.3 }
+
+    # ── 镜像请求 / 条目 / 回执 ──
+    RegisterImageRequest:
+      type: object
+      required: [name, version, runtime_spec, uploaded_by]
+      properties:
+        name: { type: string, description: 镜像主键（取代原 framework 定位）, example: openclaw }
+        framework: { type: string, description: 普通展示字段（非主键）, example: openclaw }
+        description: { type: string, description: 纯文本描述, example: "xxxxxxxx" }
+        package_path: { type: string, description: 包路径, example: /xxx/xxx/ }
+        image_archive_path: { type: string, description: 镜像归档路径, example: /xxx/xxx/ }
+        version: { type: string, description: 镜像版本（原 framework_version 更名）, example: v0.2.0 }
+        framework_version: { type: string, deprecated: true, description: "【待删除】由 version 取代，过渡期兼容", example: v0.2.0 }
+        runtime_spec:
+          type: object
+          additionalProperties: true
+          description: 运行规格（元戎 Docker 沙箱），作为不透明 JSON 对象透传，不关心具体字段
+        access_mode:
+          type: array
+          description: 接入方式数组（如 tui / web），拉起 / 接入时选用
+          items: { $ref: '#/components/schemas/AccessMode' }
+        env_vars:
+          type: object
+          additionalProperties: { type: string }
+          description: 环境变量
+          example: { A2X_LLM_KEY: "${A2X_LLM_KEY}" }
+        image_module_version: { type: string, example: v1.3 }
+        workspace: { type: string, example: /app }
+        mounts: { type: array, items: { $ref: '#/components/schemas/Mount' } }
+        uploaded_by: { type: string, example: user-01 }
+    ImageEntry:
+      type: object
+      description: >
+        一条目 = 一个 name 的一个 version，即镜像注册表的**一行**（§4.2）。扁平——不按 name 分组、无 versions 嵌套、
+        无 name 级 default 字段；name / framework / is_default 都是行上的普通字段。
+      properties:
+        name: { type: string, description: 镜像主键, example: openclaw }
+        framework: { type: string, description: 普通展示字段（非主键）, example: openclaw }
+        description: { type: string, example: "xxxxxxxx" }
+        package_path: { type: string, example: /xxx/xxx/ }
+        image_archive_path: { type: string, example: /xxx/xxx/ }
+        version: { type: string, description: 镜像版本（原 framework_version 更名）, example: v0.2.0 }
+        framework_version: { type: string, deprecated: true, description: "【待删除】由 version 取代", example: v0.2.0 }
+        is_default: { type: boolean, description: 该行是否为其 name 的默认版本；不参与排序, example: true }
+        runtime_spec:
+          type: object
+          additionalProperties: true
+          description: 运行规格（元戎 Docker 沙箱），作为不透明 JSON 对象透传，不关心具体字段
+        access_mode:
+          type: array
+          description: 接入方式数组（如 tui / web）
+          items: { $ref: '#/components/schemas/AccessMode' }
+        env_vars:
+          type: object
+          additionalProperties: { type: string }
+          description: 环境变量
+          example: { A2X_LLM_KEY: "${A2X_LLM_KEY}" }
+        image_module_version: { type: string, example: v1.3 }
+        workspace: { type: string, example: /app }
+        mounts: { type: array, items: { $ref: '#/components/schemas/Mount' } }
+        uploaded_by: { type: string, example: user-01 }
+        created_at: { type: string, format: date-time, example: "2026-07-06T10:00:00Z" }
+    UpdateImageRequest:
+      type: object
+      description: >
+        镜像字段部分更新（PATCH …/images/{name}/{version}）；至少给一个字段。
+        **不含主键** `name` / `version`；`is_default` 走 `PUT …/default`、不在此改。
+      properties:
+        framework: { type: string, description: 展示字段, example: openclaw }
+        description: { type: string, example: "更新后的描述" }
+        package_path: { type: string, example: /new/path/ }
+        image_archive_path: { type: string, example: /new/archive/ }
+        runtime_spec:
+          type: object
+          additionalProperties: true
+          description: 运行规格（不透明 JSON，整体替换）
+        access_mode:
+          type: array
+          items: { $ref: '#/components/schemas/AccessMode' }
+        env_vars:
+          type: object
+          additionalProperties: { type: string }
+        workspace: { type: string, example: /app }
+        mounts: { type: array, items: { $ref: '#/components/schemas/Mount' } }
+    AccessMode:
+      type: object
+      description: 一种接入方式（如 tui / web）
+      required: [name, port]
+      properties:
+        name: { type: string, description: 接入方式名, example: web }
+        port: { type: string, description: 端口, example: "18789" }
+        cmd: { type: string, description: 启动命令, example: "openclaw gateway --port 18789" }
+    ImageOpResponse:
+      type: object
+      description: 镜像操作回执（RegisterResponse 风格）
+      properties:
+        name: { type: string }
+        framework: { type: string }
+        version: { type: string }
+        default: { type: string }
+        status: { type: string, enum: [registered, updated, deregistered] }
+
+    # ── 镜像运行规格（GET …/launch-spec 响应）──
+    LaunchSpec:
+      type: object
+      description: 元戎运行规格（name/version + runtime_spec + access_mode + env_vars），供 gateway 拉起
+      properties:
+        name: { type: string, example: openclaw }
+        framework: { type: string, description: 普通展示字段（非主键）, example: openclaw }
+        version: { type: string, description: 镜像版本（原 framework_version 更名）, example: v0.2.0 }
+        runtime_spec:
+          type: object
+          additionalProperties: true
+          description: 运行规格（元戎 Docker 沙箱），作为不透明 JSON 对象透传，不关心具体字段
+        access_mode:
+          type: array
+          description: 接入方式数组（如 tui / web），供 gateway 选端口 / 命令拉起
+          items: { $ref: '#/components/schemas/AccessMode' }
+        env_vars:
+          type: object
+          additionalProperties: { type: string }
+          example: { A2X_LLM_KEY: "${A2X_LLM_KEY}" }
+        image_module_version: { type: string, example: v1.3 }
+        workspace: { type: string, example: /app }
+        mounts: { type: array, items: { $ref: '#/components/schemas/Mount' } }
+
+    # ── 实例请求 / 条目 / 回执 ──
+    UpdateInstanceRequest:
+      type: object
+      description: 实例变更（gateway 改 node/address、回填 instance_id，或据元戎 List 置 status；至少给一个字段；service_id 不变）
+      properties:
+        node: { type: string, description: 新落点 nodeIP, example: 192.168.0.20 }
+        address: { type: string, description: 新访问地址, example: 10.244.3.9:4096 }
+        instance_id: { type: string, description: 元戎实例 ID（元戎迁移后变化时回填）, example: yr-inst-7f3a92 }
+        status: { type: string, enum: [运行, 停止, 异常], description: 存活状态（gateway 写入）, example: 停止 }
+    RegisterInstanceRequest:
+      type: object
+      required: [service_id, kind, framework, framework_version, node, address, user]
+      description: 实例注册（三方 / 九问统一：gateway 经 GET …/launch-spec 拿规格、自行调元戎拉起后带落点注册）。
+      properties:
+        service_id: { type: string, description: user+framework 派生（幂等）, example: generic_3f9a1b2c }
+        kind: { type: string, enum: [三方, 九问], example: 三方 }
+        framework: { type: string, example: opencode }
+        framework_version: { type: string, example: v0.2.0 }
+        node: { type: string, description: 元戎落点 nodeIP, example: 192.168.0.12 }
+        instance_id: { type: string, description: 元戎实例 ID（gateway 拉起后回填；非元戎拉起可空、不做主键）, example: yr-inst-7f3a92 }
+        address: { type: string, description: 实例访问地址, example: 10.244.1.7:4096 }
+        user: { type: string, description: 创建 / 所属用户, example: user-01 }
+    CreateInstanceRuntimeRequest:
+      type: object
+      description: >
+        模式 B 创建实例（= 元戎 create payload + version）。registry 据此调元戎 create_sandbox、
+        get_agent_info 后写条目。service_id = name（首个 + 拆 user/framework）、kind 由 framework 判、
+        node/address/instance_id 元戎回填。**有无 runtime_spec 是与模式 A 的判据**。
+      required: [name, workspace, version, runtime_spec]
+      properties:
+        name: { type: string, description: 实例主键 = user+framework（= 元戎 name）, example: user-01+opencode }
+        workspace: { type: string, description: 绝对路径, example: /app }
+        version: { type: string, description: 镜像版本（注册中心专属，注销校验用）, example: v0.2.0 }
+        namespace: { type: string, description: 元戎命名空间（可选；registry 配置优先）, example: default }
+        runtime_spec:
+          type: object
+          additionalProperties: true
+          description: 元戎 Docker 沙箱运行规格（runtime / rootfs.imageurl / sandbox_type / cpu / memory / cmds…），原样转发
+        env_vars:
+          type: object
+          additionalProperties: { type: string }
+          example: { A2X_LLM_KEY: "${A2X_LLM_KEY}" }
+        mounts: { type: array, items: { $ref: '#/components/schemas/Mount' } }
+    InstanceEntry:
+      type: object
+      description: 实例注册条目（Agent 条目）；status 为落库的生命周期值，由 gateway 据元戎 List 写入
+      properties:
+        service_id: { type: string }
+        kind: { type: string, enum: [三方, 九问] }
+        framework: { type: string, example: opencode }
+        framework_version: { type: string, example: v0.2.0 }
+        address: { type: string, description: 实例自身访问地址 }
+        node: { type: string, description: 元戎 nodeIP（落点节点）}
+        instance_id: { type: string, description: 元戎实例 ID（gateway 回填；非元戎拉起可空）, example: yr-inst-7f3a92 }
+        user: { type: string }
+        created_at: { type: string, format: date-time }
+        last_active_at: { type: string, format: date-time }
+        status: { type: string, enum: [运行, 停止, 异常] }
+    InstanceDeleteResponse:
+      type: object
+      description: 单个删除回执
+      properties:
+        service_id: { type: string }
+        deleted: { type: boolean }
+        runtime_deleted: { type: boolean, description: 模式 B 时元戎实例是否已删 }
+    BatchDeleteResponse:
+      type: object
+      description: ALL / 批量删除逐条结果（部分失败不回滚）
+      properties:
+        total: { type: integer, example: 3 }
+        deleted: { type: integer, example: 2 }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              service_id: { type: string }
+              deleted: { type: boolean }
+              error: { type: string }
+
+    # ── HA ──
+    HAMembers:
+      type: object
+      properties:
+        members:
+          type: array
+          items: { type: string }
+        warning: { type: string }
+    HALeader:
+      type: object
+      properties:
+        leader: { type: string, example: 192.168.0.11 }
+
+    # ── 错误 ──
+    Error:
+      type: object
+      properties:
+        code: { type: string, description: 错误码（如 in_progress / runtime_not_configured / yuanrong_failed / yuanrong_timeout；可空）}
+        detail: { type: string }
+    ImageInUseError:
+      type: object
+      properties:
+        code: { type: string, example: image_in_use }
+        detail: { type: string }
+        instances:
+          type: array
+          items: { type: string }
