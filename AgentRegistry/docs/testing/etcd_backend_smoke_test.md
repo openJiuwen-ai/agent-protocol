@@ -120,10 +120,15 @@ registry-a2x/_meta/instances
 curl -X POST http://127.0.0.1:8000/api/images \
   -H "Content-Type: application/json" \
   -d '{
+    "name": "opencode",
     "framework": "opencode",
-    "framework_version": "v0.2.0",
+    "description": "opencode 适配镜像",
+    "package_path": "/pkg/opencode/",
+    "image_archive_path": "/archive/opencode.tar",
+    "version": "v0.2.0",
     "runtime_spec": { "runtime": "python3.11", "cpu": 1000, "memory": 2048,
                       "rootfs": {"imageurl": "harbor.local/adapted/opencode:v0.2.0-mod1.3"} },
+    "access_mode": [{"name": "tui", "port": "2222", "cmd": "opencode"}],
     "env_vars": {"A2X_LLM_KEY": "${A2X_LLM_KEY}"},
     "workspace": "/app",
     "mounts": [{"source": "/data/agent", "target": "/data"}],
@@ -134,41 +139,44 @@ curl -X POST http://127.0.0.1:8000/api/images \
 
 **预期响应** `200`：
 ```json
-{"framework": "opencode", "framework_version": "v0.2.0", "is_default": true, "status": "registered"}
+{"name": "opencode", "framework": "opencode", "version": "v0.2.0", "status": "registered"}
 ```
 
 **etcd 验证**：
 ```bash
 etcdctl get registry-a2x/images/ --prefix
-# 预期：一个 key，值 JSON 含 framework=opencode、framework_version=v0.2.0、is_default=1、uploaded_by=user-01、data
+# 预期：一个 key，值 JSON 含 name=opencode、version=v0.2.0、is_default=1、uploaded_by=user-01、data
 ```
 
-**实际输出**（`service_id` 为自动生成，每次不同）：
+**实际输出**（`service_id` 由 image_sid(name, version) 派生，同 (name, version) 稳定）：
 ```
 $ curl -X POST ...（同上）
-{"framework":"opencode","framework_version":"v0.2.0","is_default":true,"status":"registered"}
+{"name":"opencode","framework":"opencode","version":"v0.2.0","status":"registered"}
 
 $ etcdctl get registry-a2x/images/ --prefix
 registry-a2x/images/image_3d38da367a5f76e9
-{"service_id": "image_3d38da367a5f76e9", "framework": "opencode", "framework_version": "v0.2.0",
+{"service_id": "image_3d38da367a5f76e9", "name": "opencode", "framework": "opencode", "version": "v0.2.0",
  "version_key": "00000.00002.00000~", "is_default": 1, "uploaded_by": "user-01",
  "data": {"runtime_spec": {"runtime": "python3.11", "cpu": 1000, "memory": 2048,
            "rootfs": {"imageurl": "harbor.local/adapted/opencode:v0.2.0-mod1.3"}},
+          "description": "opencode 适配镜像", "package_path": "/pkg/opencode/",
+          "image_archive_path": "/archive/opencode.tar",
+          "access_mode": [{"name": "tui", "port": "2222", "cmd": "opencode"}],
           "env_vars": {"A2X_LLM_KEY": "${A2X_LLM_KEY}"}, "workspace": "/app",
           "mounts": [{"source": "/data/agent", "target": "/data"}],
           "image_module_version": "v1.3", "created_at": "2026-08-18T01:28:35Z"}}
 ```
-> 首个镜像自动成为 default（`is_default: 1`）；`created_at` 存于 `data` 内。
+> 首个镜像自动成为 default（`is_default: 1`）；`created_at` 与 §6 新字段（description / package_path / image_archive_path / access_mode）存于 `data` 内。
 
-### 3.2 查询镜像（按 framework 过滤 + 分页）
+### 3.2 查询镜像（按 name 过滤 + 分页）
 
-**接口**：`GET /api/images?framework={fw}`
+**接口**：`GET /api/images?name={name}`
 
 ```bash
-curl 'http://127.0.0.1:8000/api/images?framework=opencode'
-# 预期 200：扁平数组，一项 = 一个版本（is_default=true 排前）
+curl 'http://127.0.0.1:8000/api/images?name=opencode'
+# 预期 200：扁平数组，一项 = 一个 name 的一个版本（排序 name asc, version_key desc）
 curl 'http://127.0.0.1:8000/api/images?framework=opencode&size=10&page=1'
-# 预期 200：分页数组；响应头含 X-Total-Count
+# 预期 200：framework 降级为展示字段，仍可按其筛选；分页数组；响应头含 X-Total-Count
 ```
 
 **etcd 验证**（分页/排序为后端在内存完成，etcd 只保证行齐全）：
@@ -179,8 +187,11 @@ etcdctl get registry-a2x/images/ --prefix --print-value-only
 
 **实际输出**（API 返回为扁平展示形状，`data` 内字段被摊平；etcd 存的是原始行）：
 ```
-$ curl 'http://127.0.0.1:8000/api/images?framework=opencode'
-[{"framework":"opencode","framework_version":"v0.2.0","is_default":true,
+$ curl 'http://127.0.0.1:8000/api/images?name=opencode'
+[{"name":"opencode","framework":"opencode","version":"v0.2.0","is_default":true,
+  "description":"opencode 适配镜像","package_path":"/pkg/opencode/",
+  "image_archive_path":"/archive/opencode.tar",
+  "access_mode":[{"name":"tui","port":"2222","cmd":"opencode"}],
   "image_module_version":"v1.3",
   "runtime_spec":{"runtime":"python3.11","cpu":1000,"memory":2048,
                   "rootfs":{"imageurl":"harbor.local/adapted/opencode:v0.2.0-mod1.3"}},
@@ -188,7 +199,7 @@ $ curl 'http://127.0.0.1:8000/api/images?framework=opencode'
   "env_vars":{"A2X_LLM_KEY":"${A2X_LLM_KEY}"},"uploaded_by":"user-01",
   "created_at":"2026-08-18T01:28:35Z"}]
 
-$ curl -D - 'http://127.0.0.1:8000/api/images?framework=opencode&size=10&page=1'
+$ curl -D - 'http://127.0.0.1:8000/api/images?name=opencode&size=10&page=1'
 # 响应体同上；响应头含：
 x-total-count: 1
 
@@ -202,14 +213,15 @@ $ etcdctl get registry-a2x/images/ --prefix --print-value-only
 
 ```bash
 curl http://127.0.0.1:8000/api/images/opencode/launch-spec?version=v0.2.0
-# 预期 200：{framework, framework_version, runtime_spec:{...}}，imageurl 透传
+# 预期 200：{name, framework, version, runtime_spec:{...}}，imageurl 透传
 ```
 
 **实际输出**：
 ```json
-{"framework":"opencode","framework_version":"v0.2.0",
+{"name":"opencode","framework":"opencode","version":"v0.2.0",
  "runtime_spec":{"runtime":"python3.11","cpu":1000,"memory":2048,
                  "rootfs":{"imageurl":"harbor.local/adapted/opencode:v0.2.0-mod1.3"}},
+ "access_mode":[{"name":"tui","port":"2222","cmd":"opencode"}],
  "env_vars":{"A2X_LLM_KEY":"${A2X_LLM_KEY}"},"workspace":"/app",
  "mounts":[{"source":"/data/agent","target":"/data"}],"image_module_version":"v1.3"}
 ```
@@ -333,7 +345,7 @@ registry-a2x/instances/generic_3f9a1b2c
 | HTTP | 场景（etcd 后端） | 响应体 |
 |------|------|--------|
 | `400` | 注册镜像 rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
-| `404` | 不存在的 framework launch-spec / PATCH 不存在 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
+| `404` | 不存在的 name launch-spec / PATCH 不存在 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
 | `503` | etcd 不可达 / 超时（后端启动即 fail-fast，运行中掉线则查询报错） | `{"detail":"..."}` |

@@ -46,24 +46,25 @@ CREATE TABLE IF NOT EXISTS service (
 );
 CREATE INDEX IF NOT EXISTS idx_service_type ON service(registry, type);
 
--- Image (one row per version)
+-- Image (one row per version: name 主键, framework 降级为展示列)
 CREATE TABLE IF NOT EXISTS image (
   registry          TEXT NOT NULL,
-  service_id        TEXT NOT NULL,               -- image_sid(framework, framework_version)
-  framework         TEXT NOT NULL,               -- hot: lookup by framework
-  framework_version TEXT NOT NULL,               -- hot: lookup by version
+  service_id        TEXT NOT NULL,               -- image_sid(name, version)
+  name              TEXT NOT NULL,               -- hot: 镜像主键（取代原 framework 定位）
+  framework         TEXT,                        -- 展示字段（非主键），可按其筛选
+  version           TEXT NOT NULL,               -- hot: lookup by version（原 framework_version 更名）
   version_key       TEXT NOT NULL,               -- sort: normalized semver key computed at registration (see image/version_key.py)
-  is_default        INTEGER NOT NULL DEFAULT 0,  -- default-version flag for a framework (exactly one row per framework = 1); not part of sort order
+  is_default        INTEGER NOT NULL DEFAULT 0,  -- default-version flag for a name (exactly one row per name = 1); not part of sort order
   uploaded_by       TEXT,                        -- hot: filter by uploader; pre-seeded entries are 'system'
-  data              TEXT NOT NULL,               -- JSON flat (no rootfs wrapper): {imageurl, workdir, mounts, cpu, memory, ports, env, image_module_version, created_at}
+  data              TEXT NOT NULL,               -- JSON flat (no rootfs wrapper): {runtime_spec, access_mode, env_vars, workspace, mounts, description, package_path, image_archive_path, image_module_version, created_at}
   PRIMARY KEY (registry, service_id)
 );
-CREATE INDEX IF NOT EXISTS idx_image_fw     ON image(registry, framework);
-CREATE INDEX IF NOT EXISTS idx_image_fw_ver ON image(registry, framework, framework_version);
-CREATE INDEX IF NOT EXISTS idx_image_by     ON image(registry, uploaded_by);
-CREATE INDEX IF NOT EXISTS idx_image_order  ON image(registry, framework, version_key DESC);
+CREATE INDEX IF NOT EXISTS idx_image_name    ON image(registry, name);
+CREATE INDEX IF NOT EXISTS idx_image_name_ver ON image(registry, name, version);
+CREATE INDEX IF NOT EXISTS idx_image_by      ON image(registry, uploaded_by);
+CREATE INDEX IF NOT EXISTS idx_image_order   ON image(registry, name, version_key DESC);
 
--- Instance (status is not persisted; derived from node heartbeat at query time)
+-- Instance (status persisted inside data JSON, written by gateway via PATCH)
 CREATE TABLE IF NOT EXISTS instance (
   registry          TEXT NOT NULL,
   service_id        TEXT NOT NULL,       -- instance_sid(user, framework)
@@ -89,9 +90,60 @@ def init_schema(conn: Any) -> None:
     ``CREATE ... IF NOT EXISTS``; re-running neither raises nor alters
     existing structures). Called once by ``backend/startup.py`` at startup;
     works identically for file-backed and ``:memory:`` connections.
+
+    A legacy image table (framework-keyed) is migrated
+    first: name=framework / version=framework_version backfill in a
+    rebuild (SQLite cannot ALTER COLUMN), preserving every row's
+    service_id / is_default / data.
     """
+    _migrate_legacy_image_table(conn)
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+
+
+def _migrate_legacy_image_table(conn: Any) -> None:
+    """Migrate a framework-keyed image table to the name-keyed layout.
+
+    Detection: an existing ``image`` table that has ``framework_version``
+    but no ``name`` column. The rebuild copies each row with
+    ``name=framework`` / ``version=framework_version`` — same values the
+    old positioning used, so ``service_id`` (``image_sid`` over the same
+    two strings) stays valid. Fresh databases and already-migrated ones
+    are left untouched. Must run **before** ``SCHEMA_SQL`` (its new
+    indexes reference the ``name``/``version`` columns).
+    """
+    cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(image)").fetchall()
+    }
+    if not cols or "name" in cols:
+        return  # fresh schema or already migrated
+    conn.executescript(
+        """
+        BEGIN;
+        CREATE TABLE image_migrated (
+          registry          TEXT NOT NULL,
+          service_id        TEXT NOT NULL,
+          name              TEXT NOT NULL,
+          framework         TEXT,
+          version           TEXT NOT NULL,
+          version_key       TEXT NOT NULL,
+          is_default        INTEGER NOT NULL DEFAULT 0,
+          uploaded_by       TEXT,
+          data              TEXT NOT NULL,
+          PRIMARY KEY (registry, service_id)
+        );
+        INSERT INTO image_migrated
+            (registry, service_id, name, framework, version,
+             version_key, is_default, uploaded_by, data)
+          SELECT registry, service_id, framework, framework,
+                 framework_version, version_key, is_default,
+                 uploaded_by, data
+            FROM image;
+        DROP TABLE image;
+        ALTER TABLE image_migrated RENAME TO image;
+        COMMIT;
+        """
+    )
 
 
 # ── Backend abstraction ────────────────────────────────────────

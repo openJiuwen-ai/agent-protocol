@@ -70,8 +70,9 @@ def test_init_schema_creates_four_tables(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='index' "
             "AND name NOT LIKE 'sqlite_autoindex%'"
         )}
+        # idx_image_fw(_ver) -> idx_image_name(_ver)
         assert indexes == {
-            "idx_service_type", "idx_image_fw", "idx_image_fw_ver",
+            "idx_service_type", "idx_image_name", "idx_image_name_ver",
             "idx_image_by", "idx_image_order",
             "idx_instance_node", "idx_instance_fw", "idx_instance_user",
             "idx_instance_order",
