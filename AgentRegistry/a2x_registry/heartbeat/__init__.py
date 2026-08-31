@@ -20,6 +20,11 @@ The store / models / sweeper layer is FastAPI-free (testable without uvicorn).
 Web concerns live in ``deps.py`` / ``router.py``. The ``system_ctx`` module
 provides the synthetic ``AuthContext`` the sweeper uses to call into
 ``RegistryService.deregister`` for hard-deletion.
+
+NOTE: the appliance-mode per-node heartbeat (``NodeHeartbeatStore`` /
+``HeartbeatManager`` / ``NodeHeartbeatSweeper``, ``/api/nodes/{node}/heartbeat``
+and ``GET/POST /api/lease-config``) was removed — instance
+liveness is now reported by the gateway via ``PATCH /api/instances``.
 """
 
 from .errors import (
@@ -27,33 +32,24 @@ from .errors import (
     TTLOutOfRangeError,
     TTLRequiredError,
 )
-from .models import HeartbeatLease, HBState, NodeLeaseConfig
-from .store import HeartbeatStore, NodeHeartbeatStore
-from .sweeper import HeartbeatSweeper, NodeHeartbeatSweeper
-from .service import HeartbeatManager
+from .models import HeartbeatLease, HBState
+from .store import HeartbeatStore
+from .sweeper import HeartbeatSweeper
 from .deps import (
     get_heartbeat_store,
     set_heartbeat_store,
-    get_node_heartbeat_manager,
-    set_node_heartbeat_manager,
 )
 from .system_ctx import SYSTEM_CTX
 
 __all__ = [
     "HeartbeatStore",
-    "NodeHeartbeatStore",
     "HeartbeatLease",
     "HBState",
-    "NodeLeaseConfig",
     "HeartbeatSweeper",
-    "NodeHeartbeatSweeper",
-    "HeartbeatManager",
     "HeartbeatNotSupportedError",
     "TTLOutOfRangeError",
     "TTLRequiredError",
     "get_heartbeat_store",
     "set_heartbeat_store",
-    "get_node_heartbeat_manager",
-    "set_node_heartbeat_manager",
     "SYSTEM_CTX",
 ]

@@ -13,7 +13,7 @@ equivalent to ``RegistryTableService`` (the SQL backend):
   full scan in memory is fine; ``data.<key>`` sort fields read from the row's
   ``data`` dict, mirroring the SQL ``json_extract``).
 - ``query_paginated.order_by`` is a ``Sequence[str]`` of ``"<field> <asc|desc>"``
-  (see ``TableRepo``), ``exclude_nodes`` drops rows by node, ``limit/offset``
+  (see ``TableRepo``), ``limit/offset``
   paginate and ``total`` is the filtered count before slicing.
 
 Composition (``set_default``, ``register_image`` created_at merge, …) stays in
@@ -230,7 +230,6 @@ class EtcdTableRepo:
         self,
         name: str,
         query_filter: Optional[dict] = None,
-        exclude_nodes: Optional[List[str]] = None,
         only_status: Optional[str] = None,
         order_by: Sequence[str] = (),
         limit: int = -1,
@@ -248,10 +247,6 @@ class EtcdTableRepo:
                 if col not in allowed:
                     raise ValidationError(f"cannot filter on unknown column: {col!r}")
             rows = [r for r in rows if _matches(r, query_filter)]
-
-        # exclude unhealthy nodes
-        if exclude_nodes:
-            rows = [r for r in rows if (r.get("node") or "") not in set(exclude_nodes)]
 
         # keep only rows with the given persisted data.status (missing → 运行)
         if only_status is not None:

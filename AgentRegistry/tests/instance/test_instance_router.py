@@ -184,12 +184,18 @@ def test_get_list_filter_by_user(client):
     assert rows[0]["user"] == "alice"
 
 
-def test_get_list_include_unhealthy(client, instance_svc):
-    """默认排除异常；?include_unhealthy=true 返回全部。"""
-    _register(client, make_entry(user="alice", framework="langchain", node="192.168.0.11"))
+def test_get_list_include_unhealthy(client):
+    """默认排除停止/异常；?include_unhealthy=true 返回全部。
+
+    注册中心不收心跳：非运行状态由 gateway 经
+    PATCH 写入落库 status，这里直接 PATCH 模拟。
+    """
+    entry_a = make_entry(user="alice", framework="langchain", node="192.168.0.11")
+    _register(client, entry_a)
     _register(client, make_entry(user="bob", framework="langchain", node="192.168.0.12"))
-    # 标记 192.168.0.11 异常
-    instance_svc.set_heartbeat_check(lambda node: node == "192.168.0.11")
+    # gateway 把 192.168.0.11 的实例置为 异常
+    r = client.patch(f"/api/instances/{entry_a['service_id']}", json={"status": "异常"})
+    assert r.status_code == 200
 
     # 默认 → 只剩 192.168.0.12
     r = client.get("/api/instances")

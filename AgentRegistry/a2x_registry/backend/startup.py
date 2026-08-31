@@ -210,42 +210,9 @@ def run_warmup() -> None:
                 set_instance_service(instance_svc)
                 logger.info("  InstanceService assembled (appliance mode)")
 
-                # Per-node heartbeat assembly (appliance mode only).
-                # Creates the node lease store + manager, recovers leases
-                # for all nodes that have registered instances, starts the
-                # sweeper daemon (wires instance.expire_node as on_expire),
-                # and injects the manager into the instance service so
-                # _derive_status reflects node liveness. Non-fatal: if this
-                # fails, the instance module falls back to all-运行 status
-                # (set_heartbeat_service not called -> callback stays None).
-                try:
-                    from a2x_registry.heartbeat.store import NodeHeartbeatStore
-                    from a2x_registry.heartbeat.service import HeartbeatManager
-                    from a2x_registry.heartbeat.sweeper import NodeHeartbeatSweeper
-                    from a2x_registry.heartbeat.deps import set_node_heartbeat_manager
-
-                    node_store = NodeHeartbeatStore()
-                    node_mgr = HeartbeatManager(node_store)
-                    recovered_nodes = instance_svc.distinct_nodes()
-                    if recovered_nodes:
-                        node_mgr.recover_from_persisted(recovered_nodes)
-                    set_node_heartbeat_manager(node_mgr)
-                    instance_svc.set_heartbeat_service(node_mgr)
-                    node_sweeper = NodeHeartbeatSweeper(
-                        node_mgr, instance_svc=instance_svc, period=5.0,
-                    )
-                    node_sweeper.start()
-                    warmup_state["_node_heartbeat_sweeper"] = node_sweeper
-                    logger.info(
-                        "  Per-node heartbeat assembled (recovered %d nodes)",
-                        len(recovered_nodes),
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "  Per-node heartbeat init failed: %s", exc, exc_info=True,
-                    )
-                    from a2x_registry.heartbeat.deps import set_node_heartbeat_manager
-                    set_node_heartbeat_manager(None)
+                # NOTE: per-node heartbeat assembly was removed
+                # the registry no longer receives node heartbeats or derives
+                # instance status; the gateway polls 元戎 and PATCHes status.
         except Exception as exc:
             logger.error("  SQL backend init failed: %s", exc, exc_info=True)
             raise

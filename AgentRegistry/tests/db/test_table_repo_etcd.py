@@ -4,7 +4,7 @@ Three layers:
 
 1. **Pure-function tests** (no network) — key helpers and order parsing.
 2. **Repo contract tests** against an **in-memory fake client** — exercise all
-   ``EtcdTableRepo`` logic (CRUD, ``_meta`` routing, ordering, ``exclude_nodes``,
+   ``EtcdTableRepo`` logic (CRUD, ``_meta`` routing, ordering,
    pagination, idempotency) deterministically, without needing a live etcd. This
    guards the shared behaviour promised by ``TableRepo``.
 3. **Live-client primitives** against a **real etcd** grpc-gateway — verify the
@@ -365,13 +365,28 @@ def test_query_paginated_sort_and_pagination(repo):
     assert [r["service_id"] for r in rows] == ["i_b", "i_c"]
 
 
-def test_query_paginated_exclude_nodes(repo):
+def test_query_paginated_only_status(repo):
+    """only_status 下推：只保留 data.status 匹配的行（缺省视为 运行）。"""
     _seed_instances(repo)
+    # 无 data.status 的种子行 → 视为 运行，only_status='运行' 全保留
     rows, total = repo.query_paginated(
-        "instances", exclude_nodes=["n1"], order_by=["service_id asc"],
+        "instances", only_status="运行", order_by=["service_id asc"],
     )
+    assert total == 3
+    assert [r["service_id"] for r in rows] == ["i_a", "i_b", "i_c"]
+
+    # PATCH 语义：i_a 置 停止 后被 only_status='运行' 过滤
+    repo.register("instances", {
+        "service_id": "i_a", "kind": "三方", "framework": "opencode",
+        "framework_version": "v0.1.0", "node": "n1", "user": "u1",
+        "data": {"status": "停止"},
+    })
+    rows, total = repo.query_paginated("instances", only_status="运行")
+    assert total == 2
+    assert "i_a" not in [r["service_id"] for r in rows]
+    rows, total = repo.query_paginated("instances", only_status="停止")
     assert total == 1
-    assert [r["service_id"] for r in rows] == ["i_c"]
+    assert rows[0]["service_id"] == "i_a"
 
 
 def test_query_paginated_data_field_sort(repo):

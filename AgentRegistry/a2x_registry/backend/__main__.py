@@ -109,7 +109,7 @@ def parse_runtime_config() -> RuntimeConfig:
     Raises ``ValueError`` on:
       - unknown ``A2X_REGISTRY_MODE`` (only "" / "appliance" valid)
       - ``A2X_REGISTRY_BIND=0.0.0.0`` (wildcard forbidden)
-      - non-integer ``A2X_REGISTRY_PORT``
+      - noninteger ``A2X_REGISTRY_PORT``
       - non-empty ``A2X_REGISTRY_HA_MEMBERS`` (single-node only)
       - unknown ``A2X_REGISTRY_DB_KIND`` (only sqlite / memory)
     """

@@ -2,12 +2,10 @@
 
 覆盖全部函数契约：
 - register_instance：新增 / 幂等 upsert 保留 created_at / 校验
-- update_instance：部分更新 node/address / 404 / 空字段
+- update_instance：部分更新 node/address/instance_id/status / 404 / 空字段
 - deregister_instance：删存在 / 幂等删不存在
-- list_instances：全量 / 过滤 / include_unhealthy
-- expire_node：删该 node 全部实例 / 幂等 / 未知 node
-- _derive_status：未注入心跳 → 运行；注入 → 异常
-- distinct_nodes：去重排序（供重启恢复）
+- list_instances：全量 / 过滤 / include_unhealthy（基于落库 status）
+- status 落库：注册即 运行、PATCH 可改，注册中心不派生
 """
 
 from __future__ import annotations
@@ -186,10 +184,17 @@ def test_list_filter_by_user(instance_svc: InstanceService):
 
 
 def test_list_exclude_unhealthy_by_default(instance_svc: InstanceService):
-    """include_unhealthy=False（默认）→ 异常实例被过滤掉。"""
+    """include_unhealthy=False（默认）→ 停止/异常实例被过滤掉。
+
+    注册中心不收心跳、不派生状态：非运行状态由
+    gateway 据元戎 List 经 PATCH 写入，这里直接 PATCH 落库模拟。
+    """
     _seed_list_data(instance_svc)
-    # 标记 192.168.0.11 为异常
-    instance_svc.set_heartbeat_check(lambda node: node == "192.168.0.11")
+    # gateway 把 192.168.0.11 上的实例置为 异常
+    for row in instance_svc.list_instances(include_unhealthy=True)[0]:
+        if row["node"] == "192.168.0.11":
+            instance_svc.update_instance(row["service_id"], {"status": "异常"})
+
     rows, _ = instance_svc.list_instances()
     # 192.168.0.11 的 2 条被过滤，只剩 192.168.0.12 的 1 条
     assert len(rows) == 1
@@ -197,90 +202,24 @@ def test_list_exclude_unhealthy_by_default(instance_svc: InstanceService):
 
 
 def test_list_include_unhealthy(instance_svc: InstanceService):
-    """include_unhealthy=True → 全部返回（含异常）。"""
+    """include_unhealthy=True → 全部返回（含停止/异常）。"""
     _seed_list_data(instance_svc)
-    instance_svc.set_heartbeat_check(lambda node: node == "192.168.0.11")
+    for row in instance_svc.list_instances(include_unhealthy=True)[0]:
+        if row["node"] == "192.168.0.11":
+            instance_svc.update_instance(row["service_id"], {"status": "异常"})
     rows, _ = instance_svc.list_instances(include_unhealthy=True)
     assert len(rows) == 3
     statuses = {r["status"] for r in rows}
     assert statuses == {"运行", "异常"}
 
 
-# ── _derive_status ─────────────────────────────────────────────
+# ── status 落库（gateway 写入，注册中心不派生）────────────────
 
 def test_status_defaults_healthy(instance_svc: InstanceService):
-    """未注入心跳 → 全部 运行。"""
+    """注册即 运行（status 落库在 data JSON，无任何派生逻辑）。"""
     instance_svc.register_instance(make_entry())
     rows, _ = instance_svc.list_instances()
     assert rows[0]["status"] == "运行"
-
-
-def test_status_derived_from_heartbeat(instance_svc: InstanceService):
-    """注入心跳：node 在 expired 集合中 → 异常。"""
-    instance_svc.register_instance(make_entry(node="192.168.0.11"))
-    instance_svc.register_instance(
-        make_entry(user="bob", framework="llama_index", node="192.168.0.12")
-    )
-    expired = {"192.168.0.11"}
-    instance_svc.set_heartbeat_check(lambda node: node in expired)
-
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    by_node = {r["node"]: r["status"] for r in rows}
-    assert by_node["192.168.0.11"] == "异常"
-    assert by_node["192.168.0.12"] == "运行"
-
-
-def test_status_reset_when_heartbeat_cleared(instance_svc: InstanceService):
-    """清除心跳注入后 → 恢复 运行。"""
-    instance_svc.register_instance(make_entry(node="192.168.0.11"))
-    instance_svc.set_heartbeat_check(lambda node: node == "192.168.0.11")
-    assert instance_svc.list_instances(include_unhealthy=True)[0][0]["status"] == "异常"
-
-    instance_svc.set_heartbeat_check(None)
-    assert instance_svc.list_instances()[0][0]["status"] == "运行"
-
-
-# ── expire_node ────────────────────────────────────────────────
-
-def test_expire_node_deletes_all(instance_svc: InstanceService):
-    """expire_node 删该 node 全部实例，其他 node 不受影响。"""
-    _seed_list_data(instance_svc)
-    instance_svc.expire_node("192.168.0.11")
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    # 只剩 192.168.0.12 的 bob
-    assert len(rows) == 1
-    assert rows[0]["node"] == "192.168.0.12"
-
-
-def test_expire_node_idempotent(instance_svc: InstanceService):
-    """二次 expire 同一 node → 无副作用。"""
-    _seed_list_data(instance_svc)
-    instance_svc.expire_node("192.168.0.11")
-    instance_svc.expire_node("192.168.0.11")          # 二次
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    assert len(rows) == 1
-
-
-def test_expire_node_unknown_noop(instance_svc: InstanceService):
-    """expire 不存在的 node → 无异常，表无变化。"""
-    _seed_list_data(instance_svc)
-    instance_svc.expire_node("10.99.99.99")
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    assert len(rows) == 3
-
-
-# ── distinct_nodes ─────────────────────────────────────────────
-
-def test_distinct_nodes(instance_svc: InstanceService):
-    """distinct_nodes 返回去重 + 排序的 node 列表。"""
-    _seed_list_data(instance_svc)
-    nodes = instance_svc.distinct_nodes()
-    assert nodes == ["192.168.0.11", "192.168.0.12"]
-
-
-def test_distinct_nodes_empty(instance_svc: InstanceService):
-    """无实例时返回空列表。"""
-    assert instance_svc.distinct_nodes() == []
 
 
 # ── instance_id（元戎实例 ID，可选、不作为主键）────────────────
@@ -361,17 +300,11 @@ def test_update_invalid_status_rejected(instance_svc: InstanceService):
         instance_svc.update_instance(sid, {"status": "running"})
 
 
-def test_heartbeat_overrides_persisted_status(instance_svc: InstanceService):
-    """node 心跳 UNHEALTHY → 派生 异常，覆盖落库的 停止。"""
+def test_status_not_derived_no_heartbeat(instance_svc: InstanceService):
+    """注册中心不收心跳：落库 status 原样返回，无派生覆盖。"""
     instance_svc.register_instance(make_entry(node="192.168.0.11"))
     sid = make_entry(node="192.168.0.11")["service_id"]
     instance_svc.update_instance(sid, {"status": "停止"})
-    instance_svc.set_heartbeat_check(lambda node: node == "192.168.0.11")
 
     rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    assert rows[0]["status"] == "异常"               # 心跳活性优先
-
-    # 心跳恢复后回到落库值（停止）
-    instance_svc.set_heartbeat_check(None)
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    assert rows[0]["status"] == "停止"
+    assert rows[0]["status"] == "停止"               # 原样返回，无心跳覆盖

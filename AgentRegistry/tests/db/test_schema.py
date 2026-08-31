@@ -134,7 +134,7 @@ def test_image_index_covers_framework_and_version(appliance_conn):
 
 
 def test_instance_index_covers_node(appliance_conn):
-    """idx_instance_node 覆盖 (registry, node) —— expire_node 批量删走它。"""
+    """idx_instance_node 覆盖 (registry, node) —— ?node= 过滤查询走它。"""
     info = appliance_conn.execute(
         "SELECT sql FROM sqlite_master WHERE name='idx_instance_node'"
     ).fetchone()
