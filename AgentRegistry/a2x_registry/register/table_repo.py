@@ -85,7 +85,6 @@ class TableRepo(Protocol):
         self,
         name: str,
         query_filter: Optional[dict] = None,
-        exclude_nodes: Optional[List[str]] = None,
         only_status: Optional[str] = None,
         order_by: Sequence[str] = (),
         limit: int = -1,
@@ -93,8 +92,6 @@ class TableRepo(Protocol):
     ) -> Tuple[List[dict], int]:
         """Return ``(rows, total)`` with optional ordering and pagination.
 
-        - ``exclude_nodes``: instances listed on these node IPs are excluded
-          (used for the "include_unhealthy" push-down). ``None`` = keep all.
         - ``only_status``: keep only rows whose persisted ``data.status``
           equals this value; a row without ``data.status`` (legacy schema)
           defaults to ``运行``. Used by the instance list's

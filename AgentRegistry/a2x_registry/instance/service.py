@@ -1,6 +1,6 @@
 """InstanceService — instance management business logic.
 
-Pure recorder: register / update / deregister / query / expire_node.
+Pure recorder: register / update / deregister / query.
 Does not invoke the runtime (元戎) or make decisions for the gateway.
 
 Persistence goes through ``RegistryTableService`` (SQL backend); this
@@ -10,24 +10,20 @@ these are not promoted columns, so ``update_instance`` must merge
 ``address`` / ``instance_id`` / ``status`` into the existing ``data``
 dict before patching.
 
-``status`` (运行 / 停止 / 异常) is persisted inside ``data`` — written by
-the gateway via PATCH (据元戎 List), defaulting to 运行 on register. At
-query time a node-heartbeat callback injected via ``set_heartbeat_check``
-can still override it to 异常 when the node's lease is UNHEALTHY (see
-InstanceService._derive_status); when no callback is injected
-(standalone, or heartbeat module not loaded) the persisted value is
-shown as-is.
+``status`` (运行 / 停止 / 异常) is persisted inside ``data`` and written
+by the gateway via PATCH (元戎 List): the registry
+does NOT receive heartbeats, derive status, or auto-evict — it only
+records what the gateway reports.
 
 ``list_instances`` supports pagination (``size``/``page``),
 deterministic ordering (``framework, "user", service_id``), and SQL-side
-push-down for ``include_unhealthy=False`` via ``only_status`` /
-``expired_nodes()``.
+push-down for ``include_unhealthy=False`` via ``only_status``.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from a2x_registry.common.ids import now_iso
 from a2x_registry.register.table_repo import TableRepo
@@ -51,9 +47,6 @@ _REQUIRED_FIELDS = (
     "node", "address", "user",
 )
 
-# Callback type: (node_ip) -> is_expired
-NodeExpiredCheck = Callable[[str], bool]
-
 # Deterministic sort order for instance listing (V2).
 _INSTANCE_ORDER = (
     "framework asc",
@@ -65,30 +58,10 @@ _INSTANCE_ORDER = (
 class InstanceService:
     """Instance management business layer."""
 
-    __slots__ = ("_table_svc", "_is_node_expired", "_expired_nodes_provider")
+    __slots__ = ("_table_svc",)
 
     def __init__(self, table_svc: TableRepo) -> None:
         self._table_svc = table_svc
-        self._is_node_expired: Optional[NodeExpiredCheck] = None
-        # Optional provider returning a set of expired node IPs (read-only)
-        # for SQL push-down. Set by set_heartbeat_service.
-        self._expired_nodes_provider: Optional[Callable[[], set]] = None
-
-    # ------------------------------------------------------------------
-    # Heartbeat injection
-    # ------------------------------------------------------------------
-
-    def set_heartbeat_check(self, callback: Optional[NodeExpiredCheck]) -> None:
-        self._is_node_expired = callback
-
-    def set_heartbeat_service(self, hb) -> None:
-        """Inject (or clear) a HeartbeatManager for status derivation."""
-        if hb is None:
-            self.set_heartbeat_check(None)
-            self._expired_nodes_provider = None
-        else:
-            self.set_heartbeat_check(hb.is_expired)
-            self._expired_nodes_provider = hb.expired_nodes
 
     # ------------------------------------------------------------------
     # register_instance
@@ -204,81 +177,32 @@ class InstanceService:
     ) -> Tuple[List[Dict[str, Any]], int]:
         """Query instances with optional filters, pagination, and status.
 
-        When ``include_unhealthy=False`` (default), unhealthy instances are
-        excluded via two push-downs so ``LIMIT/OFFSET`` and
-        ``X-Total-Count`` stay correct across backends:
-        - ``only_status='运行'`` — rows whose persisted ``data.status`` was
-          set to 停止/异常 by the gateway are dropped (legacy rows without
-          a stored status default to 运行);
-        - ``exclude_nodes`` — instances on heartbeat-UNHEALTHY nodes are
-          dropped (derived 异常).
+        When ``include_unhealthy=False`` (default), only rows whose
+        persisted ``data.status`` equals 运行 are returned — pushed down
+        via ``only_status`` so ``LIMIT/OFFSET`` and ``X-Total-Count`` stay
+        correct across backends (legacy rows without a stored status
+        default to 运行).
 
         Returns ``(entries, total)`` — total is the filtered count before
         pagination.
         """
-        exclude_nodes: Optional[List[str]] = None
-        if not include_unhealthy and self._expired_nodes_provider is not None:
-            dead = self._expired_nodes_provider()
-            if dead:
-                exclude_nodes = sorted(dead)
-
         only_status: Optional[str] = None if include_unhealthy else "运行"
 
         offset = max(0, (page - 1) * size) if size > 0 else 0
         rows, total = self._table_svc.query_paginated(
             INSTANCE_REGISTRY,
             query_filter=filter or None,
-            exclude_nodes=exclude_nodes,
             only_status=only_status,
             order_by=_INSTANCE_ORDER,
             limit=size if size > 0 else -1,
             offset=offset,
         )
         entries = [self._to_entry(r) for r in rows]
-
-        # Fallback: when _expired_nodes_provider is not set but
-        # _is_node_expired is (e.g. tests using set_heartbeat_check
-        # directly), filter heartbeat-unhealthy entries in memory.
-        # (Persisted 停止/异常 rows are already excluded by only_status.)
-        if (not include_unhealthy
-                and self._expired_nodes_provider is None
-                and self._is_node_expired is not None):
-            entries = [e for e in entries if e["status"] != "异常"]
-            total = len(entries) if size <= 0 else total
         return entries, total
-
-    # ------------------------------------------------------------------
-    # expire_node
-    # ------------------------------------------------------------------
-
-    def expire_node(self, node: str) -> None:
-        rows = self._table_svc.query(INSTANCE_REGISTRY, {"node": node})
-        for row in rows:
-            self._table_svc.deregister(INSTANCE_REGISTRY, row["service_id"])
-        logger.info("expire_node %s (removed=%d)", node, len(rows))
-
-    # ------------------------------------------------------------------
-    # distinct_nodes
-    # ------------------------------------------------------------------
-
-    def distinct_nodes(self) -> List[str]:
-        rows = self._table_svc.query(INSTANCE_REGISTRY)
-        return sorted({r["node"] for r in rows if r.get("node")})
 
     # ------------------------------------------------------------------
     # internal helpers
     # ------------------------------------------------------------------
-
-    def _derive_status(self, node: str, persisted: Optional[str]) -> str:
-        """Merge heartbeat liveness with the persisted lifecycle status.
-
-        A heartbeat-UNHEALTHY node always shows 异常 (liveness wins);
-        otherwise the gateway-written persisted status is shown (运行 /
-        停止 / 异常, defaulting to 运行 for legacy rows).
-        """
-        if self._is_node_expired is not None and self._is_node_expired(node):
-            return "异常"
-        return persisted or "运行"
 
     @staticmethod
     def _validate_entry(entry: Dict[str, Any]) -> None:
@@ -307,5 +231,5 @@ class InstanceService:
             "user": row["user"],
             "created_at": data.get("created_at", ""),
             "last_active_at": data.get("last_active_at", ""),
-            "status": self._derive_status(node, data.get("status")),
+            "status": data.get("status") or "运行",
         }

@@ -259,13 +259,13 @@ registry-a2x/instances/generic_3f9a1b2c
 ```
 > etcd 值中中文按 JSON 转义显示（`\u4e09\u65b9` = 三方）；`address` 在 `data` 内，API 响应摊平到顶层。
 
-### 4.2 查询实例（按 node 过滤 + 未healthy 剔除）
+### 4.2 查询实例（按 node 过滤 + 状态过滤）
 
 **接口**：`GET /api/instances?node={ip}&include_unhealthy={bool}`
 
 ```bash
 curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12'
-# 预期 200：列出该 node 实例（status 派生自心跳，后开发中为运行）
+# 预期 200：列出该 node 实例（status 为落库值，默认只回 运行）
 ```
 
 **etcd 验证**：
@@ -286,75 +286,24 @@ $ etcdctl get registry-a2x/instances/ --prefix --print-value-only
 # 输出 = §4.1 中的实例行 JSON（过滤为后端内存完成，etcd 侧行齐全）
 ```
 
-## 5. 心跳 / 租约 `/api/nodes/{node}/heartbeat`
+## 5. 节点心跳（已移除）
 
-> **心跳活性不入库**（内存态）：etcd 中**没有**心跳相关的键。租约状态在进程内存 `NodeHeartbeatStore`；etcd 侧只能验证"写副作用"——心跳持续则该 node 实例键仍在 etcd；停止心跳超 `ttl + grace_period` 后，sweeper 调 `expire_node`，**该 node 全部实例键从 etcd 删除**。
->
-> **执行顺序**：租约默认 `enabled=false`，须**先执行 §5.3 启用租约**，否则 §5.1 心跳返回 400。
+注册中心**不再接收节点心跳**：`POST /api/nodes/{node}/heartbeat` 与 `GET/POST /api/lease-config` 已移除，调用返回 `404`。etcd 中没有任何心跳相关的键（也从未有过——心跳活性本就只存进程内存）。
 
-**默认租约配置**（启动即此值，实测）：
-```
-$ curl -s http://127.0.0.1:8000/api/lease-config
-{"enabled":false,"min_ttl":90,"max_ttl":3600,"grace_period":30}
-```
+实例存活由 gateway 周期轮询**元戎 List** 掌握：不在运行的实例经 `PATCH /api/instances/{service_id}` 写 `status`（`data.status`，落 etcd 行内 JSON），注册中心不派生状态、不自动剔除——实例键**不会**因停止心跳被删除。
 
-### 5.1 心跳续租
-
+验证方式（结合 §4.1 实例行）：
 ```bash
-curl -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat -H "Content-Type: application/json" -d '{}'
-# 预期 200：{"node":"192.168.0.12","state":"healthy","ttl_seconds":90,"expires_at":...}
+# 1. PATCH 置 停止 后，etcd 中该行仍在，data.status 变为 停止
+curl -X PATCH http://127.0.0.1:8000/api/instances/generic_3f9a1b2c \
+  -H "Content-Type: application/json" -d '{"status": "停止"}'
+etcdctl get registry-a2x/instances/generic_3f9a1b2c --print-value-only
+# 预期：行 JSON 仍在，"status":"停止"
+
+# 2. 默认列表过滤（只回 运行）为后端内存完成，etcd 侧行不受影响
+curl -s 'http://127.0.0.1:8000/api/instances'
+# 预期：[]（generic_3f9a1b2c 已置 停止）
 ```
-
-**实际输出**：
-```
-# 未启用租约时（默认）：
-$ curl -s -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat -H "Content-Type: application/json" -d '{}'
-{"detail":"Node heartbeat leases are disabled (lease-config.enabled=false)."}   # HTTP 400
-
-# 执行 §5.3 启用（min_ttl=10）后：
-$ curl -s -X POST http://127.0.0.1:8000/api/nodes/192.168.0.12/heartbeat -H "Content-Type: application/json" -d '{}'
-{"node":"192.168.0.12","state":"healthy","ttl_seconds":10,"expires_at":1787016555.6387007}
-```
-> `ttl_seconds` = 生效的 `min_ttl`：默认配置下为 90，§5.3 调短后为 10。
-
-**etcd 验证**（续租期间实例键仍在）：
-```bash
-etcdctl get registry-a2x/instances/generic_3f9a1b2c
-# 预期：值存在（未被剔除）
-```
-
-**实际输出**：值 JSON 与 §4.1 一致（键未被删）。
-
-### 5.2 超时剔除
-
-停止该 node 心跳，等待 `ttl + grace_period`（默认 90+30=120s；可用 §5.3 调短）后：
-
-```bash
-etcdctl get registry-a2x/instances/ --prefix
-# 预期：192.168.0.12 的实例键已不存在（sweeper 调 expire_node 删除）
-```
-
-**实际输出**（§5.3 调短后等待约 20s，实测剔除成功）：
-```
-$ etcdctl get registry-a2x/instances/ --prefix
-（无输出 —— generic_3f9a1b2c 已被 sweeper 调 expire_node 删除）
-```
-
-### 5.3 调短租约便于验证
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/lease-config -H "Content-Type: application/json" \
-  -d '{"enabled": true, "min_ttl": 10, "max_ttl": 60, "grace_period": 5}'
-# 预期 200：更新全局租约策略
-```
-
-**实际输出**：
-```
-$ curl -s -X POST http://127.0.0.1:8000/api/lease-config -H "Content-Type: application/json" \
-    -d '{"enabled": true, "min_ttl": 10, "max_ttl": 60, "grace_period": 5}'
-{"enabled":true,"min_ttl":10,"max_ttl":60,"grace_period":5}
-```
-> 租约配置同样是内存态（`NodeHeartbeatStore._config`），**不入 etcd**；改后 15s 左右即可观察 §5.2 的剔除。
 
 ## 6. 键布局与元数据总查
 
@@ -369,21 +318,22 @@ etcdctl get registry-a2x/_meta/ --prefix
 #       /registry-a2x/_meta/instances -> instance
 ```
 
-**实际输出**（§5.2 剔除后：实例键已删，仅剩 `_meta` + 镜像行）：
+**实际输出**（§5 PATCH 置停止后：实例键仍在，仅 `_meta` + 镜像行 + 实例行均保留——注册中心不自动剔除）：
 ```
 $ etcdctl get registry-a2x/ --prefix --keys-only
 registry-a2x/_meta/default
 registry-a2x/_meta/images
 registry-a2x/_meta/instances
 registry-a2x/images/image_3d38da367a5f76e9
+registry-a2x/instances/generic_3f9a1b2c
 ```
 
 ## 7. 错误码速查
 
 | HTTP | 场景（etcd 后端） | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 rootfs.imageurl 缺失 / filter key 不在白名单 / `lease-config.enabled=false` 时心跳 | `{"detail":"..."}` |
-| `404` | 不存在的 framework launch-spec / PATCH 不存在 service_id / 非 appliance 调心跳或 lease-config | `{"detail":"..."}` |
+| `400` | 注册镜像 rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `404` | 不存在的 framework launch-spec / PATCH 不存在 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
 | `503` | etcd 不可达 / 超时（后端启动即 fail-fast，运行中掉线则查询报错） | `{"detail":"..."}` |
@@ -408,7 +358,7 @@ rm -rf /tmp/etcd-data
 - §2 启动后 `/api/images` 返回 `[]`，且 `_meta/` 已出现 images / instances（启动期建表）。
 - §3 注册镜像后 etcd `registry-a2x/images/` 下新增行，`/api/images` 可读回。
 - §4 注册实例后 etcd `registry-a2x/instances/` 出现该 service_id，`/api/instances` 可读回。
-- §5 心跳持续实例键不消失；停止心跳超时后实例键被 sweeper 删除。
+- §5 PATCH 置 停止/异常 后实例键不消失（注册中心不自动剔除），默认列表过滤为内存完成。
 - 全程仅操作 etcd，本地无 `registry.db` 文件**新建或更新**（确认未走 sqlite/memory 后端；若机器上存在旧 sqlite 遗留文件，以 mtime 不变化为准）。
 
 > **实测记录（2026-08-18）**：以上判据在 etcd 3.4.14 单机 + 明文 http 下全部通过；期间发现并修复 etcd 3.4 网关 txn wire 格式问题（`create_revision` 须传 `"0"`）。etcd 3.5.x 环境待装机后按本流程复测。
