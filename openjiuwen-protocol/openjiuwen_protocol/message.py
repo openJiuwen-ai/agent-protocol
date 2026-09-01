@@ -39,9 +39,6 @@ class ReqMethod(Enum):
     COMMAND_SESSION = "command.session"
     COMMAND_WORKFLOWS = "command.workflows"
     COMMAND_STATUS = "command.status"
-    SWARMFLOW_PAUSE = "swarmflow.pause"
-    SWARMFLOW_RESUME = "swarmflow.resume"
-    SWARMFLOW_STOP = "swarmflow.stop"
 
     CONFIG_GET = "config.get"
     CONFIG_SET = "config.set"
@@ -56,7 +53,6 @@ class ReqMethod(Enum):
 
     SESSION_LIST = "session.list"
     SESSION_GET_METADATA = "session.get_metadata"
-    SESSION_PLAN_STATUS = "session.plan_status"
     SESSION_PIN = "session.pin"
     SESSION_COLOR_SET = "session.color_set"
     SESSION_PREVIEW = "session.preview"
@@ -114,14 +110,8 @@ class ReqMethod(Enum):
     PROJECT_CREATE = "project.create"
     PROJECT_RENAME = "project.rename"
     PROJECT_PIN = "project.pin"
-    SESSION_ARCHIVE = "session.archive"
-    SESSION_UNARCHIVE = "session.unarchive"
-    SESSION_ARCHIVED_LIST = "session.archived.list"
-    PROJECT_ARCHIVED_LIST = "project.archived.list"
-    PROJECT_DELETE = "project.delete"
-    PROJECT_LIFECYCLE = "project.lifecycle"
-    PROJECT_ARCHIVE = "project.archive"
-    PROJECT_UNARCHIVE = "project.unarchive"
+    PROJECT_REMOVE = "project.remove"
+    PROJECT_RESTORE = "project.restore"
     PROJECT_GIT_STATUS = "project.git.status"
     PROJECT_GIT_PROBE = "project.git.probe"
     PROJECT_GIT_INIT = "project.git.init"
@@ -136,7 +126,6 @@ class ReqMethod(Enum):
     PROJECT_GIT_REDO_TURN_CHANGES = "project.git.redo_turn_changes"
 
     PROACTIVE_TICK = "proactive.tick"  # Trigger proactive recommendation tick (from Cron)
-    PROACTIVE_FEEDBACK = "proactive.feedback"  # User feedback on proactive recommendation (like/dislike)
     COMMAND_GOAL = "command.goal"
     COMMANDS_LIST = "commands.list"
 
@@ -151,9 +140,6 @@ class ReqMethod(Enum):
     FILE_IMPORT_URL = "file.import_url"
     # 分块上传：用于 AgentOS 多用户场景的大文件，避免单个 E2A WebSocket 帧超过限制。
     FILE_UPLOAD_CHUNK = "file.upload_chunk"
-    # Smart Approval sealed assets: validate and read one bounded chunk in the
-    # routed AgentServer. Gateway must never authorize these from token paths.
-    FILE_DOWNLOAD_VERIFIED_CHUNK = "file.download_verified_chunk"
 
     # IM 平台附件落盘（Phase 3：Gateway 下载字节后经 base64 交给 AgentServer
     # 落盘至其注入目录的 <平台>_files/downloads/，Gateway 不直写用户目录）
@@ -185,8 +171,6 @@ class ReqMethod(Enum):
     # mcp management.
     MCP_LIST = "mcp.list"
     MCP_SHOW = "mcp.show"
-    MCP_INSTALL = "mcp.install"
-    MCP_UNINSTALL = "mcp.uninstall"
     MCP_CONNECT = "mcp.connect"
     MCP_WAIT_AUTH = "mcp.wait_auth"
     MCP_DISCONNECT = "mcp.disconnect"
@@ -218,7 +202,6 @@ class ReqMethod(Enum):
     SKILLS_MARKETPLACE_TOGGLE = "skills.marketplace.toggle"
     SKILLS_UNINSTALL = "skills.uninstall"
     SKILLS_ONLINE_SEARCH = "skills.online_search.search"
-    SKILLS_ONLINE_SEARCH_INSTALL = "skills.online_search.install"
     SKILLS_SKILLNET_SEARCH = "skills.skillnet.search"
     SKILLS_SKILLNET_INSTALL = "skills.skillnet.install"
     SKILLS_SKILLNET_INSTALL_STATUS = "skills.skillnet.install_status"
@@ -275,7 +258,6 @@ class ReqMethod(Enum):
     PERSONAL_CONTEXT_FETCH_STOP_SERVICE = "personal_context.fetch.stop_service"
     PERSONAL_CONTEXT_FETCH_RUN_ALL = "personal_context.fetch.run_all"
     PERSONAL_CONTEXT_FETCH_RUN_ONE = "personal_context.fetch.run_one"
-    PERSONAL_CONTEXT_FETCH_STOP_RUN = "personal_context.fetch.stop_run"
     PERSONAL_CONTEXT_FETCH_GET_RUN_STATUS = "personal_context.fetch.get_run_status"
     PERSONAL_CONTEXT_FETCH_GET_AUTHORIZATION_STATUS = (
         "personal_context.fetch.get_authorization_status"
@@ -395,6 +377,21 @@ class ReqMethod(Enum):
     HARNESS_PACKAGES_IMPORT = "harness.packages.import"
     HARNESS_PACKAGES_EXPORT = "harness.packages.export"
 
+    # RSI 优化平台（web → gateway → agentserver 全链路，web 契约 v0.3 §4）
+    RSI_DATASET_VALIDATE = "rsi.dataset.validate"
+    RSI_TASK_CREATE = "rsi.task.create"
+    RSI_TASK_LIST = "rsi.task.list"
+    RSI_TASK_GET = "rsi.task.get"
+    RSI_TASK_DELETE = "rsi.task.delete"
+    RSI_TRAINING_START = "rsi.training.start"
+    RSI_TRAINING_PAUSE = "rsi.training.pause"
+    RSI_TRAINING_RESUME = "rsi.training.resume"
+    RSI_TRAINING_TERMINATE = "rsi.training.terminate"
+    RSI_REPORT_GET = "rsi.report.get"
+    RSI_USAGE_GET = "rsi.usage.get"
+    RSI_ARTIFACT_DOWNLOAD = "rsi.artifact.download"
+    RSI_TREE_GET = "rsi.tree.get"
+
     # Schedule task management
     SCHEDULE_CHECK_CONFIG = "schedule.check_config"
     SCHEDULE_UPDATE_CONFIG = "schedule.update_config"
@@ -412,14 +409,6 @@ class ReqMethod(Enum):
 
 
 class EventType(Enum):
-    SESSION_ARCHIVED = "session.archived"
-    SESSION_UNARCHIVED = "session.unarchived"
-    SESSION_DELETED = "session.deleted"
-    PROJECT_ARCHIVED = "project.archived"
-    PROJECT_UNARCHIVED = "project.unarchived"
-    PROJECT_DELETED = "project.deleted"
-    SESSION_LIFECYCLE_UPDATED = "session.lifecycle.updated"
-    PROJECT_LIFECYCLE_UPDATED = "project.lifecycle.updated"
     CONNECTION_ACK = "connection.ack"
     HELLO = "hello"
     CHAT_DELTA = "chat.delta"
@@ -460,6 +449,7 @@ class EventType(Enum):
     # _missing_ so every downstream channel sees HEALTH_CHECK_RELAY.
     HEARTBEAT_RELAY = "health_check.relay"
     HISTORY_GET = "history.message"
+    PROACTIVE_RECOMMENDATION = "proactive_recommendation"
 
     @classmethod
     def _missing_(cls, value):
