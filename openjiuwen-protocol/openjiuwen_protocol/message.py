@@ -147,6 +147,16 @@ class ReqMethod(Enum):
     PROJECT_GIT_DISCARD_TURN_CHANGES = "project.git.discard_turn_changes"
     PROJECT_GIT_REDO_TURN_CHANGES = "project.git.redo_turn_changes"
 
+    # Designer execution graph (canvas + subagent orchestration shell)
+    DESIGNER_GRAPH_GET = "designer.graph.get"
+    DESIGNER_GRAPH_LIST = "designer.graph.list"
+    DESIGNER_GRAPH_SAVE = "designer.graph.save"
+    DESIGNER_GRAPH_BOOTSTRAP = "designer.graph.bootstrap"
+    DESIGNER_RUN_START = "designer.run.start"
+    DESIGNER_RUN_GET = "designer.run.get"
+    DESIGNER_RUN_PAUSE = "designer.run.pause"
+    DESIGNER_RUN_CANCEL = "designer.run.cancel"
+
     PROACTIVE_TICK = "proactive.tick"  # Trigger proactive recommendation tick (from Cron)
     PROACTIVE_FEEDBACK = "proactive.feedback"  # User feedback on proactive recommendation (like/dislike)
     COMMAND_GOAL = "command.goal"
