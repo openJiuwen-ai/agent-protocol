@@ -50,6 +50,50 @@ class Deployment:
     provider: str = "openai"
     verify_ssl: bool = True
 
+    def __post_init__(self):
+        """字段类型与数值校验"""
+        for name in ("model_name", "api_key", "api_base", "provider"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"Deployment.{name} must be a non-empty string, got {value!r}"
+                )
+
+        for name in ("tpm", "rpm"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            # bool 是 int 的子类，需显式排除
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(
+                    f"Deployment.{name} must be an int or None, got {type(value).__name__}"
+                )
+            if value <= 0:
+                raise ValueError(
+                    f"Deployment.{name} must be a positive int, got {value}"
+                )
+
+        if not isinstance(self.consecutive_failures, int) or isinstance(
+            self.consecutive_failures, bool
+        ):
+            raise TypeError(
+                "Deployment.consecutive_failures must be an int, got "
+                f"{type(self.consecutive_failures).__name__}"
+            )
+        if self.consecutive_failures < 0:
+            raise ValueError(
+                f"Deployment.consecutive_failures must be >= 0, got {self.consecutive_failures}"
+            )
+
+        if self.timeout is not None:
+            if isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float)):
+                raise TypeError(
+                    f"Deployment.timeout must be a number or None, got {type(self.timeout).__name__}"
+                )
+            if self.timeout <= 0:
+                raise ValueError(
+                    f"Deployment.timeout must be a positive number, got {self.timeout}"
+                )
 
     def to_dict(self) -> Dict[str, Any]:
         """序列化为字典"""
