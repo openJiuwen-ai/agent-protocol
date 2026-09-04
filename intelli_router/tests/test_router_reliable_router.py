@@ -435,3 +435,85 @@ async def test_hot_swap_concurrent_with_requests(sample_deployments):
     assert nodep_count["count"] == 0, (
         f"热替换期间出现 {nodep_count['count']} 次 NoDeploymentAvailable"
     )
+
+
+# -------- PR review fixes --------
+
+def test_constructor_cooldown_without_until_no_crash():
+    """P2-1 回归：COOLDOWN 且 cooldown_until=None 的 Deployment 构造 router
+    不应抛 AttributeError（cooldown_time 须在同步循环前赋值）。"""
+    from intelli_router.core.state import LocalRouterState
+    dead = Deployment(
+        model_name="m", api_key="k", api_base="b",
+        status=DeploymentStatus.COOLDOWN, cooldown_until=None,
+    )
+    router = ReliableRouter(deployments=[dead])
+    # 应使用 router 的 cooldown_time 计算默认冷却截止
+    assert router.state.deployment_status[dead.id] == DeploymentStatus.COOLDOWN
+    assert router.state.cooldown_until[dead.id] > time.time()
+
+
+@pytest.mark.asyncio
+async def test_legacy_strategy_no_double_counting():
+    """P2-2 回归：按旧契约在回调内转发 state 更新的自定义策略，
+    注入后不应造成 consecutive_failures 双重计数。"""
+    from intelli_router.core.state import LocalRouterState
+    from intelli_router.strategy.base_strategy import RoutingStrategy
+
+    class LegacyStrategy(RoutingStrategy):
+        def __init__(self, state):
+            self.state = state
+        async def select_deployment(self, deployments, context):
+            return deployments[0] if deployments else None
+        def on_success(self, deployment, latency, tokens):
+            self.state.on_success(deployment.id, latency, tokens)
+        def on_failure(self, deployment, error):
+            self.state.on_failure(deployment.id, error)
+
+    state = LocalRouterState()
+    deps = [Deployment(model_name="m", api_key="k", api_base="b", id=f"d{i}") for i in range(2)]
+    router = ReliableRouter(deployments=deps, strategy=LegacyStrategy(state))
+
+    async def mock_make_request(deployment, request_body):
+        raise ValueError("boom")
+    router._make_request = mock_make_request
+
+    with pytest.raises(RouterError):
+        await router.completion("m", [{"role": "user", "content": "hi"}])
+
+    # 每个部署只失败 1 次（4 次尝试里每部署被选 1 次后剔除）
+    assert state.consecutive_failures == {"d0": 1, "d1": 1}
+
+
+def test_update_deployments_shared_state_no_clobber():
+    """P3 回归：多 router 共享同一 state 时，一方热替换不应清除
+    另一方管理部署的运行时状态。"""
+    from intelli_router.core.state import LocalRouterState
+    from intelli_router.strategy.adaptive import AdaptiveStrategy
+
+    shared_state = LocalRouterState()
+    strategy = AdaptiveStrategy(state=shared_state)
+
+    router_a = ReliableRouter(
+        deployments=[Deployment(model_name="model-a", api_key="k", api_base="b", id="a1")],
+        strategy=strategy,
+    )
+    router_b = ReliableRouter(
+        deployments=[Deployment(model_name="model-b", api_key="k", api_base="b", id="b1")],
+        strategy=strategy,
+    )
+
+    shared_state.on_failure("b1", RuntimeError("x"))
+    assert shared_state.deployment_status["b1"] == DeploymentStatus.COOLDOWN
+
+    # router_a 热替换自己的部署（不含 b1）
+    router_a.update_deployments(
+        [Deployment(model_name="model-a2", api_key="k", api_base="b", id="a2")]
+    )
+
+    # b1 的状态不应被误删
+    assert shared_state.deployment_status.get("b1") == DeploymentStatus.COOLDOWN
+    assert shared_state.consecutive_failures.get("b1") == 1
+    # 旧部署 a1 的状态应被清理
+    assert "a1" not in shared_state.deployment_status
+    assert router_b.get_model_list() == ["model-b"]

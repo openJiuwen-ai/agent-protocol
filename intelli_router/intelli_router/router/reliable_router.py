@@ -77,6 +77,9 @@ class ReliableRouter(BaseRouter):
             strategy_state = getattr(self.strategy, "state", None)
             if strategy_state is not None:
                 self.state = strategy_state
+        # cooldown 参数（须在下方 COOLDOWN 初始状态同步循环之前赋值，
+        # 循环中 cooldown_until=None 时会用它计算默认冷却截止时间）
+        self.cooldown_time = cooldown_time
         # 同步 deployment 自带的初始状态（如配置中声明的 COOLDOWN）到 state，
         # 避免 deployment 对象与 state 两套状态并存且互不可见。
         for dep in deployments:
@@ -86,8 +89,6 @@ class ReliableRouter(BaseRouter):
                     dep.cooldown_until if dep.cooldown_until is not None
                     else time.time() + self.cooldown_time
                 )
-        # cooldown 参数
-        self.cooldown_time = cooldown_time
         # 可观测性
         self.event_bus = event_bus or EventBus()
         # 健康检查（可选，用于加速恢复）
@@ -198,10 +199,11 @@ class ReliableRouter(BaseRouter):
                 usage = response.get('usage') or {}
                 tokens = usage.get('completion_tokens', 0)
                 prompt_tokens = usage.get('prompt_tokens', 0)
-                # router 层统一更新成功状态（延迟/token统计），
-                # 策略 on_success 仅用于策略自身的内部更新。
+                # router 层是 state 的唯一写入方：延迟/token 统计统一在此更新。
+                # 不再调用 strategy.on_success——避免按旧契约在回调内转发
+                # state 更新的自定义策略造成双重计数。自定义策略需要路由
+                # 状态时直接读共享的 router.state。
                 self.state.on_success(selected.id, latency, tokens)
-                self.strategy.on_success(selected, latency, tokens)
                 context.set_success(selected, response)
 
                 await self.event_bus.emit(RoutingEvent(
@@ -219,11 +221,10 @@ class ReliableRouter(BaseRouter):
                 ))
                 return response
             except Exception as e:
-                # router 层统一更新失败状态（cooldown/退避），策略回调
-                # 仅用于策略自身的内部更新——部分策略（simple-shuffle 等）
-                # 的 on_failure 是空实现，不能作为状态更新的唯一通道。
+                # router 层是 state 的唯一写入方：失败计数与 cooldown 退避
+                # 统一在此更新（含 cooldown_time 透传）。不再调用
+                # strategy.on_failure——避免旧契约自定义策略双重计数。
                 self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
-                self.strategy.on_failure(selected, e)
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
 
@@ -306,18 +307,13 @@ class ReliableRouter(BaseRouter):
                     yield chunk
 
                 self.state.on_success(selected.id, ttfb, 0)
-                self.strategy.on_success(selected, ttfb, 0)
                 context.set_success(selected, None)
                 return
 
             except Exception as e:
-                if first_chunk_received:
-                    self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
-                    self.strategy.on_failure(selected, e)
-                    raise
-
                 self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
-                self.strategy.on_failure(selected, e)
+                if first_chunk_received:
+                    raise
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
                 available = [d for d in available if d.id != selected.id]
@@ -354,15 +350,20 @@ class ReliableRouter(BaseRouter):
         with self._deployments_lock:
             old_ids = {dep.id for dep in self.deployments}
             new_ids = {dep.id for dep in new_deployments}
+            removed_ids = old_ids - new_ids
 
             self.deployments = new_deployments
             self._build_model_indices()
             if self.health_checker:
                 self.health_checker.deployments = new_deployments
 
-            # 清理已移除部署的残留状态（cooldown/延迟统计/会话亲和映射等）
-            if old_ids - new_ids:
-                self.state.cleanup_deployments(list(new_ids))
+            # 仅清理本 router 之前管理、且已从新列表移除的部署状态
+            # （cooldown/延迟统计等）。不能按新列表全集反向清理——
+            # 多个 router 可能共享同一 state，全集清理会误删其他
+            # router 管理的部署状态。
+            if removed_ids:
+                for dep_id in removed_ids:
+                    self.state.remove_deployment(dep_id)
 
     # ------------------------------------------------------------------
     # Typed invoke / stream (高层 SDK 接口)
@@ -506,9 +507,8 @@ class ReliableRouter(BaseRouter):
                             ttft = time.time() - stream_start
                         yield parsed
 
-                # 成功后统一更新状态（延迟统计）+ 策略回调
+                # 成功后统一更新状态（延迟统计）
                 self.state.on_success(selected.id, time.time() - stream_start, 0)
-                self.strategy.on_success(selected, time.time() - stream_start, 0)
                 await self.event_bus.emit(RoutingEvent(
                     event_type=RoutingEventType.STREAM_SUCCEEDED,
                     request_id=request_id,
@@ -524,7 +524,6 @@ class ReliableRouter(BaseRouter):
                 return
             except Exception as e:
                 self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
-                self.strategy.on_failure(selected, e)
                 errors.append((selected.id, type(e).__name__, str(e)))
 
                 if attempt < self.num_retries:

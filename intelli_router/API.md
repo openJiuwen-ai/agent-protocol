@@ -522,9 +522,12 @@ class RoutingStrategy(ABC):
         """失败回调 - 仅供策略维护自身私有状态"""
 ```
 
-> **回调契约**：`on_success` / `on_failure` 不承担 `LocalRouterState`
-> 的统一状态更新（失败计数、cooldown、延迟统计等由 `ReliableRouter`
-> 在路由层直接写入 state）。自定义策略无需在回调内转发状态更新。
+> **回调契约**：`ReliableRouter` **不会调用** `on_success` / `on_failure`。
+> `LocalRouterState` 的统一状态更新（失败计数、cooldown、延迟统计等）
+> 由 `ReliableRouter` 在路由层直接写入 state。自定义策略需要路由状态时，
+> 请直接读取共享的 `router.state`（构造时传入的 `state`），**切勿**在
+> 回调内转发 `state.on_success/on_failure`——回调不会被触发，且若未来
+> 版本恢复调用会造成双重计数。
 
 ---
 
@@ -707,6 +710,7 @@ def create_strategy(
 | `get_average_latency_raw` | `get_average_latency_raw(deployment_id: str) -> Optional[float]` | 获取平均**真实**延迟（秒，用户统计口径；无记录返回 `None`） |
 | `get_available_deployments` | `get_available_deployments(now: float) -> List[str]` | 获取可用部署ID列表 |
 | `cleanup_deployments` | `cleanup_deployments(keep_ids: List[str]) -> List[str]` | 清理不在 keep_ids 中的部署残留状态（热替换场景），返回被清理的 ID 列表 |
+| `remove_deployment` | `remove_deployment(deployment_id: str) -> bool` | 精确删除单个部署的全部运行时状态（多 router 共享 state 时使用） |
 | `get_token_remaining` | `get_token_remaining(deployment_id: str) -> int` | 获取剩余Token |
 | `get_rpm_remaining` | `get_rpm_remaining(deployment_id: str) -> int` | 获取剩余RPM |
 | `get_token_utilization` | `get_token_utilization(deployment_id: str) -> float` | 获取Token使用率 |

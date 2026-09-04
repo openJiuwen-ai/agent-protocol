@@ -257,8 +257,45 @@ class LocalRouterState:
             return usage.remaining
         return float('inf')
 
+    def remove_deployment(self, deployment_id: str) -> bool:
+        """删除单个部署的全部运行时状态（热替换中该部署被移除时调用）。
+
+        与 cleanup_deployments 不同，本方法精确作用于单个部署，
+        不会影响共享同一 state 的其他 router 管理的部署。
+
+        Returns:
+            是否实际删除了状态
+        """
+        with self._lock:
+            existed = (
+                deployment_id in self.deployment_status
+                or deployment_id in self.latencies
+            )
+            for registry in (
+                self.deployment_status,
+                self.consecutive_failures,
+                self.cooldown_until,
+                self.latencies,
+                self.total_tokens,
+                self.total_requests,
+                self.health_state,
+                self.token_usage,
+                self.rpm_tracker,
+            ):
+                registry.pop(deployment_id, None)
+            for sid, dep_id in list(self.session_deployment_map.items()):
+                if dep_id == deployment_id:
+                    del self.session_deployment_map[sid]
+                    self.session_timestamps.pop(sid, None)
+            return existed
+
     def cleanup_deployments(self, keep_ids: List[str]) -> List[str]:
-        """清理不在 keep_ids 中的部署残留状态（热替换场景）。
+        """清理不在 keep_ids 中的部署残留状态。
+
+        .. warning::
+            按 keep_ids 全集反向清理。若多个 router 共享同一 state
+            且各管不同部署，会误删其他 router 管理的部署状态——
+            该场景请使用 remove_deployment 精确删除。
 
         Returns:
             被清理的 deployment_id 列表
