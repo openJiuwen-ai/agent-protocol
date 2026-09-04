@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Any, AsyncIterator
 import json
 import asyncio
 import logging
+import threading
 
 import httpx
 
@@ -51,16 +52,23 @@ class BaseRouter:
         self.cache = cache or LocalCache()
         self._client: Optional[httpx.AsyncClient] = None
         self._adapter_cache: Dict[str, BaseProviderAdapter] = {}
+        # 保护 deployments/model_indices 的热替换（读多写少）
+        self._deployments_lock = threading.RLock()
         self._build_model_indices()
 
     def _build_model_indices(self) -> None:
-        """构建模型名到部署列表的映射"""
-        self.model_indices: Dict[str, List[int]] = {}
+        """构建模型名到部署列表的映射
+
+        先在局部变量构建完成后一次性原子赋值，避免并发请求在
+        "已清空、未填完" 的窗口期读到空索引（热替换场景）。
+        """
+        indices: Dict[str, List[int]] = {}
         for i, dep in enumerate(self.deployments):
             model = dep.model_name
-            if model not in self.model_indices:
-                self.model_indices[model] = []
-            self.model_indices[model].append(i)
+            if model not in indices:
+                indices[model] = []
+            indices[model].append(i)
+        self.model_indices = indices
 
     def get_deployments_for_model(self, model: str) -> List[Deployment]:
         """获取指定模型的所有部署"""
