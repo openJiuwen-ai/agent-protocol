@@ -32,21 +32,75 @@ MCP C++ SDK 是 [Model Context Protocol](https://modelcontextprotocol.io/) 的 C
 
 ## 环境要求
 
-- **操作系统**：Linux（主要验证平台）
+- **操作系统**：Linux（主要验证平台）、macOS
 - **编译器**：C++17 及以上
 - **CMake**：≥ 3.15（见根目录 `CMakeLists.txt`）
-- **依赖**：见 [docs/dependencies.md](docs/dependencies.md)
+- **依赖**：完整说明见 [docs/dependencies.md](docs/dependencies.md)
+
+### 版本要求（摘要）
+
+| 依赖 | 最低版本 | 用途 |
+|------|----------|------|
+| C++ 编译器 | C++17 | 语言标准 |
+| CMake | 3.15 | 构建系统 |
+| OpenSSL | 1.1.1 | TLS、加密 |
+| libcurl | 8.12 | HTTP Client 传输 |
+| nlohmann_json | 3.11.2 | JSON 序列化 |
+| libevent | 2.1.12 | 事件循环 |
+| http_parser | 2.9.4 | HTTP 解析 |
+
+### 系统依赖安装
+
+请按发行版使用对应包管理器。**Debian/Ubuntu 使用 `apt-get`（包名多为 `*-dev`）；RHEL/CentOS/Fedora/EulerOS 使用 `yum`/`dnf`（包名多为 `*-devel`），两者不可混用。**
+
+推荐一键安装（检测发行版并安装 OpenSSL、libcurl 开发包；不含编译器与 CMake）：
+
+```bash
+cd MCP/cpp-sdk
+bash scripts/install_deps.sh
+```
+
+也可手动安装（含编译工具链与常用系统开发包）：
+
+**Ubuntu / Debian（`apt-get`）**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cmake \
+  libssl-dev \
+  libcurl4-openssl-dev \
+  libevent-dev \
+  nlohmann-json3-dev
+```
+
+**CentOS / RHEL / Fedora / EulerOS（`yum`/`dnf`）**
+
+```bash
+sudo yum install -y \
+  gcc-c++ cmake \
+  openssl-devel \
+  libcurl-devel \
+  libevent-devel
+# Fedora 等也可使用：sudo dnf install -y ...
+```
+
+**macOS（Homebrew）**
+
+```bash
+brew install cmake openssl curl libevent nlohmann-json
+```
 
 ## 快速入门
 
 在仓库 `MCP/cpp-sdk` 目录下，按以下顺序执行（约 5–15 分钟，视网络与编译环境而定）。
 
-**前置条件**：已安装 C++17 编译器（如 `gcc-c++`）和 CMake ≥ 3.15。`install_deps.sh` 仅安装 OpenSSL、libcurl 开发包，不包含编译器与 CMake（见 [依赖说明](docs/dependencies.md)）。
+**前置条件**：已安装 C++17 编译器与 CMake ≥ 3.15，并完成上一节系统依赖安装。`install_deps.sh` 仅安装 OpenSSL、libcurl 开发包，不包含编译器与 CMake（见 [依赖说明](docs/dependencies.md)）。
 
 ```bash
 cd MCP/cpp-sdk
 
-# 1. 安装 OpenSSL、libcurl 开发包
+# 1. 安装 OpenSSL、libcurl 开发包（或按上一节手动安装）
 bash scripts/install_deps.sh
 
 # 2. 编译 SDK（产物：output/lib/libmcp.so）

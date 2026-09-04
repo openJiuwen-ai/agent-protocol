@@ -52,37 +52,43 @@ bash scripts/install_deps.sh
 
 **不包含**：`gcc-c++`、`cmake`、`nlohmann_json` 等，需单独安装或由 `build.sh` 的 CMake 自动处理。
 
-### Ubuntu / Debian（手动，含编译工具链）
+> **包名注意**：Debian/Ubuntu 为 `libssl-dev`、`libcurl4-openssl-dev`（不要写成 `openssl-devel` / `libcurl-devel`）；RHEL 系才是 `openssl-devel`、`libcurl-devel`。
+
+### Ubuntu / Debian（手动，含编译工具链，`apt-get`）
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
   build-essential cmake \
   libssl-dev \
-  libcurl4-openssl-dev
+  libcurl4-openssl-dev \
+  libevent-dev \
+  nlohmann-json3-dev
 ```
 
-可选：安装系统 `nlohmann_json`，避免从网络拉取：
-
-```bash
-sudo apt-get install -y nlohmann-json3-dev
-```
-
-### CentOS / RHEL / Fedora / EulerOS（手动）
+### CentOS / RHEL / Fedora / EulerOS（手动，`yum`/`dnf`）
 
 ```bash
 sudo yum install -y \
   gcc-c++ cmake \
   openssl-devel \
-  libcurl-devel
+  libcurl-devel \
+  libevent-devel
+# Fedora 等也可使用：sudo dnf install -y ...
 ```
 
 EulerOS / openEuler 上 `nlohmann_json` 包名可能为 `nlohmann-json-devel` 等，视发行版而定。
 
+### macOS（Homebrew）
+
+```bash
+brew install cmake openssl curl libevent nlohmann-json
+```
+
 ### Arch Linux（手动）
 
 ```bash
-sudo pacman -S --needed base-devel cmake openssl curl
+sudo pacman -S --needed base-devel cmake openssl curl libevent nlohmann-json
 ```
 
 ## nlohmann_json 解析规则
