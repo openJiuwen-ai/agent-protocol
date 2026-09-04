@@ -104,3 +104,38 @@ class TestMetricsWebServer:
         srv.start()
         time.sleep(0.05)
         srv.stop()
+
+    # -------- port validation (issue #47) --------
+
+    @pytest.mark.parametrize("bad_port", [-1, 65536, 100000])
+    def test_port_out_of_range_raises(self, metrics, bad_port):
+        with pytest.raises(ValueError, match="port"):
+            MetricsWebServer(metrics, port=bad_port)
+
+    @pytest.mark.parametrize("bad_port", ["8080", 80.5, True])
+    def test_port_non_int_raises(self, metrics, bad_port):
+        with pytest.raises(TypeError, match="port"):
+            MetricsWebServer(metrics, port=bad_port)
+
+    def test_port_boundary_values_valid(self, metrics):
+        """0（动态分配）与边界值 1/65535 应可创建。"""
+        MetricsWebServer(metrics, port=0)
+        MetricsWebServer(metrics, port=1)
+        MetricsWebServer(metrics, port=65535)
+
+    # -------- port=0 dynamic assignment (issue #46) --------
+
+    def test_port_zero_dynamic_assignment(self, metrics):
+        """port=0 时应由 OS 动态分配端口，且不再停留在 0。"""
+        srv = MetricsWebServer(metrics, port=0)
+        assert srv._port == 0  # start 前仍为 0
+        srv.start()
+        try:
+            assert srv._port != 0
+            assert 1 <= srv._port <= 65535
+            assert srv.url.endswith(f":{srv._port}")
+            # 动态分配的端口应可实际访问
+            resp = urllib.request.urlopen(f"{srv.url}/api/stats")
+            assert resp.status == 200
+        finally:
+            srv.stop()

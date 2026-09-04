@@ -238,3 +238,38 @@ class TestMetricsCollector:
             pytest.skip("prometheus-client is installed")
         with pytest.raises(ImportError, match="prometheus-client"):
             MetricsCollector(enable_prometheus=True)
+
+
+class TestPrometheusPrefixValidation:
+    """issue #48: prometheus_prefix 校验。"""
+
+    def test_empty_prefix_raises(self):
+        with pytest.raises(ValueError, match="prometheus_prefix"):
+            MetricsCollector(prometheus_prefix="")
+
+    def test_valid_prefix_accepted(self):
+        MetricsCollector(prometheus_prefix="my_router")
+        MetricsCollector(prometheus_prefix="a")
+        MetricsCollector(prometheus_prefix="A_b2")
+
+    @pytest.mark.parametrize("bad_prefix", [
+        "1abc",          # 数字开头
+        "-abc",          # 非法字符开头
+        "my-router",     # 连字符不合法
+        "my router",     # 空格不合法
+        "abc.def",       # 点号不合法
+    ])
+    def test_invalid_prefix_raises(self, bad_prefix):
+        with pytest.raises(ValueError, match="prometheus_prefix"):
+            MetricsCollector(prometheus_prefix=bad_prefix)
+
+    def test_too_long_prefix_raises(self):
+        with pytest.raises(ValueError, match="prometheus_prefix"):
+            MetricsCollector(prometheus_prefix="a" * 257)
+
+    def test_prefix_length_256_accepted(self):
+        MetricsCollector(prometheus_prefix="a" * 256)
+
+    def test_non_string_prefix_raises(self):
+        with pytest.raises(TypeError, match="prometheus_prefix"):
+            MetricsCollector(prometheus_prefix=123)
