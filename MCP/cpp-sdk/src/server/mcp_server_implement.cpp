@@ -23,6 +23,7 @@
 #include "server/server_session.h"
 #include "server/tool_manager.h"
 #include "shared/common_type.h"
+#include "shared/http_common.h"
 #include "shared/jsonrpc.h"
 
 namespace Mcp {
@@ -601,8 +602,9 @@ void McpServerImplement::RemoveResourceTemplate(const std::string& uriTemplate)
 
 bool McpServerImplement::ValidateStreamableHttpConfig(const StreamableHttpServerConfig& config)
 {
-    if (config.endpoint.empty() || config.endpoint.find(' ') != std::string::npos) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid Streamable HTTP endpoint");
+    std::string endpointError;
+    if (!Http::IsValidStreamableHttpEndpoint(config.endpoint, &endpointError)) {
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid Streamable HTTP endpoint: " + endpointError);
         return false;
     }
 
@@ -621,8 +623,8 @@ bool McpServerImplement::ValidateStreamableHttpConfig(const StreamableHttpServer
 
 bool McpServerImplement::ValidateConfig(const ServerConfig& config)
 {
-    if (config.name.empty() || config.version.empty() || config.name.find(' ') != std::string::npos ||
-        config.version.find('.') == std::string::npos) {
+    const bool nameBlank = config.name.find_first_not_of(" \t\n\r") == std::string::npos;
+    if (nameBlank || config.version.empty() || config.version.find('.') == std::string::npos) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid Server name or version");
         return false;
     }

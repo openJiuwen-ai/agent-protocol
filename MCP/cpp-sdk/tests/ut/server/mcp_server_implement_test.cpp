@@ -12,6 +12,7 @@
 #include <thread>
 #include <string>
 #include <functional>
+#include <vector>
 
 #include "server/mcp_server_implement.h"
 #include "mcp_type.h"
@@ -138,6 +139,17 @@ TEST(McpServerImplementTest, Constructor_InvalidName)
     }, std::invalid_argument);
 }
 
+TEST(McpServerImplementTest, Constructor_WhitespaceOnlyName)
+{
+    ServerConfig config;
+    config.name = "   ";
+    config.version = "1.0.0";
+
+    EXPECT_THROW({
+        McpServerImplement server(config);
+    }, std::invalid_argument);
+}
+
 TEST(McpServerImplementTest, Constructor_InvalidVersion)
 {
     ServerConfig config;
@@ -158,6 +170,49 @@ TEST(McpServerImplementTest, Constructor_InvalidEndpoint)
     EXPECT_THROW({
         McpServerImplement server(config, transport);
     }, std::invalid_argument);
+}
+
+TEST(McpServerImplementTest, Constructor_InvalidEndpointFormat)
+{
+    ServerConfig config = CreateValidHttpConfig();
+    StreamableHttpServerConfig transport = CreateValidTransportConfig();
+
+    const std::vector<std::string> invalidEndpoints = {
+        "not-a-url",
+        "http://local#host:8080",
+        "http://localhost:8080/path#frag",
+        "ftp://localhost:8080",
+        "http://localhost:99999",
+        "http://localhost:0",
+    };
+
+    for (const auto& endpoint : invalidEndpoints) {
+        transport.endpoint = endpoint;
+        EXPECT_THROW({
+            McpServerImplement server(config, transport);
+        }, std::invalid_argument) << "endpoint=" << endpoint;
+    }
+}
+
+TEST(McpServerImplementTest, Constructor_ValidEndpointFormats)
+{
+    ServerConfig config = CreateValidHttpConfig();
+    StreamableHttpServerConfig transport = CreateValidTransportConfig();
+
+    const std::vector<std::string> validEndpoints = {
+        "http://localhost:8080",
+        "https://127.0.0.1:8001/mcp",
+        "http://example.com:443/path?x=1",
+        "http://localhost",
+        "https://example.com/mcp",
+    };
+
+    for (const auto& endpoint : validEndpoints) {
+        transport.endpoint = endpoint;
+        EXPECT_NO_THROW({
+            McpServerImplement server(config, transport);
+        }) << "endpoint=" << endpoint;
+    }
 }
 
 TEST(McpServerImplementTest, Lifecycle_StopWithoutStart)
@@ -434,16 +489,16 @@ TEST(McpServerImplementTest, ResourceTemplateManagement_RemoveTemplate) {
     EXPECT_NO_THROW(server.RemoveResourceTemplate(resTemplate.uriTemplate));
 }
 
-// 测试特殊字符配置
+// Server name with spaces should be allowed (e.g. default "MCP Server")
 TEST(McpServerImplementTest, SpecialCharacters_SpacesInName)
 {
     ServerConfig config;
     config.name = "Test Server";
     config.version = "1.0.0";
 
-    EXPECT_THROW({
+    EXPECT_NO_THROW({
         McpServerImplement server(config);
-    }, std::invalid_argument);
+    });
 }
 
 TEST(McpServerImplementTest, SpecialCharacters_SpacesInEndpoint)

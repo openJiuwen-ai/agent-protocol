@@ -6,7 +6,7 @@
 - [register_design.md](register_design.md) — 注册模块
 - [build_design.md](build_design.md) — A2X 分类树自动构建
 - [search_design.md](search_design.md) — A2X 搜索算法
-- [incremental_design.md](incremental_design.md) — 增量构建
+- [environment.md](environment.md) — 环境变量总表
 - [auth_design.md](auth_design.md) — 鉴权模块（静态 API Key + 三档角色 + namespace 作用域，**默认关闭，向前兼容**）
 - [heartbeat_design.md](heartbeat_design.md) — 心跳保活模块（per-namespace opt-in 租约 + 软驱逐 / 硬删两段式，**默认关闭，向前兼容**）
 - [cluster_design.md](cluster_design.md) — 分布式同步模块（多注册中心 gossip 复制 + 失活驱逐，**默认关闭，向前兼容**）；部署见 [README_forDistributed.md](../README_forDistributed.md)
@@ -68,7 +68,7 @@ a2x_registry/                      # pip 包根
     └── search/                    #   MCP 全上下文基线
 ```
 
-> 仓库还包含 `ui/`（React + Vite Web UI，仅源码克隆可用）、`docs/`、`results/`、`database/`（git submodule，演示数据），这些不在 pip wheel 内。
+> 仓库还包含 `ui/`（React + Vite Web UI，仅源码克隆可用）与 `docs/`，这些不在 pip wheel 内。`database/`（演示数据，需另行 clone，见 [README.md](../README.md)）与 `results/`（评估输出，运行时生成）都不进 git。
 
 ## 2. 模块职责与主要对外接口
 
@@ -116,7 +116,7 @@ a2x_registry/                      # pip 包根
 - `services/taxonomy_service.get_taxonomy_tree(dataset)` — 仅读 `taxonomy.json`，lite 可用。
 - `startup.run_warmup` — 阶段 1-2（数据集加载、taxonomy 缓存）始终跑；阶段 3-6（A2X 引擎、Chroma 清理、向量同步、嵌入预热）在 `feature_flags.has("vector")` 为真时才跑。
 
-### 2.4 `a2x/` — A2X 分类构建与递归搜索（需 `[vector]`）
+### 2.4 `a2x/` — A2X 分类构建与递归搜索（纯 LLM，lite 可用）
 
 | 接口 | 输入 | 输出 |
 |---|---|---|
@@ -133,7 +133,7 @@ a2x_registry/                      # pip 包根
 | `vector.search.vector_search.VectorSearch.search(query, top_k)` | top-K 向量检索 |
 | `vector.build.index_builder.IndexBuilder` | 从 service.json 增量同步 ChromaDB collection |
 
-### 2.6 `traditional/` — MCP 全上下文基线（需 `[vector]`）
+### 2.6 `traditional/` — MCP 全上下文基线（纯 LLM，lite 可用）
 
 | 接口 | 说明 |
 |---|---|
@@ -216,8 +216,8 @@ a2x/search ←──┬──→ vector/search ←──┬──→ traditional
 
 | 安装命令 | 包含 | 可用范围 |
 |---|---|---|
-| `pip install a2x-registry` | requests / httpx / fastapi / pydantic / python-multipart / uvicorn[standard] | 注册中心 + SDK 全部接口 + 分布式同步（Agent Team 默认） |
-| `pip install 'a2x-registry[vector]'` | + numpy / sentence-transformers / chromadb | + A2X 分类构建 / 向量检索 / traditional 检索 |
+| `pip install a2x-registry` | requests / httpx / fastapi / pydantic / python-multipart / uvicorn[standard] | 注册中心 + SDK 全部接口 + 分布式同步 + A2X 分类构建 / A2X 搜索 / traditional 检索（均为纯 LLM，需配 `llm_apikey.json`） |
+| `pip install 'a2x-registry[vector]'` | + numpy / sentence-transformers / chromadb | + 向量检索（`method=vector`）与向量索引同步 |
 | `pip install 'a2x-registry[evaluation]'` | + tqdm | + `a2x-evaluate-*` CLI 进度条 |
 | `pip install 'a2x-registry[full]'` | 上述全部 | 等价 ≤0.1.5 默认安装 |
 

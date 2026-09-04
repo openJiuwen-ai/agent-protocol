@@ -4,10 +4,67 @@
 
 #include "shared/http_common.h"
 
+#include <algorithm>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 
 namespace Mcp::Http {
+
+namespace {
+constexpr std::size_t MAX_STREAMABLE_HTTP_URL_LENGTH = 2048;
+constexpr int PORT_MIN = 1;
+constexpr int PORT_MAX = 65535;
+// Capture groups for: ^(https?)://([^/\s?#:]+)(?::(\d+))?(/[^\s#]*)?$
+constexpr std::size_t URL_REGEX_GROUP_HOST = 2;
+constexpr std::size_t URL_REGEX_GROUP_PORT = 3;
+} // namespace
+
+bool IsValidStreamableHttpEndpoint(const std::string& endpoint, std::string* errorMsg)
+{
+    auto fail = [errorMsg](const char* message) {
+        if (errorMsg != nullptr) {
+            *errorMsg = message;
+        }
+        return false;
+    };
+
+    if (endpoint.empty()) {
+        return fail("endpoint is empty");
+    }
+    if (endpoint.find(' ') != std::string::npos) {
+        return fail("endpoint contains spaces");
+    }
+    if (endpoint.length() > MAX_STREAMABLE_HTTP_URL_LENGTH) {
+        return fail("url length more than max url length");
+    }
+
+    // Scheme and host are required; port and path/query are optional.
+    // Host excludes ':' so an optional port is not absorbed into the host.
+    // Reject '#' (fragment); query '?' is allowed in the path segment.
+    static const std::regex urlRegex(R"(^(https?)://([^/\s?#:]+)(?::(\d+))?(/[^\s#]*)?$)");
+    std::smatch matches;
+    if (!std::regex_match(endpoint, matches, urlRegex)) {
+        return fail("url is not valid");
+    }
+
+    if (matches[URL_REGEX_GROUP_HOST].str().empty()) {
+        return fail("host is required");
+    }
+
+    if (matches[URL_REGEX_GROUP_PORT].matched) {
+        try {
+            const int port = std::stoi(matches[URL_REGEX_GROUP_PORT].str());
+            if (port < PORT_MIN || port > PORT_MAX) {
+                return fail("port out of range");
+            }
+        } catch (const std::exception&) {
+            return fail("invalid port");
+        }
+    }
+
+    return true;
+}
 
 void TrimInPlace(std::string& value)
 {

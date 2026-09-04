@@ -7,6 +7,7 @@ All mutable state (_entries, _output_cache, _taxonomy_states) is protected by _l
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -55,6 +56,19 @@ logger = logging.getLogger(__name__)
 
 USER_CONFIG_FILE = "user_config.json"
 API_CONFIG_FILE  = "api_config.json"
+
+# Concurrency of the outbound agent-card fetch fan-out. Bounded by what the
+# remote endpoints tolerate rather than by local CPU.
+_DEFAULT_AGENT_CARD_WORKERS = 10
+try:
+    _AGENT_CARD_WORKERS = int(
+        os.environ.get("A2X_REGISTRY_AGENT_CARD_WORKERS", "") or _DEFAULT_AGENT_CARD_WORKERS
+    )
+except ValueError:
+    logger.warning(
+        "ignoring invalid A2X_REGISTRY_AGENT_CARD_WORKERS (using %s)", _DEFAULT_AGENT_CARD_WORKERS
+    )
+    _AGENT_CARD_WORKERS = _DEFAULT_AGENT_CARD_WORKERS
 BUILD_CONFIG_FILE = "build_config.json"
 TAXONOMY_FILE    = "taxonomy.json"
 
@@ -1578,7 +1592,7 @@ class RegistryService:
             errors=["entry has no payload to validate"])
 
     def _fetch_agent_cards_parallel(self, url_entries: List[tuple]):
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=_AGENT_CARD_WORKERS) as executor:
             futures = {
                 executor.submit(fetch_agent_card, entry.agent_card_url): (dataset, entry)
                 for dataset, entry in url_entries

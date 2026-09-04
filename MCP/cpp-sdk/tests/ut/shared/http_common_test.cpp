@@ -273,4 +273,46 @@ TEST(HttpCommonTest, HttpRequest_DefaultValues)
     EXPECT_TRUE(request.pathParams.empty());
 }
 
+TEST(HttpCommonTest, IsValidStreamableHttpEndpoint_ValidUrls)
+{
+    std::string errorMsg;
+    EXPECT_TRUE(IsValidStreamableHttpEndpoint("http://localhost:8080", &errorMsg));
+    EXPECT_TRUE(IsValidStreamableHttpEndpoint("https://127.0.0.1:8001/mcp", &errorMsg));
+    EXPECT_TRUE(IsValidStreamableHttpEndpoint("http://example.com:443/path?x=1", &errorMsg));
+    EXPECT_TRUE(IsValidStreamableHttpEndpoint("http://localhost", &errorMsg));
+    EXPECT_TRUE(IsValidStreamableHttpEndpoint("https://example.com/mcp", &errorMsg));
+}
+
+TEST(HttpCommonTest, IsValidStreamableHttpEndpoint_InvalidUrls)
+{
+    std::string errorMsg;
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("", &errorMsg));
+    EXPECT_EQ(errorMsg, "endpoint is empty");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://localhost:8080 ", &errorMsg));
+    EXPECT_EQ(errorMsg, "endpoint contains spaces");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("not-a-url", &errorMsg));
+    EXPECT_EQ(errorMsg, "url is not valid");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://local#host:8080", &errorMsg));
+    EXPECT_EQ(errorMsg, "url is not valid");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://localhost:8080/path#frag", &errorMsg));
+    EXPECT_EQ(errorMsg, "url is not valid");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://localhost:8080#frag", &errorMsg));
+    EXPECT_EQ(errorMsg, "url is not valid");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("ftp://localhost:8080", &errorMsg));
+    EXPECT_EQ(errorMsg, "url is not valid");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://localhost:99999", &errorMsg));
+    EXPECT_EQ(errorMsg, "port out of range");
+
+    EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://localhost:0", &errorMsg));
+    EXPECT_EQ(errorMsg, "port out of range");
+}
+
 } // namespace Mcp::Http

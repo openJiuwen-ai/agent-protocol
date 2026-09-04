@@ -82,4 +82,8 @@ endif()
 
 add_dependencies(a2a_ut_test a2a)
 
-gtest_discover_tests(a2a_ut_test)
+# DISCOVERY_TIMEOUT: ASAN builds are slow to start; default 5s often fails discovery.
+gtest_discover_tests(a2a_ut_test
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES TIMEOUT 300
+)

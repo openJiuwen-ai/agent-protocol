@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -36,7 +37,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 _service: Optional[RegistryService] = None
-_executor = ThreadPoolExecutor(max_workers=2)
+_DEFAULT_DATASET_WORKERS = 2
+try:
+    _DATASET_WORKERS = int(os.environ.get("A2X_REGISTRY_DATASET_WORKERS", "") or _DEFAULT_DATASET_WORKERS)
+except ValueError:
+    logger.warning("ignoring invalid A2X_REGISTRY_DATASET_WORKERS (using %s)", _DEFAULT_DATASET_WORKERS)
+    _DATASET_WORKERS = _DEFAULT_DATASET_WORKERS
+
+_executor = ThreadPoolExecutor(max_workers=_DATASET_WORKERS)
 
 
 def init_registry_service(database_dir: Path, global_config_path: Optional[Path] = None):

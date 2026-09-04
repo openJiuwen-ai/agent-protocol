@@ -1,7 +1,5 @@
 # A2X Registry — 智能体服务发现注册中心
 
-**v0.3.2**
-
 ## 概述
 
 A2X Registry 是一个 **Agent 及 Agent 可调用服务的注册中心**，同时内置 **Agent 原生的高效服务发现方案（A2X 搜索）**。
@@ -16,11 +14,11 @@ A2X Registry 是一个 **Agent 及 Agent 可调用服务的注册中心**，同�
 
 数据来源：[tool-retrieval-benchmark](https://github.com/mangopy/tool-retrieval-benchmark)，经过数据清洗。
 
-| 方法 | Hit Rate | Recall | Precision | Avg Tokens/q | Avg LLM Calls | 数据 |
-|------|:--------:|:------:|:--------:|:------------:|:-------------:|:----:|
-| **A2X** (v0.1.1) | **92.59%** | **89.19%** | 16.06% | 7,069 | 7.96 | [summary](results/20260323_a2x-getall_toolretnew_1714/summary.json) |
-| Vector (top-5) | 69.08% | 61.81% | 15.24% | 0 | 0 | [summary](results/20260323_vector_toolretnew_1714/summary.json) |
-| Traditional (MCP)* | 86.00% | 83.67% | 5.17% | 66,568 | 1.00 | [summary](results/20260323_traditional_toolretnew_50/summary.json) |
+| 方法 | Hit Rate | Recall | Precision | Avg Tokens/q | Avg LLM Calls |
+|------|:--------:|:------:|:--------:|:------------:|:-------------:|
+| **A2X** (v0.1.1) | **92.59%** | **89.19%** | 16.06% | 7,069 | 7.96 |
+| Vector (top-5) | 69.08% | 61.81% | 15.24% | 0 | 0 |
+| Traditional (MCP)* | 86.00% | 83.67% | 5.17% | 66,568 | 1.00 |
 
 \* Traditional 方案仅使用 name + description。若加入完整 inputSchema，单次查询 Token 消耗将达到 ~200k，已超出大多数模型的上下文窗口限制。
 
@@ -28,11 +26,11 @@ A2X Registry 是一个 **Agent 及 Agent 可调用服务的注册中心**，同�
 
 数据来源：[MCP 官方服务器列表](https://github.com/modelcontextprotocol/servers)，共 1387 条 MCP 服务器描述。查询模拟真实用户请求（含个人偏好、多服务组合等）。
 
-| 方法 | Hit Rate | Recall | Precision | Avg Tokens/q | Avg LLM Calls | 数据 |
-|------|:--------:|:------:|:--------:|:------------:|:-------------:|:----:|
-| **A2X** (v0.1.1) | **100%** | **94.87%** | 10.54% | 15,366 | 14.10 | [summary](results/20260323_a2x-getall_publicmcp_50/summary.json) |
-| Vector (top-5) | 72.0% | 42.77% | 22.00% | 0 | 0 | [summary](results/20260323_vector_publicmcp_50/summary.json) |
-| Vector (top-10) | 78.0% | 50.50% | 13.20% | 0 | 0 | [summary](results/20260323_vector_publicmcp_50/summary.json) |
+| 方法 | Hit Rate | Recall | Precision | Avg Tokens/q | Avg LLM Calls |
+|------|:--------:|:------:|:--------:|:------------:|:-------------:|
+| **A2X** (v0.1.1) | **100%** | **94.87%** | 10.54% | 15,366 | 14.10 |
+| Vector (top-5) | 72.0% | 42.77% | 22.00% | 0 | 0 |
+| Vector (top-10) | 78.0% | 50.50% | 13.20% | 0 | 0 |
 
 > **关于 Precision**：在大规模服务库中，ground truth 难以标注所有与请求相关的服务。人工抽样检查发现超过 60% 的假阳选项实际上与请求功能相关，因此 Precision 指标显著低估了实际检索质量，本文不引用该指标。
 
@@ -81,7 +79,7 @@ pip install -e '.[full]'
 支持多 provider 配置，按顺序轮询使用，兼容所有 OpenAI-compatible API。
 
 > 仅使用向量检索 / 通用 CRUD 时不需要此配置。
-> 如需把 key 文件放到别处，设 `A2X_REGISTRY_HOME=/your/path` 环境变量即可。
+> 如需把 key 文件放到别处，设 `A2X_REGISTRY_HOME=/your/path` 环境变量即可。全部环境变量见 [docs/environment.md](docs/environment.md)。
 
 ### 3. 下载演示数据集（可选）
 
@@ -358,7 +356,7 @@ curl -X POST http://localhost:8000/api/datasets/my_ds/services/a2a \
 | [docs/build_design.md](docs/build_design.md) | 分类树自动构建设计 |
 | [docs/register_design.md](docs/register_design.md) | 服务注册模块设计 |
 | [docs/search_design.md](docs/search_design.md) | 搜索流程详细设计 |
-| [docs/incremental_design.md](docs/incremental_design.md) | 增量构建设计 |
+| [docs/environment.md](docs/environment.md) | **环境变量总表** — 全部 `A2X_REGISTRY_*` 变量、默认值与生效时机 |
 | [docs/auth_design.md](docs/auth_design.md) | 鉴权模块设计（静态 API Key + 三档角色 + namespace 作用域；默认关闭） |
 | [docs/heartbeat_design.md](docs/heartbeat_design.md) | 心跳保活模块设计（per-namespace opt-in 租约；软驱逐 / 硬删两段式；默认关闭） |
 | [docs/cluster_design.md](docs/cluster_design.md) | 分布式同步模块设计（多注册中心 gossip 同步 + 失活驱逐；默认关闭） |

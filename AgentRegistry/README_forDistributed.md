@@ -230,6 +230,7 @@ rm -rf /tmp/a2x-A /tmp/a2x-B /tmp/a2x-C
 |------|------|------|
 | `A2X_REGISTRY_CLUSTER_ADVERTISE` | 对端回连本节点用的 base URL | 启动 server 前设置；填对端可达地址（同机调试可用 127.0.0.1） |
 | `A2X_REGISTRY_HOME` | 本节点数据目录（含 `cluster_state.json`、`database/`） | 同机多实例时每个实例设不同值 |
+| `A2X_REGISTRY_CLUSTER_STATE` | 集群身份文件路径的显式覆盖 | 不设则用 `<HOME>/cluster_state.json` |
 | `NO_PROXY` | 让自己发的 HTTP 不走系统代理 | 仅在有 Clash/VPN 时需要 |
 
-失活/规模化相关的 `A2X_REGISTRY_CLUSTER_*` 调优项见 [§5 表格](#5-失活与运维注意)。更深入的协议 / 时序 / 接口细节见 [`docs/cluster_design.md`](docs/cluster_design.md)。
+失活/规模化相关的 `A2X_REGISTRY_CLUSTER_*` 调优项见 [§5 表格](#5-失活与运维注意)。**注册中心全部环境变量（数据目录 / 集群 / 并发度 / 前端）见 [`docs/environment.md`](docs/environment.md)**。更深入的协议 / 时序 / 接口细节见 [`docs/cluster_design.md`](docs/cluster_design.md)。

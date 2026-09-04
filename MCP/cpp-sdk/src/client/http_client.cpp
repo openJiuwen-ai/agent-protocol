@@ -143,6 +143,7 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
     std::string rawRequest = BuildRawHttpRequest(request, host);
     if (!connection->Send(rawRequest)) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "[http_client] send failed");
+        connection->Close();
         return std::nullopt;
     }
 
@@ -171,6 +172,9 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
     if (timerId > 0) {
         eventSystem.RemoveEvent(timerId);
     }
+
+    // Connect()/Adopt() keep a self-hold until Close(); always release it here.
+    connection->Close();
 
     if (error || !done) {
         return std::nullopt;

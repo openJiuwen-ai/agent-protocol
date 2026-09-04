@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# build output (wheels / sdists / vendored rpms)
+build/
+dist/
+
 # pip / setuptools editable-install metadata
 *.egg-info/
 *.egg
@@ -22,3 +26,7 @@ a2x_registry/auth/auth_data/
 
 # LLM API key config (user-supplied secrets)
 llm_apikey.json
+
+# Evaluation output — generated at runtime by the a2x-evaluate-* CLIs
+# (path built in a2x_registry/common/naming.py), relative to the CWD.
+results/

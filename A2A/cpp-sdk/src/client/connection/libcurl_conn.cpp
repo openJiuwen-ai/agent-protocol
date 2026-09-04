@@ -607,16 +607,20 @@ void LibcurlConn::CheckMultiInfo()
             continue;
         }
 
-        // Process response based on result
-        if (msg->data.result == CURLE_OK) {
-            HandleFinishedResponse(request);
-        } else {
-            HandleErrorResponse(request, curl_easy_strerror(msg->data.result));
-        }
-
-        // Cleanup resources
+        // CURLMsg lives inside the easy handle on some libcurl builds; copy result
+        // before cleanup. Free the handle before business callbacks so exceptions /
+        // early returns cannot skip curl_easy_cleanup (ASAN leak).
+        CURLcode result = msg->data.result;
         curl_multi_remove_handle(multiHandle_, easyHandle);
         curl_easy_cleanup(easyHandle);
+        request->easyHandle = nullptr;
+
+        // Process response based on result (statusCode already set in HeaderCallback)
+        if (result == CURLE_OK) {
+            HandleFinishedResponse(request);
+        } else {
+            HandleErrorResponse(request, curl_easy_strerror(result));
+        }
     }
 }
 
@@ -1060,8 +1064,10 @@ void LibcurlConn::CancelRequest(const std::shared_ptr<RequestContext>& request) 
     }
 
     if (request->easyHandle != nullptr) {
-        // Remove from multi handle
+        // Remove and free easy handle before callback (exception-safe; avoids ASAN leak)
         curl_multi_remove_handle(multiHandle_, request->easyHandle);
+        curl_easy_cleanup(request->easyHandle);
+        request->easyHandle = nullptr;
 
         HttpResponse response;
         response.success = false;
@@ -1069,10 +1075,6 @@ void LibcurlConn::CancelRequest(const std::shared_ptr<RequestContext>& request) 
         response.errorMessage = "Request cancelled during shutdown";
         response.userData = request->userData;
         ExecuteCallback(request, response);
-
-        // Cleanup CURL handle
-        curl_easy_cleanup(request->easyHandle);
-        request->easyHandle = nullptr;
 
         A2A_LOG(A2A_LOG_LEVEL::INFO, std::string("Request ") + request->userData.requestId +
                 " cancelled successfully");

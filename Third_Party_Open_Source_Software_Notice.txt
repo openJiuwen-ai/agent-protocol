@@ -570,6 +570,47 @@ BSD 3-Clause text is identical to the one shown above for numpy, with the
 copyright holder replaced by "Encode OSS Ltd."
 
 ================================================================================
+A4P SDK Third-Party Dependencies
+================================================================================
+
+Software: cryptography 49.0.0
+
+License: Apache License 2.0 OR BSD 3-Clause License
+
+Copyright (c) Individual contributors. All rights reserved.
+
+Please see the full Apache License 2.0 text in Appendix A and the BSD 3-Clause
+License text shown above.
+
+--------------------------------------------------------------------------------
+Software: tzdata 2026.3
+
+License: Apache License 2.0
+
+Copyright (c) 2020, Paul Ganssle (Google)
+Copyright (c) 2026, Stan Ulbrych
+
+Please see the full Apache License 2.0 text in Appendix A.
+
+--------------------------------------------------------------------------------
+Software: webauthn 2.8.0
+
+License: BSD 3-Clause License
+
+Copyright (c) 2017-2021 Duo Security, Inc. All rights reserved.
+
+Please see the BSD 3-Clause License text shown above.
+
+--------------------------------------------------------------------------------
+Software: mcp 1.28.0 (optional demo dependency)
+
+License: MIT License
+
+Copyright (c) 2024 Anthropic, PBC
+
+Please see the full MIT License text in Appendix B.
+
+================================================================================
 APPENDIX A: APACHE LICENSE, VERSION 2.0
 ================================================================================
 

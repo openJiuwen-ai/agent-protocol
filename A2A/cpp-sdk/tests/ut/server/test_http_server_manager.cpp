@@ -33,18 +33,18 @@ TEST_F(HttpServerManagerCoverageTest, ConstructorInitializesFields)
     EXPECT_EQ(mgr.config_.host, "127.0.0.1");
     EXPECT_EQ(mgr.config_.port, 0);
     EXPECT_EQ(mgr.config_.ioThreadNum, 2u);
-    EXPECT_FALSE(mgr.running_.load());
+    EXPECT_FALSE(mgr.running_);
     EXPECT_TRUE(mgr.servers_.empty());
 }
 
 TEST_F(HttpServerManagerCoverageTest, StartWhenAlreadyRunningReturnsImmediately)
 {
     HttpServerManager mgr(MakeConfig(2));
-    mgr.running_.store(true);
+    mgr.running_ = true;
 
     mgr.Start();
 
-    EXPECT_TRUE(mgr.running_.load());
+    EXPECT_TRUE(mgr.running_);
     EXPECT_TRUE(mgr.servers_.empty());
 }
 
@@ -54,7 +54,7 @@ TEST_F(HttpServerManagerCoverageTest, StartWithZeroIoThreadReturnsWithoutCreatin
 
     mgr.Start();
 
-    EXPECT_FALSE(mgr.running_.load());
+    EXPECT_FALSE(mgr.running_);
     EXPECT_TRUE(mgr.servers_.empty());
 }
 
@@ -64,14 +64,14 @@ TEST_F(HttpServerManagerCoverageTest, StopWhenNotRunningReturnsImmediately)
 
     mgr.Stop();
 
-    EXPECT_FALSE(mgr.running_.load());
+    EXPECT_FALSE(mgr.running_);
     EXPECT_TRUE(mgr.servers_.empty());
 }
 
 TEST_F(HttpServerManagerCoverageTest, StopWhenRunningAndServersExistClearsAllServers)
 {
     HttpServerManager mgr(MakeConfig(2));
-    mgr.running_.store(true);
+    mgr.running_ = true;
 
     mgr.servers_.push_back(nullptr);
     mgr.servers_.push_back(nullptr);
@@ -79,27 +79,27 @@ TEST_F(HttpServerManagerCoverageTest, StopWhenRunningAndServersExistClearsAllSer
 
     mgr.Stop();
 
-    EXPECT_FALSE(mgr.running_.load());
+    EXPECT_FALSE(mgr.running_);
     EXPECT_TRUE(mgr.servers_.empty());
 }
 
 TEST_F(HttpServerManagerCoverageTest, StopTwiceIsSafe)
 {
     HttpServerManager mgr(MakeConfig(1));
-    mgr.running_.store(true);
+    mgr.running_ = true;
     mgr.servers_.push_back(nullptr);
 
     mgr.Stop();
     mgr.Stop();
 
-    EXPECT_FALSE(mgr.running_.load());
+    EXPECT_FALSE(mgr.running_);
     EXPECT_TRUE(mgr.servers_.empty());
 }
 
 TEST_F(HttpServerManagerCoverageTest, DestructorCallsStopSafely)
 {
     auto mgr = std::make_unique<HttpServerManager>(MakeConfig(1));
-    mgr->running_.store(true);
+    mgr->running_ = true;
     mgr->servers_.push_back(nullptr);
     mgr->servers_.push_back(nullptr);
 

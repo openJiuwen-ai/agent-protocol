@@ -157,10 +157,25 @@ def build_parser() -> argparse.ArgumentParser:
         "reset-admin",
         help="Wipe principals/keys and create a new bootstrap admin.",
     )
-    p_reset.add_argument("--confirm", action="store_true", required=False)
-    p_reset.add_argument("--handle", default="root")
-    p_reset.add_argument("--admin-token", default=None)
-    p_reset.add_argument("--data-dir", default=None)
+    p_reset.add_argument(
+        "--confirm", action="store_true",
+        help="Required acknowledgement — without it the command aborts without touching anything.",
+    )
+    p_reset.add_argument(
+        "--handle", default="root",
+        help="Handle for the new bootstrap admin principal (default: 'root')",
+    )
+    p_reset.add_argument(
+        "--admin-token", default=None,
+        help=(
+            "Use this exact plaintext token (must start with 'a2x_pat_'). "
+            "For CI / scripted bootstraps; usually omit to let the store generate one."
+        ),
+    )
+    p_reset.add_argument(
+        "--data-dir", default=None,
+        help="Override the auth_data directory (else uses $A2X_REGISTRY_AUTH_DATA or the bundled path).",
+    )
     p_reset.set_defaults(func=cmd_reset_admin)
 
     return parser

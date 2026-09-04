@@ -1,6 +1,19 @@
 # A2X 版本说明
 
-## 当前版本: v0.3.2
+---
+
+## v0.2.0 (2026-07-31)
+
+### 概述：版本号并入 agent-protocol 发布线
+本版本起，A2X Registry 的版本号与 agent-protocol 仓库的 AgentRegistry 发布线对齐，重新从 **0.2.0** 编号。下方 v0.3.3 及更早条目属于**重编号之前的独立编号**，两套编号之间没有先后关系，请按日期而非数字大小阅读。
+
+当前版本以 `AgentRegistry/VERSION` 为唯一来源（由 `scripts/bump_version.py` 同步到两个 `__init__.py`）；各 README 与本文件不再重复标注版本号，避免漂移。
+
+### 变化
+- 文档易用性修复（见 issue #59）：修正 `a2x/` 与 `traditional/` 的 `[vector]` gating 标注、补齐客户端 SDK 方法说明、新增 `docs/environment.md` 环境变量总表、移除 README 中失效的评估结果链接。
+- `error_analysis` 移除硬编码数据集 fallback，路径改为必须由 `config.json` 提供。
+- `LLMClient` 移除 legacy 单 provider 配置格式及其 DeepSeek 默认 URL；配置须使用 `providers` 数组。
+- 四处线程池并发度改为可通过 `A2X_REGISTRY_*_WORKERS` 环境变量配置。
 
 ---
 

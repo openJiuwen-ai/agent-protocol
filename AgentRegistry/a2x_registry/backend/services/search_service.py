@@ -1,6 +1,7 @@
 """Unified search service — facade over A2X, Vector, and Traditional search."""
 
 import json
+import os
 import threading
 import time
 import logging
@@ -10,6 +11,15 @@ from typing import Dict, Generator, List, Optional
 from a2x_registry.common import feature_flags
 
 logger = logging.getLogger(__name__)
+
+# Concurrency of A2X's recursive LLM navigation. Bounded by the LLM
+# provider's rate limit more than by local CPU — tune per deployment.
+_DEFAULT_LLM_WORKERS = 20
+try:
+    _LLM_WORKERS = int(os.environ.get("A2X_REGISTRY_LLM_WORKERS", "") or _DEFAULT_LLM_WORKERS)
+except ValueError:
+    logger.warning("ignoring invalid A2X_REGISTRY_LLM_WORKERS (using %s)", _DEFAULT_LLM_WORKERS)
+    _LLM_WORKERS = _DEFAULT_LLM_WORKERS
 
 # Optional reference to RegistryService for taxonomy state checks.
 # Set via set_registry() during app startup.
@@ -139,7 +149,7 @@ class SearchService:
                     taxonomy_path=str(paths["taxonomy_path"]),
                     class_path=str(paths["class_path"]),
                     service_path=str(paths["service_path"]),
-                    max_workers=20,
+                    max_workers=_LLM_WORKERS,
                     parallel=True,
                     mode=mode,
                 )

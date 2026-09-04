@@ -169,6 +169,18 @@ std::string getContentType(const HttpResponse& response);
 
 bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent);
 
+/**
+ * @brief Validate Streamable HTTP endpoint URL used by MCP Client/Server create APIs.
+ *
+ * Requires http/https scheme and a non-empty host. Port is optional; when present it must be in [1, 65535].
+ * Optional path/query is allowed. Rejects fragments ('#'), empty values, spaces, oversized URLs, and malformed hosts.
+ *
+ * @param endpoint Endpoint URL string to validate.
+ * @param errorMsg Optional output for a human-readable failure reason.
+ * @return true if the endpoint is valid; false otherwise.
+ */
+bool IsValidStreamableHttpEndpoint(const std::string& endpoint, std::string* errorMsg = nullptr);
+
 } // namespace Mcp::Http
 
 #endif // MCP_HTTP_COMMON_INCLUDE_H_

@@ -37,4 +37,6 @@ if(MCP_WITH_HTTP)
 endif()
 
 target_compile_features(mcp_client_tests PRIVATE cxx_std_17)
-gtest_discover_tests(mcp_client_tests)
+gtest_discover_tests(mcp_client_tests
+  DISCOVERY_TIMEOUT 60
+)
