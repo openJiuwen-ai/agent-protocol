@@ -71,6 +71,21 @@ class ReliableRouter(BaseRouter):
             self.strategy = create_strategy(strategy, state=self.state, **strategy_kwargs)
         else:
             self.strategy = strategy
+            # 策略实例可能自带 state（如 AdaptiveStrategy(state=...)）。
+            # 统一采用策略的 state 作为唯一事实源，避免 router 与策略
+            # 各持一套状态导致 cooldown/统计互不可见。
+            strategy_state = getattr(self.strategy, "state", None)
+            if strategy_state is not None:
+                self.state = strategy_state
+        # 同步 deployment 自带的初始状态（如配置中声明的 COOLDOWN）到 state，
+        # 避免 deployment 对象与 state 两套状态并存且互不可见。
+        for dep in deployments:
+            if dep.status == DeploymentStatus.COOLDOWN:
+                self.state.deployment_status[dep.id] = DeploymentStatus.COOLDOWN
+                self.state.cooldown_until[dep.id] = (
+                    dep.cooldown_until if dep.cooldown_until is not None
+                    else time.time() + self.cooldown_time
+                )
         # cooldown 参数
         self.cooldown_time = cooldown_time
         # 可观测性
@@ -105,10 +120,11 @@ class ReliableRouter(BaseRouter):
         没有 FAILED 状态——所有失败都是可自愈的。
         """
         now = time.time()
-        if model == MODEL_WILDCARD:
-            all_deployments = self.deployments
-        else:
-            all_deployments = self.get_deployments_for_model(model)
+        with self._deployments_lock:
+            if model == MODEL_WILDCARD:
+                all_deployments = list(self.deployments)
+            else:
+                all_deployments = self.get_deployments_for_model(model)
         with self.state.lock:
             available = []
             for dep in all_deployments:
@@ -117,8 +133,9 @@ class ReliableRouter(BaseRouter):
                     cooldown_until = self.state.cooldown_until.get(dep.id, 0)
                     if now < cooldown_until:
                         continue
-                    self.state.deployment_status[dep.id] = DeploymentStatus.HEALTHY
-                    self.state.cooldown_until[dep.id] = None
+                    # 软恢复：状态与 health_state 一并恢复（reset_deployment 统一处理），
+                    # 否则 health_state 残留 False，部署永远不会被再次调度。
+                    self.state.reset_deployment(dep.id)
                 available.append(dep)
         return available
 
@@ -181,6 +198,9 @@ class ReliableRouter(BaseRouter):
                 usage = response.get('usage') or {}
                 tokens = usage.get('completion_tokens', 0)
                 prompt_tokens = usage.get('prompt_tokens', 0)
+                # router 层统一更新成功状态（延迟/token统计），
+                # 策略 on_success 仅用于策略自身的内部更新。
+                self.state.on_success(selected.id, latency, tokens)
                 self.strategy.on_success(selected, latency, tokens)
                 context.set_success(selected, response)
 
@@ -199,6 +219,10 @@ class ReliableRouter(BaseRouter):
                 ))
                 return response
             except Exception as e:
+                # router 层统一更新失败状态（cooldown/退避），策略回调
+                # 仅用于策略自身的内部更新——部分策略（simple-shuffle 等）
+                # 的 on_failure 是空实现，不能作为状态更新的唯一通道。
+                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 self.strategy.on_failure(selected, e)
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
@@ -281,15 +305,18 @@ class ReliableRouter(BaseRouter):
                         ttfb = time.time() - start_time
                     yield chunk
 
+                self.state.on_success(selected.id, ttfb, 0)
                 self.strategy.on_success(selected, ttfb, 0)
                 context.set_success(selected, None)
                 return
 
             except Exception as e:
                 if first_chunk_received:
+                    self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                     self.strategy.on_failure(selected, e)
                     raise
 
+                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 self.strategy.on_failure(selected, e)
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
@@ -319,11 +346,23 @@ class ReliableRouter(BaseRouter):
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     def update_deployments(self, new_deployments: List[Deployment]) -> None:
-        """更新部署列表"""
-        self.deployments = new_deployments
-        self._build_model_indices()
-        if self.health_checker:
-            self.health_checker.deployments = new_deployments
+        """更新部署列表（热替换）
+
+        加锁保证并发请求期间不会读到半更新的索引/部署列表，
+        并清理已移除部署在 state 中的残留状态。
+        """
+        with self._deployments_lock:
+            old_ids = {dep.id for dep in self.deployments}
+            new_ids = {dep.id for dep in new_deployments}
+
+            self.deployments = new_deployments
+            self._build_model_indices()
+            if self.health_checker:
+                self.health_checker.deployments = new_deployments
+
+            # 清理已移除部署的残留状态（cooldown/延迟统计/会话亲和映射等）
+            if old_ids - new_ids:
+                self.state.cleanup_deployments(list(new_ids))
 
     # ------------------------------------------------------------------
     # Typed invoke / stream (高层 SDK 接口)
@@ -467,6 +506,9 @@ class ReliableRouter(BaseRouter):
                             ttft = time.time() - stream_start
                         yield parsed
 
+                # 成功后统一更新状态（延迟统计）+ 策略回调
+                self.state.on_success(selected.id, time.time() - stream_start, 0)
+                self.strategy.on_success(selected, time.time() - stream_start, 0)
                 await self.event_bus.emit(RoutingEvent(
                     event_type=RoutingEventType.STREAM_SUCCEEDED,
                     request_id=request_id,
@@ -481,6 +523,7 @@ class ReliableRouter(BaseRouter):
                 ))
                 return
             except Exception as e:
+                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 self.strategy.on_failure(selected, e)
                 errors.append((selected.id, type(e).__name__, str(e)))
 
@@ -626,7 +669,18 @@ class ReliableRouter(BaseRouter):
             "consecutive_failures": dict(self.state.consecutive_failures),
             "latency_stats": {
                 dep.id: {
-                    "avg_latency": self.state.get_average_latency(dep.id),
+                    # 真实延迟（秒），无记录为 None；保留4位小数避免浮点精度噪声
+                    "avg_latency": (
+                        round(self.state.get_average_latency_raw(dep.id), 4)
+                        if self.state.get_average_latency_raw(dep.id) is not None
+                        else None
+                    ),
+                    # 归一化延迟（latency/tokens），供策略参考
+                    "avg_normalized_latency": (
+                        round(self.state.get_average_latency(dep.id), 4)
+                        if self.state.get_average_latency(dep.id) != float('inf')
+                        else None
+                    ),
                     "total_tokens": self.state.total_tokens.get(dep.id, 0),
                     "total_requests": self.state.total_requests.get(dep.id, 0),
                 }

@@ -241,6 +241,42 @@ def test_get_available_deployments_cooldown_expired(router_state):
     assert router_state.deployment_status["dep1"] == DeploymentStatus.HEALTHY
 
 
+# -------- reset_deployment (issue #49) --------
+
+def test_reset_deployment_restores_health_state(router_state):
+    """软恢复必须同步恢复 health_state，否则部署永远不会被再次调度。
+
+    场景（issue #49）：部署失败进入 COOLDOWN 且 health_state=False；
+    cooldown 到期后软恢复，health_state 应一并恢复为 True，
+    让策略重新给该部署调度机会。
+    """
+    dep_id = "dep1"
+    router_state.on_failure(dep_id, error=RuntimeError("boom"))
+    assert router_state.deployment_status[dep_id] == DeploymentStatus.COOLDOWN
+    assert router_state.health_state[dep_id] is False
+
+    router_state.reset_deployment(dep_id)
+
+    assert router_state.deployment_status[dep_id] == DeploymentStatus.HEALTHY
+    assert router_state.cooldown_until[dep_id] is None
+    assert router_state.health_state[dep_id] is True
+    # consecutive_failures 保留，维持退避递增语义
+    assert router_state.consecutive_failures[dep_id] == 1
+
+
+def test_reset_then_failure_cooldown_increases(router_state):
+    """软恢复后再次失败，退避时长应基于保留的失败次数递增。"""
+    dep_id = "dep1"
+    router_state.on_failure(dep_id, error=RuntimeError("boom"))
+    router_state.reset_deployment(dep_id)
+    router_state.on_failure(dep_id, error=RuntimeError("boom again"))
+
+    assert router_state.deployment_status[dep_id] == DeploymentStatus.COOLDOWN
+    # 第2次失败：cooldown = 60 * 2
+    expected_min = time.time() + 60 * 2 - 1
+    assert router_state.cooldown_until[dep_id] >= expected_min
+
+
 def test_get_available_deployments_empty(router_state):
     available = router_state.get_available_deployments(time.time())
     assert available == []
@@ -324,3 +360,38 @@ def test_concurrent_success_failure(router_state):
     assert len(errors) == 0
     # State should be internally consistent
     assert router_state.consecutive_failures[dep_id] >= 0
+
+
+# -------- cleanup_deployments (issue #50) --------
+
+def test_cleanup_deployments_removes_stale_state(router_state):
+    """热替换后，已移除部署的残留状态应被清理。"""
+    router_state.on_success("dep_old", latency=0.1, tokens=10)
+    router_state.on_failure("dep_old", error=RuntimeError("x"))
+    router_state.on_success("dep_keep", latency=0.2, tokens=20)
+    router_state.session_deployment_map["sess1"] = "dep_old"
+    router_state.session_timestamps["sess1"] = time.time()
+
+    removed = router_state.cleanup_deployments(["dep_keep"])
+
+    assert removed == ["dep_old"]
+    assert "dep_old" not in router_state.deployment_status
+    assert "dep_old" not in router_state.consecutive_failures
+    assert "dep_old" not in router_state.cooldown_until
+    assert "dep_old" not in router_state.latencies
+    assert "dep_old" not in router_state.total_tokens
+    assert "dep_old" not in router_state.total_requests
+    assert "dep_old" not in router_state.health_state
+    assert "dep_old" not in router_state.token_usage
+    assert "dep_old" not in router_state.rpm_tracker
+    # 指向已移除部署的 session 映射被清理
+    assert "sess1" not in router_state.session_deployment_map
+    # 保留的部署不受影响
+    assert router_state.total_tokens["dep_keep"] == 20
+
+
+def test_cleanup_deployments_nothing_to_remove(router_state):
+    router_state.on_success("dep1", latency=0.1, tokens=10)
+    removed = router_state.cleanup_deployments(["dep1"])
+    assert removed == []
+    assert router_state.total_tokens["dep1"] == 10

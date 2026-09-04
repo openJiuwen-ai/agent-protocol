@@ -69,9 +69,9 @@ class RateLimitAwareStrategy(RoutingStrategy):
         return scored[0][0] if scored else available[0]
 
     def on_success(self, deployment: "Deployment", latency: float, tokens: int) -> None:
-        """成功回调 - 更新RPM追踪"""
-        self.state.on_success(deployment.id, latency, tokens)
+        """成功回调 - 无额外策略状态（router 层已统一更新 state）"""
+        pass
 
     def on_failure(self, deployment: "Deployment", error: Exception) -> None:
-        """失败回调 - 更新失败记录"""
-        self.state.on_failure(deployment.id, error)
+        """失败回调 - 无额外策略状态（router 层已统一更新 state）"""
+        pass
