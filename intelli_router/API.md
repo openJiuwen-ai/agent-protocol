@@ -151,6 +151,8 @@ Provider 适配器将不同 LLM 提供商的请求/响应格式统一转换为 O
 
 ### `BaseProviderAdapter` (抽象基类)
 
+> 扩展接口：面向需要接入新 Provider 的进阶用户，不属于主要测试对象。
+
 所有 Provider 适配器的基类。
 
 ```python
@@ -482,6 +484,12 @@ class MarkdownElementType:
 
 ## 路由策略
 
+> **交付范围说明**：本版本对外交付并纳入接口测试的策略为
+> **`AdaptiveStrategy`（`"adaptive"`）**。`RoutingStrategy` 抽象基类
+> 面向需要自定义路由行为的进阶用户，属于扩展接口而非主要测试对象。
+> 其余内置策略（simple-shuffle / lowest-latency / tag-based /
+> token-aware / rate-limit-aware）为内部实现，不在对外接口测试范围内。
+
 ### `RoutingStrategy` (抽象基类)
 
 所有路由策略的抽象基类。
@@ -503,7 +511,7 @@ class RoutingStrategy(ABC):
         latency: float,
         tokens: int
     ) -> None:
-        """成功回调 - 更新策略状态"""
+        """成功回调 - 仅供策略维护自身私有状态"""
 
     @abstractmethod
     def on_failure(
@@ -511,8 +519,12 @@ class RoutingStrategy(ABC):
         deployment: "Deployment",
         error: Exception
     ) -> None:
-        """失败回调 - 更新策略状态"""
+        """失败回调 - 仅供策略维护自身私有状态"""
 ```
+
+> **回调契约**：`on_success` / `on_failure` 不承担 `LocalRouterState`
+> 的统一状态更新（失败计数、cooldown、延迟统计等由 `ReliableRouter`
+> 在路由层直接写入 state）。自定义策略无需在回调内转发状态更新。
 
 ---
 
@@ -690,9 +702,11 @@ def create_strategy(
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `on_success` | `on_success(deployment_id: str, latency: float, tokens: int) -> None` | 成功回调，重置失败计数并恢复为 HEALTHY |
-| `on_failure` | `on_failure(deployment_id: str, error: Exception, cooldown_time: float = 60.0) -> None` | 失败回调，进入 COOLDOWN（时长 = cooldown_time × 连续失败次数），超时后自愈 |
-| `get_average_latency` | `get_average_latency(deployment_id: str) -> float` | 获取平均延迟 |
+| `on_failure` | `on_failure(deployment_id: str, error: Exception, cooldown_time: float = 60.0) -> None` | 失败回调，进入 COOLDOWN（时长 = cooldown_time × 连续失败次数），超时后自愈。ReliableRouter 会将其 `cooldown_time` 配置透传至此 |
+| `get_average_latency` | `get_average_latency(deployment_id: str) -> float` | 获取平均**归一化**延迟（latency/tokens，策略打分口径；无记录返回 `inf`） |
+| `get_average_latency_raw` | `get_average_latency_raw(deployment_id: str) -> Optional[float]` | 获取平均**真实**延迟（秒，用户统计口径；无记录返回 `None`） |
 | `get_available_deployments` | `get_available_deployments(now: float) -> List[str]` | 获取可用部署ID列表 |
+| `cleanup_deployments` | `cleanup_deployments(keep_ids: List[str]) -> List[str]` | 清理不在 keep_ids 中的部署残留状态（热替换场景），返回被清理的 ID 列表 |
 | `get_token_remaining` | `get_token_remaining(deployment_id: str) -> int` | 获取剩余Token |
 | `get_rpm_remaining` | `get_rpm_remaining(deployment_id: str) -> int` | 获取剩余RPM |
 | `get_token_utilization` | `get_token_utilization(deployment_id: str) -> float` | 获取Token使用率 |
