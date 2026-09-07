@@ -4,7 +4,10 @@
 - register_image：首次自动默认、re-register 保留默认 + 更新 runtime_spec、第二版本非默认、
   新字段（description/package_path/image_archive_path/access_mode）落 data、framework 纯展示
 - query：扁平返回、name/framework/uploaded_by 过滤、分页、total 计数、runtime_spec 透传、
-  name ASC → version_key DESC 排序
+  name ASC -> version_key DESC 排序
+- update_image（§8）：部分更新可变字段（提升列 framework + data JSON 字段合并）、
+  未给字段保留旧值、runtime_spec 整体替换、不影响其他版本行 / is_default、
+  空 fields -> 400、镜像不存在 -> 404
 - get_default_version：显式默认 + 未设取最新；按 name 维度（同名不同 framework 只一个默认）
 - set_default：清旧置新
 - resolve_launch_spec：带/不带 version、runtime_spec/access_mode 透传
@@ -15,7 +18,11 @@ from __future__ import annotations
 
 import pytest
 
-from a2x_registry.image.errors import ImageInUseError, ImageNotFoundError
+from a2x_registry.image.errors import (
+    ImageInUseError,
+    ImageNotFoundError,
+    ImageValidationError,
+)
 from a2x_registry.image.service import ImageService
 
 from .conftest import make_runtime_spec, make_register_body, make_access_mode
@@ -213,6 +220,81 @@ def test_query_empty_returns_empty(image_svc: ImageService):
     rows, total = image_svc.query()
     assert rows == []
     assert total == 0
+
+
+# ── update_image (§8 partial update) ───────────────────────────
+
+def test_update_single_data_field(image_svc: ImageService):
+    """只改一个字段（description），其余保留旧值。"""
+    _reg(image_svc, description="旧描述", package_path="/old/")
+    entry = image_svc.update_image("opencode", "v0.2.0", {"description": "新描述"})
+    assert entry["description"] == "新描述"
+    assert entry["package_path"] == "/old/"  # 未给字段不动
+    assert entry["workspace"] == "/app"
+    assert entry["created_at"]  # created_at 不被清掉
+
+
+def test_update_framework_promoted_column(image_svc: ImageService):
+    """framework 是提升列，可部分更新（name 主键不变）。"""
+    _reg(image_svc, framework="openclaw-fw")
+    entry = image_svc.update_image("opencode", "v0.2.0", {"framework": "renamed-fw"})
+    assert entry["name"] == "opencode"
+    assert entry["framework"] == "renamed-fw"
+
+
+def test_update_runtime_spec_replaced_whole(image_svc: ImageService):
+    """runtime_spec 整体替换（不透明透传，不做字段级合并）。"""
+    _reg(image_svc, runtime_spec=make_runtime_spec(cpu=1000))
+    new_spec = make_runtime_spec(cpu=4000, memory=8192)
+    entry = image_svc.update_image("opencode", "v0.2.0", {"runtime_spec": new_spec})
+    assert entry["runtime_spec"] == new_spec
+
+
+def test_update_access_mode_and_env(image_svc: ImageService):
+    _reg(image_svc)
+    new_mode = [{"name": "web", "port": "18789", "cmd": "openclaw gateway"}]
+    entry = image_svc.update_image(
+        "opencode", "v0.2.0",
+        {"access_mode": new_mode, "env_vars": {"K": "V"}, "mounts": []},
+    )
+    assert entry["access_mode"] == new_mode
+    assert entry["env_vars"] == {"K": "V"}
+    assert entry["mounts"] == []
+
+
+def test_update_multiple_fields_and_launch_spec_reflects(image_svc: ImageService):
+    """多字段更新后 launch-spec 立即反映新值。"""
+    _reg(image_svc, workspace="/app")
+    image_svc.update_image(
+        "opencode", "v0.2.0", {"workspace": "/new-ws", "description": "x"}
+    )
+    spec = image_svc.resolve_launch_spec("opencode")
+    assert spec["workspace"] == "/new-ws"
+
+
+def test_update_does_not_touch_other_versions_or_default(image_svc: ImageService):
+    _reg(image_svc, ver="v0.2.0", description="v2 desc")
+    _reg(image_svc, ver="v0.1.0", description="v1 desc")
+    image_svc.update_image("opencode", "v0.1.0", {"description": "v1 new"})
+    rows, _ = image_svc.query(name="opencode")
+    by_ver = {r["version"]: r for r in rows}
+    assert by_ver["v0.1.0"]["description"] == "v1 new"
+    assert by_ver["v0.2.0"]["description"] == "v2 desc"
+    assert by_ver["v0.2.0"]["is_default"] is True  # 默认标志不受影响
+
+
+def test_update_empty_fields_rejected(image_svc: ImageService):
+    _reg(image_svc)
+    with pytest.raises(ImageValidationError):
+        image_svc.update_image("opencode", "v0.2.0", {})
+
+
+def test_update_not_found(image_svc: ImageService):
+    _reg(image_svc)
+    with pytest.raises(ImageNotFoundError):
+        image_svc.update_image("opencode", "v9.9.9", {"description": "x"})
+    with pytest.raises(ImageNotFoundError):
+        image_svc.update_image("nonexistent", "v0.2.0", {"description": "x"})
 
 
 # ── get_default_version ─────────────────────────────────────────

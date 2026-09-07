@@ -252,7 +252,72 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 预期（两版本场景）：v0.1.0|0  /  v0.2.0|1
 ```
 
-### 1.5 注销镜像
+### 1.5 更新镜像字段（部分更新）
+
+**接口**：`PATCH /api/images/{name}/{version}`
+**场景**：镜像登记后只改部分可变字段（如 `description`），无需整条重注册覆盖。
+
+```bash
+# 改纯文本字段 + 接入方式数组（未给字段保留旧值）
+curl -X PATCH http://127.0.0.1:8000/api/images/opencode/v0.2.0 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "opencode 适配镜像（更新后）",
+    "package_path": "/pkg/opencode/v2/",
+    "access_mode": [
+      {"name": "tui", "port": "2222", "cmd": "opencode"},
+      {"name": "web", "port": "18789", "cmd": "opencode gateway --port 18789"}
+    ]
+  }'
+
+# runtime_spec 整体替换（不透明透传，不做字段级合并）
+curl -X PATCH http://127.0.0.1:8000/api/images/opencode/v0.2.0 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runtime_spec": {
+      "runtime": "python3.12",
+      "sandbox_type": "docker",
+      "rootfs": {"imageurl": "harbor.local/adapted/opencode:v0.2.0-mod2.0"},
+      "cpu": 2000,
+      "memory": 4096
+    }
+  }'
+```
+
+**预期响应** `200`：返回更新后的完整镜像条目（`ImageEntry`），未给字段保留注册时的旧值：
+```json
+{
+  "name": "opencode",
+  "framework": "opencode",
+  "description": "opencode 适配镜像（更新后）",
+  "package_path": "/pkg/opencode/v2/",
+  "image_archive_path": "/archive/opencode.tar",
+  "version": "v0.2.0",
+  "is_default": true,
+  "runtime_spec": {"runtime": "python3.12", "rootfs": {"imageurl": "..."}, "cpu": 2000, ...},
+  "access_mode": [{"name": "tui", ...}, {"name": "web", ...}],
+  "uploaded_by": "user-01",
+  "created_at": "2026-07-06T10:00:00Z"
+}
+```
+
+**效果**：部分更新一行镜像的可变字段，**至少给一个字段**。可改 `framework` / `description` / `package_path` / `image_archive_path` / `runtime_spec` / `access_mode` / `env_vars` / `workspace` / `mounts`；`runtime_spec` 为不透明 JSON **整体替换**。主键 `name` / `version` 与 `is_default` **不可改**（默认版本走 `PUT …/default`）--请求里带这些字段会被忽略，若全部字段被忽略则等价空 body 返回 `400`。底层复用 `patch` 部分更新原语（`framework` 走提升列，其余字段读-改-写合并进 `data` JSON；SQL / etcd 两后端行为一致）。
+**错误**：一个可改字段都不给 -> `400 {"detail":"at least one field must be provided"}`；`name@version` 不存在 -> `404 {"detail":"..."}`。
+
+**数据库验证**：
+```bash
+# data JSON 中对应字段已更新；created_at 保留注册时间（不被清掉）
+sqlite3 "$A2X_REGISTRY_DB" \
+  "SELECT json_extract(data,'$.description') AS description,
+          json_extract(data,'$.package_path') AS package_path,
+          json_extract(data,'$.runtime_spec.rootfs.imageurl') AS imageurl,
+          json_extract(data,'$.runtime_spec.cpu') AS cpu,
+          json_extract(data,'$.created_at') AS created_at
+   FROM image WHERE registry='images' AND name='opencode' AND version='v0.2.0';"
+# 预期：opencode 适配镜像（更新后）|/pkg/opencode/v2/|harbor.local/adapted/opencode:v0.2.0-mod2.0|2000|<注册时的 created_at>
+```
+
+### 1.6 注销镜像
 
 **接口**：`DELETE /api/images/{name}/{version}`
 
@@ -698,7 +763,7 @@ sqlite3 "$A2X_REGISTRY_DB" \
 
 | HTTP | 场景 | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
 | `404` | 取不存在的 name launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
