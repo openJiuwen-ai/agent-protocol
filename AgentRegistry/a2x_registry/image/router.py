@@ -6,6 +6,7 @@ Routes (mounted at app level, prefix ``/api/images``):
     GET    /api/images                        query (user; flat, ?name / ?framework / ?uploaded_by / ?size / ?page)
     GET    /api/images/{name}/launch-spec     resolve_launch_spec (gateway)
     PUT    /api/images/{name}/default          set_default (user)
+    PATCH  /api/images/{name}/{version}       update_image (user; partial, name/version/is_default 不可改)
     DELETE /api/images/{name}/{version}       deregister (user; 409 if in use)
 
 ``name`` is the image primary key (the old ``{framework}`` paths are gone);
@@ -37,6 +38,7 @@ from .models import (
     RegisterImageRequest,
     SetDefaultRequest,
     SetDefaultResponse,
+    UpdateImageRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,6 +137,26 @@ async def set_default(name: str, req: SetDefaultRequest):
         return svc.set_default(name, version)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.patch("/{name}/{version}", response_model=ImageEntry)
+async def update_image(name: str, version: str, req: UpdateImageRequest):
+    """Partially update mutable fields of one image version (§8).
+
+    At least one field required; primary key ``name`` / ``version`` and
+    ``is_default`` are not patchable (默认版本走 ``PUT …/default``).
+    Returns the updated entry.
+    """
+    svc = _resolve_service()
+    # model_dump() 递归展开 access_mode 的 AccessMode 子模型；
+    # None 字段剔除（"未给 = 不改"）。
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    try:
+        return svc.update_image(name, version, fields)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/{name}/{version}", response_model=DeregisterResponse)
