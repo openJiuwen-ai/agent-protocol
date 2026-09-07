@@ -198,6 +198,68 @@ class TestReliableRouterStream:
         assert "Hello" in texts
         assert "world" in texts
 
+    def test_stream_records_ttft_not_total_duration(self):
+        """stream() 成功回调记录 ttft（首 chunk 耗时），而非整条流总时长（与 stream_completion 口径一致）。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class StreamCapture(RequestCapture):
+            def _respond(self, request):
+                content = "data: " + json.dumps({
+                    "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
+                }) + "\n\n"
+                content += "data: " + json.dumps({
+                    "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": "stop"}]
+                }) + "\n\n"
+                content += "data: [DONE]\n\n"
+                return Response(200, text=content)
+
+        capture = StreamCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            chunks = []
+            async for ch in router.stream(messages=[{"role": "user", "content": "hi"}]):
+                chunks.append(ch)
+                # 消费端放慢节奏：拉长流的总时长，但不影响 ttft（首个 chunk 到达时间）
+                await asyncio.sleep(0.05)
+            await router.close()
+            return chunks, router
+        result, router = asyncio.run(runner())
+
+        assert len(result) >= 1
+        # 两个 chunk × 0.05s sleep，若误记总时长会 >= 0.1；ttft 应显著小于总时长
+        recorded = router.state.get_average_latency_raw("openai-1")
+        assert recorded is not None
+        assert recorded < 0.05, f"expected ttft, got total duration: {recorded}"
+
+    def test_stream_empty_response_records_zero_latency(self):
+        """空流（无可解析 chunk）成功时延迟兜底为 0.0 而非 None。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class EmptyCapture(RequestCapture):
+            def _respond(self, request):
+                return Response(200, text="data: [DONE]\n\n")
+
+        capture = EmptyCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            chunks = []
+            async for ch in router.stream(messages=[{"role": "user", "content": "hi"}]):
+                chunks.append(ch)
+            await router.close()
+            return chunks, router
+        result, router = asyncio.run(runner())
+
+        assert len(result) == 0
+        assert router.state.get_average_latency_raw("openai-1") == 0.0
+
     def test_stream_empty_response(self):
         dep = Deployment(
             id="openai-1", model_name="gpt-4o-mini",

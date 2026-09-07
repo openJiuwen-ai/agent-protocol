@@ -40,6 +40,15 @@ Deployment(
 )
 ```
 
+**字段校验**（构造期强制，违规抛 `ValueError`/`TypeError`）：
+
+- `model_name`、`api_key`、`api_base`、`provider` 必须为非空字符串
+- 走免认证本地端点（如 Ollama、vLLM）或统一认证代理时，请显式传入占位值
+  （如 `"ollama"`、`"no-key"`）；本库不做环境变量等隐式注入，请求层注入
+  场景由调用方自行封装
+- `tpm`/`rpm`：正整数或 `None`（排除 bool）；`consecutive_failures`：非负 int；
+  `timeout`：正数或 `None`
+
 **方法**:
 
 | 方法 | 签名 | 说明 |

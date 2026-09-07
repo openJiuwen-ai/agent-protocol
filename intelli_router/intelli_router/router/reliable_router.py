@@ -507,8 +507,9 @@ class ReliableRouter(BaseRouter):
                             ttft = time.time() - stream_start
                         yield parsed
 
-                # 成功后统一更新状态（延迟统计）
-                self.state.on_success(selected.id, time.time() - stream_start, 0)
+                # 成功后统一更新状态（延迟统计口径与 stream_completion 一致：ttft/首 chunk 耗时，
+                # 而非整条流的总时长；空流无可解析 chunk 时兜底为 0.0）
+                self.state.on_success(selected.id, ttft if ttft is not None else 0.0, 0)
                 await self.event_bus.emit(RoutingEvent(
                     event_type=RoutingEventType.STREAM_SUCCEEDED,
                     request_id=request_id,
@@ -669,15 +670,16 @@ class ReliableRouter(BaseRouter):
             "latency_stats": {
                 dep.id: {
                     # 真实延迟（秒），无记录为 None；保留4位小数避免浮点精度噪声
+                    # （各值只取一次，避免重复 O(n) 求均值及两次调用间的读数偏差）
                     "avg_latency": (
-                        round(self.state.get_average_latency_raw(dep.id), 4)
-                        if self.state.get_average_latency_raw(dep.id) is not None
+                        round(raw_latency, 4)
+                        if (raw_latency := self.state.get_average_latency_raw(dep.id)) is not None
                         else None
                     ),
                     # 归一化延迟（latency/tokens），供策略参考
                     "avg_normalized_latency": (
-                        round(self.state.get_average_latency(dep.id), 4)
-                        if self.state.get_average_latency(dep.id) != float('inf')
+                        round(norm_latency, 4)
+                        if (norm_latency := self.state.get_average_latency(dep.id)) != float('inf')
                         else None
                     ),
                     "total_tokens": self.state.total_tokens.get(dep.id, 0),

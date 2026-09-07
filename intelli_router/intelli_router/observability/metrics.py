@@ -8,8 +8,10 @@ from typing import Dict, Any, List, Deque, Optional
 from .events import RoutingEvent, RoutingEventType
 from .handler import EventHandler
 
-# Prometheus 指标名规范: [a-zA-Z_:][a-zA-Z0-9_:]*
-# prefix 作为指标名前缀，不允许冒号以保持简单
+# Prometheus 完整指标名规范: [a-zA-Z_:][a-zA-Z0-9_:]*
+# 此正则仅约束 prefix 本身（禁止冒号是刻意的，冒号保留给特定命名惯例）；
+# 完整指标名 = prefix + 本模块固定的合法后缀（如 _requests_total），
+# 整体合规由拼接处保证
 _PROMETHEUS_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 # prefix 最大长度（拼接指标名后总长不超过 Prometheus 规范上限）
 _PROMETHEUS_PREFIX_MAX_LEN = 256
