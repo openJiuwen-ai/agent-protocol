@@ -83,6 +83,30 @@ class SetDefaultRequest(BaseModel):
     )
 
 
+class UpdateImageRequest(BaseModel):
+    """``PATCH /api/images/{name}/{version}`` request body (§8 部分更新).
+
+    At least one field required. Primary key ``name`` / ``version`` and
+    ``is_default`` are **not** patchable here (默认版本走
+    ``PUT …/default``); the model simply omits them. ``runtime_spec``
+    is an opaque JSON object replaced as a whole.
+    """
+
+    framework: Optional[str] = Field(None, description="展示字段（非主键）")
+    description: Optional[str] = Field(None, description="纯文本描述")
+    package_path: Optional[str] = Field(None, description="包路径")
+    image_archive_path: Optional[str] = Field(None, description="镜像归档路径")
+    runtime_spec: Optional[Dict[str, Any]] = Field(
+        None, description="运行规格（不透明 JSON，整体替换）"
+    )
+    access_mode: Optional[List[AccessMode]] = Field(
+        None, description="接入方式数组（如 tui / web）"
+    )
+    env_vars: Optional[Dict[str, str]] = Field(None, description="环境变量")
+    workspace: Optional[str] = Field(None, description="Working directory")
+    mounts: Optional[List[Dict[str, Any]]] = Field(None, description="Volume mounts")
+
+
 class ImageRegisterResponse(BaseModel):
     """``POST /api/images`` receipt (ImageOpResponse 风格，按 name 定位)。"""
 

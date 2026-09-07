@@ -10,6 +10,9 @@ Responsibilities:
 - ``query``: return **flat** rows (one row per name version) with optional
   ``name`` / ``framework`` / ``uploaded_by`` filters and SQL-side pagination
   (``LIMIT/OFFSET``). Returns ``(rows, total)`` tuple.
+- ``update_image``: partially update mutable fields of one row (§8) -
+  ``framework`` as a promoted column, the rest merged into ``data``
+  read-modify-write; primary key / ``is_default`` untouched.
 - ``deregister``: verify no in-use instances; delete repo image file (stub)
   and delete the row; promote the latest remaining version to default.
 - ``set_default`` / ``get_default_version``: default-version management
@@ -49,6 +52,20 @@ _IMAGE_ORDER = (
     "name asc",
     "version_key desc",
     "data.created_at desc",
+)
+
+# Mutable ``data``-JSON fields patchable via ``update_image`` (§8).
+# Everything else inside ``data`` (image_module_version / created_at) is
+# not patchable via the image PATCH endpoint.
+_MUTABLE_DATA_FIELDS = (
+    "description",
+    "package_path",
+    "image_archive_path",
+    "runtime_spec",
+    "access_mode",
+    "env_vars",
+    "workspace",
+    "mounts",
 )
 
 
@@ -177,6 +194,57 @@ class ImageService:
             offset=offset,
         )
         return [self._row_to_entry(r) for r in rows], total
+
+    # ------------------------------------------------------------------
+    # update_image (§8 partial update)
+    # ------------------------------------------------------------------
+
+    def update_image(
+        self, name: str, version: str, fields: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Partially update mutable fields of one image row (name@version).
+
+        ``fields`` keys ⊆ ``{"framework"} ∪ _MUTABLE_DATA_FIELDS``; at
+        least one non-``None`` value required. Primary key ``name`` /
+        ``version`` and ``is_default`` are not patchable (the request
+        model omits them). ``framework`` is a promoted column; the rest
+        live inside the ``data`` JSON and are merged read-modify-write
+        (the whole ``data`` blob is patched). Returns the updated entry.
+        """
+        if not any(v is not None for v in fields.values()):
+            raise ImageValidationError(
+                "at least one field must be provided"
+            )
+
+        rows = self._table_svc.query(
+            IMAGE_REGISTRY, {"name": name, "version": version}
+        )
+        if not rows:
+            raise ImageNotFoundError(f"image {name}@{version} not found")
+        row = rows[0]
+
+        patch_fields: Dict[str, Any] = {}
+        if fields.get("framework") is not None:
+            patch_fields["framework"] = fields["framework"]
+
+        data = dict(row.get("data", {}) or {})
+        dirty = False
+        for key in _MUTABLE_DATA_FIELDS:
+            if fields.get(key) is not None:
+                data[key] = fields[key]
+                dirty = True
+        if dirty:
+            patch_fields["data"] = data
+
+        updated = self._table_svc.patch(
+            IMAGE_REGISTRY, row["service_id"], patch_fields
+        )
+        logger.info(
+            "update_image %s@%s (fields=%s)",
+            name, version,
+            sorted(k for k, v in fields.items() if v is not None),
+        )
+        return self._row_to_entry(updated)
 
     # ------------------------------------------------------------------
     # deregister

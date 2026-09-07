@@ -148,6 +148,63 @@ def test_put_set_default_not_found(client):
     assert r.status_code == 404
 
 
+# ── PATCH /api/images/{name}/{version} (§8) ─────────────────────
+
+def test_patch_update_single_field(client):
+    _register(client, description="旧描述", package_path="/old/")
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"description": "更新后的描述"}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "opencode"
+    assert body["version"] == "v0.2.0"
+    assert body["description"] == "更新后的描述"
+    assert body["package_path"] == "/old/"  # 未给字段保留
+    assert body["is_default"] is True
+
+
+def test_patch_update_runtime_spec_whole_replace(client):
+    _register(client, runtime_spec=make_runtime_spec(cpu=1000))
+    new_spec = make_runtime_spec(cpu=4000)
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"runtime_spec": new_spec}
+    )
+    assert r.status_code == 200
+    assert r.json()["runtime_spec"]["cpu"] == 4000
+
+
+def test_patch_empty_body_rejected(client):
+    _register(client)
+    r = client.patch("/api/images/opencode/v0.2.0", json={})
+    assert r.status_code == 400
+
+
+def test_patch_not_found(client):
+    _register(client)
+    assert client.patch(
+        "/api/images/opencode/v9.9.9", json={"description": "x"}
+    ).status_code == 404
+    assert client.patch(
+        "/api/images/nonexistent/v0.2.0", json={"description": "x"}
+    ).status_code == 404
+
+
+def test_patch_unknown_fields_ignored_keys_not_patchable(client):
+    """主键 name/version 不在请求模型（不可改）；多余未知字段被 pydantic 忽略。"""
+    _register(client)
+    r = client.patch(
+        "/api/images/opencode/v0.2.0",
+        json={"name": "hijack", "version": "v9.9.9", "is_default": True},
+    )
+    # 全部字段都被忽略 -> 等价于空 body -> 400
+    assert r.status_code == 400
+    # 行未被改动
+    rows = client.get("/api/images", params={"name": "opencode"}).json()
+    assert rows[0]["version"] == "v0.2.0"
+    assert rows[0]["is_default"] is True
+
+
 # ── DELETE /api/images/{name}/{version} ─────────────────────────
 
 def test_delete_deregister(client):
