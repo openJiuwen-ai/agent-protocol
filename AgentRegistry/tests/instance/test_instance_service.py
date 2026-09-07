@@ -183,8 +183,8 @@ def test_list_filter_by_user(instance_svc: InstanceService):
     assert len(rows) == 2
 
 
-def test_list_exclude_unhealthy_by_default(instance_svc: InstanceService):
-    """include_unhealthy=False（默认）→ 停止/异常实例被过滤掉。
+def test_list_include_unhealthy_filter(instance_svc: InstanceService):
+    """include_unhealthy=False（默认）排除停止/异常；=True 返回全部。
 
     注册中心不收心跳、不派生状态：非运行状态由
     gateway 据元戎 List 经 PATCH 写入，这里直接 PATCH 落库模拟。
@@ -195,31 +195,15 @@ def test_list_exclude_unhealthy_by_default(instance_svc: InstanceService):
         if row["node"] == "192.168.0.11":
             instance_svc.update_instance(row["service_id"], {"status": "异常"})
 
+    # 默认：192.168.0.11 的 2 条被过滤，只剩 192.168.0.12 的 1 条
     rows, _ = instance_svc.list_instances()
-    # 192.168.0.11 的 2 条被过滤，只剩 192.168.0.12 的 1 条
     assert len(rows) == 1
     assert rows[0]["node"] == "192.168.0.12"
 
-
-def test_list_include_unhealthy(instance_svc: InstanceService):
-    """include_unhealthy=True → 全部返回（含停止/异常）。"""
-    _seed_list_data(instance_svc)
-    for row in instance_svc.list_instances(include_unhealthy=True)[0]:
-        if row["node"] == "192.168.0.11":
-            instance_svc.update_instance(row["service_id"], {"status": "异常"})
+    # include_unhealthy=True：全部返回（运行 + 异常）
     rows, _ = instance_svc.list_instances(include_unhealthy=True)
     assert len(rows) == 3
-    statuses = {r["status"] for r in rows}
-    assert statuses == {"运行", "异常"}
-
-
-# ── status 落库（gateway 写入，注册中心不派生）────────────────
-
-def test_status_defaults_healthy(instance_svc: InstanceService):
-    """注册即 运行（status 落库在 data JSON，无任何派生逻辑）。"""
-    instance_svc.register_instance(make_entry())
-    rows, _ = instance_svc.list_instances()
-    assert rows[0]["status"] == "运行"
+    assert {r["status"] for r in rows} == {"运行", "异常"}
 
 
 # ── instance_id（元戎实例 ID，可选、不作为主键）────────────────
@@ -257,14 +241,7 @@ def test_update_instance_id_only(instance_svc: InstanceService):
     assert result["status"] == "运行"               # 保留
 
 
-# ── status 落库（gateway 据元戎 List 写入）────────────────────
-
-def test_register_status_defaults_running(instance_svc: InstanceService):
-    """注册即 运行（status 落库在 data JSON）。"""
-    instance_svc.register_instance(make_entry())
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    assert rows[0]["status"] == "运行"
-
+# ── status 落库（gateway 写入，注册中心不派生）────────────────
 
 def test_update_status_stopped(instance_svc: InstanceService):
     """PATCH status=停止 → 落库并在 include_unhealthy=true 时可见。"""
@@ -298,13 +275,3 @@ def test_update_invalid_status_rejected(instance_svc: InstanceService):
     sid = make_entry()["service_id"]
     with pytest.raises(InstanceValidationError, match="status"):
         instance_svc.update_instance(sid, {"status": "running"})
-
-
-def test_status_not_derived_no_heartbeat(instance_svc: InstanceService):
-    """注册中心不收心跳：落库 status 原样返回，无派生覆盖。"""
-    instance_svc.register_instance(make_entry(node="192.168.0.11"))
-    sid = make_entry(node="192.168.0.11")["service_id"]
-    instance_svc.update_instance(sid, {"status": "停止"})
-
-    rows, _ = instance_svc.list_instances(include_unhealthy=True)
-    assert rows[0]["status"] == "停止"               # 原样返回，无心跳覆盖

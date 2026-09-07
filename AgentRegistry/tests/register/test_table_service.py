@@ -124,22 +124,25 @@ class TestRegisterService:
 # ── register：image kind ──────────────────────────────────────
 
 class TestRegisterImage:
-    def _entry(self, fw, ver, **overrides):
-        # V2: image rows require version_key (NOT NULL) and uploaded_by.
+    def _entry(self, name, ver, **overrides):
+        # name 主键 + version（原 framework_version）；
+        # framework 降级为展示列。version_key/uploaded_by 仍为提升列。
         from a2x_registry.image.version_key import version_key
         base = {
-            "service_id": image_sid(fw, ver),
-            "framework": fw,
-            "framework_version": ver,
+            "service_id": image_sid(name, ver),
+            "name": name,
+            "framework": name,
+            "version": ver,
             "version_key": version_key(ver),
             "is_default": 0,
             "uploaded_by": "tester",
             "data": {
-                "imageurl": f"registry.local/{fw}:{ver}",
-                "cpu": 1,
-                "memory": "512Mi",
-                "ports": [8080],
-                "env": {},
+                "runtime_spec": {
+                    "rootfs": {"imageurl": f"registry.local/{name}:{ver}"},
+                    "cpu": 1, "memory": "512Mi", "ports": [8080],
+                },
+                "access_mode": [],
+                "env_vars": {},
                 "image_module_version": "v1",
             },
         }
@@ -149,19 +152,20 @@ class TestRegisterImage:
     def test_register_image_inserts_new(self, table_service):
         table_service.create_registry(IMAGE_REG, "image")
         row = table_service.register(IMAGE_REG, self._entry("langchain", "0.2.0"))
+        assert row["name"] == "langchain"
         assert row["framework"] == "langchain"
-        assert row["framework_version"] == "0.2.0"
+        assert row["version"] == "0.2.0"
         assert row["service_id"] == image_sid("langchain", "0.2.0")
 
     def test_register_image_upsert(self, table_service):
-        """同 framework+version 二次 register → service_id 相同 → 行数仍 1。"""
+        """同 name+version 二次 register → service_id 相同 → 行数仍 1。"""
         table_service.create_registry(IMAGE_REG, "image")
         table_service.register(IMAGE_REG, self._entry("langchain", "0.2.0"))
-        new_data = {"rootfs": {"type": "docker", "imageurl": "new"}, "cpu": 4}
+        new_data = {"runtime_spec": {"rootfs": {"imageurl": "new"}, "cpu": 4}}
         row = table_service.register(
             IMAGE_REG, self._entry("langchain", "0.2.0", data=new_data)
         )
-        assert row["data"]["cpu"] == 4
+        assert row["data"]["runtime_spec"]["cpu"] == 4
         rows = table_service.query(IMAGE_REG)
         assert len(rows) == 1
 
@@ -417,8 +421,9 @@ class TestKindIsolation:
             IMAGE_REG,
             {
                 "service_id": "shared_id",
+                "name": "fw",
                 "framework": "fw",
-                "framework_version": "1.0",
+                "version": "1.0",
                 "version_key": "00000.00001.00000~",
                 "is_default": 1,
                 "uploaded_by": "tester",

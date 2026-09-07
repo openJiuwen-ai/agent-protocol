@@ -27,24 +27,25 @@ CREATE TABLE IF NOT EXISTS service (
 );
 CREATE INDEX IF NOT EXISTS idx_service_type ON service(registry, type);
 
--- Image (one row per version)
+-- Image (one row per version; name 主键, framework 降级为展示列)
 CREATE TABLE IF NOT EXISTS image (
   registry          TEXT NOT NULL,
-  service_id        TEXT NOT NULL,               -- image_sid(framework, framework_version)
-  framework         TEXT NOT NULL,               -- hot: lookup by framework
-  framework_version TEXT NOT NULL,               -- hot: lookup by version
+  service_id        TEXT NOT NULL,               -- image_sid(name, version)
+  name              TEXT NOT NULL,               -- hot: 镜像主键（取代原 framework 定位）
+  framework         TEXT,                        -- 展示字段（非主键），可按其筛选
+  version           TEXT NOT NULL,               -- hot: lookup by version（原 framework_version 更名）
   version_key       TEXT NOT NULL,               -- sort: normalized semver key computed at registration (see image/version_key.py)
-  is_default        INTEGER NOT NULL DEFAULT 0,  -- default-version flag for a framework (exactly one row per framework = 1); not part of sort order
+  is_default        INTEGER NOT NULL DEFAULT 0,  -- default-version flag for a name (exactly one row per name = 1); not part of sort order
   uploaded_by       TEXT,                        -- hot: filter by uploader; pre-seeded entries are 'system'
-  data              TEXT NOT NULL,               -- JSON flat (no rootfs wrapper): {imageurl, workdir, mounts, cpu, memory, ports, env, image_module_version, created_at}
+  data              TEXT NOT NULL,               -- JSON flat (no rootfs wrapper): {runtime_spec, access_mode, env_vars, workspace, mounts, description, package_path, image_archive_path, image_module_version, created_at}
   PRIMARY KEY (registry, service_id)
 );
-CREATE INDEX IF NOT EXISTS idx_image_fw     ON image(registry, framework);
-CREATE INDEX IF NOT EXISTS idx_image_fw_ver ON image(registry, framework, framework_version);
-CREATE INDEX IF NOT EXISTS idx_image_by     ON image(registry, uploaded_by);
-CREATE INDEX IF NOT EXISTS idx_image_order  ON image(registry, framework, version_key DESC);
+CREATE INDEX IF NOT EXISTS idx_image_name    ON image(registry, name);
+CREATE INDEX IF NOT EXISTS idx_image_name_ver ON image(registry, name, version);
+CREATE INDEX IF NOT EXISTS idx_image_by      ON image(registry, uploaded_by);
+CREATE INDEX IF NOT EXISTS idx_image_order   ON image(registry, name, version_key DESC);
 
--- Instance (status is not persisted; derived from node heartbeat at query time)
+-- Instance (status persisted inside data JSON, written by gateway via PATCH)
 CREATE TABLE IF NOT EXISTS instance (
   registry          TEXT NOT NULL,
   service_id        TEXT NOT NULL,       -- instance_sid(user, framework)

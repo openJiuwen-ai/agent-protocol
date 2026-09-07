@@ -15,6 +15,7 @@
   export A2X_REGISTRY_DB="${A2X_REGISTRY_HOME:-/var/lib/a2x-registry}/registry.db"
   ```
 - 表结构真源：[a2x_registry/common/db.py](../../a2x_registry/common/db.py) 的 `SCHEMA_SQL`（4 表：`registry_meta` / `service` / `image` / `instance`）。
+- **镜像注册表以 `name` 为主键**：`name` 取代原 `framework` 的定位作用（主键 / 默认版本 / 检索）；`framework` 降级为纯展示字段（仍可按其筛选）；`framework_version` 更名 `version`（过渡期 `framework_version` 兼容回退、标记待删除）；新增 `description` / `package_path` / `image_archive_path` 纯文本字段与 `access_mode` 接入方式数组（每项 `{name, port, cmd}`）。接口路径 `{framework}` 全部改 `{name}`。
 - **实例 status 落库（data JSON）**：`instance` 表无 `status` 列，status 存在行内 `data` JSON（`data.status`，注册默认 `运行`，gateway 据元戎 List 经 PATCH 写入 `停止`/`异常`/`运行`）。
 - **注册中心不收心跳**：节点心跳 `/api/nodes/{node}/heartbeat` 与全局 `/api/lease-config` 已移除；实例存活由 gateway 轮询元戎 List、经 `PATCH` 写 `status`，注册中心不派生、不自动剔除。
 
@@ -59,8 +60,12 @@ pyinstaller \
 curl -X POST http://127.0.0.1:8000/api/images \
   -H "Content-Type: application/json" \
   -d '{
+    "name": "opencode",
     "framework": "opencode",
-    "framework_version": "v0.2.0",
+    "description": "opencode 适配镜像",
+    "package_path": "/pkg/opencode/",
+    "image_archive_path": "/archive/opencode.tar",
+    "version": "v0.2.0",
     "runtime_spec": {
       "runtime": "python3.11",
       "sandbox_type": "docker",
@@ -73,6 +78,10 @@ curl -X POST http://127.0.0.1:8000/api/images \
       "memory": 2048,
       "ports": [{"port": 8080, "protocol": "tcp"}]
     },
+    "access_mode": [
+      {"name": "tui", "port": "2222", "cmd": "opencode"},
+      {"name": "web", "port": "18789", "cmd": "opencode gateway --port 18789"}
+    ],
     "env_vars": {"A2X_LLM_KEY": "${A2X_LLM_KEY}"},
     "workspace": "/app",
     "mounts": [{"source": "/data/agent", "target": "/data"}],
@@ -83,21 +92,25 @@ curl -X POST http://127.0.0.1:8000/api/images \
 
 **预期响应** `200`：
 ```json
-{"framework": "opencode", "framework_version": "v0.2.0", "is_default": true, "status": "registered"}
+{"name": "opencode", "framework": "opencode", "version": "v0.2.0", "status": "registered"}
 ```
 
-**效果**：按 `framework + framework_version` 幂等 upsert；该 framework 首次注册时自动置为默认版本。`runtime_spec` 为不透明 JSON 透传，注册中心不解析其内部字段。
-**错误**：`runtime_spec` 缺失 -> `422`（pydantic 校验错误）。
+**效果**：按 `name + version` 幂等 upsert；该 name 首次注册时自动置为默认版本。`runtime_spec` 为不透明 JSON 透传，注册中心不解析其内部字段。`framework` 为纯展示字段（非主键）；`description` / `package_path` / `image_archive_path` / `access_mode` 为 §6 新增字段，落 `data` JSON。
+**错误**：`runtime_spec` 缺失 -> `422`（pydantic 校验错误）；`version` 与过渡期 `framework_version` 均缺失 -> `400`。
 
 **数据库验证**：
 ```bash
-# 1. image 表新增一行（registry='images'），data JSON 含 runtime_spec 透传
+# 1. image 表新增一行（registry='images'），name/framework/version 为提升列，
+#    data JSON 含 runtime_spec 透传 + §6 新字段
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT framework, framework_version, is_default,
+  "SELECT name, framework, version, is_default,
           json_extract(data,'$.runtime_spec.rootfs.imageurl') AS imageurl,
-          json_extract(data,'$.runtime_spec.cpu') AS cpu
-   FROM image WHERE registry='images' AND framework='opencode';"
-# 预期：opencode|v0.2.0|1|harbor.local/adapted/opencode:v0.2.0-mod1.3|1000
+          json_extract(data,'$.runtime_spec.cpu') AS cpu,
+          json_extract(data,'$.description') AS description,
+          json_extract(data,'$.package_path') AS package_path,
+          json_extract(data,'$.image_archive_path') AS archive_path
+   FROM image WHERE registry='images' AND name='opencode';"
+# 预期：opencode|opencode|v0.2.0|1|harbor.local/adapted/opencode:v0.2.0-mod1.3|1000|opencode 适配镜像|/pkg/opencode/|/archive/opencode.tar
 
 # 2. registry_meta 已登记 'images'（启动期 create_registry）
 sqlite3 "$A2X_REGISTRY_DB" \
@@ -105,20 +118,31 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 预期：images|image
 ```
 
-### 1.2 查询镜像（按 framework 过滤）
+> **过渡期兼容**：请求体只带 `framework_version`（不带 `version`）也能注册——`version` 缺省时回退 deprecated `framework_version`。
 
-**接口**：`GET /api/images?framework={fw}`
+### 1.2 查询镜像（按 name 过滤）
+
+**接口**：`GET /api/images?name={name}`
 
 ```bash
+# 按主键 name 过滤
+curl 'http://127.0.0.1:8000/api/images?name=opencode'
+
+# 按 framework 展示字段过滤（降级为普通筛选）
 curl 'http://127.0.0.1:8000/api/images?framework=opencode'
 ```
 
 **预期响应** `200`：
 ```json
 [{
+  "name": "opencode",
   "framework": "opencode",
-  "framework_version": "v0.2.0",
+  "description": "opencode 适配镜像",
+  "package_path": "/pkg/opencode/",
+  "image_archive_path": "/archive/opencode.tar",
+  "version": "v0.2.0",
   "is_default": true,
+  "access_mode": [{"name": "tui", "port": "2222", "cmd": "opencode"}],
   "image_module_version": "v1.3",
   "runtime_spec": {"runtime": "python3.11", "rootfs": {"imageurl": "..."}, "cpu": 1000, ...},
   "workspace": "/app",
@@ -129,22 +153,22 @@ curl 'http://127.0.0.1:8000/api/images?framework=opencode'
 }]
 ```
 
-**效果**：扁平数组返回（一条目 = 一个框架版本），`runtime_spec` 为不透明透传。不传 `?framework=` 返回全部。支持 `?size` / `?page` 分页。
+**效果**：扁平数组返回（一条目 = 一个 name 的一个版本），`runtime_spec` 为不透明透传。排序 `name asc, version_key desc`（同 name 新版本在前）。不传参数返回全部；`?name=` 按主键过滤，`?framework=` 按展示字段过滤。支持 `?size` / `?page` 分页。
 
 **数据库验证**：
 ```bash
-# 对照 image 表中该 framework 全部版本行 + 默认版本指针
+# 对照 image 表中该 name 全部版本行 + 默认版本指针
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT framework_version, is_default,
+  "SELECT name, version, is_default,
           json_extract(data,'$.image_module_version') AS mod_ver
-   FROM image WHERE registry='images' AND framework='opencode'
-   ORDER BY is_default DESC, framework_version;"
-# 预期首行：v0.2.0|1|v1.3（is_default=1 排在前）
+   FROM image WHERE registry='images' AND name='opencode'
+   ORDER BY is_default DESC, version;"
+# 预期首行：opencode|v0.2.0|1|v1.3（is_default=1 排在前）
 ```
 
 ### 1.3 取运行规格（gateway 拉起前调用）
 
-**接口**：`GET /api/images/{framework}/launch-spec?version={ver}`
+**接口**：`GET /api/images/{name}/launch-spec?version={ver}`
 
 ```bash
 # 默认版本
@@ -157,8 +181,9 @@ curl 'http://127.0.0.1:8000/api/images/opencode/launch-spec?version=v0.2.0'
 **预期响应** `200`：
 ```json
 {
+  "name": "opencode",
   "framework": "opencode",
-  "framework_version": "v0.2.0",
+  "version": "v0.2.0",
   "runtime_spec": {
     "runtime": "python3.11",
     "sandbox_type": "docker",
@@ -171,6 +196,10 @@ curl 'http://127.0.0.1:8000/api/images/opencode/launch-spec?version=v0.2.0'
     "memory": 2048,
     "ports": [{"port": 8080, "protocol": "tcp"}]
   },
+  "access_mode": [
+    {"name": "tui", "port": "2222", "cmd": "opencode"},
+    {"name": "web", "port": "18789", "cmd": "opencode gateway --port 18789"}
+  ],
   "env_vars": {"A2X_LLM_KEY": "${A2X_LLM_KEY}"},
   "workspace": "/app",
   "mounts": [{"source": "/data/agent", "target": "/data"}],
@@ -178,53 +207,54 @@ curl 'http://127.0.0.1:8000/api/images/opencode/launch-spec?version=v0.2.0'
 }
 ```
 
-**效果**：返回元戎运行规格（`runtime_spec` 不透明透传 + `env_vars`/`workspace`/`mounts` 顶层字段）；不带 version 取默认版本。
-**错误**：framework 或版本不存在 -> `404 {"detail":"..."}`。
+**效果**：返回元戎运行规格（`runtime_spec` 不透明透传 + `access_mode`/`env_vars`/`workspace`/`mounts` 顶层字段，gateway 据 `access_mode` 选端口与启动命令）；不带 version 取默认版本。
+**错误**：name 或版本不存在 -> `404 {"detail":"..."}`。
 
 **数据库验证**：
 ```bash
 # 默认版本路径：查 is_default=1 那一行的 data
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT framework_version,
+  "SELECT version,
           json_extract(data,'$.runtime_spec.rootfs.imageurl') AS imageurl,
-          json_extract(data,'$.runtime_spec.cpu') AS cpu
+          json_extract(data,'$.runtime_spec.cpu') AS cpu,
+          json_extract(data,'$.access_mode') AS access_mode
    FROM image
-   WHERE registry='images' AND framework='opencode' AND is_default=1;"
-# 预期：v0.2.0|harbor.local/adapted/opencode:v0.2.0-mod1.3|1000
+   WHERE registry='images' AND name='opencode' AND is_default=1;"
+# 预期：v0.2.0|harbor.local/adapted/opencode:v0.2.0-mod1.3|1000|[{"name":"tui","port":"2222","cmd":"opencode"},...]
 ```
 
 ### 1.4 设默认版本
 
-**接口**：`PUT /api/images/{framework}/default`
+**接口**：`PUT /api/images/{name}/default`
 
 ```bash
 # 假设此前已注册 opencode 的 v0.1.0 与 v0.2.0 两个版本
 curl -X PUT http://127.0.0.1:8000/api/images/opencode/default \
   -H "Content-Type: application/json" \
-  -d '{"framework_version": "v0.2.0"}'
+  -d '{"version": "v0.2.0"}'
 ```
 
 **预期响应** `200`：
 ```json
-{"framework": "opencode", "default": "v0.2.0", "status": "updated"}
+{"name": "opencode", "framework": "opencode", "default": "v0.2.0", "status": "updated"}
 ```
 
-**效果**：清该 framework 旧 `is_default`、置新版为 1。
-**错误**：framework 不存在 -> `404`。
+**效果**：清该 name 旧 `is_default`、置新版为 1。
+**错误**：name 不存在 -> `404`；`version` 与过渡期 `framework_version` 均缺失 -> `400`。
 
 **数据库验证**：
 ```bash
-# 同 framework 下应恰有一行 is_default=1（新版），其他均为 0
+# 同 name 下应恰有一行 is_default=1（新版），其他均为 0
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT framework_version, is_default
-   FROM image WHERE registry='images' AND framework='opencode'
-   ORDER BY framework_version;"
+  "SELECT version, is_default
+   FROM image WHERE registry='images' AND name='opencode'
+   ORDER BY version;"
 # 预期（两版本场景）：v0.1.0|0  /  v0.2.0|1
 ```
 
 ### 1.5 注销镜像
 
-**接口**：`DELETE /api/images/{framework}/{version}`
+**接口**：`DELETE /api/images/{name}/{version}`
 
 ```bash
 curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
@@ -232,7 +262,7 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 
 **预期响应** `200`：
 ```json
-{"framework": "opencode", "framework_version": "v0.2.0", "status": "deregistered"}
+{"name": "opencode", "framework": "opencode", "version": "v0.2.0", "status": "deregistered"}
 ```
 
 **效果**：先校验无在用实例 -> 删镜像仓文件 -> 删条目（删的是默认版本则把最新版补为默认）。
@@ -243,14 +273,14 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 # 1. image 表对应行已删除
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT COUNT(*) FROM image
-   WHERE registry='images' AND framework='opencode' AND framework_version='v0.2.0';"
+   WHERE registry='images' AND name='opencode' AND version='v0.2.0';"
 # 预期：0
 
-# 2. 若删的是默认版本，应自动补一个新默认（同 framework 下剩余行恰一行 is_default=1）
+# 2. 若删的是默认版本，应自动补一个新默认（同 name 下剩余行恰一行 is_default=1）
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT COUNT(*) FROM image
-   WHERE registry='images' AND framework='opencode' AND is_default=1;"
-# 预期：1（如还有其他版本）或 0（如该 framework 已无任何版本）
+   WHERE registry='images' AND name='opencode' AND is_default=1;"
+# 预期：1（如还有其他版本）或 0（如该 name 已无任何版本）
 ```
 
 ## 2. 实例管理 `/api/instances`
@@ -581,15 +611,15 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 # 1. image 表对应版本行已删除
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT COUNT(*) FROM image
-   WHERE registry='images' AND framework='opencode' AND framework_version='v0.2.0';"
+   WHERE registry='images' AND name='opencode' AND version='v0.2.0';"
 # 预期：0
 
-# 2. 该 framework 下若仍有其他版本，应恰有一行 is_default=1（自动补默认）
+# 2. 该 name 下若仍有其他版本，应恰有一行 is_default=1（自动补默认）
 sqlite3 "$A2X_REGISTRY_DB" \
-  "SELECT framework_version, is_default
-   FROM image WHERE registry='images' AND framework='opencode'
-   ORDER BY is_default DESC, framework_version;"
-# 预期：剩余版本中恰一行 is_default=1；若该 framework 已无版本则空
+  "SELECT version, is_default
+   FROM image WHERE registry='images' AND name='opencode'
+   ORDER BY is_default DESC, version;"
+# 预期：剩余版本中恰一行 is_default=1；若该 name 已无版本则空
 
 # 3. 注销前的在用实例校验：instance 表中引用该 fw+ver 的行（DELETE 镜像前应已迁走）
 sqlite3 "$A2X_REGISTRY_DB" \
@@ -669,7 +699,7 @@ sqlite3 "$A2X_REGISTRY_DB" \
 | HTTP | 场景 | 响应体 |
 |------|------|--------|
 | `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
-| `404` | 取不存在的 framework launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
+| `404` | 取不存在的 name launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
 

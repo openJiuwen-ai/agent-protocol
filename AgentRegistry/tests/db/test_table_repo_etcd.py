@@ -254,8 +254,9 @@ def test_register_get_roundtrip(repo):
     repo.create_registry("images", "image")
     entry = {
         "service_id": "opencode@v0.2.0",
+        "name": "opencode",
         "framework": "opencode",
-        "framework_version": "v0.2.0",
+        "version": "v0.2.0",
         "version_key": "0.2.0",
         "is_default": 1,
         "uploaded_by": "user-01",
@@ -263,7 +264,8 @@ def test_register_get_roundtrip(repo):
     }
     stored = repo.register("images", entry)
     assert stored["service_id"] == entry["service_id"]
-    assert stored["framework"] == "opencode"
+    assert stored["name"] == "opencode"
+    assert stored["version"] == "v0.2.0"
     assert repo.get("images", "opencode@v0.2.0")["is_default"] == 1
 
 
@@ -392,17 +394,17 @@ def test_query_paginated_only_status(repo):
 def test_query_paginated_data_field_sort(repo):
     repo.create_registry("images", "image")
     repo.register("images", {
-        "service_id": "a@v1", "framework": "a", "framework_version": "v1",
+        "service_id": "a@v1", "name": "a", "framework": "a", "version": "v1",
         "version_key": "1", "is_default": 0, "uploaded_by": "sys",
         "data": {"created_at": "2026-01-01"},
     })
     repo.register("images", {
-        "service_id": "a@v2", "framework": "a", "framework_version": "v2",
+        "service_id": "a@v2", "name": "a", "framework": "a", "version": "v2",
         "version_key": "2", "is_default": 1, "uploaded_by": "sys",
         "data": {"created_at": "2026-02-01"},
     })
     rows, _ = repo.query_paginated("images", order_by=["data.created_at desc"])
-    assert [r["framework_version"] for r in rows] == ["v2", "v1"]
+    assert [r["version"] for r in rows] == ["v2", "v1"]
 
 
 # ── 真实 etcd 客户端原语（未起 etcd 则 skip） ─────────────────

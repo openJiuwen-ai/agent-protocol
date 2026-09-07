@@ -1,8 +1,8 @@
 """Deterministic ID + timestamp helpers for the registry.
 
 - now_iso(): UTC ISO8601 timestamp (second precision, 'Z' suffix).
-- image_sid(framework, framework_version): deterministic service_id for an
-  image row — "image_" + sha256(framework|framework_version)[:16].
+- image_sid(name, version): deterministic service_id for an image row —
+  "image_" + sha256(name|version)[:16]（name 主键）.
 - instance_sid(user, framework): deterministic service_id for an instance
   row — "generic_" + sha256(user|framework)[:8].
 
@@ -25,15 +25,17 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def image_sid(framework: str, framework_version: str) -> str:
+def image_sid(name: str, version: str) -> str:
     """Return the deterministic service_id for an image row.
 
-    Formula: "image_" + sha256(framework + "|" + framework_version)[:16].
-    The same (framework, framework_version) always yields the same id, so a
-    repeated register upserts the existing row instead of creating a
-    duplicate.
+    Formula: "image_" + sha256(name + "|" + version)[:16].
+    The same (name, version) always yields the same id, so a repeated
+    register upserts the existing row instead of creating a duplicate.
+    Legacy rows keyed by (framework, framework_version) keep their ids
+    valid after the §6 migration because name=framework / version=
+    framework_version were backfilled with the same two strings.
     """
-    raw = f"{framework}|{framework_version}"
+    raw = f"{name}|{version}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return "image_" + digest[:16]
 
