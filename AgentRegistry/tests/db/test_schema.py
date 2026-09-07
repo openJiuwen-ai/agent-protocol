@@ -73,17 +73,23 @@ def test_service_columns(appliance_conn):
 
 
 def test_image_columns(appliance_conn):
-    """image 主键 (registry, service_id)，framework/version/version_key/is_default 热，uploaded_by 热，is_default 默认 0。"""
+    """image 主键 (registry, service_id)，name/version/version_key/is_default/uploaded_by。
+
+    name 是镜像主键（NOT NULL）；framework 降级为纯展示列（可空）；
+    version（原 framework_version）NOT NULL；is_default 默认 0。
+    """
     cols = _columns(appliance_conn, "image")
     assert set(cols) == {
-        "registry", "service_id", "framework", "framework_version",
+        "registry", "service_id", "name", "framework", "version",
         "version_key", "is_default", "uploaded_by", "data",
     }
     assert cols["registry"]["pk"] == 1
     assert cols["service_id"]["pk"] == 2
-    for nn in ("registry", "service_id", "framework",
-               "framework_version", "version_key", "is_default", "data"):
+    for nn in ("registry", "service_id", "name", "version",
+               "version_key", "is_default", "data"):
         assert cols[nn]["notnull"] == 1, f"{nn} 应 NOT NULL"
+    # framework 降级为展示字段，可空
+    assert cols["framework"]["notnull"] == 0
     # is_default 默认值 0
     assert cols["is_default"]["dflt_value"] == "0"
 
@@ -108,7 +114,7 @@ def test_instance_columns(appliance_conn):
 # ── 索引 ──────────────────────────────────────────────────────
 
 def test_indexes_exist(appliance_conn):
-    """6 个业务索引必须存在。"""
+    """7 个业务索引必须存在（idx_image_fw(_ver) → idx_image_name(_ver)）。"""
     rows = appliance_conn.execute(
         "SELECT name FROM sqlite_master WHERE type='index' "
         "AND name NOT LIKE 'sqlite_autoindex%'"
@@ -116,21 +122,21 @@ def test_indexes_exist(appliance_conn):
     names = {r["name"] for r in rows}
     expected = {
         "idx_service_type",
-        "idx_image_fw", "idx_image_fw_ver",
+        "idx_image_name", "idx_image_name_ver",
         "idx_instance_node", "idx_instance_fw", "idx_instance_user",
     }
     assert expected <= names, f"缺失索引：{expected - names}"
 
 
-def test_image_index_covers_framework_and_version(appliance_conn):
-    """idx_image_fw_ver 覆盖 (registry, framework, framework_version) —— launch-spec 查询走它。"""
+def test_image_index_covers_name_and_version(appliance_conn):
+    """idx_image_name_ver 覆盖 (registry, name, version) —— launch-spec 查询走它。"""
     info = appliance_conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name='idx_image_fw_ver'"
+        "SELECT sql FROM sqlite_master WHERE name='idx_image_name_ver'"
     ).fetchone()
     assert info is not None
     sql = info["sql"].lower()
-    assert "framework" in sql
-    assert "framework_version" in sql
+    assert "name" in sql
+    assert "version" in sql
 
 
 def test_instance_index_covers_node(appliance_conn):
