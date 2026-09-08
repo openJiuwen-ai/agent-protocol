@@ -173,18 +173,19 @@ async def test_lowest_latency_exploration(deployment_gpt4_1, deployment_gpt4_2):
     assert selected in deps
 
 
-def test_lowest_latency_on_success(deployment_gpt4_1):
+def test_lowest_latency_on_success_noop(deployment_gpt4_1):
+    """策略回调不再直接更新 state（router 层统一更新）。"""
     state = LocalRouterState()
     strategy = LowestLatencyStrategy(state=state)
     strategy.on_success(deployment_gpt4_1, latency=0.5, tokens=100)
-    assert state.total_tokens["dep_gpt4_1"] == 100
+    assert state.total_tokens == {}
 
 
-def test_lowest_latency_on_failure(deployment_gpt4_1):
+def test_lowest_latency_on_failure_noop(deployment_gpt4_1):
     state = LocalRouterState()
     strategy = LowestLatencyStrategy(state=state)
     strategy.on_failure(deployment_gpt4_1, ValueError("x"))
-    assert state.consecutive_failures["dep_gpt4_1"] == 1
+    assert state.consecutive_failures == {}
 
 
 # ======== TagBasedStrategy ========
@@ -292,18 +293,19 @@ async def test_token_aware_empty_deps():
     assert await strategy.select_deployment([], ctx) is None
 
 
-def test_token_aware_on_success(deployment_gpt4_1):
+def test_token_aware_on_success_noop(deployment_gpt4_1):
+    """策略回调不再直接更新 state（router 层统一更新）。"""
     state = LocalRouterState()
     strategy = TokenAwareStrategy(state=state)
     strategy.on_success(deployment_gpt4_1, latency=0.5, tokens=100)
-    assert state.total_tokens["dep_gpt4_1"] == 100
+    assert state.total_tokens == {}
 
 
-def test_token_aware_on_failure(deployment_gpt4_1):
+def test_token_aware_on_failure_noop(deployment_gpt4_1):
     state = LocalRouterState()
     strategy = TokenAwareStrategy(state=state)
     strategy.on_failure(deployment_gpt4_1, ValueError("x"))
-    assert state.consecutive_failures["dep_gpt4_1"] == 1
+    assert state.consecutive_failures == {}
 
 
 # ======== RateLimitAwareStrategy ========
@@ -326,18 +328,19 @@ async def test_rate_limit_empty_deps():
     assert await strategy.select_deployment([], ctx) is None
 
 
-def test_rate_limit_on_success(deployment_gpt4_1):
+def test_rate_limit_on_success_noop(deployment_gpt4_1):
+    """策略回调不再直接更新 state（router 层统一更新）。"""
     state = LocalRouterState()
     strategy = RateLimitAwareStrategy(state=state)
     strategy.on_success(deployment_gpt4_1, latency=0.5, tokens=100)
-    assert state.total_tokens["dep_gpt4_1"] == 100
+    assert state.total_tokens == {}
 
 
-def test_rate_limit_on_failure(deployment_gpt4_1):
+def test_rate_limit_on_failure_noop(deployment_gpt4_1):
     state = LocalRouterState()
     strategy = RateLimitAwareStrategy(state=state)
     strategy.on_failure(deployment_gpt4_1, ValueError("x"))
-    assert state.consecutive_failures["dep_gpt4_1"] == 1
+    assert state.consecutive_failures == {}
 
 
 # ======== AdaptiveStrategy ========
@@ -468,18 +471,19 @@ def test_cleanup_expired_sessions():
     assert state.session_deployment_map.get("stale") is None
 
 
-def test_adaptive_on_success(deployment_gpt4_1):
+def test_adaptive_on_success_noop(deployment_gpt4_1):
+    """策略回调不再直接更新 state（router 层统一更新）。"""
     state = LocalRouterState()
     strategy = AdaptiveStrategy(state=state)
     strategy.on_success(deployment_gpt4_1, latency=0.5, tokens=100)
-    assert state.total_tokens["dep_gpt4_1"] == 100
+    assert state.total_tokens == {}
 
 
-def test_adaptive_on_failure(deployment_gpt4_1):
+def test_adaptive_on_failure_noop(deployment_gpt4_1):
     state = LocalRouterState()
     strategy = AdaptiveStrategy(state=state)
     strategy.on_failure(deployment_gpt4_1, ValueError("x"))
-    assert state.consecutive_failures["dep_gpt4_1"] == 1
+    assert state.consecutive_failures == {}
 
 
 @pytest.mark.asyncio

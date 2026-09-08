@@ -279,6 +279,12 @@ class MetricsWebServer:
         port: int = 8080,
         addr: str = "0.0.0.0",
     ):
+        if isinstance(port, bool) or not isinstance(port, int):
+            raise TypeError(f"port must be an int, got {type(port).__name__}")
+        if not (0 <= port <= 65535):
+            raise ValueError(
+                f"port must be in range 0-65535 (0 = dynamic assignment), got {port}"
+            )
         self._metrics = metrics
         self._port = port
         self._addr = addr
@@ -350,6 +356,8 @@ class MetricsWebServer:
                 pass  # 静默，不输出到 stderr
 
         self._httpd = HTTPServer((self._addr, self._port), Handler)
+        # port=0 时 OS 会动态分配端口，绑定后回读实际端口
+        self._port = self._httpd.server_port
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
 

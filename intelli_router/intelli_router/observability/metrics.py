@@ -1,4 +1,5 @@
 """指标采集事件处理器"""
+import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -6,6 +7,14 @@ from typing import Dict, Any, List, Deque, Optional
 
 from .events import RoutingEvent, RoutingEventType
 from .handler import EventHandler
+
+# Prometheus 完整指标名规范: [a-zA-Z_:][a-zA-Z0-9_:]*
+# 此正则仅约束 prefix 本身（禁止冒号是刻意的，冒号保留给特定命名惯例）；
+# 完整指标名 = prefix + 本模块固定的合法后缀（如 _requests_total），
+# 整体合规由拼接处保证
+_PROMETHEUS_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+# prefix 最大长度（拼接指标名后总长不超过 Prometheus 规范上限）
+_PROMETHEUS_PREFIX_MAX_LEN = 256
 
 
 @dataclass
@@ -79,6 +88,20 @@ class MetricsCollector(EventHandler):
         enable_prometheus: bool = False,
         prometheus_prefix: str = "intelli_router",
     ):
+        if not isinstance(prometheus_prefix, str):
+            raise TypeError(
+                f"prometheus_prefix must be a str, got {type(prometheus_prefix).__name__}"
+            )
+        if not _PROMETHEUS_NAME_RE.match(prometheus_prefix):
+            raise ValueError(
+                "prometheus_prefix must match [a-zA-Z_][a-zA-Z0-9_]* and be non-empty, "
+                f"got {prometheus_prefix!r}"
+            )
+        if len(prometheus_prefix) > _PROMETHEUS_PREFIX_MAX_LEN:
+            raise ValueError(
+                f"prometheus_prefix length must be <= {_PROMETHEUS_PREFIX_MAX_LEN}, "
+                f"got {len(prometheus_prefix)}"
+            )
         self._enable_prometheus = enable_prometheus
         self._prefix = prometheus_prefix
 

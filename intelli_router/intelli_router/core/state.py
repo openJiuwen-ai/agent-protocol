@@ -129,10 +129,19 @@ class LocalRouterState:
         return self._lock
 
     def reset_deployment(self, deployment_id: str) -> None:
-        """原子性重置部署状态"""
+        """原子性重置部署状态
+
+        COOLDOWN 到期后的软恢复入口：状态与健康标记一并恢复为可用，
+        让策略重新获得调度机会；真实请求若仍失败会再次触发 on_failure
+        进入 COOLDOWN（consecutive_failures 保留，退避时长递增）。
+        """
         with self._lock:
             self.deployment_status[deployment_id] = DeploymentStatus.HEALTHY
             self.cooldown_until[deployment_id] = None
+            # health_state 必须同步恢复，否则 COOLDOWN 到期后
+            # health_state 仍是 False，策略打分永远为 0，部署永远
+            # 不会被再次调度，也就永远不会再进入 COOLDOWN。
+            self.health_state[deployment_id] = True
 
     def update_health(self, deployment_id: str, is_healthy: bool) -> None:
         """原子性更新健康状态
@@ -211,11 +220,22 @@ class LocalRouterState:
             self.health_state[deployment_id] = False
 
     def get_average_latency(self, deployment_id: str) -> float:
-        """获取平均归一化延迟"""
+        """获取平均归一化延迟（latency/tokens，供策略打分使用）"""
         records = self.latencies.get(deployment_id, [])
         if not records:
             return float('inf')
         return sum(r.normalized for r in records) / len(records)
+
+    def get_average_latency_raw(self, deployment_id: str) -> Optional[float]:
+        """获取平均真实延迟（秒）。
+
+        与 get_average_latency（归一化延迟，策略打分用）不同，本方法
+        面向用户统计口径：无记录时返回 None 而非 inf。
+        """
+        records = self.latencies.get(deployment_id, [])
+        if not records:
+            return None
+        return sum(r.latency for r in records) / len(records)
 
     def get_available_deployments(self, now: float) -> List[str]:
         """获取当前可用的部署ID列表"""
@@ -236,6 +256,75 @@ class LocalRouterState:
         if usage:
             return usage.remaining
         return float('inf')
+
+    def remove_deployment(self, deployment_id: str) -> bool:
+        """删除单个部署的全部运行时状态（热替换中该部署被移除时调用）。
+
+        与 cleanup_deployments 不同，本方法精确作用于单个部署，
+        不会影响共享同一 state 的其他 router 管理的部署。
+
+        Returns:
+            是否实际删除了状态
+        """
+        with self._lock:
+            existed = (
+                deployment_id in self.deployment_status
+                or deployment_id in self.latencies
+            )
+            for registry in (
+                self.deployment_status,
+                self.consecutive_failures,
+                self.cooldown_until,
+                self.latencies,
+                self.total_tokens,
+                self.total_requests,
+                self.health_state,
+                self.token_usage,
+                self.rpm_tracker,
+            ):
+                registry.pop(deployment_id, None)
+            for sid, dep_id in list(self.session_deployment_map.items()):
+                if dep_id == deployment_id:
+                    del self.session_deployment_map[sid]
+                    self.session_timestamps.pop(sid, None)
+            return existed
+
+    def cleanup_deployments(self, keep_ids: List[str]) -> List[str]:
+        """清理不在 keep_ids 中的部署残留状态。
+
+        .. warning::
+            按 keep_ids 全集反向清理。若多个 router 共享同一 state
+            且各管不同部署，会误删其他 router 管理的部署状态——
+            该场景请使用 remove_deployment 精确删除。
+
+        Returns:
+            被清理的 deployment_id 列表
+        """
+        keep = set(keep_ids)
+        removed = []
+        with self._lock:
+            for registry in (
+                self.deployment_status,
+                self.consecutive_failures,
+                self.cooldown_until,
+                self.latencies,
+                self.total_tokens,
+                self.total_requests,
+                self.health_state,
+                self.token_usage,
+                self.rpm_tracker,
+            ):
+                for dep_id in list(registry.keys()):
+                    if dep_id not in keep:
+                        removed.append(dep_id)
+                        del registry[dep_id]
+            # session 映射指向已移除部署的也一并清理
+            for sid, dep_id in list(self.session_deployment_map.items()):
+                if dep_id not in keep:
+                    del self.session_deployment_map[sid]
+                    self.session_timestamps.pop(sid, None)
+        # 去重保序
+        return list(dict.fromkeys(removed))
 
     def get_rpm_remaining(self, deployment_id: str) -> int:
         """获取剩余RPM配额"""
