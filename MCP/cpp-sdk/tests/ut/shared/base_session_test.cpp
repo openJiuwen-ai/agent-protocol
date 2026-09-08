@@ -61,9 +61,9 @@ public:
 
     void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override
     {
-        (void)message;
         (void)ctx;
         sentCount_++;
+        lastMessage_ = message;
     }
 
     void HandleRequest(const Http::HttpRequest& request, RequestContext& ctx) override
@@ -74,6 +74,8 @@ public:
 
     int SentCount() const { return sentCount_; }
 
+    const std::optional<JSONRPCMessage>& LastMessage() const { return lastMessage_; }
+
     void EmitIncoming(JSONRPCMessage message, RequestContext& ctx)
     {
         if (cb_) cb_->OnMessageReceived(message, ctx);
@@ -82,6 +84,7 @@ public:
 private:
     std::shared_ptr<TransportCallback> cb_;
     int sentCount_{0};
+    std::optional<JSONRPCMessage> lastMessage_;
 };
 
 // ---------- Concrete test session ----------
@@ -335,6 +338,31 @@ TEST(BaseSessionTest, ProcessIncomingNotification_Null_NoCrash)
     ctx.sessionId = "ut";
 
     EXPECT_NO_THROW(s.OnTransportMessage(MakeNullNotificationMsg(), ctx));
+}
+
+TEST(BaseSessionTest, ProcessIncomingRequest_NullTypedRequest_SendsMethodNotFound)
+{
+    auto t = std::make_shared<FakeServerTransport>();
+    TestServerSession s(t);
+
+    JSONRPCRequest r;
+    r.jsonrpc_ = JSONRPC_VERSION;
+    r.id_ = RequestId(99);
+    r.method_ = "unknown/method";
+    r.request_.reset();
+
+    RequestContext ctx;
+    ctx.sessionId = "ut";
+
+    EXPECT_NO_THROW(s.OnTransportMessage(JSONRPCMessage{std::move(r)}, ctx));
+    EXPECT_EQ(t->SentCount(), 1);
+    ASSERT_TRUE(t->LastMessage().has_value());
+    ASSERT_TRUE(std::holds_alternative<JSONRPCError>(*t->LastMessage()));
+    const auto& err = std::get<JSONRPCError>(*t->LastMessage());
+    EXPECT_EQ(err.id_, RequestId(99));
+    EXPECT_EQ(err.code_, static_cast<int>(JsonRpcErrorCode::METHOD_NOT_FOUND));
+    EXPECT_NE(err.message_.find("unknown/method"), std::string::npos);
+    EXPECT_EQ(ctx.method, "unknown/method");
 }
 
 TEST(BaseSessionTest, SendProgressNotification_NoCrash)

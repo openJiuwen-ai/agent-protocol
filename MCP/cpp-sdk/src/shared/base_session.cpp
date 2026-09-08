@@ -179,7 +179,16 @@ void BaseSession::HandleResponse(const JSONRPCError& error)
 void BaseSession::ProcessIncomingRequest(const JSONRPCRequest& rpcRequest, RequestContext& ctx)
 {
     if (!rpcRequest.request_) {
+        // Unknown / unsupported methods deserialize with a null typed request.
+        // Return a JSON-RPC error instead of dereferencing the null pointer.
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "rpcRequest.request_ is null");
+        ctx.method = rpcRequest.method_;
+        JSONRPCError error;
+        error.id_ = rpcRequest.id_;
+        error.code_ = static_cast<int>(JsonRpcErrorCode::METHOD_NOT_FOUND);
+        error.message_ = "Method not found: " + rpcRequest.method_;
+        SendResponse(rpcRequest.id_, error, ctx);
+        return;
     }
     const Request& typedRequest = *static_cast<const Request*>(rpcRequest.request_.get());
     ctx.method = typedRequest.method_;
