@@ -79,7 +79,9 @@ class TableRepo(Protocol):
 
     def query(self, name: str, query_filter: Optional[dict] = None) -> List[dict]:
         """Return rows of registry ``name``, optionally equality-filtered by
-        promoted columns (or ``service_id``). ``filter=None`` returns all."""
+        promoted columns (or ``service_id``). A ``data.<key>`` filter key
+        matches the JSON-internal field (SQL: ``json_extract``; etcd: the
+        flattened row dict). ``filter=None`` returns all."""
 
     def query_paginated(
         self,

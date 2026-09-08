@@ -156,6 +156,29 @@ def test_data_json_empty_dict(fresh_backend):
     assert rows[0]["data"] == {}
 
 
+def test_query_filter_by_data_key(fresh_backend):
+    """data.<key> 过滤键下推为 json_extract（镜像在用校验主键关联用）。"""
+    from a2x_registry.register.service import RegistryTableService
+
+    svc = RegistryTableService(fresh_backend)
+    svc.create_registry("instances", "instance")
+    for sid, img in [("i_a", "opencode"), ("i_b", "aider"), ("i_c", "")]:
+        svc.register("instances", {
+            "service_id": sid, "kind": "三方", "framework": "fw",
+            "framework_version": "v0.1.0", "node": "n1", "user": "u1",
+            "data": {"image_name": img},
+        })
+    assert [r["service_id"] for r in svc.query(
+        "instances", {"data.image_name": "opencode"}
+    )] == ["i_a"]
+    # 与提升列组合过滤
+    assert [r["service_id"] for r in svc.query("instances", {
+        "framework_version": "v0.1.0", "data.image_name": "aider",
+    })] == ["i_b"]
+    # 缺失键（NULL）不匹配
+    assert svc.query("instances", {"data.image_name": "nope"}) == []
+
+
 # ── 启动模式建表（A2X_REGISTRY_MODE） ─────────────────────────
 
 def test_generic_mode_only_service_registry_needed(fresh_backend):
