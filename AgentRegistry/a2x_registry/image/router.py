@@ -13,6 +13,9 @@ Routes (mounted at app level, prefix ``/api/images``):
 ``framework`` remains a plain display filter. query returns flat rows (not
 grouped by name). Pagination headers (``X-Total-Count`` etc.) are set when
 ``size > 0``.
+
+etcd backend infrastructure failures (``EtcdError``: unreachable / timeout /
+CAS conflict) map to HTTP 502 on every route.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from a2x_registry.register.errors import (
     ValidationError,
 )
 from a2x_registry.register.errors import ImageInUseError, ExternalDependencyError
+from a2x_registry.register.etcd_client import EtcdError
 
 from .deps import get_image_service
 from .models import (
@@ -82,6 +86,8 @@ async def register_image(req: RegisterImageRequest):
         )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except EtcdError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
     return result
 
 
@@ -96,13 +102,16 @@ async def list_images(
 ):
     """Query images (flat, one row per name version)."""
     svc = _resolve_service()
-    rows, total = svc.query(
-        name=name,
-        framework=framework,
-        uploaded_by=uploaded_by,
-        size=size,
-        page=page,
-    )
+    try:
+        rows, total = svc.query(
+            name=name,
+            framework=framework,
+            uploaded_by=uploaded_by,
+            size=size,
+            page=page,
+        )
+    except EtcdError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
     if size > 0:
         response.headers["X-Total-Count"] = str(total)
         response.headers["X-Page"] = str(page)
@@ -123,6 +132,8 @@ async def get_launch_spec(
         return svc.resolve_launch_spec(name, version=version)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except EtcdError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 @router.put("/{name}/default", response_model=SetDefaultResponse)
@@ -137,6 +148,8 @@ async def set_default(name: str, req: SetDefaultRequest):
         return svc.set_default(name, version)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except EtcdError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 @router.patch("/{name}/{version}", response_model=ImageEntry)
@@ -157,6 +170,10 @@ async def update_image(name: str, version: str, req: UpdateImageRequest):
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except ImageInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except EtcdError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 @router.delete("/{name}/{version}", response_model=DeregisterResponse)
@@ -169,4 +186,6 @@ async def deregister_image(name: str, version: str):
     except ImageInUseError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except ExternalDependencyError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except EtcdError as exc:
         raise HTTPException(status_code=502, detail=str(exc))

@@ -21,7 +21,9 @@ Responsibilities:
 
 In-use check: instance rows still carry ``framework`` / ``framework_version``
 (instance contract unchanged this batch), so an image is "in use" when an
-instance references its display ``framework`` + ``version``.
+instance references its display ``framework`` + ``version``. Renaming the
+``framework`` of an in-use image is rejected,
+so a rename can never orphan instance references.
 
 Persistence goes through ``RegistryTableService``; this service does not
 hold a backend/store directly.
@@ -210,6 +212,12 @@ class ImageService:
         model omits them). ``framework`` is a promoted column; the rest
         live inside the ``data`` JSON and are merged read-modify-write
         (the whole ``data`` blob is patched). Returns the updated entry.
+
+        Renaming ``framework`` while the image is in use raises
+        ``ImageInUseError``: instances join on the
+        display ``framework``, so a rename would orphan their references
+        and make the image deletable. A no-op patch (same
+        value) is not blocked.
         """
         if not any(v is not None for v in fields.values()):
             raise ImageValidationError(
@@ -222,6 +230,23 @@ class ImageService:
         if not rows:
             raise ImageNotFoundError(f"image {name}@{version} not found")
         row = rows[0]
+
+        # 改 framework 展示值前按**当前**值做在用校验：改名后持旧值的
+        # **存量**实例行（无 image_name、按展示字段关联）不再匹配（镜像
+        # 可被删 -> 孤儿实例行）。方向保守——宁可 409 不漏判。带
+        # image_name（主键引用）的实例行不受改名影响，不拦截。
+        new_framework = fields.get("framework")
+        if new_framework is not None and new_framework != row.get("framework"):
+            in_use = self._legacy_in_use_instances(
+                row.get("framework"), version, name
+            )
+            if in_use:
+                raise ImageInUseError(
+                    f"image {name}@{version} still has "
+                    f"{len(in_use)} in-use instance(s); renaming "
+                    f"framework {row.get('framework')!r} -> "
+                    f"{new_framework!r} would orphan their references"
+                )
 
         patch_fields: Dict[str, Any] = {}
         if fields.get("framework") is not None:
@@ -364,26 +389,56 @@ class ImageService:
     def _in_use_instances(
         self, framework: Optional[str], version: str, name: str
     ) -> List[Dict[str, Any]]:
-        """Instances referencing this image.
+        """Instances referencing this image（注销守卫）.
 
-        Instance rows carry ``framework`` / ``framework_version`` (instance
-        contract unchanged), so the join key is the image's
-        display ``framework`` + ``version``. An image without a ``framework``
-        cannot be referenced by any instance.
+        关联优先级：
+        1. 实例行带 ``data.image_name``（镜像主键引用）→ 按
+           ``image_name + version`` **主键关联**——展示字段 ``framework``
+           改值 / 多镜像共用同一 framework 值均不再产生误伤或漏判；
+           ``image_name`` 指向**其它**镜像的行不阻塞本镜像。
+        2. 无 ``image_name`` 的存量行 → 退回展示字段
+           ``framework + version`` 匹配（镜像 framework 为空时按其
+           ``name`` 兜底，方向保守：只可能误伤、不可能漏判）。
         """
+        rows = self._table_svc.query(
+            INSTANCE_REGISTRY, {"framework_version": version}
+        )
+        pk_refs = [
+            r for r in rows
+            if (r.get("data") or {}).get("image_name") == name
+        ]
+        legacy = [
+            r for r in rows
+            if not (r.get("data") or {}).get("image_name")
+        ]
         if not framework:
             logger.info(
                 "in-use check for image %s@%s falls back to name match "
                 "(image framework is empty)", name, version,
             )
-            return self._table_svc.query(
-                INSTANCE_REGISTRY,
-                {"framework": name, "framework_version": version},
-            )
-        return self._table_svc.query(
-            INSTANCE_REGISTRY,
-            {"framework": framework, "framework_version": version},
+            return pk_refs + [r for r in legacy if r.get("framework") == name]
+        return pk_refs + [
+            r for r in legacy if r.get("framework") == framework
+        ]
+
+    def _legacy_in_use_instances(
+        self, framework: Optional[str], version: str, name: str
+    ) -> List[Dict[str, Any]]:
+        """仅按展示字段关联的存量在用行（framework 改名守卫专用）.
+
+        带 ``image_name``（主键引用）的实例行**不算数**：主键关联不受
+        framework 改名影响，改名不会孤儿化它们，无需拦截。
+        """
+        rows = self._table_svc.query(
+            INSTANCE_REGISTRY, {"framework_version": version}
         )
+        legacy = [
+            r for r in rows
+            if not (r.get("data") or {}).get("image_name")
+        ]
+        if not framework:
+            return [r for r in legacy if r.get("framework") == name]
+        return [r for r in legacy if r.get("framework") == framework]
 
     def _has_default(self, name: str) -> bool:
         rows = self._table_svc.query(

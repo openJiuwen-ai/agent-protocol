@@ -228,7 +228,9 @@ curl http://127.0.0.1:8000/api/images/opencode/launch-spec?version=v0.2.0
 
 ## 4. 实例管理 `/api/instances`
 
-### 4.1 注册实例（三方）
+> **双模式说明**：POST 带 `runtime_spec` → 模式 B（注册中心调元戎创建，需配 `A2X_REGISTRY_YUANRONG_ENDPOINT`，否则 501）；POST 带 `node`/`address` → 模式 A（向前兼容，仅登记）。DELETE 带 `?with_runtime=true` → 先元戎后条目；`{service_id}` 传 `ALL` → 批量。模式 B 的行为与 SQL 后端完全一致（编排逻辑在 service 层，后端无关），etcd 侧差异仅在条目行的键值落库。
+
+### 4.1 注册实例（模式 A，三方）
 
 **接口**：`POST /api/instances`
 
@@ -240,21 +242,22 @@ curl -X POST http://127.0.0.1:8000/api/instances \
     "kind": "三方",
     "framework": "opencode",
     "framework_version": "v0.2.0",
+    "image_name": "opencode",
     "node": "192.168.0.12",
     "address": "10.244.1.7:4096",
     "user": "user-01"
   }'
 ```
 
-**预期响应** `200`：`{service_id, kind, framework, framework_version, address, node, user, status:"运行"}`。
+**预期响应** `200`：`{service_id, kind, framework, framework_version, image_name, address, node, user, status:"运行"}`。
 
 **etcd 验证**：
 ```bash
 etcdctl get registry-a2x/instances/generic_3f9a1b2c
-# 预期：值 JSON 含 kind=三方、node=192.168.0.12、data.address=10.244.1.7:4096
+# 预期：值 JSON 含 kind=三方、node=192.168.0.12、data.address=10.244.1.7:4096、data.image_name=opencode
 ```
 
-**实际输出**（时间戳为示例值）：
+**实际输出**（时间戳为示例值；本节实测于 image_name 字段加入之前，`data` 中暂无该键——新写入条目会多出 `"image_name": "opencode"`）：
 ```
 $ curl -X POST ...（同上）
 {"service_id":"generic_3f9a1b2c","kind":"三方","framework":"opencode",
@@ -271,6 +274,43 @@ registry-a2x/instances/generic_3f9a1b2c
 ```
 > etcd 值中中文按 JSON 转义显示（`\u4e09\u65b9` = 三方）；`address` 在 `data` 内，API 响应摊平到顶层。
 
+### 4.1b 创建实例（模式 B：注册中心直连元戎）
+
+**接口**：`POST /api/instances`（请求体带 `runtime_spec`）
+**前置**：注册中心以元戎 env 启动（在 §2 的 export 基础上追加）：
+
+```bash
+export A2X_REGISTRY_YUANRONG_ENDPOINT=http://127.0.0.1:18888   # 元戎 frontend（或 mock）
+# 可选：A2X_REGISTRY_YUANRONG_NAMESPACE / _TIMEOUT_SECONDS / _WAIT_RUNNING_SECONDS
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/instances \
+  -H "Content-Type: application/json" --max-time 400 \
+  -d '{
+    "name": "user-01+opencode",
+    "workspace": "/app",
+    "version": "v0.2.0",
+    "image_name": "opencode",
+    "runtime_spec": {"runtime": "python3.11",
+      "rootfs": {"imageurl": "harbor.local/adapted/opencode:v0.2.0-mod1.3"}}
+  }'
+```
+
+**预期响应** `200`：`service_id = name = "user-01+opencode"`；`kind` 由 framework 判；`node`/`address`/`instance_id` 为元戎回填值。**条目已存在且运行 → 幂等回现有条目不二次拉起**；同 service_id 在途 → `409 in_progress`；未配元戎 → `501`；元戎失败/超时 → `502`/`504`（错误体 `{"detail":{"code":"yuanrong_failed"/"yuanrong_timeout",...}}`）。
+
+**etcd 验证**：
+```bash
+# 键名即 service_id（= 请求 name）；data 内含元戎回填的 instance_id 与 image_name
+etcdctl get registry-a2x/instances/user-01+opencode
+# 预期：值 JSON 含 framework=opencode、framework_version=v0.2.0、
+#       data.instance_id=<元戎 ID>、data.image_name=opencode、data.status=运行
+
+# 幂等验证：同 body 重复 POST 后，该键的 data.instance_id 不变（元戎实例数不增）
+```
+
+> 说明：模式 B 的元戎调用编排与 etcd 无关（service 层），条目最终经 `EtcdTableRepo.register` 落键，行形状与模式 A 一致（`node` 为提升列，落点来自元戎）。
+
 ### 4.2 查询实例（按 node 过滤 + 状态过滤）
 
 **接口**：`GET /api/instances?node={ip}&include_unhealthy={bool}`
@@ -283,7 +323,7 @@ curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12'
 **etcd 验证**：
 ```bash
 etcdctl get registry-a2x/instances/ --prefix --print-value-only
-# 预期：全部实例行；按 node/uservice_id 过滤为后端内存完成
+# 预期：全部实例行；按 node/service_id 过滤为后端内存完成
 ```
 
 **实际输出**：
@@ -296,6 +336,37 @@ $ curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12'
 
 $ etcdctl get registry-a2x/instances/ --prefix --print-value-only
 # 输出 = §4.1 中的实例行 JSON（过滤为后端内存完成，etcd 侧行齐全）
+```
+
+### 4.3 删除实例（模式 A / 模式 B / ALL 批量）
+
+**接口**：`DELETE /api/instances/{service_id}[?with_runtime=true]`；`{service_id}` = `ALL` 批量删全部。
+
+```bash
+# 模式 A：仅删条目（元戎停止由 gateway 完成）
+curl -X DELETE http://127.0.0.1:8000/api/instances/generic_3f9a1b2c
+# 预期：{"service_id":"generic_3f9a1b2c","deleted":true}
+
+# 模式 B：先按条目 data.instance_id 调元戎 delete_sandbox，成功后删条目
+curl -X DELETE 'http://127.0.0.1:8000/api/instances/user-01+opencode?with_runtime=true' \
+  --max-time 400
+# 预期：{"service_id":"user-01+opencode","deleted":true,"runtime_deleted":true}
+#   - 条目不存在 → {"deleted":false,"runtime_deleted":false}（幂等，不调元戎）
+#   - 条目无 instance_id（模式 A 登记未回填）→ 仅删条目，runtime_deleted=false
+#   - 元戎失败/超时 → 502/504，条目保留
+#   - 同 service_id 在途 → 409 in_progress
+
+# ALL 批量（逐条并发限流、部分失败不回滚、在途条目逐条记 error 而非整体 409）
+curl -X DELETE 'http://127.0.0.1:8000/api/instances/ALL?with_runtime=true' \
+  --max-time 400
+# 预期：{"total":N,"deleted":M,"results":[{"service_id":"...","deleted":true},...]}
+```
+
+**etcd 验证**：
+```bash
+# 删除成功后对应键消失；失败的条目（results 中 deleted=false）键保留
+etcdctl get registry-a2x/instances/ --prefix --keys-only
+# 预期：仅列出未删除的 service_id（模式 B 删除元戎失败的条目仍在）
 ```
 
 ## 5. 节点心跳（已移除）
@@ -344,10 +415,13 @@ registry-a2x/instances/generic_3f9a1b2c
 
 | HTTP | 场景（etcd 后端） | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `400` | 注册镜像 rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 / 模式 B 创建入参非法（name 无 `+`、workspace 非绝对路径、缺 version、runtime_spec 缺 runtime 或 rootfs.imageurl、无法判模式） | `{"detail":"..."}` |
 | `404` | 不存在的 name launch-spec / PATCH 不存在 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
-| `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
+| `409` | 同 service_id 有在途创建 / 删除（实例模式 B；ALL 批量不整体 409、逐条记 error） | `{"detail":{"code":"in_progress","detail":"..."}}` |
+| `501` | 模式 B 请求但未配置元戎连接 | `{"detail":{"code":"runtime_not_configured","detail":"..."}}` |
+| `502` | 元戎创建 / 删除失败（含元戎侧同名实例冲突透传）；注销镜像时镜像仓删除接口失败 | `{"detail":{"code":"yuanrong_failed","detail":"..."}}` 或 `{"detail":"..."}` |
+| `504` | 元戎请求 / 等待 running 超时（实例模式 B） | `{"detail":{"code":"yuanrong_timeout","detail":"..."}}` |
 | `503` | etcd 不可达 / 超时（后端启动即 fail-fast，运行中掉线则查询报错） | `{"detail":"..."}` |
 
 > `401` / `403` 鉴权错误不在当前范围。
@@ -370,6 +444,8 @@ rm -rf /tmp/etcd-data
 - §2 启动后 `/api/images` 返回 `[]`，且 `_meta/` 已出现 images / instances（启动期建表）。
 - §3 注册镜像后 etcd `registry-a2x/images/` 下新增行，`/api/images` 可读回。
 - §4 注册实例后 etcd `registry-a2x/instances/` 出现该 service_id，`/api/instances` 可读回。
+- §4.1b 模式 B 创建后（配元戎 env）：条目键 `instances/user-01+opencode` 落库，data 含元戎回填的 instance_id；重复 POST 键值不变（幂等）。未配元戎 env 时 POST 带 runtime_spec → `501`。
+- §4.3 删除后对应键消失；模式 B 元戎失败条目键保留；ALL 批量逐条 results。
 - §5 PATCH 置 停止/异常 后实例键不消失（注册中心不自动剔除），默认列表过滤为内存完成。
 - 全程仅操作 etcd，本地无 `registry.db` 文件**新建或更新**（确认未走 sqlite/memory 后端；若机器上存在旧 sqlite 遗留文件，以 mtime 不变化为准）。
 

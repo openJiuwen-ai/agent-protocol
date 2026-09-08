@@ -235,11 +235,45 @@ def test_update_single_data_field(image_svc: ImageService):
 
 
 def test_update_framework_promoted_column(image_svc: ImageService):
-    """framework 是提升列，可部分更新（name 主键不变）。"""
+    """framework 是提升列，可部分更新（name 主键不变）；无在用实例时改名不受限。"""
     _reg(image_svc, framework="openclaw-fw")
     entry = image_svc.update_image("opencode", "v0.2.0", {"framework": "renamed-fw"})
     assert entry["name"] == "opencode"
     assert entry["framework"] == "renamed-fw"
+
+
+def test_update_framework_rename_in_use_rejected(image_svc: ImageService):
+    """§3.2 止血：在用镜像改 framework 展示值 -> 409（防孤儿实例行）。"""
+    _reg(image_svc, framework="opencode", ver="v0.2.0")
+    image_svc._table_svc.register("instances", {
+        "service_id": "generic_abc123",
+        "kind": "三方",
+        "framework": "opencode",
+        "framework_version": "v0.2.0",
+        "node": "node-1",
+        "user": "user-01",
+        "data": {},
+    })
+    with pytest.raises(ImageInUseError):
+        image_svc.update_image("opencode", "v0.2.0", {"framework": "renamed-fw"})
+    rows, _ = image_svc.query()
+    assert rows[0]["framework"] == "opencode"  # 未被改动
+
+
+def test_update_framework_same_value_patch_allowed_while_in_use(image_svc: ImageService):
+    """no-op 改名（值不变）不触发在用守卫，避免误伤。"""
+    _reg(image_svc, framework="opencode", ver="v0.2.0")
+    image_svc._table_svc.register("instances", {
+        "service_id": "generic_abc123",
+        "kind": "三方",
+        "framework": "opencode",
+        "framework_version": "v0.2.0",
+        "node": "node-1",
+        "user": "user-01",
+        "data": {},
+    })
+    entry = image_svc.update_image("opencode", "v0.2.0", {"framework": "opencode"})
+    assert entry["framework"] == "opencode"
 
 
 def test_update_runtime_spec_replaced_whole(image_svc: ImageService):
