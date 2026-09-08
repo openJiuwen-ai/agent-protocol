@@ -7,7 +7,12 @@ from intelli_router.router.reliable_router import ReliableRouter
 from intelli_router.strategy.simple_shuffle import SimpleShuffleStrategy
 from intelli_router.strategy.adaptive import AdaptiveStrategy
 from intelli_router.core.deployment import Deployment, DeploymentStatus
-from intelli_router.utils.exceptions import RouterError, NoDeploymentAvailable
+from intelli_router.utils.exceptions import (
+    AllDeploymentsFailed,
+    DeploymentNetworkError,
+    NoDeploymentAvailable,
+    RouterError,
+)
 
 
 @pytest.fixture
@@ -200,7 +205,7 @@ async def test_completion_success(reliable_router):
 
 @pytest.mark.asyncio
 async def test_completion_failure_then_retry(reliable_router):
-    """First attempt fails, second succeeds."""
+    """First transient attempt fails, second succeeds."""
     mock_response = {"choices": [], "usage": {"completion_tokens": 5}}
     _call_count = 0
 
@@ -208,7 +213,7 @@ async def test_completion_failure_then_retry(reliable_router):
         nonlocal _call_count
         _call_count += 1
         if _call_count == 1:
-            raise ValueError("first attempt failed")
+            raise DeploymentNetworkError(deployment.id, "first attempt failed")
         return mock_response
 
     with patch.object(reliable_router, '_make_request', new=mock_make_request):
@@ -219,9 +224,61 @@ async def test_completion_failure_then_retry(reliable_router):
 
 @pytest.mark.asyncio
 async def test_completion_all_fail(reliable_router):
-    with patch.object(reliable_router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
-        with pytest.raises(RouterError):
+    with patch.object(
+        reliable_router,
+        '_make_request',
+        new=AsyncMock(side_effect=DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed):
             await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_completion_ordered_failover_fails_over_to_second_deployment(
+    deployment_gpt4_1,
+    deployment_gpt4_2,
+):
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    mock_response = {"choices": [], "usage": {"completion_tokens": 5}}
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        if deployment.id == deployment_gpt4_1.id:
+            raise DeploymentNetworkError(deployment.id, "transient")
+        return mock_response
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result == mock_response
+    assert calls == [deployment_gpt4_1.id, deployment_gpt4_2.id]
+
+
+@pytest.mark.asyncio
+async def test_completion_plain_error_uses_legacy_fallback_for_existing_strategy(reliable_router):
+    with patch.object(reliable_router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(AllDeploymentsFailed):
+            await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_completion_non_fallbackable_error_raises_original_for_ordered_failover(
+    deployment_gpt4_1,
+    deployment_gpt4_2,
+):
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(ValueError):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
 
 
 @pytest.mark.asyncio
@@ -251,16 +308,60 @@ async def test_completion_strategy_returns_none(reliable_router):
 
 
 @pytest.mark.asyncio
+async def test_completion_tag_filtered_none_does_not_fallback_to_first(deployment_gpt4_1, deployment_gpt4_2):
+    """tag-filtered no-match should not call the first available deployment."""
+    deployment_gpt4_1.fallback_tag = "primary"
+    deployment_gpt4_2.fallback_tag = "backup"
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="tag-filtered",
+        fallback_tag="missing",
+    )
+
+    with patch.object(router, '_make_request', new=AsyncMock()) as mock_req:
+        with pytest.raises(NoDeploymentAvailable):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        mock_req.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_completion_zero_retries(reliable_router):
-    """num_retries=0: first failure raises RouterError."""
+    """num_retries=0: existing strategies keep legacy aggregation behavior."""
     router = ReliableRouter(
         deployments=[reliable_router.deployments[0]],
         strategy="simple-shuffle",
         num_retries=0,
     )
     with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
-        with pytest.raises(RouterError):
+        with pytest.raises(AllDeploymentsFailed):
             await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_fallback_after_visible_output(reliable_router):
+    dep1, dep2 = reliable_router.deployments[0], reliable_router.deployments[1]
+    router = ReliableRouter(
+        deployments=[dep1, dep2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    attempts = []
+
+    async def mock_stream(model, messages, deployment, **kwargs):
+        attempts.append(deployment.id)
+        if deployment.id == dep1.id:
+            yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+            raise DeploymentNetworkError(deployment.id, "stream interrupted")
+        yield {"choices": [{"delta": {"content": "fallback"}, "finish_reason": "stop"}]}
+
+    with patch.object(router, 'acompletion_stream', new=mock_stream):
+        chunks = []
+        with pytest.raises(DeploymentNetworkError):
+            async for chunk in router.stream([{"role": "user", "content": "hi"}], model="gpt-4"):
+                chunks.append(chunk.content)
+
+    assert chunks == ["partial"]
+    assert attempts == [dep1.id]
 
 
 # -------- batch_completion --------

@@ -177,13 +177,12 @@ async def test_request_id_consistent_across_events(router_with_events, recorder)
 
 @pytest.mark.asyncio
 async def test_stream_emits_started_and_succeeded(router_with_events, recorder):
-    """成功的 stream 应触发 STREAM_STARTED + STREAM_SUCCEEDED"""
+    """成功的 stream 应在输出前触发 STREAM_ROUTE_SELECTED，并保留 STREAM_SUCCEEDED"""
     chunks = [
         {"choices": [{"delta": {"content": "hello"}, "finish_reason": None}]},
         {"choices": [{"delta": {"content": " world"}, "finish_reason": None}]},
         {"choices": [{"delta": {}, "finish_reason": "stop"}]},
     ]
-
     async def mock_stream(*args, **kwargs):
         for chunk in chunks:
             yield chunk
@@ -196,16 +195,60 @@ async def test_stream_emits_started_and_succeeded(router_with_events, recorder):
         async for chunk in router_with_events.stream(
             [{"role": "user", "content": "hi"}], model="gpt-4"
         ):
+            if not collected:
+                assert len(recorder.events_of_type(RoutingEventType.STREAM_ROUTE_SELECTED)) == 1
             collected.append(chunk)
 
     started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    selected = recorder.events_of_type(RoutingEventType.STREAM_ROUTE_SELECTED)
     succeeded = recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED)
 
     assert len(started) == 1
+    assert len(selected) == 1
     assert len(succeeded) == 1
+    assert recorder.events.index(selected[0]) < recorder.events.index(succeeded[0])
     assert succeeded[0].chunk_count == len(collected)
     assert succeeded[0].latency is not None
-    assert started[0].request_id == succeeded[0].request_id
+    assert started[0].request_id == selected[0].request_id == succeeded[0].request_id
+    assert selected[0].deployment_id is not None
+    assert selected[0].extra["route_id"] == selected[0].deployment_id
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_emits_route_selected_before_first_visible_chunk(
+    router_with_events,
+    recorder,
+):
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant"}, "finish_reason": None}]},
+        {"choices": [{"delta": {"content": "hello"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    ]
+
+    async def mock_stream(*args, **kwargs):
+        for chunk in chunks:
+            yield chunk
+
+    with patch.object(router_with_events, "acompletion_stream", side_effect=mock_stream):
+        collected = []
+        async for chunk in router_with_events.stream_completion(
+            "gpt-4",
+            [{"role": "user", "content": "hi"}],
+        ):
+            collected.append(chunk)
+            if chunk["choices"][0].get("delta", {}).get("content"):
+                assert len(recorder.events_of_type(RoutingEventType.STREAM_ROUTE_SELECTED)) == 1
+
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    selected = recorder.events_of_type(RoutingEventType.STREAM_ROUTE_SELECTED)
+    succeeded = recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED)
+
+    assert len(started) == 1
+    assert len(selected) == 1
+    assert len(succeeded) == 1
+    assert recorder.events.index(selected[0]) < recorder.events.index(succeeded[0])
+    assert succeeded[0].chunk_count == len(collected)
+    assert started[0].request_id == selected[0].request_id == succeeded[0].request_id
 
 
 @pytest.mark.asyncio
@@ -227,6 +270,8 @@ async def test_stream_emits_retried_and_exhausted(router_with_events, recorder):
     # num_retries=2, 所以最多 3 次尝试，2 次 retry 事件
     assert len(retried) >= 1
     assert len(exhausted) == 1
+    assert exhausted[0].extra["route_id"]
+    assert exhausted[0].extra["fallback_reason"] == "RuntimeError"
 
 
 # ---------- backward compatibility ----------

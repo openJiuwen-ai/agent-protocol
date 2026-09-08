@@ -36,6 +36,7 @@ class Deployment:
 
     # 以下字段有默认值
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    model_id: Optional[str] = None
     status: DeploymentStatus = DeploymentStatus.HEALTHY
     consecutive_failures: int = 0
     cooldown_until: Optional[float] = None
@@ -49,6 +50,11 @@ class Deployment:
 
     provider: str = "openai"
     verify_ssl: bool = True
+    request_defaults: Dict[str, Any] = field(default_factory=dict)
+    endpoint_profile: Optional[str] = None
+    custom_headers: Optional[Dict[str, str]] = None
+    fallback_tag: Optional[str] = None
+    model_description: Optional[str] = None
 
     def __post_init__(self):
         """字段类型与数值校验"""
@@ -99,6 +105,7 @@ class Deployment:
         """序列化为字典"""
         return {
             "id": self.id,
+            "model_id": self.model_id,
             "model_name": self.model_name,
             "api_key": self.api_key,
             "api_base": self.api_base,
@@ -111,6 +118,11 @@ class Deployment:
             "timeout": self.timeout,
             "provider": self.provider,
             "verify_ssl": self.verify_ssl,
+            "request_defaults": self.request_defaults,
+            "endpoint_profile": self.endpoint_profile,
+            "custom_headers": self.custom_headers,
+            "fallback_tag": self.fallback_tag,
+            "model_description": self.model_description,
         }
 
     @classmethod

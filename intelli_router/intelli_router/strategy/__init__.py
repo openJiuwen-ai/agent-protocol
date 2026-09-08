@@ -7,16 +7,28 @@ from .base_strategy import RoutingStrategy
 from .simple_shuffle import SimpleShuffleStrategy
 from .lowest_latency import LowestLatencyStrategy
 from .tag_based import TagBasedStrategy
+from .ordered_failover import OrderedFailoverStrategy
+from .tag_filtered import TagFilteredStrategy
 from .token_aware import TokenAwareStrategy
 from .rate_limit_aware import RateLimitAwareStrategy
 from .adaptive import AdaptiveStrategy
 
 from ..core.state import LocalRouterState
 
-StrategyType = Literal["simple-shuffle", "lowest-latency", "tag-based", "token-aware", "rate-limit-aware", "adaptive"]
+StrategyType = Literal[
+    "simple-shuffle",
+    "lowest-latency",
+    "tag-based",
+    "ordered-failover",
+    "tag-filtered",
+    "token-aware",
+    "rate-limit-aware",
+    "adaptive",
+]
 
 __all__ = [
     "RoutingStrategy", "SimpleShuffleStrategy", "LowestLatencyStrategy", "TagBasedStrategy",
+    "OrderedFailoverStrategy", "TagFilteredStrategy",
     "TokenAwareStrategy", "RateLimitAwareStrategy", "AdaptiveStrategy",
     "StrategyType", "create_strategy"
 ]
@@ -35,6 +47,10 @@ def create_strategy(
         return LowestLatencyStrategy(state=state, **kwargs)
     elif strategy_type == "tag-based":
         return TagBasedStrategy(**kwargs)
+    elif strategy_type == "ordered-failover":
+        return OrderedFailoverStrategy(**kwargs)
+    elif strategy_type == "tag-filtered":
+        return TagFilteredStrategy(**kwargs)
     elif strategy_type == "token-aware":
         if state is None:
             raise ValueError("token-aware strategy requires state")

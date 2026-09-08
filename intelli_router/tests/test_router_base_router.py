@@ -47,6 +47,7 @@ def test_get_deployment_configs(base_router):
     assert len(configs) == 4
     for cfg in configs:
         assert "id" in cfg
+        assert "model_id" in cfg
         assert "model_name" in cfg
         assert "api_base" in cfg
         assert "api_key" in cfg

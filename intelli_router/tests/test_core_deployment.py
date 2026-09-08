@@ -15,11 +15,17 @@ def test_deployment_defaults():
     assert dep.status == DeploymentStatus.HEALTHY
     assert dep.consecutive_failures == 0
     assert dep.cooldown_until is None
+    assert dep.model_id is None
     assert dep.tags == []
     assert dep.tpm is None
     assert dep.rpm is None
     assert dep.timeout is None
     assert dep.verify_ssl is True
+    assert dep.request_defaults == {}
+    assert dep.endpoint_profile is None
+    assert dep.custom_headers is None
+    assert dep.fallback_tag is None
+    assert dep.model_description is None
 
 
 def test_deployment_auto_id():
@@ -30,22 +36,27 @@ def test_deployment_auto_id():
 
 def test_to_dict():
     dep = Deployment(
-        id="test123", model_name="gpt-4", api_key="sk-key", api_base="https://api.test.com",
+        id="test123", model_id="model-123", model_name="gpt-4", api_key="sk-key", api_base="https://api.test.com",
         status=DeploymentStatus.COOLDOWN, tags=["prod"], rpm=100,
     )
     d = dep.to_dict()
     assert d["id"] == "test123"
+    assert d["model_id"] == "model-123"
     assert d["model_name"] == "gpt-4"
     assert d["api_key"] == "sk-key"
     assert d["api_base"] == "https://api.test.com"
     assert d["status"] == "cooldown"
     assert d["tags"] == ["prod"]
     assert d["rpm"] == 100
+    assert d["request_defaults"] == {}
+    assert d["fallback_tag"] is None
+    assert d["model_description"] is None
 
 
 def test_from_dict():
     data = {
         "id": "from_dict_id",
+        "model_id": "model-from-dict",
         "model_name": "gpt-4",
         "api_key": "sk-fd",
         "api_base": "https://api.test.com",
@@ -56,6 +67,7 @@ def test_from_dict():
     }
     dep = Deployment.from_dict(data)
     assert dep.id == "from_dict_id"
+    assert dep.model_id == "model-from-dict"
     assert dep.model_name == "gpt-4"
     assert dep.status == DeploymentStatus.HEALTHY
     assert dep.tags == ["test"]

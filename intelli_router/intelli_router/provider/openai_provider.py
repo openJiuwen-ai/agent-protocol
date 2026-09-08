@@ -1,8 +1,11 @@
 """OpenAI provider adapter — 默认 OpenAI 兼容行为的抽取。"""
+import logging
 from typing import Dict
 
 from ..core.deployment import Deployment
 from .base_provider import BaseProviderAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProviderAdapter(BaseProviderAdapter):
@@ -18,7 +21,20 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
         return f"{base}/v1/chat/completions"
 
     def get_headers(self, deployment: Deployment) -> Dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {deployment.api_key}",
             "Content-Type": "application/json",
         }
+        if deployment.custom_headers:
+            custom_header_names = {name.lower() for name in deployment.custom_headers}
+            if "authorization" in custom_header_names:
+                logger.warning(
+                    "Deployment %s custom_headers overrides Authorization header. "
+                    "This is allowed for compatibility, but may cause authentication failures.",
+                    deployment.id,
+                )
+                for header_name in list(headers):
+                    if header_name.lower() == "authorization":
+                        headers.pop(header_name)
+            headers.update(deployment.custom_headers)
+        return headers

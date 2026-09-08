@@ -1,5 +1,6 @@
 """Tests for provider adapters (OpenAI / Anthropic / Gemini / Registry)."""
 import json
+import logging
 import pytest
 from intelli_router.core.deployment import Deployment, DeploymentStatus
 from intelli_router.provider.base_provider import BaseProviderAdapter
@@ -41,6 +42,23 @@ class TestOpenAIProviderAdapter:
         headers = self.adapter.get_headers(self.dep)
         assert headers["Authorization"] == "Bearer sk-test-key"
         assert headers["Content-Type"] == "application/json"
+
+    def test_get_headers_warns_when_custom_headers_override_authorization(self, caplog):
+        dep = Deployment(
+            id="custom-auth",
+            model_name="gpt-4",
+            api_key="sk-test-key",
+            api_base="https://api.openai.com",
+            provider="openai",
+            custom_headers={"authorization": "ApiKey custom"},
+        )
+
+        with caplog.at_level(logging.WARNING):
+            headers = self.adapter.get_headers(dep)
+
+        assert headers["authorization"] == "ApiKey custom"
+        assert "Authorization" not in headers
+        assert any("overrides Authorization header" in record.message for record in caplog.records)
 
     def test_transform_request_passthrough(self):
         result = self.adapter.transform_request(

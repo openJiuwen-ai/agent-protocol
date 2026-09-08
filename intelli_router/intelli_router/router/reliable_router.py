@@ -18,7 +18,15 @@ from ..strategy.base_strategy import RoutingStrategy
 from ..strategy import create_strategy, StrategyType
 from ..health.checker import SDKHealthChecker
 from ..cache.local_cache import LocalCache
-from ..utils.exceptions import RouterError, NoDeploymentAvailable, AllDeploymentsFailed
+from ..utils.exceptions import (
+    RouterError,
+    NoDeploymentAvailable,
+    AllDeploymentsFailed,
+    DeploymentNetworkError,
+    DeploymentRateLimitError,
+    DeploymentServerError,
+    DeploymentTimeoutError,
+)
 from ..types import (
     AssistantMessage,
     AssistantMessageChunk,
@@ -45,6 +53,8 @@ class ReliableRouter(BaseRouter):
     - 流式支持: 支持流式响应
     """
 
+    _RESERVED_REQUEST_DEFAULT_KEYS = {"model", "messages", "deployment", "stream"}
+
     def __init__(
         self,
         deployments: List[Deployment],
@@ -56,6 +66,7 @@ class ReliableRouter(BaseRouter):
         health_check_interval: float = 300,
         cache: Optional[LocalCache] = None,
         event_bus: Optional[EventBus] = None,
+        model_group_id: Optional[str] = None,
         **strategy_kwargs
     ):
         super().__init__(
@@ -91,6 +102,7 @@ class ReliableRouter(BaseRouter):
                 )
         # 可观测性
         self.event_bus = event_bus or EventBus()
+        self.model_group_id = model_group_id
         # 健康检查（可选，用于加速恢复）
         self.health_checker: Optional[SDKHealthChecker] = None
         if enable_health_check:
@@ -140,6 +152,85 @@ class ReliableRouter(BaseRouter):
                 available.append(dep)
         return available
 
+    def _request_kwargs_for_deployment(
+        self,
+        deployment: Deployment,
+        request_kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(deployment.request_defaults or {})
+        invalid_keys = self._RESERVED_REQUEST_DEFAULT_KEYS & set(merged)
+        if invalid_keys:
+            raise ValueError(
+                "deployment.request_defaults cannot contain reserved keys: "
+                f"{sorted(invalid_keys)}"
+            )
+        merged.update({key: value for key, value in request_kwargs.items() if value is not None})
+        return merged
+
+    def _fallback_to_first_on_empty_selection(self) -> bool:
+        return bool(getattr(self.strategy, "fallback_to_first_on_empty_selection", True))
+
+    def _uses_strict_fallback_errors(self) -> bool:
+        return bool(getattr(self.strategy, "strict_fallback_errors", False))
+
+    def _route_metadata(self, deployment: Deployment, **extra: Any) -> Dict[str, Any]:
+        metadata = {
+            "model_group_id": self.model_group_id,
+            "route_id": deployment.id,
+            "model_id": deployment.model_id,
+            "model_name": deployment.model_name,
+            "provider": deployment.provider,
+        }
+        metadata.update(extra)
+        return {key: value for key, value in metadata.items() if value is not None}
+
+    @staticmethod
+    def _fallback_reason_from_error(error: Exception) -> str:
+        return type(error).__name__
+
+    async def _select_deployment(
+        self,
+        available: List[Deployment],
+        context: RoutingContext,
+    ) -> Optional[Deployment]:
+        selected = await self.strategy.select_deployment(available, context)
+        if selected is not None:
+            return selected
+        if self._fallback_to_first_on_empty_selection() and available:
+            return available[0]
+        return None
+
+    @staticmethod
+    def _is_fallbackable_error(error: Exception, visible_output_started: bool = False) -> bool:
+        if visible_output_started or isinstance(error, asyncio.CancelledError):
+            return False
+        return isinstance(
+            error,
+            (
+                DeploymentNetworkError,
+                DeploymentRateLimitError,
+                DeploymentServerError,
+                DeploymentTimeoutError,
+            ),
+        )
+
+    @staticmethod
+    def _has_visible_stream_output(chunk: Dict[str, Any]) -> bool:
+        choices = chunk.get("choices") or []
+        if not choices:
+            return False
+        choice = choices[0] or {}
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        return bool(
+            delta.get("content")
+            or delta.get("reasoning_content")
+            or delta.get("tool_calls")
+            or message.get("content")
+            or message.get("reasoning_content")
+            or message.get("tool_calls")
+        )
+
     async def completion(
         self,
         model: str,
@@ -150,23 +241,26 @@ class ReliableRouter(BaseRouter):
         可靠性completion - 自动路由选择和重试
         """
         request_id = RoutingEvent.new_request_id()
-        total_attempts = self.num_retries + 1
-
         available = self._get_available_deployments(model)
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
         if not available:
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
                 model=model,
                 error_message="No available deployments",
+                extra=request_extra,
             ))
-            raise NoDeploymentAvailable(f"No available deployment for model: {model}")
+            raise NoDeploymentAvailable(model, "No available deployments")
+
+        total_attempts = min(self.num_retries + 1, len(available))
 
         await self.event_bus.emit(RoutingEvent(
             event_type=RoutingEventType.REQUEST_STARTED,
             request_id=request_id,
             model=model,
             total_attempts=total_attempts,
+            extra=request_extra,
         ))
 
         context = RoutingContext(
@@ -176,15 +270,16 @@ class ReliableRouter(BaseRouter):
         )
         errors = []
         overall_start = time.time()
+        last_failure_metadata = None
 
         for attempt in range(total_attempts):
-            selected = await self.strategy.select_deployment(available, context)
+            selected = await self._select_deployment(available, context)
             if selected is None:
-                if available:
-                    selected = available[0]
-                else:
+                if errors:
                     break
+                raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
             context.mark_attempt(selected)
+            request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
             try:
                 start_time = time.time()
                 actual_model = selected.model_name if model == MODEL_WILDCARD else model
@@ -192,7 +287,7 @@ class ReliableRouter(BaseRouter):
                     model=actual_model,
                     messages=messages,
                     deployment=selected,
-                    **kwargs
+                    **request_kwargs
                 )
                 end_time = time.time()
                 latency = end_time - start_time
@@ -205,6 +300,15 @@ class ReliableRouter(BaseRouter):
                 # 状态时直接读共享的 router.state。
                 self.state.on_success(selected.id, latency, tokens)
                 context.set_success(selected, response)
+                route_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    **(
+                        {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                        if context.error
+                        else {}
+                    ),
+                )
 
                 await self.event_bus.emit(RoutingEvent(
                     event_type=RoutingEventType.REQUEST_SUCCEEDED,
@@ -218,6 +322,7 @@ class ReliableRouter(BaseRouter):
                     total_tokens=prompt_tokens + tokens,
                     attempt=attempt + 1,
                     total_attempts=total_attempts,
+                    extra=route_metadata,
                 ))
                 return response
             except Exception as e:
@@ -227,8 +332,18 @@ class ReliableRouter(BaseRouter):
                 self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                )
 
-                if attempt < self.num_retries:
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    raise
+
+                available = [d for d in available if d.id != selected.id]
+                can_retry = attempt < total_attempts - 1 and bool(available)
+                if can_retry:
                     await self.event_bus.emit(RoutingEvent(
                         event_type=RoutingEventType.REQUEST_RETRIED,
                         request_id=request_id,
@@ -237,11 +352,14 @@ class ReliableRouter(BaseRouter):
                         provider=selected.provider,
                         attempt=attempt + 1,
                         total_attempts=total_attempts,
-                        error_type=type(e).__name__,
+                        error_type=self._fallback_reason_from_error(e),
                         error_message=str(e),
+                        extra=self._route_metadata(
+                            selected,
+                            fallback_reason=self._fallback_reason_from_error(e),
+                        ),
                     ))
 
-                available = [d for d in available if d.id != selected.id]
                 if not available:
                     break
 
@@ -254,6 +372,7 @@ class ReliableRouter(BaseRouter):
             total_attempts=total_attempts,
             error_type=type(context.error).__name__ if context.error else None,
             error_message=str(context.error) if context.error else None,
+            extra=last_failure_metadata or request_extra,
         ))
         raise AllDeploymentsFailed(model=model, errors=errors)
 
@@ -271,7 +390,7 @@ class ReliableRouter(BaseRouter):
         """
         available = self._get_available_deployments(model)
         if not available:
-            raise NoDeploymentAvailable(f"No available deployment for model: {model}")
+            raise NoDeploymentAvailable(model, "No available deployments")
 
         context = RoutingContext(
             model=model,
@@ -280,46 +399,138 @@ class ReliableRouter(BaseRouter):
         )
 
         errors = []
-        for attempt in range(self.num_retries + 1):
-            selected = await self.strategy.select_deployment(available, context)
+        total_attempts = min(self.num_retries + 1, len(available))
+        request_id = RoutingEvent.new_request_id()
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.STREAM_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+        overall_start = time.time()
+        last_failure_metadata = None
+        for attempt in range(total_attempts):
+            selected = await self._select_deployment(available, context)
             if selected is None:
-                if available:
-                    selected = available[0]
-                else:
+                if errors:
                     break
+                raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
 
             context.mark_attempt(selected)
-            first_chunk_received = False
+            visible_output_started = False
+            route_selected_emitted = False
             ttfb = 0.0
+            request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
 
             try:
                 start_time = time.time()
                 actual_model = selected.model_name if model == MODEL_WILDCARD else model
+                chunk_count = 0
                 async for chunk in self.acompletion_stream(
                     model=actual_model,
                     messages=messages,
                     deployment=selected,
-                    **kwargs,
+                    **request_kwargs,
                 ):
-                    if not first_chunk_received:
-                        first_chunk_received = True
+                    chunk_count += 1
+                    if not visible_output_started and self._has_visible_stream_output(chunk):
+                        visible_output_started = True
                         ttfb = time.time() - start_time
+                        await self.event_bus.emit(RoutingEvent(
+                            event_type=RoutingEventType.STREAM_ROUTE_SELECTED,
+                            request_id=request_id,
+                            model=model,
+                            deployment_id=selected.id,
+                            provider=selected.provider,
+                            latency=ttfb,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            extra=self._route_metadata(
+                                selected,
+                                attempt=attempt + 1,
+                                **(
+                                    {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                                    if context.error
+                                    else {}
+                                ),
+                                ttft=ttfb,
+                            ),
+                        ))
+                        route_selected_emitted = True
                     yield chunk
 
                 self.state.on_success(selected.id, ttfb, 0)
                 context.set_success(selected, None)
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.STREAM_SUCCEEDED,
+                    request_id=request_id,
+                    model=model,
+                    deployment_id=selected.id,
+                    provider=selected.provider,
+                    latency=time.time() - overall_start,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    chunk_count=chunk_count,
+                    extra=self._route_metadata(
+                        selected,
+                        attempt=attempt + 1,
+                        **(
+                            {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                            if context.error
+                            else {}
+                        ),
+                        **({"ttft": ttfb} if route_selected_emitted else {}),
+                    ),
+                ))
                 return
 
             except Exception as e:
                 self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
-                if first_chunk_received:
+                if visible_output_started:
+                    raise
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
                     raise
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                )
                 available = [d for d in available if d.id != selected.id]
+                if attempt < total_attempts - 1 and available:
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_RETRIED,
+                        request_id=request_id,
+                        model=model,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error_type=self._fallback_reason_from_error(e),
+                        error_message=str(e),
+                        extra=self._route_metadata(
+                            selected,
+                            fallback_reason=self._fallback_reason_from_error(e),
+                        ),
+                    ))
+
                 if not available:
                     break
 
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            error_type=self._fallback_reason_from_error(context.error) if context.error else None,
+            error_message=str(context.error) if context.error else None,
+            extra=last_failure_metadata or request_extra,
+        ))
         raise AllDeploymentsFailed(model=model, errors=errors)
 
     async def batch_completion(
@@ -458,55 +669,80 @@ class ReliableRouter(BaseRouter):
         model_name = self._resolve_model_name(model)
 
         request_id = RoutingEvent.new_request_id()
-        total_attempts = self.num_retries + 1
-
         available = self._get_available_deployments(model_name)
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
         if not available:
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
                 model=model_name,
                 error_message="No available deployments",
+                extra=request_extra,
             ))
-            raise NoDeploymentAvailable(f"No available deployment for model: {model_name}")
+            raise NoDeploymentAvailable(model_name, "No available deployments")
+
+        total_attempts = min(self.num_retries + 1, len(available))
 
         await self.event_bus.emit(RoutingEvent(
             event_type=RoutingEventType.STREAM_STARTED,
             request_id=request_id,
             model=model_name,
             total_attempts=total_attempts,
+            extra=request_extra,
         ))
 
         overall_start = time.time()
         errors = []
+        last_failure_metadata = None
+        last_fallback_reason = None
 
         for attempt in range(total_attempts):
-            selected = await self.strategy.select_deployment(available, RoutingContext(
+            selected = await self._select_deployment(available, RoutingContext(
                 model=model_name, messages=messages, kwargs=params,
             ))
             if selected is None:
-                if available:
-                    selected = available[0]
-                else:
+                if errors:
                     break
+                raise NoDeploymentAvailable(model_name, "No deployment matched routing strategy")
+            request_kwargs = self._request_kwargs_for_deployment(selected, params)
             try:
                 actual_model = selected.model_name if model_name == MODEL_WILDCARD else model_name
                 chunk_count = 0
                 ttft = None
+                visible_output_started = False
+                route_selected_emitted = False
                 stream_start = time.time()
                 async for chunk in self.acompletion_stream(
                     model=actual_model,
                     messages=messages,
                     deployment=selected,
-                    **params,
+                    **request_kwargs,
                 ):
                     parsed = self._chunk_to_assistant_message_chunk(chunk)
                     if parsed is not None:
                         chunk_count += 1
-                        if chunk_count == 1:
-                            ttft = time.time() - stream_start
+                        if parsed.content or parsed.reasoning_content or parsed.tool_calls:
+                            if not route_selected_emitted:
+                                ttft = time.time() - stream_start
+                                await self.event_bus.emit(RoutingEvent(
+                                    event_type=RoutingEventType.STREAM_ROUTE_SELECTED,
+                                    request_id=request_id,
+                                    model=model_name,
+                                    deployment_id=selected.id,
+                                    provider=selected.provider,
+                                    latency=ttft,
+                                    attempt=attempt + 1,
+                                    total_attempts=total_attempts,
+                                    extra=self._route_metadata(
+                                        selected,
+                                        attempt=attempt + 1,
+                                        **({"fallback_reason": last_fallback_reason} if last_fallback_reason else {}),
+                                        ttft=ttft,
+                                    ),
+                                ))
+                                route_selected_emitted = True
+                            visible_output_started = True
                         yield parsed
-
                 # 成功后统一更新状态（延迟统计口径与 stream_completion 一致：ttft/首 chunk 耗时，
                 # 而非整条流的总时长；空流无可解析 chunk 时兜底为 0.0）
                 self.state.on_success(selected.id, ttft if ttft is not None else 0.0, 0)
@@ -520,14 +756,30 @@ class ReliableRouter(BaseRouter):
                     attempt=attempt + 1,
                     total_attempts=total_attempts,
                     chunk_count=chunk_count,
-                    extra={"ttft": ttft} if ttft is not None else {},
+                    extra=self._route_metadata(
+                        selected,
+                        attempt=attempt + 1,
+                        **({"fallback_reason": last_fallback_reason} if last_fallback_reason else {}),
+                        **({"ttft": ttft} if ttft is not None else {}),
+                    ),
                 ))
                 return
             except Exception as e:
                 self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
-                errors.append((selected.id, type(e).__name__, str(e)))
+                if visible_output_started:
+                    raise
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    raise
+                last_fallback_reason = self._fallback_reason_from_error(e)
+                errors.append((selected.id, last_fallback_reason, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=last_fallback_reason,
+                )
 
-                if attempt < self.num_retries:
+                available = [d for d in available if d.id != selected.id]
+                if attempt < total_attempts - 1 and available:
                     await self.event_bus.emit(RoutingEvent(
                         event_type=RoutingEventType.REQUEST_RETRIED,
                         request_id=request_id,
@@ -536,11 +788,11 @@ class ReliableRouter(BaseRouter):
                         provider=selected.provider,
                         attempt=attempt + 1,
                         total_attempts=total_attempts,
-                        error_type=type(e).__name__,
+                        error_type=last_fallback_reason,
                         error_message=str(e),
+                        extra=self._route_metadata(selected, fallback_reason=last_fallback_reason),
                     ))
 
-                available = [d for d in available if d.id != selected.id]
                 if not available:
                     break
 
@@ -553,6 +805,7 @@ class ReliableRouter(BaseRouter):
             total_attempts=total_attempts,
             error_type=errors[-1][1] if errors else None,
             error_message=errors[-1][2] if errors else None,
+            extra=last_failure_metadata or request_extra,
         ))
         raise RouterError(f"All deployments failed for stream after {total_attempts} attempts: {errors}")
 
