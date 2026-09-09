@@ -18,6 +18,11 @@
 - **镜像注册表以 `name` 为主键**：`name` 取代原 `framework` 的定位作用（主键 / 默认版本 / 检索）；`framework` 降级为纯展示字段（仍可按其筛选）；`framework_version` 更名 `version`（过渡期 `framework_version` 兼容回退、标记待删除）；新增 `description` / `package_path` / `image_archive_path` 纯文本字段与 `access_mode` 接入方式数组（每项 `{name, port, cmd}`）。接口路径 `{framework}` 全部改 `{name}`。
 - **实例 status 落库（data JSON）**：`instance` 表无 `status` 列，status 存在行内 `data` JSON（`data.status`，注册默认 `运行`，gateway 据元戎 List 经 PATCH 写入 `停止`/`异常`/`运行`）。
 - **注册中心不收心跳**：节点心跳 `/api/nodes/{node}/heartbeat` 与全局 `/api/lease-config` 已移除；实例存活由 gateway 轮询元戎 List、经 `PATCH` 写 `status`，注册中心不派生、不自动剔除。
+- **实例创建 / 删除双模式**（按请求形状判模式，无开关字段）：
+  - `POST /api/instances` 带 `runtime_spec` → **模式 B**：注册中心自己调元戎 `create_sandbox`、等探针通过（status=running）、取齐落点（node/address/instance_id 元戎回填）后才写条目回响应；`name = service_id = "{user}+{framework}"`（首个 `+` 拆分）、`kind` 由 `framework == "jiuwenswarm"` 判、`version` 必填（注销镜像在用校验用）、`image_name` 为镜像主键引用（推荐携带）。最坏耗时 ≈ 元戎超时(300s) + 等待上限(60s)，**调用方 HTTP 超时须大于该值（建议 ≥ 400s）**。需配置 `A2X_REGISTRY_YUANRONG_ENDPOINT`，否则 `501`。
+  - `POST` 不带 `runtime_spec`、带 `node`/`address` → **模式 A**（向前兼容）：仅登记，元戎由调用方自己拉起。同时给两者以模式 B 为准（落点由元戎返回覆盖）。
+  - `DELETE /api/instances/{service_id}?with_runtime=true` → 模式 B：先按条目 `instance_id` 调元戎 `delete_sandbox`，成功后删条目；缺省 → 模式 A 仅删条目。`{service_id}` 传 `ALL` → 批量删全部（逐条报结果、部分失败不回滚）。
+  - 同 `service_id` 在途操作互斥：创建 / 删除进行中的并发请求回 `409 in_progress`。
 
 ## 构建二进制
 以下命令在代码仓根目录执行。
@@ -330,7 +335,7 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 {"name": "opencode", "framework": "opencode", "version": "v0.2.0", "status": "deregistered"}
 ```
 
-**效果**：先校验无在用实例 -> 删镜像仓文件 -> 删条目（删的是默认版本则把最新版补为默认）。
+**效果**：先校验无在用实例（**主键关联优先**：实例行带 `image_name` 时按 `image_name + version` 匹配；无 `image_name` 的存量行退回 `framework + framework_version` 匹配，方向保守）-> 删镜像仓文件 -> 删条目（删的是默认版本则把最新版补为默认）。
 **错误**：仍有在用实例 -> `409 {"detail":"image opencode@v0.2.0 still has N in-use instance(s); cannot deregister"}`。
 
 **数据库验证**：
@@ -350,10 +355,10 @@ sqlite3 "$A2X_REGISTRY_DB" \
 
 ## 2. 实例管理 `/api/instances`
 
-### 2.1 注册实例（三方）
+### 2.1 注册实例（模式 A，三方）
 
 **接口**：`POST /api/instances`
-**场景**：gateway 拿 launch-spec、调元戎拉起后，带落点注册。
+**场景**：gateway 拿 launch-spec、调元戎拉起后，带落点注册（不带 `runtime_spec` → 模式 A，向前兼容）。
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/instances \
@@ -363,6 +368,7 @@ curl -X POST http://127.0.0.1:8000/api/instances \
     "kind": "三方",
     "framework": "opencode",
     "framework_version": "v0.2.0",
+    "image_name": "opencode",
     "node": "192.168.0.12",
     "instance_id": "yr-inst-7f3a92",
     "address": "10.244.1.7:4096",
@@ -377,27 +383,29 @@ curl -X POST http://127.0.0.1:8000/api/instances \
   "kind": "三方", "framework": "opencode", "framework_version": "v0.2.0",
   "address": "10.244.1.7:4096", "node": "192.168.0.12", "user": "user-01",
   "instance_id": "yr-inst-7f3a92",
+  "image_name": "opencode",
   "created_at": "2026-07-06T10:00:00Z",
   "last_active_at": "2026-07-06T10:00:00Z",
   "status": "运行"
 }
 ```
 
-**效果**：`service_id` 幂等 upsert；重发即覆盖。`service_id` 由 `instance_sid(user, framework)` 派生（每用户每框架一个实例）。`instance_id` 为元戎实例 ID（gateway 拉起后回填；非元戎拉起可空、不做主键）；`status` 注册即 `运行`（落库 `data.status`）。
+**效果**：`service_id` 幂等 upsert；重发即覆盖。`service_id` 由 `instance_sid(user, framework)` 派生（每用户每框架一个实例）。`instance_id` 为元戎实例 ID（gateway 拉起后回填；非元戎拉起可空、不做主键）；`image_name` 为镜像主键引用（可选；携带后镜像注销在用校验按主键关联，不受 framework 改名/共用值影响）；`status` 注册即 `运行`（落库 `data.status`）。
 **错误**：缺 `node` 等必填字段 -> `400`（pydantic `422`）；`kind` 非 `三方`/`九问` -> `400`。
 
 **数据库验证**：
 ```bash
-# 1. instance 表新增一行（registry='instances'），data JSON 含 address/instance_id/status
+# 1. instance 表新增一行（registry='instances'），data JSON 含 address/instance_id/image_name/status
 sqlite3 "$A2X_REGISTRY_DB" \
   "SELECT service_id, kind, framework, framework_version, node, \"user\",
           json_extract(data,'\$.address') AS address,
           json_extract(data,'\$.instance_id') AS instance_id,
+          json_extract(data,'\$.image_name') AS image_name,
           json_extract(data,'\$.status') AS status,
           json_extract(data,'\$.created_at') AS created_at
    FROM instance
    WHERE registry='instances' AND service_id='generic_3f9a1b2c';"
-# 预期：generic_3f9a1b2c|三方|opencode|v0.2.0|192.168.0.12|user-01|10.244.1.7:4096|yr-inst-7f3a92|运行|2026-07-06T10:00:00Z
+# 预期：generic_3f9a1b2c|三方|opencode|v0.2.0|192.168.0.12|user-01|10.244.1.7:4096|yr-inst-7f3a92|opencode|运行|2026-07-06T10:00:00Z
 
 # 2. registry_meta 已登记 'instances'
 sqlite3 "$A2X_REGISTRY_DB" \
@@ -405,7 +413,86 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 预期：实例注册表|instance
 ```
 
-### 2.2 注册实例（九问）
+### 2.1b 创建实例（模式 B：注册中心直连元戎）
+
+**接口**：`POST /api/instances`（请求体带 `runtime_spec`）
+**场景**：gateway 组装好规格后单次调用注册中心，由注册中心调元戎创建（元戎成功 → 等 running → 取落点 → 写条目 → 回响应）。
+**前置**：注册中心已配置元戎连接 env（否则 `501`）：
+
+```bash
+A2X_REGISTRY_YUANRONG_ENDPOINT="http://<yuanrong-frontend>:<port>" \
+A2X_REGISTRY_YUANRONG_NAMESPACE=default \
+A2X_REGISTRY_YUANRONG_TIMEOUT_SECONDS=300 \
+A2X_REGISTRY_YUANRONG_WAIT_RUNNING_SECONDS=60 \
+  a2x-registry
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/instances \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "user-01+opencode",
+    "workspace": "/app",
+    "version": "v0.2.0",
+    "image_name": "opencode",
+    "runtime_spec": {
+      "runtime": "python3.11",
+      "sandbox_type": "docker",
+      "rootfs": {
+        "imageurl": "harbor.local/adapted/opencode:v0.2.0-mod1.3",
+        "user": "agentos"
+      },
+      "cpu": 1000,
+      "memory": 2048
+    },
+    "env_vars": {"A2X_LLM_KEY": "${A2X_LLM_KEY}"},
+    "mounts": [{"source": "/data/agent", "target": "/data", "readonly": false}]
+  }'
+```
+
+**预期响应** `200`（`service_id = name`；`kind` 由 `framework == "jiuwenswarm"` 判；`node`/`address`/`instance_id` 元戎回填）：
+```json
+{
+  "service_id": "user-01+opencode",
+  "kind": "三方", "framework": "opencode", "framework_version": "v0.2.0",
+  "address": "10.244.1.7", "node": "192.168.0.12", "user": "user-01",
+  "instance_id": "yr-inst-7f3a92",
+  "image_name": "opencode",
+  "created_at": "2026-07-06T10:00:00Z",
+  "last_active_at": "2026-07-06T10:00:00Z",
+  "status": "运行"
+}
+```
+
+**效果**：
+- 幂等——条目已存在且 `status=运行` → 直接回现有条目，**不二次拉起**（`instance_id` 不变）；条目存在但非运行 → 重新拉起并覆盖。
+- 同 `service_id` 在途（创建/删除进行中）→ `409 {"detail":{"code":"in_progress",...}}`。
+- `namespace` 以注册中心配置为准（请求里的 `namespace` 字段被忽略）。
+- **curl 侧注意**：最坏耗时 ≈ 元戎超时 + 等待 running 上限（默认 360s），手动测试建议加 `--max-time 400`。
+
+**错误**：
+- `name` 不含 `+` 或某一侧为空 / `workspace` 非绝对路径 / 缺 `version` / `runtime_spec.runtime` 或 `rootfs.imageurl` 缺失 / 出现元戎类字段（workspace/version/env_vars/mounts）却缺 `runtime_spec` / 两者都缺无法判模式 → `400`
+- 未配置元戎 → `501 {"detail":{"code":"runtime_not_configured",...}}`
+- 元戎创建 / 删除失败（含元戎侧同名实例冲突透传）→ `502 {"detail":{"code":"yuanrong_failed",...}}`
+- 元戎请求 / 等待 running 超时 → `504 {"detail":{"code":"yuanrong_timeout",...}}`
+
+**数据库验证**：
+```bash
+# 条目落库：service_id=name；data JSON 中 instance_id/image_name/address 均为元戎回填值
+sqlite3 "$A2X_REGISTRY_DB" \
+  "SELECT service_id, kind, framework, framework_version, node, \"user\",
+          json_extract(data,'\$.address') AS address,
+          json_extract(data,'\$.instance_id') AS instance_id,
+          json_extract(data,'\$.image_name') AS image_name,
+          json_extract(data,'\$.status') AS status
+   FROM instance
+   WHERE registry='instances' AND service_id='user-01+opencode';"
+# 预期：user-01+opencode|三方|opencode|v0.2.0|<元戎 node_ip>|user-01|<元戎 sandbox_ip[:port]>|<元戎 instance_id>|opencode|运行
+
+# 幂等验证：同 body 重复 POST 后 instance_id 不变、元戎侧实例数不增
+```
+
+### 2.2 注册实例（模式 A，九问）
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/instances \
@@ -511,9 +598,9 @@ curl 'http://127.0.0.1:8000/api/instances?include_unhealthy=true'
 # 预期：含 generic_3f9a1b2c，status="停止"
 ```
 
-### 2.5 注销实例
+### 2.5 删除实例（模式 A：仅删条目）
 
-**接口**：`DELETE /api/instances/{service_id}`
+**接口**：`DELETE /api/instances/{service_id}`（不带 `with_runtime`）
 
 ```bash
 curl -X DELETE http://127.0.0.1:8000/api/instances/generic_3f9a1b2c
@@ -537,6 +624,65 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 2. 再次 DELETE 后再查（幂等验证）：依然 0，且响应体 deleted=false
 curl -s -X DELETE http://127.0.0.1:8000/api/instances/generic_3f9a1b2c
 # 预期响应：{"service_id":"generic_3f9a1b2c","deleted":false}
+```
+
+### 2.5b 删除实例（模式 B：先调元戎后删条目）
+
+**接口**：`DELETE /api/instances/{service_id}?with_runtime=true`
+**场景**：注册中心先按条目 `instance_id` 调元戎 `delete_sandbox`，元戎成功（含元戎本就不存在的幂等情形）后删条目。
+
+```bash
+# 单个删除（需配置元戎连接，见 §2.1b 前置）
+curl -X DELETE 'http://127.0.0.1:8000/api/instances/user-01+opencode?with_runtime=true' \
+  --max-time 400
+```
+
+**预期响应** `200`：
+```json
+{"service_id": "user-01+opencode", "deleted": true, "runtime_deleted": true}
+```
+
+**效果与边界**：
+- 条目不存在 → `{"deleted": false, "runtime_deleted": false}`（幂等，不调元戎）
+- 条目无 `instance_id`（模式 A 登记未回填）→ 仅删条目，`runtime_deleted: false`
+- 元戎已无该实例（404）→ 视作已删、继续删条目，`runtime_deleted: true`
+- 元戎失败 / 超时 → `502` / `504`，**条目保留**（重试可再删）
+- 同 `service_id` 有在途创建 / 删除 → `409 in_progress`
+
+### 2.5c 批量删除全部实例（ALL）
+
+**接口**：`DELETE /api/instances/ALL[?with_runtime=true]`
+
+```bash
+# 仅删全部条目（模式 A）
+curl -X DELETE http://127.0.0.1:8000/api/instances/ALL
+
+# 先调元戎后删条目（模式 B，逐条并发限流）
+curl -X DELETE 'http://127.0.0.1:8000/api/instances/ALL?with_runtime=true' \
+  --max-time 400
+```
+
+**预期响应** `200`（部分失败不回滚、逐条报结果）：
+```json
+{
+  "total": 3,
+  "deleted": 2,
+  "results": [
+    {"service_id": "user-01+opencode", "deleted": true},
+    {"service_id": "user-02+aider", "deleted": true},
+    {"service_id": "user-03+crewai", "deleted": false, "error": "yuanrong timeout"}
+  ]
+}
+```
+
+**效果**：`ALL` 批量**不整体 409**——个别在途条目在该条 `results[].error` 记 `"in_progress"`，其余照常处理。暂不提供过滤条件。
+
+**数据库验证**：
+```bash
+# 成功删除后 instance 表清空（或仅剩失败条目）
+sqlite3 "$A2X_REGISTRY_DB" \
+  "SELECT service_id FROM instance WHERE registry='instances';"
+# 预期：仅列出 results 中 deleted=false 的条目（全部成功则为空）
 ```
 
 ---
@@ -598,7 +744,7 @@ curl http://127.0.0.1:8000/api/ha/leader
 
 ## 5. 典型联调场景
 
-### 场景 A：gateway 拉起一个新实例（端到端）
+### 场景 A：gateway 拉起一个新实例（模式 A 端到端，向前兼容）
 
 ```bash
 # 1. 取运行规格
@@ -757,16 +903,57 @@ sqlite3 "$A2X_REGISTRY_DB" \
 # 预期：列出该 node 全部实例，status 与重启前一致
 ```
 
+### 场景 F：模式 B 全流程（注册中心直连元戎，端到端）
+
+> 前置：注册中心以元戎 env 启动（见 §2.1b）。元戎不可达时可用 mock 替身
+> （`blackbox/tools/mock_yuanrong.py`，`MOCK_PORT=18888 MOCK_LOG=/tmp/mock.log python mock_yuanrong.py`）。
+> 自动化脚本版：`tests/e2e/instance_mode_b_cases.sh`（自拉起环境，49 断言）。
+
+```bash
+# 1. 创建（模式 B）：注册中心调元戎、等 running、落点回填
+curl -X POST http://127.0.0.1:8000/api/instances \
+  -H "Content-Type: application/json" --max-time 400 \
+  -d '{
+    "name": "user-01+opencode", "workspace": "/app",
+    "version": "v0.2.0", "image_name": "opencode",
+    "runtime_spec": {"runtime": "python3.11",
+      "rootfs": {"imageurl": "harbor.local/adapted/opencode:v0.2.0-mod1.3"}}
+  }'
+# 预期：200，node/address/instance_id 为元戎回填值
+
+# 2. 幂等：同 body 重复 POST
+# 预期：200，instance_id 不变（不二次拉起）
+
+# 3. 在用校验（主键关联）：镜像注销被拦
+curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
+# 预期：409 image_in_use
+
+# 4. 删除（模式 B）：先元戎后条目
+curl -X DELETE 'http://127.0.0.1:8000/api/instances/user-01+opencode?with_runtime=true' \
+  --max-time 400
+# 预期：200 {"service_id":"user-01+opencode","deleted":true,"runtime_deleted":true}
+
+# 5. 镜像此时可注销
+curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
+# 预期：200
+```
+
+**验证要点**：步骤 1 后 `cat /tmp/mock.log` 应有一条 `{"event":"create","name":"user-01+opencode","namespace":"default",...}`（namespace 为注册中心配置）；步骤 4 后元戎收到对应 DELETE；步骤 2 全程元戎实例数不增。
+
 ---
 
 ## 6. 错误码速查
 
 | HTTP | 场景 | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 / 模式 B 创建入参非法（name 无 `+`、workspace 非绝对路径、缺 version、runtime_spec 缺 runtime 或 rootfs.imageurl、无法判模式） | `{"detail":"..."}` |
 | `404` | 取不存在的 name launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
-| `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
+| `409` | 同 service_id 有在途创建 / 删除（实例模式 B，含 DELETE 单个抢锁超时；ALL 批量不整体 409、逐条记 error） | `{"detail":{"code":"in_progress","detail":"..."}}` |
+| `501` | 模式 B 请求（POST 带 runtime_spec / DELETE with_runtime=true）但注册中心未配置元戎连接 | `{"detail":{"code":"runtime_not_configured","detail":"..."}}` |
+| `502` | 元戎创建 / 删除失败（外部依赖，含元戎侧同名实例冲突透传）；注销镜像时镜像仓删除接口失败 | `{"detail":{"code":"yuanrong_failed","detail":"..."}}` 或 `{"detail":"..."}` |
+| `504` | 元戎请求 / 等待 running 超时（实例模式 B） | `{"detail":{"code":"yuanrong_timeout","detail":"..."}}` |
 
 > `401` / `403` 鉴权错误不在 730 范围（不启鉴权），后续版本启用 `auth/` 模块后补充。
 > 注：`/api/nodes/{node}/heartbeat` 与 `/api/lease-config` 已移除，调用返回 `404`。
+> 模式 B 错误体的 `detail` 为对象 `{"code","detail"}`（FastAPI 包装在顶层 `detail` 下）；模式 A / 镜像侧错误体 `detail` 为字符串。
