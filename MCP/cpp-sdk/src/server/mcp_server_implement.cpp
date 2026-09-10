@@ -491,6 +491,9 @@ void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOp
     ServerTool tool(name, fn, params.title, params.description, params.inputSchema, params.outputSchema,
                     params.structuredOutput, params.annotations, params.icons);
     toolManager_.AddTool(tool);
+    if (!config_.capabilities.tools.has_value()) {
+        config_.capabilities.tools = ToolsCapabilities{};
+    }
 }
 
 void McpServerImplement::RemoveTool(const std::string& name)
@@ -520,6 +523,9 @@ void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc han
     }
 
     promptManager_.AddPrompt(prompt, handler);
+    if (!config_.capabilities.prompts.has_value()) {
+        config_.capabilities.prompts = PromptsCapabilities{};
+    }
 }
 
 void McpServerImplement::RemovePrompt(const std::string& name)
@@ -557,6 +563,9 @@ void McpServerImplement::AddResource(const std::string& uri, const std::string& 
     }
 
     resourceManager_.AddResource(resource, readFunc);
+    if (!config_.capabilities.resources.has_value()) {
+        config_.capabilities.resources = ResourcesCapabilities{};
+    }
 }
 
 void McpServerImplement::RemoveResource(const std::string& uri)
