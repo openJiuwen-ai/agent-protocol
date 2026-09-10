@@ -25,5 +25,7 @@ def test_strategy_type_is_literal():
     assert "adaptive" in args
     assert "lowest-latency" in args
     assert "tag-based" in args
+    assert "ordered-failover" in args
+    assert "tag-filtered" in args
     assert "token-aware" in args
     assert "rate-limit-aware" in args

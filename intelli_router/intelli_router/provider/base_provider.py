@@ -50,6 +50,18 @@ class BaseProviderAdapter(ABC):
         """
         return {"model": model, "messages": messages, **kwargs}
 
+    def validate_request_config(
+        self,
+        deployment: Deployment,
+        config: Dict[str, Any],
+    ) -> None:
+        """Validate final request config for the selected deployment.
+
+        Provider adapters may override this to reject route/deployment-specific
+        options before the HTTP request is sent.
+        """
+        return None
+
     def transform_response(
         self,
         raw_response: Dict[str, Any],

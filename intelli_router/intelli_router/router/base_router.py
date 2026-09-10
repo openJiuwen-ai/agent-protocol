@@ -84,9 +84,12 @@ class BaseRouter:
         return [
             {
                 "id": dep.id,
+                "model_id": dep.model_id,
                 "model_name": dep.model_name,
                 "api_base": dep.api_base,
                 "api_key": dep.api_key,
+                "fallback_tag": dep.fallback_tag,
+                "model_description": dep.model_description,
             }
             for dep in self.deployments
         ]
@@ -96,9 +99,12 @@ class BaseRouter:
         return [
             {
                 "id": dep.id,
+                "model_id": dep.model_id,
                 "model_name": dep.model_name,
                 "api_base": dep.api_base,
                 "api_key": dep.api_key,
+                "fallback_tag": dep.fallback_tag,
+                "model_description": dep.model_description,
             }
             for dep in self.deployments
             if dep.model_name == model
@@ -246,9 +252,10 @@ class BaseRouter:
         if deployment is None:
             deployments = self.get_deployments_for_model(model)
             if not deployments:
-                raise NoDeploymentAvailable(f"No deployment for model: {model}")
+                raise NoDeploymentAvailable(model, "No deployment")
             deployment = deployments[0]
         adapter = self._get_adapter(deployment)
+        adapter.validate_request_config(deployment=deployment, config=kwargs)
         request_body = adapter.transform_request(
             model=model, messages=messages, deployment=deployment, **kwargs
         )
@@ -276,12 +283,14 @@ class BaseRouter:
         if deployment is None:
             deployments = self.get_deployments_for_model(model)
             if not deployments:
-                raise NoDeploymentAvailable(f"No deployment for model: {model}")
+                raise NoDeploymentAvailable(model, "No deployment")
             deployment = deployments[0]
 
         adapter = self._get_adapter(deployment)
+        stream_kwargs = {"stream": True, **kwargs}
+        adapter.validate_request_config(deployment=deployment, config=stream_kwargs)
         request_body = adapter.transform_request(
-            model=model, messages=messages, deployment=deployment, stream=True, **kwargs
+            model=model, messages=messages, deployment=deployment, **stream_kwargs
         )
         client = self._ensure_client()
         url = adapter.get_api_url(deployment, stream=True)

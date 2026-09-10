@@ -11,13 +11,14 @@ class TestRoutingEventType:
         assert RoutingEventType.REQUEST_RETRIED == "request_retried"
         assert RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED == "all_deployments_exhausted"
         assert RoutingEventType.STREAM_STARTED == "stream_started"
+        assert RoutingEventType.STREAM_ROUTE_SELECTED == "stream_route_selected"
         assert RoutingEventType.STREAM_SUCCEEDED == "stream_succeeded"
 
     def test_is_str_enum(self):
         assert isinstance(RoutingEventType.REQUEST_STARTED, str)
 
     def test_total_count(self):
-        assert len(RoutingEventType) == 6
+        assert len(RoutingEventType) == 7
 
 
 class TestRoutingEvent:

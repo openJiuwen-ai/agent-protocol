@@ -8,6 +8,7 @@
 - [输出解析器](#输出解析器)
 - [路由策略](#路由策略)
 - [策略工厂函数](#策略工厂函数)
+- [路由事件](#路由事件)
 - [状态管理](#状态管理)
 - [缓存](#缓存)
 - [健康检查](#健康检查)
@@ -29,6 +30,7 @@ Deployment(
     api_key: str,                             # API密钥
     api_base: str,                            # API端点URL
     id: str = None,                           # 部署ID (可选，自动生成8位随机ID)
+    model_id: Optional[str] = None,            # 上游业务模型ID
     status: DeploymentStatus = DeploymentStatus.HEALTHY,  # 部署状态
     consecutive_failures: int = 0,            # 连续失败次数
     cooldown_until: Optional[float] = None,   # 冷却时间戳
@@ -37,6 +39,12 @@ Deployment(
     rpm: Optional[int] = None,                # Request Per Minute限制
     timeout: Optional[float] = None,          # 请求超时
     provider: str = "openai",                 # Provider 类型 (见 Provider 适配器)
+    verify_ssl: bool = True,                  # 是否校验证书
+    request_defaults: Dict[str, Any] = {},     # deployment 级默认请求参数
+    endpoint_profile: Optional[str] = None,    # endpoint 形态标识，预留给上游/适配层
+    custom_headers: Optional[Dict[str, str]] = None,  # 自定义 HTTP 头
+    fallback_tag: Optional[str] = None,        # tag-filtered 策略匹配字段
+    model_description: Optional[str] = None,   # 模型描述，当前不参与路由
 )
 ```
 
@@ -48,6 +56,11 @@ Deployment(
   场景由调用方自行封装
 - `tpm`/`rpm`：正整数或 `None`（排除 bool）；`consecutive_failures`：非负 int；
   `timeout`：正数或 `None`
+- `request_defaults` 会先于单次调用参数合并；单次调用参数优先级更高。
+  该字段不能包含 `model`、`messages`、`deployment`、`stream` 等保留键
+- `custom_headers` 在 OpenAI 兼容 Provider 中允许覆盖默认请求头；若覆盖
+  `Authorization`，会打印 warning 日志，便于排查鉴权失败
+- `endpoint_profile`、`model_description` 当前仅承载/序列化，不参与默认路由逻辑
 
 **方法**:
 
@@ -86,15 +99,22 @@ ReliableRouter(
     enable_health_check: bool = False,          # 启用健康检查
     health_check_interval: float = 300,         # 健康检查间隔（秒）
     cache: Optional[LocalCache] = None,         # 缓存实例
+    event_bus: Optional[EventBus] = None,       # 路由事件总线
+    model_group_id: Optional[str] = None,       # 上游模型组ID，写入路由事件 extra
     **strategy_kwargs                           # 策略参数
 )
 ```
+
+`num_retries` 表示跨 deployment 的 fallback 预算，不是同一个 deployment 的
+HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集合移除；因此实际
+尝试次数为 `min(num_retries + 1, len(available_deployments))`。
 
 **方法**:
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `completion` | `async completion(model: str, messages: List[Dict], **kwargs) -> Dict` | 发送 completion 请求，返回 OpenAI 格式原始字典 |
+| `stream_completion` | `async stream_completion(model: str, messages: List[Dict], **kwargs) -> AsyncIterator[Dict]` | 发送流式 completion 请求，返回 OpenAI 格式原始 chunk |
 | `invoke` | `async invoke(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, output_parser=None, **kwargs) -> AssistantMessage` | 类型化 completion 请求，返回 `AssistantMessage` |
 | `stream` | `async stream(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, **kwargs) -> AsyncIterator[AssistantMessageChunk]` | 流式 completion，逐 chunk 返回 `AssistantMessageChunk` |
 | `batch_completion` | `async batch_completion(requests: List[Dict], max_concurrent: int = 10) -> List[Any]` | 批量 completion 请求（并发控制） |
@@ -178,6 +198,11 @@ class BaseProviderAdapter(ABC):
         self, model: str, messages: List[Dict], deployment: Deployment, **kwargs
     ) -> Dict[str, Any]:
         """将 OpenAI 格式请求转换为目标 Provider 格式（默认透传）"""
+
+    def validate_request_config(
+        self, deployment: Deployment, config: Dict[str, Any]
+    ) -> None:
+        """校验最终请求参数；默认不校验，Provider 可覆盖"""
 
     def transform_response(
         self, raw_response: Dict[str, Any], model: str, deployment: Deployment
@@ -354,6 +379,8 @@ StrategyType = Literal[
     "simple-shuffle",
     "lowest-latency",
     "tag-based",
+    "ordered-failover",
+    "tag-filtered",
     "token-aware",
     "rate-limit-aware",
     "adaptive"
@@ -497,7 +524,8 @@ class MarkdownElementType:
 > **`AdaptiveStrategy`（`"adaptive"`）**。`RoutingStrategy` 抽象基类
 > 面向需要自定义路由行为的进阶用户，属于扩展接口而非主要测试对象。
 > 其余内置策略（simple-shuffle / lowest-latency / tag-based /
-> token-aware / rate-limit-aware）为内部实现，不在对外接口测试范围内。
+> ordered-failover / tag-filtered / token-aware / rate-limit-aware）为内部实现，
+> 不在对外接口测试范围内。
 
 ### `RoutingStrategy` (抽象基类)
 
@@ -537,6 +565,17 @@ class RoutingStrategy(ABC):
 > 请直接读取共享的 `router.state`（构造时传入的 `state`），**切勿**在
 > 回调内转发 `state.on_success/on_failure`——回调不会被触发，且若未来
 > 版本恢复调用会造成双重计数。
+
+### `OrderedFailoverStrategy`
+
+按传入 deployments 的顺序选择第一个可用部署。常用于主备容灾场景。
+失败后由 `ReliableRouter` 移除当前 deployment，再进入下一次选择。
+
+### `TagFilteredStrategy`
+
+先按 `Deployment.fallback_tag` 严格过滤，再委托 ordered-failover 选择。
+如果配置了 `fallback_tag` 但没有任何 deployment 匹配，会直接返回无可用部署，
+不会兜底到第一个 deployment。`model_description` 不参与该策略。
 
 ---
 
@@ -678,12 +717,35 @@ def create_strategy(
 | `"simple-shuffle"` | 随机加权选择 |
 | `"lowest-latency"` | 最低延迟 |
 | `"tag-based"` | 标签过滤 |
+| `"ordered-failover"` | 按配置顺序选择第一个可用部署，适合主备容灾 |
+| `"tag-filtered"` | 按 `fallback_tag` 严格过滤，无匹配不兜底 |
 | `"token-aware"` | Token感知 |
 | `"rate-limit-aware"` | RPM限流 |
 | `"adaptive"` | 自适应 |
 
 **异常**:
 - `ValueError`: 未知策略类型或缺少必需参数
+
+---
+
+## 路由事件
+
+`ReliableRouter` 可通过 `event_bus` 发出路由事件，事件不携带请求 body
+或 messages。模型组等上游业务字段放在 `RoutingEvent.extra` 中。
+
+| 事件 | 说明 |
+|------|------|
+| `REQUEST_STARTED` | 非流式请求开始 |
+| `REQUEST_SUCCEEDED` | 非流式请求成功 |
+| `REQUEST_RETRIED` | 当前 deployment 失败，即将 fallback 到其他 deployment |
+| `ALL_DEPLOYMENTS_EXHAUSTED` | 所有可尝试 deployment 均失败或无可用 deployment |
+| `STREAM_STARTED` | 流式请求开始 |
+| `STREAM_ROUTE_SELECTED` | 流式请求拿到首个可见输出后、yield 给调用方前发出，表示本次回答已提交到该 route |
+| `STREAM_SUCCEEDED` | 流式请求完整结束 |
+
+`STREAM_ROUTE_SELECTED` 的触发时机不是 `_select_deployment()` 刚返回时；
+只有 route 已经产出首个可见内容后才发出，这样下游展示的是最终命中的 route，
+而不是仍可能在连接阶段 fallback 的候选 route。
 
 ---
 

@@ -16,6 +16,7 @@ class RoutingEventType(str, Enum):
 
     # 流式请求
     STREAM_STARTED = "stream_started"
+    STREAM_ROUTE_SELECTED = "stream_route_selected"
     STREAM_SUCCEEDED = "stream_succeeded"
 
 

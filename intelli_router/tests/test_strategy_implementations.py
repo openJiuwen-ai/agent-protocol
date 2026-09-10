@@ -5,7 +5,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from intelli_router.strategy import (
     create_strategy, SimpleShuffleStrategy, LowestLatencyStrategy,
-    TagBasedStrategy, TokenAwareStrategy, RateLimitAwareStrategy,
+    TagBasedStrategy, OrderedFailoverStrategy, TagFilteredStrategy,
+    TokenAwareStrategy, RateLimitAwareStrategy,
     AdaptiveStrategy,
 )
 from intelli_router.core.deployment import Deployment, DeploymentStatus
@@ -34,6 +35,16 @@ def test_create_lowest_latency_no_state():
 def test_create_tag_based():
     s = create_strategy("tag-based")
     assert isinstance(s, TagBasedStrategy)
+
+
+def test_create_ordered_failover():
+    s = create_strategy("ordered-failover")
+    assert isinstance(s, OrderedFailoverStrategy)
+
+
+def test_create_tag_filtered():
+    s = create_strategy("tag-filtered", fallback_tag="paid")
+    assert isinstance(s, TagFilteredStrategy)
 
 
 def test_create_token_aware(router_state):
@@ -256,6 +267,38 @@ def test_tag_based_on_success_on_failure(deployment_gpt4_1):
     error = ValueError("x")
     strategy.on_failure(deployment_gpt4_1, error)
     fallback_mock.on_failure.assert_called_once_with(deployment_gpt4_1, error)
+
+
+# ======== OrderedFailoverStrategy / TagFilteredStrategy ========
+
+@pytest.mark.asyncio
+async def test_ordered_failover_selects_first_available(deployment_gpt4_1, deployment_gpt4_2):
+    strategy = OrderedFailoverStrategy()
+    ctx = RoutingContext(model="gpt-4", messages=[])
+    selected = await strategy.select_deployment([deployment_gpt4_1, deployment_gpt4_2], ctx)
+    assert selected.id == deployment_gpt4_1.id
+
+
+@pytest.mark.asyncio
+async def test_tag_filtered_matches_fallback_tag(deployment_gpt4_1, deployment_gpt4_2):
+    deployment_gpt4_1.fallback_tag = "cheap-model"
+    deployment_gpt4_2.fallback_tag = "paid-model"
+    deployment_gpt4_2.model_description = "good for legal knowledge"
+    strategy = TagFilteredStrategy(fallback_tag="paid-model")
+    ctx = RoutingContext(model="gpt-4", messages=[])
+    selected = await strategy.select_deployment([deployment_gpt4_1, deployment_gpt4_2], ctx)
+    assert selected.id == "dep_gpt4_2"
+    assert selected.model_description == "good for legal knowledge"
+
+
+@pytest.mark.asyncio
+async def test_tag_filtered_no_match_returns_none(deployment_gpt4_1, deployment_gpt4_2):
+    deployment_gpt4_1.fallback_tag = "cheap-model"
+    deployment_gpt4_2.fallback_tag = "paid-model"
+    strategy = TagFilteredStrategy(fallback_tag="not-present")
+    ctx = RoutingContext(model="gpt-4", messages=[])
+    selected = await strategy.select_deployment([deployment_gpt4_1, deployment_gpt4_2], ctx)
+    assert selected is None
 
 
 # ======== TokenAwareStrategy ========
