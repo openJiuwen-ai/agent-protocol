@@ -63,7 +63,7 @@ async def list_instances(
     framework: Optional[str] = Query(None),
     kind: Optional[str] = Query(None),
     user: Optional[str] = Query(None),
-    size: int = Query(-1, description="Page size; -1 = no pagination"),
+    size: int = Query(-1, ge=-1, description="Page size; -1 = no pagination"),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     response: Response = None,  # noqa: B008 - FastAPI injected
 ):

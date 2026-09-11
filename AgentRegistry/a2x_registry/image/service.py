@@ -106,6 +106,8 @@ class ImageService:
         """
         if not name or not version:
             raise ImageValidationError("name and version must not be empty")
+        if not uploaded_by:
+            raise ImageValidationError("uploaded_by must not be empty")
 
         sid = image_sid(name, version)
         existing = self._table_svc.query(
@@ -266,7 +268,12 @@ class ImageService:
         if in_use:
             raise ImageInUseError(
                 f"image {name}@{version} still has "
-                f"{len(in_use)} in-use instance(s); cannot deregister"
+                f"{len(in_use)} in-use instance(s); cannot deregister",
+                instances=[
+                    str(row.get("service_id") or "")
+                    for row in in_use
+                    if row.get("service_id")
+                ],
             )
 
         self._delete_repo_image(target.get("data", {}))
