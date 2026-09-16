@@ -153,6 +153,7 @@ class ReqMethod(Enum):
     DESIGNER_GRAPH_SAVE = "designer.graph.save"
     DESIGNER_GRAPH_BOOTSTRAP = "designer.graph.bootstrap"
     DESIGNER_GRAPH_PATCH = "designer.graph.patch"
+    DESIGNER_GRAPH_CHAT = "designer.graph.chat"
     DESIGNER_RUN_START = "designer.run.start"
     DESIGNER_RUN_GET = "designer.run.get"
     DESIGNER_RUN_PAUSE = "designer.run.pause"
@@ -525,6 +526,7 @@ class EventType(Enum):
     DESIGNER_RUN_UPDATED = "designer.run.updated"
     DESIGNER_NODE_UPDATED = "designer.node.updated"
     DESIGNER_GRAPH_UPDATED = "designer.graph.updated"
+    DESIGNER_LEADER_ACTIVITY = "designer.leader.activity"
     # 旧探活结果通过 health_check.relay 发送。
     # 新心跳任务(heartbeat.job.*)不使用 relay 事件,结果通过普通 chat.send 进入原会话。
     HEALTH_CHECK_RELAY = "health_check.relay"
