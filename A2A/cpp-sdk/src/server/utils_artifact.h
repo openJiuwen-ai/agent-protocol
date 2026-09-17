@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_UTILS_ARTIFACT
@@ -8,16 +8,16 @@
 #include <string>
 #include <vector>
 
-#include "utils/types.h"
+#include "types.h"
 
-namespace a2a {
+namespace A2A {
 
 Artifact NewArtifact(const std::vector<Part>& parts, const std::string& name, const std::string& description = "");
 
 Artifact NewTextArtifact(const std::string& name, const std::string& text, const std::string& description = "");
 
-Artifact NewDataArtifact(const std::string& name, const nlohmann::json& data, const std::string& description = "");
+Artifact NewDataArtifact(const std::string& name, const std::string& data, const std::string& description = "");
 
-} // namespace a2a
+} // namespace A2A
 
 #endif

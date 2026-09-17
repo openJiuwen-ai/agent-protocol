@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "mcp_error.h"
+#include "mcp_client.h"
 #include "mcp_type.h"
 #include "shared/base_session.h"
 #include "shared/jsonrpc.h"
@@ -34,27 +36,50 @@ public:
     std::future<std::shared_ptr<InitializeResult>> Initialize();
 
     // Send a ping request and wait for a response
-    std::future<EmptyResult> SendPing();
+    std::future<std::shared_ptr<EmptyResult>> SendPing();
 
     // Send a roots list changed notification
     void SendRootsListChanged();
 
+    // Set the callback for handling roots/list requests from the server
+    void SetListRootsCallback(ListRootsCallback cb);
+
+    // Set the callback for handling elicitation/create requests from the server
+    void SetElicitCallback(ElicitCallback cb);
+
+    // Set the callback for handling elicitation/create requests from the server
+    void SetElicitUrlCallback(ElicitUrlCallback cb);
+
+    // Set the callback for handling notifications/message from the server
+    void SetLoggingCallback(LoggingCallback cb);
+
+    // Set the callback for handling sampling/createMessage requests from the server.
+    // Must be set before Initialize() so the client advertises sampling support.
+    void SetSamplingCreateMessageCallback(McpClient::SamplingCreateMessageCallback cb,
+        SamplingCapability capability = SamplingCapability{});
+
     // Set the logging level
-    std::future<EmptyResult> SetLoggingLevel(LoggingLevel level);
+    std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(LoggingLevel level);
 
-    // Call a tool on the server
+    // Call a tool on the server (optional progressCallback enables progressToken and notifications/progress).
     std::future<std::shared_ptr<CallToolResult>> CallTool(const std::string& name,
-                                                          const std::optional<JsonValue>& arguments = std::nullopt,
-                                                          int timeout = 0);
+                                                          const std::optional<std::string>& arguments = std::nullopt,
+                                                          int timeout = 0,
+                                                          std::optional<ProgressCallback> progressCallback
+                                                              = std::nullopt);
 
-    // List available tools
+    // List available tools. When cursor is provided, the server will return
+    // a page of tools starting from that cursor and may include nextCursor in
+    // the result for subsequent pages.
     std::future<std::shared_ptr<ListToolsResult>> ListTools();
+    std::future<std::shared_ptr<ListToolsResult>> ListTools(const std::optional<std::string>& cursor);
 
     // List prompts
     std::future<std::shared_ptr<ListPromptsResult>> ListPrompts();
 
     // --- Resources ---
     std::future<std::shared_ptr<ListResourcesResult>> ListResources();
+    std::future<std::shared_ptr<ListResourcesResult>> ListResources(const std::optional<std::string>& cursor);
     std::future<std::shared_ptr<ListResourceTemplatesResult>> ListResourcesTemplates();
     std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri);
     std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri);
@@ -64,9 +89,15 @@ public:
     std::future<std::shared_ptr<GetPromptResult>> GetPrompt(const std::string& name,
                                                             const std::optional<JsonValue>& arguments = std::nullopt);
 
+    // Request completion options
+    std::future<std::shared_ptr<CompleteResult>> Complete(const CompleteReference& ref,
+                                                          const CompletionArgument& argument,
+                                                          const std::optional<CompletionContext>& context
+                                                            = std::nullopt);
+
     // Override BaseSession notification sending
-    void SendNotification(const Notification& notification,
-                          std::optional<int64_t> relatedRequestId = std::nullopt) override;
+    void SendNotification(std::unique_ptr<Notification> notification,
+                          std::optional<RequestId> relatedRequestId = std::nullopt) override;
 
     // Check if initialize has completed successfully
     bool IsInitialized() const
@@ -74,8 +105,27 @@ public:
         return initialized_;
     }
 
+    // Get the capabilities advertised by the connected server.
+    // Populated when the client receives the InitializeResult.
+    ServerCapabilities GetServerCapabilities() const;
+
     // Send notifications/initialized after successful initialize handshake
     void SendInitializedNotification();
+
+    /** Send notifications/progress to the server (MCP progress tracking). progressToken is string or int64_t. */
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total = std::nullopt,
+                                  const std::optional<std::string>& message = std::nullopt);
+
+protected:
+    /**
+    * @brief Handle an incoming JSON-RPC notification from the server.
+    *
+    * This is called by `BaseSession` when a notification message is parsed.
+    */
+    void ReceivedNotification(const Notification& notification) override;
+
+    void ReceivedRequest(const RequestId& requestId, const Request& request, RequestContext& ctx) override;
 
 private:
     // Incremental request ID for tracking (thread-safe)
@@ -89,17 +139,60 @@ private:
     // (or via constructor) before making requests.
     std::function<bool(const std::string&)> send_raw_;
 
-    // Method to handle incoming requests (for demonstration)
-    void HandleRequest(const Mcp::JSONRPCRequest& request);
+    // Build client capabilities for initialize request.
+    ClientCapabilities BuildClientCapabilities() const;
 
-    // Feed incoming raw JSON messages from the transport into the session
-    void OnMessageReceived(const std::string& message_json);
+    // Handle roots/list request. This is used when the server asks the client to
+    // provide its roots. The request is only supported when listRootsCallback_ is set.
+    void HandleRootsListRequest(const RequestId& requestId, const Request& request, RequestContext& ctx);
+
+    void HandleElicitRequest(const RequestId& requestId, const Request& request, RequestContext& ctx);
+
+    // Handle sampling/createMessage server-initiated request.
+    void HandleSamplingCreateMessageRequest(const RequestId& requestId, const Request& request, RequestContext& ctx);
+
+    // Utility helpers for replying to server-initiated requests with JSON-RPC errors.
+    // These helpers centralize error formatting and ensure consistent responses.
+    void SendJsonRpcError(const RequestId& requestId, JsonRpcErrorCode code, const std::string& message,
+                          RequestContext& ctx);
+    void SendJsonRpcErrorRaw(const RequestId& requestId, int code, const std::string& message, RequestContext& ctx);
+    void SendMethodNotFound(const RequestId& requestId, const std::string& method, RequestContext& ctx);
+    void SendInternalError(const RequestId& requestId, const std::string& message, RequestContext& ctx);
+
+    /** Handle notifications/progress: look up callback by progressToken (string or int64_t) and invoke it. */
+    void HandleProgressNotification(const ProgressToken& progressToken, double progress,
+                                    std::optional<double> total, const std::optional<std::string>& message);
 
     // Indicates whether initialize has succeeded
     bool initialized_{false};
 
+    // Capabilities advertised by the server during the MCP handshake.
+    std::optional<ServerCapabilities> serverCapabilities_{std::nullopt};
+
+    // If set, the client supports roots/list. Used to decide whether to advertise
+    // ClientCapabilities.roots in the initialize request.
+    ListRootsCallback listRootsCallback_{nullptr};
+
+    LoggingCallback loggingCallback_{nullptr};
+
+    ElicitCallback elicitCallback_{nullptr};
+    ElicitUrlCallback elicitUrlCallback_{nullptr};
+
+    // If set, the client supports sampling/createMessage.
+    McpClient::SamplingCreateMessageCallback samplingCreateMessageCallback_{nullptr};
+    SamplingCapability samplingCapability_{};
+
     // Client configuration used to build initialize.clientInfo
     ClientConfig clientConfig_;
+
+    // Cache for tool output schemas
+    std::unordered_map<std::string, JsonValue> toolOutputSchemas_;
+
+    // Cache schemas from ListTools result
+    void CacheToolSchemas(const ListToolsResult& r);
+
+    // Validate tool result against cached output schema
+    void ValidateToolResult(const std::string& name, const CallToolResult& result);
 };
 
 } // namespace Mcp

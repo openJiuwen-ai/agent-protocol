@@ -1,35 +1,36 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "utils/utils_message.h"
-#include "utils/uuid.h"
+#include "utils_message.h"
+#include "uuid.h"
 
-namespace a2a {
+namespace A2A {
 
-Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& context_id,
-                            const std::optional<std::string>& task_id)
+Message NewAgentTextMessage(const std::string& text, const std::optional<std::string>& contextId,
+                            const std::optional<std::string>& taskId)
 {
-    TextPart t{.kind = "text", .metadata = std::nullopt, .text = text};
-    Part p = t;
+    Part p;
+    p.text = text;
+    p.mediaType = "text/plain";
     Message m;
     m.role = Role::AGENT;
     m.parts = {p};
-    m.messageId = a2a::generateUuid();
-    m.taskId = task_id;
-    m.contextId = context_id;
+    m.messageId = A2A::GenerateUuid();
+    m.taskId = taskId;
+    m.contextId = contextId;
     return m;
 }
 
-Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional<std::string>& context_id,
-                             const std::optional<std::string>& task_id)
+Message NewAgentPartsMessage(const std::vector<Part>& parts, const std::optional<std::string>& contextId,
+    const std::optional<std::string>& taskId)
 {
     Message m;
     m.role = Role::AGENT;
     m.parts = parts;
-    m.messageId = a2a::generateUuid();
-    m.taskId = task_id;
-    m.contextId = context_id;
+    m.messageId = A2A::GenerateUuid();
+    m.taskId = taskId;
+    m.contextId = contextId;
     return m;
 }
 
@@ -37,30 +38,8 @@ std::vector<std::string> GetTextParts(const std::vector<Part>& parts)
 {
     std::vector<std::string> out;
     for (const auto& p : parts) {
-        if (std::holds_alternative<TextPart>(p)) {
-            out.push_back(std::get<TextPart>(p).text);
-        }
-    }
-    return out;
-}
-
-std::vector<nlohmann::json> GetDataParts(const std::vector<Part>& parts)
-{
-    std::vector<nlohmann::json> out;
-    for (const auto& p : parts) {
-        if (std::holds_alternative<DataPart>(p)) {
-            out.push_back(std::get<DataPart>(p).data);
-        }
-    }
-    return out;
-}
-
-std::vector<std::variant<FileWithBytes, FileWithUri>> GetFileParts(const std::vector<Part>& parts)
-{
-    std::vector<std::variant<FileWithBytes, FileWithUri>> out;
-    for (const auto& p : parts) {
-        if (std::holds_alternative<FilePart>(p)) {
-            out.push_back(std::get<FilePart>(p).file);
+        if (p.text.has_value()) {
+            out.push_back(p.text.value());
         }
     }
     return out;
@@ -79,4 +58,4 @@ std::string GetMessageText(const Message& message, const std::string& delimiter)
     return joined;
 }
 
-} // namespace a2a
+} // namespace A2A

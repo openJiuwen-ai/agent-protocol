@@ -27,28 +27,41 @@ MCP_LOG_LEVEL GetLogLevel(void)
     return g_logLevel;
 }
 
-void McpPrintfImpl(MCP_LOG_LEVEL logLevel, const char* format, ...)
+const char* GetLogLevelName(MCP_LOG_LEVEL logLevel)
+{
+    switch (logLevel) {
+        case MCP_LOG_LEVEL_DEBUG:
+            return "DEBUG";
+        case MCP_LOG_LEVEL_INFO:
+            return "INFO";
+        case MCP_LOG_LEVEL_WARN:
+            return "WARN";
+        case MCP_LOG_LEVEL_ERROR:
+            return "ERROR";
+        case MCP_LOG_LEVEL_FATAL:
+            return "FATAL";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+void McpPrintfImpl(MCP_LOG_LEVEL logLevel, std::string message)
 {
     if (logLevel < GetLogLevel()) {
         return;
     }
-    va_list args;
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
+    printf("%s\n", message.c_str());
 }
 
 int32_t SetLogCallback(McpLogCallback logCallback)
 {
     if (logCallback == nullptr) {
-        printf("log callback is null");
-        return -1;
-    }
-    if (logCallback == g_logCallback) {
-        printf("log callback is the same");
+        g_logCallback = McpPrintfImpl;
         return 0;
     }
-    printf("log callback changed\n");
+    if (logCallback == g_logCallback) {
+        return 0;
+    }
     g_logCallback = logCallback;
     return 0;
 }

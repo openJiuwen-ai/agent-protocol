@@ -1,54 +1,51 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_CLIENT_FACTORY
 #define A2A_CLIENT_FACTORY
 
-#include <functional>
-#include <map>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "client/client.h"
-#include "utils/types.h"
+#include "client/client_transport.h"
+#include "types.h"
 
-namespace a2a::client {
+namespace A2A::Client {
 
-class ClientFactoryImpl;
-
+/**
+ * @brief Factory for creating configured A2A Client instances.
+ */
 class ClientFactory {
 public:
-    /**
-     * @brief constructor
-     *
-     * @param[in] config client config used when create client
-     * @param[in] consumers consumers of client being created
-     */
-    explicit ClientFactory(ClientConfig config, std::vector<Consumer> consumers = {});
-
-    /**
-     * @brief destructor
-     *
-     */
+    /** @brief Destructor. */
     ~ClientFactory();
 
     /**
-     * @brief create client
-     *
-     * @param[in] card agent card
-     * @param[in] extraConsumers extra consumers of client being created
-     * @param[in] interceptors interceptors of client being created
-     * @return unique pointer of client been created
+     * @brief Create a client with the default JSON-RPC transport.
+     * @param[in] card         Resolved agent card.
+     * @param[in] config       Client behaviour configuration.
+     * @param[in] consumers    Optional event consumers.
+     * @param[in] interceptors Optional request interceptors.
+     * @return Shared pointer to the created client.
      */
-    std::unique_ptr<Client> Create(const a2a::AgentCard& card, const std::vector<Consumer>& extraConsumers = {},
-                                   const std::vector<ClientCallInterceptor*>& interceptors = {}) const;
+    static std::shared_ptr<Client> Create(const AgentCard& card, const ClientConfig& config,
+        const std::vector<Consumer>& consumers = {},
+        const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors = {});
 
-private:
-    std::unique_ptr<ClientFactoryImpl> impl_;
+    /**
+     * @brief Create a client with a custom transport implementation.
+     * @param[in] card       Resolved agent card.
+     * @param[in] config     Client behaviour configuration.
+     * @param[in] transport  Custom transport layer.
+     * @param[in] consumers  Optional event consumers.
+     * @return Shared pointer to the created client.
+     */
+    static std::shared_ptr<Client> Create(const AgentCard& card, const ClientConfig& config,
+        std::shared_ptr<ClientTransport> transport, const std::vector<Consumer>& consumers = {});
 };
 
-} // namespace a2a::client
+} // namespace A2A::Client
 
 #endif

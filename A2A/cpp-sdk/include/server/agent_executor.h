@@ -1,39 +1,56 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #ifndef A2A_AGENT_EXECUTOR
 #define A2A_AGENT_EXECUTOR
 
-#include "server/event_queue.h"
-#include "server/request_context.h"
+#include <memory>
 
-namespace a2a::server {
+#include "task_updater.h"
+#include "request_context.h"
 
+namespace A2A::Server {
+
+/**
+ * @brief User-implemented agent logic for task execution and cancellation.
+ * @note 实现此接口以处理 message/send 与 tasks/cancel 请求。
+ */
 class AgentExecutor {
 public:
-    /**
-     * @brief destructor
-     */
+    /** @brief Virtual destructor. */
     virtual ~AgentExecutor() = default;
 
     /**
-     * @brief execute a task in given request context
-     *
-     * @param[in] context request context cintaining task information
-     * @param[in] eventQueue event queue used to publish events
+     * @brief Execute a task in the given request context.
+     * @param[in] context     Request context with message and task info.
+     * @param[in] taskUpdater Updater for publishing status / artifact events.
+     * @throws A2AServerError on unrecoverable execution errors.
      */
-    virtual void Execute(RequestContext& context, EventQueue& eventQueue) = 0;
+    virtual void Execute(std::shared_ptr<RequestContext> context, std::shared_ptr<TaskUpdater> taskUpdater) = 0;
 
     /**
-     * @brief cancel a task in given request context
-     *
-     * @param[in] context request context cintaining task information
-     * @param[in] eventQueue event queue used to publish events
+     * @brief Execute a task for a custom JSON-RPC method (non SendMessage variants).
+     * @param[in] context     Request context.
+     * @param[in] taskUpdater Updater for publishing events.
+     * @param[in] method      Custom JSON-RPC method name.
+     * @note Default implementation delegates to Execute(context, taskUpdater).
      */
-    virtual void Cancel(RequestContext& context, EventQueue& eventQueue) = 0;
+    virtual void Execute(std::shared_ptr<RequestContext> context, std::shared_ptr<TaskUpdater> taskUpdater,
+        [[maybe_unused]] const std::string& method)
+    {
+        Execute(std::move(context), std::move(taskUpdater));
+    }
+
+    /**
+     * @brief Cancel a running task.
+     * @param[in] context     Request context containing task information.
+     * @param[in] taskUpdater Updater for publishing cancellation status.
+     * @throws A2AServerError if the task cannot be canceled.
+     */
+    virtual void Cancel(std::shared_ptr<RequestContext> context, std::shared_ptr<TaskUpdater> taskUpdater) = 0;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

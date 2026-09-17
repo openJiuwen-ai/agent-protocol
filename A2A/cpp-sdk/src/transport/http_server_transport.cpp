@@ -1,236 +1,255 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+* Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include <httplib.h>
-
-#include <iostream>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <mutex>
+#include <future>
+#include <algorithm>
 
+#include "stream_server_emitter.h"
+#include "a2a_log.h"
+#include "common_types.h"
+#include "http_common.h"
+#include "types.h"
+#include "jsonrpc.h"
 #include "http_server_transport.h"
-#include "utils/errors.h"
 
-namespace a2a::transport {
-constexpr auto SERVER_STARTUP_DELAY = 50;
-// ========================
-// HttpServerTransportEmiter (concrete implementation for httplib)
-// ========================
-class HttplibEmitter : public AbstractServerTransportEmiter {
-public:
-    explicit HttplibEmitter(httplib::DataSink* sink) : sink_(sink)
-    {
-    }
+namespace A2A::Transport {
 
-    void WriteData(const std::string& data) override
-    {
-        if (sink_) {
-            std::string chunk = "data: " + data + "\n\n";
-            sink_->write(chunk.data(), chunk.size());
-        }
-    }
-
-    void WriteDone() override
-    {
-        if (sink_) {
-            std::string done = "event: done\ndata: {\"done\":true}\n\n";
-            sink_->write(done.data(), done.size());
-        }
-    }
-
-private:
-    httplib::DataSink* sink_;
-};
-
-// ========================
-// HttpServerTransport
-// ========================
-HttpServerTransport::HttpServerTransport(std::shared_ptr<AgentCard> agentCard) : agentCard_(agentCard)
+void HttpServerTransport::SetHeader(const std::string& key, const std::string& value)
 {
+    headers_[key] = value;
 }
 
-HttpServerTransport& HttpServerTransport::SetHeader(std::string key, std::string value)
+void HttpServerTransport::SetBearerToken(const std::string& token)
 {
-    headers_[std::move(key)] = std::move(value);
-    return *this;
+    bearerToken_ = token;
 }
 
-HttpServerTransport& HttpServerTransport::SetBearerToken(std::string token)
-{
-    bearerToken_ = std::move(token);
-    return *this;
-}
-
-HttpServerTransport& HttpServerTransport::SetTimeoutMs(long connectMs, long readMs)
+void HttpServerTransport::SetTimeoutMs(long connectMs, long readMs)
 {
     connectTimeoutMs_ = connectMs;
     readTimeoutMs_ = readMs;
-    return *this;
 }
 
-void HttpServerTransport::SetEventHandler(ServerTransportEventHandler handler)
+void HttpServerTransport::SetRpcHandler(ServerTransportRpcHandler handler)
 {
     handler_ = std::move(handler);
 }
 
-void HttpServerTransport::SetStreamEventHandler(ServerTransportStreamEventHandler handler)
+void HttpServerTransport::SetCardHandler(ServerTransportCardHandler handler)
 {
-    streamHandler_ = std::move(handler);
+    handlerCard_ = std::move(handler);
 }
 
-int HttpServerTransport::Start(const std::string& ipAddr, uint16_t port)
+int HttpServerTransport::Start()
 {
-    ipAddr_ = ipAddr;
-    port_ = port;
+    // Create route map for the new server
+    Server::RouteMap routeMap;
 
-    // Set up JSON-RPC endpoint
-    server_.Post("/jsonrpc", [this](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Content-Type", "application/json");
+    // Set up endpoints using helper methods
+    SetupJsonRpcEndpoint(routeMap);
+    SetupCardEndpoint(routeMap);
 
-        // 添加全局 headers
+    // Create server manager configuration
+    Server::HttpServerManagerConfig config;
+    config.host = config_.ip;
+    config.port = static_cast<uint16_t>(config_.port);
+    config.ioThreadNum = config_.ioThreadNum;
+
+    // Disable TLS for simple HTTP service
+    config.tlsConfig.enabled = false;
+
+    config.routeMap = routeMap;
+
+    // Create and start the server manager
+    httpServerMgr_ = std::make_unique<Server::HttpServerManager>(config);
+
+    // Start server in background thread; wait until Start() finishes so Stop()
+    // cannot race with servers_ construction (ASAN SEGV in unique_ptr clear).
+    auto started = std::make_shared<std::promise<void>>();
+    auto startedFuture = started->get_future();
+    listenThread_ = std::thread([this, started]() {
+        try {
+            httpServerMgr_->Start();
+            started->set_value();
+        } catch (...) {
+            started->set_exception(std::current_exception());
+        }
+    });
+    startedFuture.get();
+
+    return 0;
+}
+
+void HttpServerTransport::SetupJsonRpcEndpoint(Server::RouteMap& routeMap)
+{
+    routeMap[jsonrpc_endpoint_] = [this](const Http::HttpRequest& req, const Http::HttpRequestContext& ctx) {
+        HandleJsonRpcRequest(req, ctx);
+    };
+    
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "JSON-RPC endpoint setup at: " + jsonrpc_endpoint_);
+}
+
+void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
+{
+    routeMap[AGENT_CARD_ENDPOINT] = [this]([[maybe_unused]] const Http::HttpRequest& req,
+                                            const Http::HttpRequestContext& ctx) {
+        Http::HttpResponse response;
+
+        // Add global headers
         for (const auto& [key, value] : headers_) {
-            res.set_header(key.c_str(), value.c_str());
+            response.headers[key] = value;
         }
 
         std::string resp;
-        try {
-            if (handler_) {
-                handler_(req.body, resp); // handler_ 处理 req.body → resp
-            } else {
-                resp = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"Handler not set"}})";
-            }
-        } catch (const std::exception& e) {
-            resp =
-                R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":")" + std::string(e.what()) + R"("}})";
+        handlerCard_("", resp);
+        response.body = resp;
+        response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
+        ctx.httpSendFunc(response, ctx);
+    };
+}
+
+void HttpServerTransport::HandleJsonRpcRequest(const Http::HttpRequest& req, const Http::HttpRequestContext& ctx)
+{
+    // Parse the request to check if it's a streaming method
+    std::string contentType = A2A::Http::GetHeaderValue(req.headers, Http::CONTENT_TYPE_HEADER);
+
+    // Determine if this is a streaming request by checking the method
+    if (IsStreamingMethod(req.body)) {
+        HandleStreamingRequest(req.body, ctx, headers_);
+    } else {
+        HandleNonStreamingRequest(req.body, ctx, headers_);
+    }
+}
+
+bool HttpServerTransport::IsStreamingMethod(const std::string& reqBody) const
+{
+    try {
+        auto jsonReq = nlohmann::json::parse(reqBody);
+        if (jsonReq.contains("method")) {
+            std::string method = jsonReq["method"];
+            return method == METHOD_MESSAGE_STREAM || method == METHOD_TASK_RESUBSCRIBE;
         }
-        printf("-resp: %s\n", resp.c_str());
-        res.set_content(resp, "application/json");
-    });
+    } catch (...) {
+        // If parsing fails, treat as non-streaming
+    }
+    return false;
+}
 
-    // Set up Streaming endpoint
-    server_.Post("/stream", [this](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Content-Type", "text/event-stream");
-        res.set_header("Cache-Control", "no-cache");
-        res.set_header("Connection", "keep-alive");
-        res.set_header("X-Accel-Buffering", "no");
+void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
+    const std::map<std::string, std::string>& headersCopy)
+{
+    // Create a background thread to handle streaming request
+    std::thread workerThread([this, reqBody, ctx, headersCopy]() mutable {
+        // Prepare initial response for streaming
+        Http::HttpResponse response;
+        SetCommonHeaders(response);
 
-        // 添加全局 headers
-        for (const auto& [key, value] : headers_) {
-            res.set_header(key.c_str(), value.c_str());
+        // Add global headers
+        for (const auto& [key, value] : headersCopy) {
+            response.headers[key] = value;
         }
-
-        // 使用 set_chunked_content_provider
-        res.set_chunked_content_provider("text/event-stream",
-            [this, body = req.body](size_t, httplib::DataSink& sink) -> bool {
-                HttplibEmitter emitter(&sink);
-                try {
-                    if (streamHandler_) {
-                        streamHandler_(body, emitter);
-                    }
-                    sink.done(); // 显式标记完成
-                } catch (const std::exception& e) {
-                    std::cout << e.what();
-                    sink.done();
-                }
-                return true; // 返回 true 表示完成
-            });
-    });
-
-    server_.Get("/.well-known/agent-card.json", [this](const httplib::Request& req, httplib::Response& res) {
-        // 添加全局 headers
-        for (const auto& [key, value] : headers_) {
-            res.set_header(key.c_str(), value.c_str());
-        }
-        nlohmann::json ret;
-        to_json(ret, *agentCard_);
-        res.set_content(ret.dump(), "application/json");
-    });
-
-    server_.Get("/tasks/:id", [this](const httplib::Request& req, httplib::Response& res) {
-        // 添加全局 headers
-        for (const auto& [key, value] : headers_) {
-            res.set_header(key.c_str(), value.c_str());
-        }
+        response.type = Http::HttpSendType::HTTPRESPONSESTART;
+        ctx.httpSendFunc(response, ctx);
 
         try {
-            std::string taskId = req.path_params.at("id");
-            std::cout << "Get task by ID: " << taskId << std::endl;
-
-            nlohmann::json jsonRpcReq = {
-                {"jsonrpc", "2.0"}, {"id", 1}, {"method", "task/get"}, {"params", {{"id", taskId}}}};
-
-            std::string requestBody = jsonRpcReq.dump();
-            std::string resp;
-
-            if (handler_) {
-                handler_(requestBody, resp);
-                res.set_content(resp, "application/json");
-            } else {
-                res.status = static_cast<int>(HttpStatusCode::InternalServerError);
-                res.set_content(R"({"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"Handler not set"}})",
-                                "application/json");
-            }
+            auto emitter = std::make_shared<StreamServerEmitter>(ctx);
+            std::string unusedResp; // For streaming, response body is not used
+            handler_(reqBody, unusedResp, emitter);
         } catch (const std::exception& e) {
-            res.status = static_cast<int>(HttpStatusCode::BadRequest);
-            std::string errorResp =
-                R"({"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":")" + std::string(e.what()) + R"("}})";
-            res.set_content(errorResp, "application/json");
+            std::string error_msg = e.what() ? e.what() : "Unknown exception";
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed: " + error_msg);
+
+            // Send error as SSE event
+            Http::HttpResponse error_response;
+            SetCommonHeaders(error_response);
+            error_response.body = "event: error\ndata: {\"error\":\"" + std::string(e.what()) + "\"}\n\n";
+
+            ctx.httpSendFunc(error_response, ctx);
+        }
+
+        // Clean up the thread from the vector when done
+        {
+            std::lock_guard<std::mutex> lock(workerThreadsMutex_);
+            workerThreads_.erase(
+                std::remove_if(workerThreads_.begin(), workerThreads_.end(),
+                    [](const std::thread& t) { return !t.joinable(); }),
+                workerThreads_.end());
         }
     });
 
-    server_.Post("/tasks/:id/cancel", [this](const httplib::Request& req, httplib::Response& res) {
-        // 添加全局 headers
-        for (const auto& [key, value] : headers_) {
-            res.set_header(key.c_str(), value.c_str());
-        }
+    // Store the thread in our vector and detach it
+    {
+        std::lock_guard<std::mutex> lock(workerThreadsMutex_);
+        workerThreads_.emplace_back(std::move(workerThread));
+    }
+}
 
+void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
+    const std::map<std::string, std::string>& headersCopy)
+{
+    // Handle non-streaming request with a dedicated background thread
+    // Create a background thread to handle the request
+    std::thread workerThread([this, reqBody, ctx, headersCopy]() mutable {
+        std::string responseLocal;
+        auto emitter = std::make_shared<StreamServerEmitter>(ctx, headersCopy);
         try {
-            std::string taskId = req.path_params.at("id");
-            std::cout << "Get task by ID: " << taskId << std::endl;
-
-            nlohmann::json jsonRpcReq = {
-                {"jsonrpc", "2.0"}, {"id", 1}, {"method", "task/cancel"}, {"params", {{"id", taskId}}}};
-
-            std::string requestBody = jsonRpcReq.dump();
-            std::string resp;
-
-            if (handler_) {
-                handler_(requestBody, resp);
-                res.set_content(resp, "application/json");
-            } else {
-                res.status = static_cast<int>(HttpStatusCode::InternalServerError);
-                res.set_content(R"({"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"Handler not set"}})",
-                                "application/json");
-            }
+            handler_(reqBody, responseLocal, emitter);
         } catch (const std::exception& e) {
-            res.status = static_cast<int>(HttpStatusCode::BadRequest);
-            std::string errorResp =
-                R"({"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":")" + std::string(e.what()) + R"("}})";
-            res.set_content(errorResp, "application/json");
+            nlohmann::json err;
+            err[JSON_FIELD_JSONRPC] = JSON_VERSION;
+            err[JSON_FIELD_ID] = "null";
+            err[JSON_FIELD_ERROR] = InternalError{};
+            responseLocal = err.dump();
+        }
+
+        if (!responseLocal.empty()) {
+            emitter->WriteNonStreamingData(responseLocal);
+        }
+
+        // Clean up the thread from the vector when done
+        {
+            std::lock_guard<std::mutex> lock(workerThreadsMutex_);
+            workerThreads_.erase(
+                std::remove_if(workerThreads_.begin(), workerThreads_.end(),
+                    [](const std::thread& t) { return !t.joinable(); }),
+                workerThreads_.end());
         }
     });
 
-    // Start server in background thread
-    listen_thread_ = std::thread([this]() { server_.listen(ipAddr_.c_str(), port_); });
+    // Store the thread in our vector and detach it
+    {
+        std::lock_guard<std::mutex> lock(workerThreadsMutex_);
+        workerThreads_.emplace_back(std::move(workerThread));
+    }
+}
 
-    // Ensure logs flush immediately (critical for short-lived threads)
-    std::cout << std::flush;
-    std::cerr << std::flush;
-
-    // Give server time to start
-    std::this_thread::sleep_for(std::chrono::milliseconds(SERVER_STARTUP_DELAY));
-    return 0;
+void HttpServerTransport::SetCommonHeaders(Http::HttpResponse& response)
+{
+    response.success = true;
+    response.statusCode = Http::HTTP_STATUS_OK;
+    response.headers[Http::CACHE_CONTROL_HEADER] = Http::CACHE_CONTROL_NO_CACHE_NO_TRANSFORM;
+    response.headers[Http::CONNECTION_HEADER] = Http::CONNECTION_KEEP_ALIVE;
+    response.headers[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_SSE;
+    response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
+    response.headers[Http::X_ACCEL_BUFFERING_HEADER] = "no";
 }
 
 void HttpServerTransport::Stop()
 {
-    server_.stop();
-    if (listen_thread_.joinable()) {
-        listen_thread_.join();
+    if (httpServerMgr_) {
+        httpServerMgr_->Stop();
+    }
+    if (listenThread_.joinable()) {
+        listenThread_.join();
     }
 }
 
-int HttpServerTransport::SendData(const std::string& url, const std::string& data) const
+int HttpServerTransport::SendData([[maybe_unused]] const std::string& url,
+    [[maybe_unused]] const std::string& data) const
 {
     // Server does not send data to external URLs
     return -1;
@@ -238,10 +257,42 @@ int HttpServerTransport::SendData(const std::string& url, const std::string& dat
 
 HttpServerTransport::~HttpServerTransport()
 {
-    if (listen_thread_.joinable()) {
-        server_.stop();
-        listen_thread_.join();
+    try {
+        if (httpServerMgr_) {
+            httpServerMgr_->Stop();
+        }
+    } catch (const std::exception& e) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in stopping http server: ") + e.what());
+    } catch (...) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in stopping http server");
+    }
+
+    try {
+        if (listenThread_.joinable()) {
+            listenThread_.join();
+        }
+    } catch (const std::exception& e) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("Exception in joining listen thread: ") + e.what());
+    } catch (...) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in joining listen thread");
+    }
+
+    // Join all worker threads before destruction
+    std::vector<std::thread> threadsToJoin;
+    {
+        std::lock_guard<std::mutex> lock(workerThreadsMutex_);
+        for (auto& worker_thread : workerThreads_) {
+            if (worker_thread.joinable()) {
+                threadsToJoin.emplace_back(std::move(worker_thread));
+            }
+        }
+        workerThreads_.clear();
+    }
+    for (auto& t : threadsToJoin) {
+        if (t.joinable()) {
+            t.join();
+        }
     }
 }
 
-} // namespace a2a::transport
+} // namespace A2A::Transport

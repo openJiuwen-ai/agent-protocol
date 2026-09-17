@@ -1,0 +1,141 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f8fb;
+  --panel: #ffffff;
+  --text: #1f2328;
+  --muted: #5f6b7a;
+  --border: #d8dee8;
+  --green: #1f7a4d;
+  --red: #b42318;
+  --blue: #315f96;
+  --code: #f2f4f8;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+header { margin-bottom: 20px; }
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+article {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 22px;
+  margin: 16px 0;
+  box-shadow: 0 10px 24px rgba(31, 35, 40, 0.06);
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.field:first-of-type { padding-top: 0; }
+
+.field label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.field code {
+  overflow-wrap: anywhere;
+  color: var(--blue);
+  font-size: 14px;
+}
+
+.instruction {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+details {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code);
+}
+
+summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+pre {
+  margin: 0;
+  border-top: 1px solid var(--border);
+  padding: 14px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.approve { background: var(--green); }
+.reject { background: var(--red); }
+.secondary { background: var(--blue); }
+
+.status {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.empty {
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  color: var(--muted);
+}
+
+@media (max-width: 680px) {
+  main { padding: 24px 14px 36px; }
+  .field { grid-template-columns: 1fr; gap: 4px; }
+}

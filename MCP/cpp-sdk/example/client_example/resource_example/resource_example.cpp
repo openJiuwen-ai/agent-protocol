@@ -17,16 +17,26 @@ constexpr int REQUEST_TIMEOUT = 300;
 constexpr char EXAMPLE_ENDPOINT[] = "http://localhost:8000/mcp";
 constexpr char EXAMPLE_TOKEN[] = "your-token";
 
-int main()
+int main(int argc, char** argv)
 {
     SetLogLevel(MCP_LOG_LEVEL_INFO);
+
+    std::string endpoint = EXAMPLE_ENDPOINT;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] ? std::string(argv[i]) : std::string{};
+        if (arg.rfind("--port=", 0) == 0) {
+            const std::string value = arg.substr(std::string("--port=").size());
+            int port = std::stoi(value);
+            endpoint = std::string("http://localhost:") + std::to_string(port) + "/mcp";
+        }
+    }
 
     // Setup client configuration
     Mcp::ClientConfig config;
     config.name = "ResourceExampleClient";
     config.version = "1.0.0";
     Mcp::StreamableHttpClientConfig httpConfig;
-    httpConfig.endpoint = EXAMPLE_ENDPOINT;
+    httpConfig.endpoint = endpoint;
     httpConfig.tlsConfig.enabled = false;
 
     auto authProvider = std::make_shared<Mcp::BearerTokenProvider>(EXAMPLE_TOKEN);
@@ -43,29 +53,43 @@ int main()
         initFuture.get();
         MCP_LOG(MCP_LOG_LEVEL_INFO, "Initialize success");
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Initialize failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Initialize failed: ") + e.what());
         return -1;
     }
 
-    // Example 1: List resources
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListResources ===");
+    // Example 1: List resources (paginated)
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example ListResources (paginated) ===");
     std::string targetUri;
     try {
-        auto listFuture = mcpClient->ListResources();
-        if (listFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResources timeout");
-            return -1;
-        }
-        auto resourceList = listFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListResources success, resource count: %zu", resourceList->resources.size());
-        for (const auto &resource : resourceList->resources) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Resource: %s (uri: %s)", resource.name.c_str(), resource.uri.c_str());
-        }
-        if (!resourceList->resources.empty()) {
-            targetUri = resourceList->resources.front().uri;
-        }
+        std::optional<std::string> cursor;
+        std::size_t totalCount = 0;
+        bool firstPage = true;
+
+        do {
+            auto listFuture = mcpClient->ListResources(cursor);
+            if (listFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
+                MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResources timeout");
+                return -1;
+            }
+            auto resourceList = listFuture.get();
+            MCP_LOG(MCP_LOG_LEVEL_INFO,
+                    std::string("ListResources page fetched, resource count: ") +
+                        std::to_string(resourceList->resources.size()));
+            for (const auto &resource : resourceList->resources) {
+                MCP_LOG(MCP_LOG_LEVEL_INFO, "  Resource: " + resource.name + " (uri: " + resource.uri + ")");
+            }
+            if (firstPage && !resourceList->resources.empty()) {
+                targetUri = resourceList->resources.front().uri;
+                firstPage = false;
+            }
+            totalCount += resourceList->resources.size();
+            cursor = resourceList->nextCursor;
+        } while (cursor.has_value());
+
+        MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("ListResources completed, total resource count: ") + std::to_string(totalCount));
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResources failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListResources failed: ") + e.what());
         return -1;
     }
 
@@ -79,7 +103,7 @@ int main()
                 return -1;
             }
             subFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "SubscribeResource success: %s", targetUri.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "SubscribeResource success: " + targetUri);
 
             auto unsubFuture = mcpClient->UnsubscribeResource(targetUri);
             if (unsubFuture.wait_for(std::chrono::seconds(REQUEST_TIMEOUT)) != std::future_status::ready) {
@@ -87,9 +111,9 @@ int main()
                 return -1;
             }
             unsubFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "UnsubscribeResource success: %s", targetUri.c_str());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "UnsubscribeResource success: " + targetUri);
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Subscribe/Unsubscribe failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Subscribe/Unsubscribe failed: ") + e.what());
             return -1;
         }
     }
@@ -104,10 +128,10 @@ int main()
                 return -1;
             }
             auto readResult = readFuture.get();
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "ReadResource success: %s, content count: %zu", targetUri.c_str(),
-                    readResult->contents.size());
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "ReadResource success: " + targetUri + ", content count: " +
+                std::to_string(readResult->contents.size()));
         } catch (const std::exception &e) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "ReadResource failed: %s", e.what());
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ReadResource failed: ") + e.what());
             return -1;
         }
     }
@@ -121,16 +145,19 @@ int main()
             return -1;
         }
         auto templates = templateFuture.get();
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "ListResourcesTemplates success, template count: %zu",
-                templates->resourceTemplates.size());
+        MCP_LOG(MCP_LOG_LEVEL_INFO,
+                std::string("ListResourcesTemplates success, template count: ") +
+                    std::to_string(templates->resourceTemplates.size()));
         for (const auto &tmpl : templates->resourceTemplates) {
-            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Template: %s (mimeType: %s)", tmpl.uriTemplate.c_str(),
-                    tmpl.mimeType.has_value() ? tmpl.mimeType.value().c_str() : "none");
+            std::string mimeType = tmpl.mimeType.has_value() ? tmpl.mimeType.value() : std::string("none");
+            MCP_LOG(MCP_LOG_LEVEL_INFO, "  Template: " + tmpl.uriTemplate + " (mimeType: " + mimeType + ")");
         }
     } catch (const std::exception &e) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "ListResourcesTemplates failed: %s", e.what());
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("ListResourcesTemplates failed: ") + e.what());
         return -1;
     }
+
+    mcpClient->CloseGracefully();
 
     MCP_LOG(MCP_LOG_LEVEL_INFO, "=== Example completed ===");
     return 0;

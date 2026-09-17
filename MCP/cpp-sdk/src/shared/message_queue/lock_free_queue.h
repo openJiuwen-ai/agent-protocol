@@ -233,7 +233,8 @@ public:
     bool Push(const T& item)
     {
         if (Size() >= capacity_) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "MPSCQueue overflow detected, capacity=%zu", capacity_);
+            MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                    std::string("MPSCQueue overflow detected, capacity=") + std::to_string(capacity_));
             return false;
         }
     

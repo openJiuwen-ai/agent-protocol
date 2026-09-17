@@ -22,4 +22,6 @@ target_link_libraries(mcp_auth_tests
 
 target_compile_features(mcp_auth_tests PRIVATE cxx_std_17)
 
-gtest_discover_tests(mcp_auth_tests)
+gtest_discover_tests(mcp_auth_tests
+  DISCOVERY_TIMEOUT 60
+)

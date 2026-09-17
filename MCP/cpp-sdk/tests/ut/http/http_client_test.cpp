@@ -43,12 +43,12 @@ int main(int argc, char* argv[]) {
 
     const auto& response = *responseOptional;
 
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Status: %d %s", response.statusCode, response.statusText.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Status: " + std::to_string(response.statusCode) + " " + response.statusText);
     MCP_LOG(MCP_LOG_LEVEL_INFO, "Headers:");
     for (const auto& header : response.headers) {
-        MCP_LOG(MCP_LOG_LEVEL_INFO, "%s: %s", header.first.c_str(), header.second.c_str());
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "\t" + header.first + ": " + header.second);
     }
-    MCP_LOG(MCP_LOG_LEVEL_INFO, "Body:\n%s", response.body.c_str());
+    MCP_LOG(MCP_LOG_LEVEL_INFO, "Body:\n" + response.body);
 
     return 0;
 }

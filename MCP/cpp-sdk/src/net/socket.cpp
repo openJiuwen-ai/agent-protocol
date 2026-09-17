@@ -29,11 +29,13 @@ bool Socket::SetNonBlocking(int fd)
 {
     int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "F_GETFL failed: %s (%d)", std::strerror(errno), errno);
+        MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("F_GETFL failed: ") +
+            std::strerror(errno) + " (" + std::to_string(errno) + ")");
         return false;
     }
     if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "F_SETFL failed: %s (%d)", std::strerror(errno), errno);
+        MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("F_SETFL failed: ") +
+            std::strerror(errno) + " (" + std::to_string(errno) + ")");
         return false;
     }
     return true;
@@ -48,34 +50,39 @@ void Socket::ApplyOptions(const SocketOptions& opts)
     // Configure non-blocking and close-on-exec according to options.
     if (opts.nonBlocking) {
         if (!SetNonBlocking(fd_)) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "SetNonBlocking failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("SetNonBlocking failed: ") +
+                std::strerror(errno) + " (" + std::to_string(errno) + ")");
         }
     }
 
     if (opts.recvBufSize > 0) {
         if (::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &opts.recvBufSize,
                          static_cast<socklen_t>(sizeof(opts.recvBufSize))) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_RCVBUF) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("setsockopt(SO_RCVBUF) failed: ") +
+                std::strerror(errno) + " (" + std::to_string(errno) + ")");
         }
     }
     if (opts.sendBufSize > 0) {
         if (::setsockopt(fd_, SOL_SOCKET, SO_SNDBUF, &opts.sendBufSize,
                          static_cast<socklen_t>(sizeof(opts.sendBufSize))) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_SNDBUF) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("setsockopt(SO_SNDBUF) failed: ") +
+                std::strerror(errno) + " (" + std::to_string(errno) + ")");
         }
     }
 
     if (opts.reuseAddr) {
         int on = 1;
         if (::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &on, static_cast<socklen_t>(sizeof(on))) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_REUSEADDR) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("setsockopt(SO_REUSEADDR) failed: ") +
+                std::strerror(errno) + " (" + std::to_string(errno) + ")");
         }
     }
 
     if (opts.reusePort) {
         int on = 1;
         if (::setsockopt(fd_, SOL_SOCKET, SO_REUSEPORT, &on, static_cast<socklen_t>(sizeof(on))) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_REUSEPORT) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN, std::string("setsockopt(SO_REUSEPORT) failed: ") +
+                std::strerror(errno) + " (" + std::to_string(errno) + ")");
         }
     }
 }

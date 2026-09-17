@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "mcp_auth.h"
+#include "shared/http_common.h"
 
 namespace Mcp {
 
@@ -36,7 +37,7 @@ AuthenticationResult BearerTokenAuthenticator::Authenticate(
         return result;
     }
 
-    auto authHeader = headers.find("Authorization");
+    auto authHeader = headers.find(Http::AUTHORIZATION_HEADER);
     if (authHeader == headers.end()) {
         result.errorDescription = "Missing Authorization header";
         return result;

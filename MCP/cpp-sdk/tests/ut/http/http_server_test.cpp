@@ -39,7 +39,8 @@ int main(int argc, char* argv[]) {
     tlsConfig.enabled = false;
 
     if (server.Start("127.0.0.1", port, tlsConfig) != Mcp::Http::HttpServerStartResult::OK) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to start HTTP server on port %u", port);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Failed to start HTTP server on port ") + std::to_string(port));
         return 1;
     }
 

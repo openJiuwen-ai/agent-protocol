@@ -18,6 +18,7 @@
 #include <unordered_map>
 
 #include "mcp_log.h"
+#include "shared/thread_utils.h"
 
 namespace Mcp {
 
@@ -111,7 +112,8 @@ struct EventSystem::Impl {
 
             if (!savedPersistent && eventOwner != nullptr) {
                 MCP_LOG(MCP_LOG_LEVEL_DEBUG,
-                        "EventSystem::eventCallbackAdapter: removing non-persistent event, eventId=%d", savedId);
+                        std::string("EventSystem::eventCallbackAdapter: removing non-persistent event, eventId=") +
+                            std::to_string(savedId));
                 eventOwner->RemoveEvent(savedId);
             }
         }
@@ -134,7 +136,8 @@ struct EventSystem::Impl {
     std::thread eventThread;
 };
 
-EventSystem::EventSystem(bool enableThreadSupport) : impl_(std::make_unique<Impl>(enableThreadSupport))
+EventSystem::EventSystem(bool enableThreadSupport, int eventThreadIndex)
+    : impl_(std::make_unique<Impl>(enableThreadSupport)), eventThreadIndex_(eventThreadIndex)
 {
 }
 
@@ -180,6 +183,7 @@ bool EventSystem::Init()
 
 int EventSystem::ToEventFd(int eventId)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = impl_->events.find(eventId);
     if (it == impl_->events.end()) {
         return -1;
@@ -210,28 +214,40 @@ int EventSystem::AddEvent(int fd, EventType events, EventCallback callback, void
 
     event* ev = event_new(event_base_, fd, flags, &Impl::EventData::eventCallbackAdapter, data.get());
     if (ev == nullptr) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to create event for fd=%d", fd);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to create event for fd=") + std::to_string(fd));
         return -1;
     }
 
     data->handle.reset(ev);
 
+    const int assignedId = data->id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        impl_->events.emplace(assignedId, std::move(data));
+    }
+
     timeval tv{};
     if (event_add(ev, ToTimeval(timeoutMs, tv)) != 0) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Failed to add event for fd=%d", fd);
-        data->handle.reset();
+        MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Failed to add event for fd=") + std::to_string(fd));
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = impl_->events.find(assignedId);
+        if (it != impl_->events.end()) {
+            if (it->second != nullptr && it->second->handle != nullptr) {
+                it->second->handle.reset();
+            }
+            impl_->events.erase(it);
+        }
         return -1;
     }
 
-    const int assignedId = data->id;
-    impl_->events.emplace(assignedId, std::move(data));
     return assignedId;
 }
 
 int EventSystem::AddTimer(long timeoutMs, EventCallback callback, void* arg, bool repeat)
 {
     if (timeoutMs <= 0) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "Invalid timer timeout: %ldms", timeoutMs);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("Invalid timer timeout: ") + std::to_string(timeoutMs) + "ms");
         return -1;
     }
 
@@ -329,22 +345,19 @@ bool EventSystem::CloseNotifyEventId(int eventId)
         return false;
     }
 
-    int eventFd = ToEventFd(eventId);
-    if (eventFd == -1) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "The eventId not found.");
-        return false;
-    }
-
-    // Remove the libevent watcher and close the fd.
-    RemoveEvent(eventId);
-    ::close(eventFd);
-    return true;
+    return RemoveEventInternal(eventId, true);
 }
 
 bool EventSystem::RemoveEvent(int eventId)
 {
+    return RemoveEventInternal(eventId, false);
+}
+
+bool EventSystem::RemoveEventInternal(int eventId, bool closeFd)
+{
     std::unique_ptr<Impl::EventData> data;
     {
+        // Remove from map first so concurrent Notify fails immediately.
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = impl_->events.find(eventId);
         if (it == impl_->events.end()) {
@@ -360,10 +373,14 @@ bool EventSystem::RemoveEvent(int eventId)
         data->handle.reset();
     }
 
+    if (closeFd && data != nullptr && data->fd >= 0) {
+        ::close(data->fd);
+    }
+
     return true;
 }
 
-void EventSystem::Start(bool run_in_background)
+void EventSystem::Start(bool runInBackground)
 {
     if (event_base_ == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "The event system is not initialized.");
@@ -375,12 +392,13 @@ void EventSystem::Start(bool run_in_background)
         return; // already running
     }
 
-    if (run_in_background) {
+    if (runInBackground) {
         if (impl_->eventThread.joinable()) {
             impl_->eventThread.join();
         }
 
         impl_->eventThread = std::thread([this]() {
+            SetCurrentThreadName("MCP-Event-" + std::to_string(eventThreadIndex_));
             event_base_dispatch(event_base_);
             running_.store(false);
         });
@@ -390,7 +408,7 @@ void EventSystem::Start(bool run_in_background)
     }
 }
 
-void EventSystem::Stop()
+void EventSystem::Stop(bool runInCallback)
 {
     if (event_base_ == nullptr) {
         MCP_LOG(MCP_LOG_LEVEL_ERROR, "The event system is not initialized.");
@@ -404,7 +422,7 @@ void EventSystem::Stop()
 
     event_base_loopbreak(event_base_);
 
-    if (impl_->eventThread.joinable()) {
+    if (!runInCallback && impl_->eventThread.joinable()) {
         impl_->eventThread.join();
     }
 }

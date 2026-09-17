@@ -20,4 +20,6 @@ target_link_libraries(mcp_log_tests
 
 target_compile_features(mcp_log_tests PRIVATE cxx_std_17)
 
-gtest_discover_tests(mcp_log_tests)
+gtest_discover_tests(mcp_log_tests
+  DISCOVERY_TIMEOUT 60
+)

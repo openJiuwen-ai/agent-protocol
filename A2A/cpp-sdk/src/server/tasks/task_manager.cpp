@@ -1,194 +1,277 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include "task_manager.h"
-#include "utils/errors.h"
+#include <nlohmann/json.hpp>
+
 #include "utils_helpers.h"
+#include "error.h"
+#include "a2a_log.h"
+#include "task_manager.h"
 
-namespace a2a::server {
+namespace A2A::Server {
 
-TaskManager::TaskManager(std::optional<std::string> task_id, std::optional<std::string> contextId,
-                         std::shared_ptr<TaskStore> task_store, std::optional<a2a::Message> initial_message,
-                         const a2a::server::ServerCallContext* context)
-    : taskId_(std::move(task_id)),
-      contextId_(std::move(contextId)),
-      taskStore_(std::move(task_store)),
-      initialMessage_(std::move(initial_message)),
-      callContext_(context)
+TaskManager::TaskManager(const std::shared_ptr<TaskStore>& taskStore) : taskStore_(taskStore) {}
+
+void TaskManager::RegisterTask(const std::string& taskId, const std::shared_ptr<TaskExecuteInfo>& info)
 {
-    if (taskId_.has_value() && taskId_->empty()) {
-        throw std::invalid_argument("Task ID must be a non-empty string");
+    if (taskId.empty()) {
+        throw A2AServerError("Task ID must be a non-empty string");
     }
+    taskExecuteMap_[taskId] = info;
 }
 
-std::optional<a2a::Task> TaskManager::GetTask()
+std::shared_ptr<Task> TaskManager::GetTask(const std::string& taskId)
 {
-    if (!taskId_) {
-        return std::nullopt;
+    auto it = taskExecuteMap_.find(taskId);
+    if (it != taskExecuteMap_.end() && it->second != nullptr) {
+        return taskStore_->Get(taskId, it->second->callContext);
     }
-    if (currentTask_) {
-        return currentTask_;
-    }
-    currentTask_ = taskStore_->Get(*taskId_, callContext_);
-    return currentTask_;
+    return taskStore_->Get(taskId, nullptr);
 }
 
-a2a::Task TaskManager::SaveTaskEvent(
-    const std::variant<a2a::Task, a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>& event)
+std::string TaskManager::GetContextId(const std::string& taskId) const
 {
-    // Determine task id/context id from event
+    if (const auto task = taskStore_->Get(taskId, nullptr); task != nullptr) {
+        return task->contextId;
+    }
+    return "";
+}
+
+void TaskManager::SaveTaskContextId(const EventType &event)
+{
     std::string eid;
     std::string ecid;
-    if (std::holds_alternative<a2a::Task>(event)) {
-        const auto& t = std::get<a2a::Task>(event);
+    if (std::holds_alternative<Task>(event)) {
+        const auto& t = std::get<Task>(event);
         eid = t.id;
         ecid = t.contextId;
-    } else if (std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)) {
-        const auto& e = std::get<a2a::TaskStatusUpdateEvent>(event);
+    } else if (std::holds_alternative<TaskStatusUpdateEvent>(event)) {
+        const auto& e = std::get<TaskStatusUpdateEvent>(event);
         eid = e.taskId;
         ecid = e.contextId;
     } else { // TaskArtifactUpdateEvent
-        const auto& e = std::get<a2a::TaskArtifactUpdateEvent>(event);
+        const auto& e = std::get<TaskArtifactUpdateEvent>(event);
         eid = e.taskId;
         ecid = e.contextId;
     }
 
-    if (taskId_ && !taskId_.value().empty() && *taskId_ != eid) {
-        throw a2a::A2AServerError("Task in event doesn't match TaskManager " + *taskId_ + " : " + eid);
-    }
-    if (!taskId_) {
-        taskId_ = eid;
-    }
-    if (contextId_ && !contextId_.value().empty() && *contextId_ != ecid) {
-        throw a2a::A2AServerError("Context in event doesn't match TaskManager " + *contextId_ + " : " + ecid);
-    }
-    if (!contextId_) {
-        contextId_ = ecid;
+    if (auto it = taskExecuteMap_.find(eid); it == taskExecuteMap_.end() || it->second == nullptr) {
+        HandleError(eid, "Task in event has not been registered to task manager");
+        return;
     }
 
-    if (std::holds_alternative<a2a::Task>(event)) {
-        const auto& t = std::get<a2a::Task>(event);
+    auto task = GetTask(eid);
+    if (task && !task->contextId.empty() && task->contextId != ecid) {
+        HandleError(eid, "Context in event doesn't match TaskManager " + task->contextId + " : " + ecid);
+    }
+}
+
+void TaskManager::SaveTaskEvent(const EventType& event)
+{
+    // Determine task id/context id from event
+    SaveTaskContextId(event);
+
+    if (std::holds_alternative<Task>(event)) {
+        const auto& t = std::get<Task>(event);
         SaveTask(t);
-        return t;
+        return;
     }
 
-    a2a::Task task;
-    if (std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)) {
-        task = EnsureTask(std::variant<a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>{
-            std::get<a2a::TaskStatusUpdateEvent>(event)});
+    Task task;
+    if (std::holds_alternative<TaskStatusUpdateEvent>(event)) {
+        task = EnsureTask(std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>{
+            std::get<TaskStatusUpdateEvent>(event)});
     } else {
-        task = EnsureTask(std::variant<a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>{
-            std::get<a2a::TaskArtifactUpdateEvent>(event)});
+        task = EnsureTask(std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>{
+            std::get<TaskArtifactUpdateEvent>(event)});
     }
 
-    if (std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)) {
-        const auto& e = std::get<a2a::TaskStatusUpdateEvent>(event);
+    if (std::holds_alternative<TaskStatusUpdateEvent>(event)) {
+        const auto& e = std::get<TaskStatusUpdateEvent>(event);
         if (task.status.message) {
             if (task.history) {
-                task.history->push_back(*task.status.message);
+                task.history->push_back(std::move(*task.status.message));
             } else {
-                task.history = std::vector<a2a::Message>{*task.status.message};
+                task.history = std::vector<Message>{std::move(*task.status.message)};
             }
         }
-        if (e.metadata) {
-            if (!task.metadata) {
-                task.metadata = nlohmann::json::object();
+        if (!task.metadata) {
+            task.metadata = e.metadata;
+        } else if (e.metadata) {
+            nlohmann::json taskMetadata = nlohmann::json::parse(*task.metadata);
+            nlohmann::json eventMetadata = nlohmann::json::parse(*e.metadata);
+            for (auto it = eventMetadata.begin(); it != eventMetadata.end(); ++it) {
+                taskMetadata[it.key()] = it.value();
             }
-            for (auto it = e.metadata->begin(); it != e.metadata->end(); ++it) {
-                (*task.metadata)[it.key()] = it.value();
-            }
+            task.metadata = taskMetadata.dump();
         }
         task.status = e.status;
     } else {
-        const auto& e = std::get<a2a::TaskArtifactUpdateEvent>(event);
+        const auto& e = std::get<TaskArtifactUpdateEvent>(event);
         AppendArtifactToTask(task, e);
     }
 
     SaveTask(task);
-    return task;
 }
 
-a2a::Task TaskManager::EnsureTask(const std::variant<a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>& event)
+Task TaskManager::EnsureTask(const std::variant<TaskStatusUpdateEvent, TaskArtifactUpdateEvent>& event)
 {
-    if (currentTask_) {
-        return *currentTask_;
+    // Convert to the wider variant type to reuse EnsureTaskForEvent
+    if (std::holds_alternative<TaskStatusUpdateEvent>(event)) {
+        auto taskVariant =
+            EventType{std::get<TaskStatusUpdateEvent>(event)};
+        return EnsureTaskForEvent(taskVariant);
     }
-    if (taskId_) {
-        auto maybe = taskStore_->Get(*taskId_, callContext_);
-        if (maybe) {
-            currentTask_ = maybe;
-            return *currentTask_;
+    auto taskVariant = EventType{std::get<TaskArtifactUpdateEvent>(event)};
+    return EnsureTaskForEvent(taskVariant);
+}
+
+void TaskManager::Process(const std::string& taskId, const StreamEvent& event)
+{
+    auto it = taskExecuteMap_.find(taskId);
+    if (it == taskExecuteMap_.end() || it->second == nullptr) {
+        HandleError(taskId, "Process task failed, task id has expired or is not registered to task manager");
+        return;
+    }
+    auto info = it->second;
+
+    std::lock_guard<std::mutex> lock(info->callbackMutex);
+
+    // If it's task-related, update and save
+    if (std::holds_alternative<Task>(event)) {
+        SaveTaskEvent(EventType{std::get<Task>(event)});
+    } else if (std::holds_alternative<TaskStatusUpdateEvent>(event)) {
+        SaveTaskEvent(EventType{std::get<TaskStatusUpdateEvent>(event)});
+    } else if (std::holds_alternative<TaskArtifactUpdateEvent>(event)) {
+        SaveTaskEvent(EventType{std::get<TaskArtifactUpdateEvent>(event)});
+    }
+
+    for (const auto& callback : info->eventCb) {
+        if (callback) {
+            callback(event);
+        } else {
+            A2A_LOG(A2A_LOG_LEVEL::WARN,
+                "Transport callback is null or has expired, will not send response, task id: " +
+                taskId);
         }
     }
+    if (IsFinalEvent(event)) {
+        taskExecuteMap_.erase(taskId);
+    }
+}
+
+Task TaskManager::EnsureTaskForEvent(const EventType& event)
+{
     // Create new task from event
-    std::string eid = std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)
-                          ? std::get<a2a::TaskStatusUpdateEvent>(event).taskId
-                          : std::get<a2a::TaskArtifactUpdateEvent>(event).taskId;
-    std::string ecid = std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)
-                           ? std::get<a2a::TaskStatusUpdateEvent>(event).contextId
-                           : std::get<a2a::TaskArtifactUpdateEvent>(event).contextId;
-    a2a::Task t = InitTaskObj(eid, ecid);
+    std::string eid = std::holds_alternative<TaskStatusUpdateEvent>(event)
+                            ? std::get<TaskStatusUpdateEvent>(event).taskId
+                            : std::get<TaskArtifactUpdateEvent>(event).taskId;
+    if (auto taskObj = taskStore_->Get(eid, nullptr); taskObj != nullptr) {
+        return *taskObj;
+    }
+
+    Task t;
+    t.id = eid;
+    t.contextId = std::holds_alternative<TaskStatusUpdateEvent>(event)
+        ? std::get<TaskStatusUpdateEvent>(event).contextId
+        : std::get<TaskArtifactUpdateEvent>(event).contextId;
+    t.status.state = TaskState::SUBMITTED;
+    RegisterTask(eid, {});
     SaveTask(t);
-    return *currentTask_;
-}
-
-std::variant<a2a::Task, a2a::Message, a2a::TaskArtifactUpdateEvent, a2a::TaskStatusUpdateEvent> TaskManager::Process(
-    const std::variant<a2a::Task, a2a::Message, a2a::TaskArtifactUpdateEvent, a2a::TaskStatusUpdateEvent>& event)
-{
-    // If it's task-related, update and save
-    if (std::holds_alternative<a2a::Task>(event)) {
-        SaveTaskEvent(std::variant<a2a::Task, a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>{
-            std::get<a2a::Task>(event)});
-    } else if (std::holds_alternative<a2a::TaskStatusUpdateEvent>(event)) {
-        SaveTaskEvent(std::variant<a2a::Task, a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>{
-            std::get<a2a::TaskStatusUpdateEvent>(event)});
-    } else if (std::holds_alternative<a2a::TaskArtifactUpdateEvent>(event)) {
-        SaveTaskEvent(std::variant<a2a::Task, a2a::TaskStatusUpdateEvent, a2a::TaskArtifactUpdateEvent>{
-            std::get<a2a::TaskArtifactUpdateEvent>(event)});
-    }
-    return event;
-}
-
-a2a::Task TaskManager::InitTaskObj(const std::string& task_id, const std::string& contextId)
-{
-    a2a::Task t;
-    t.id = task_id;
-    t.contextId = contextId;
-    t.status = a2a::TaskStatus{std::nullopt, a2a::TaskState::SUBMITTED, std::nullopt};
-    if (initialMessage_) {
-        t.history = std::vector<a2a::Message>{*initialMessage_};
-    }
     return t;
 }
 
-void TaskManager::SaveTask(const a2a::Task& task)
+void TaskManager::SaveTask(const Task& task)
 {
-    taskStore_->Save(task, callContext_);
-    currentTask_ = task;
-    if (!taskId_) {
-        taskId_ = task.id;
-        contextId_ = task.contextId;
+    auto it = taskExecuteMap_.find(task.id);
+    if (it != taskExecuteMap_.end() && it->second != nullptr) {
+        taskStore_->Save(task, it->second->callContext);
+        return;
     }
+    taskStore_->Save(task, nullptr);
 }
 
-a2a::Task TaskManager::UpdateWithMessage(const a2a::Message& message, a2a::Task task)
+Task TaskManager::UpdateWithMessage(const Message& message, Task task)
 {
+    auto it = taskExecuteMap_.find(task.id);
+    if (it != taskExecuteMap_.end() && it->second != nullptr) {
+        std::lock_guard<std::mutex> lock(it->second->callbackMutex);
+    }
     if (task.status.message) {
         if (task.history) {
-            task.history->push_back(*task.status.message);
+            task.history->push_back(std::move(*task.status.message));
         } else {
-            task.history = std::vector<a2a::Message>{*task.status.message};
+            task.history = std::vector<Message>{std::move(*task.status.message)};
         }
         task.status.message.reset();
     }
     if (task.history) {
         task.history->push_back(message);
     } else {
-        task.history = std::vector<a2a::Message>{message};
+        task.history = std::vector<Message>{message};
     }
-    currentTask_ = task;
+    SaveTask(task);
     return task;
 }
 
-} // namespace a2a::server
+bool TaskManager::ExchangeMessageSent(const std::string& taskId, bool value)
+{
+    auto it = taskExecuteMap_.find(taskId);
+    if (it != taskExecuteMap_.end() && it->second != nullptr) {
+        return it->second->messageSent.exchange(value);
+    }
+    return false;
+}
+
+void TaskManager::AddEventCallback(const std::string& taskId, EventCb callback)
+{
+    auto it = taskExecuteMap_.find(taskId);
+    if (it != taskExecuteMap_.end() && it->second != nullptr) {
+        std::lock_guard<std::mutex> lock(it->second->callbackMutex);
+        it->second->eventCb.emplace_back(std::move(callback));
+    }
+}
+
+void TaskManager::CancelTask(const std::shared_ptr<Task>& task)
+{
+    if (IsFinal(task->status.state)) {
+        // Agent may have already cancelled this task
+        A2A_LOG(A2A_LOG_LEVEL::DEBUG, "Task already canceled by agent, task id: " + task->id);
+        return;
+    }
+
+    auto it = taskExecuteMap_.find(task->id);
+    if (it == taskExecuteMap_.end() || it->second == nullptr) {
+        // No agent is actively working on this task (input required or auth required)
+        task->status.state = TaskState::CANCELED;
+        return;
+    }
+
+    // Agent is actively working on this task, need to stop all streaming responses
+    std::lock_guard<std::mutex> lock(it->second->callbackMutex);
+    const auto event = TaskStatusUpdateEvent{
+        task->contextId,
+        std::nullopt,
+        TaskStatus{std::nullopt, TaskState::CANCELED, std::nullopt},
+        task->id
+    };
+    task->status.state = TaskState::CANCELED;
+    for (const auto& callback : it->second->eventCb) {
+        if (callback) {
+            callback(event);
+        } else {
+            A2A_LOG(A2A_LOG_LEVEL::WARN,
+                "Transport callback is null or has expired, will not notify task cancellation, task id: " + task->id);
+        }
+    }
+    taskExecuteMap_.erase(task->id);
+}
+
+void TaskManager::HandleError(const std::string& taskId, const std::string& message, int code) const
+{
+    A2A_LOG(A2A_LOG_LEVEL::ERROR, "Process task failed, task id: " + taskId +
+        ", error msg: " + message +
+        ", error code: " + std::to_string(code));
+}
+} // namespace A2A::Server

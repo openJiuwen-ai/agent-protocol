@@ -12,6 +12,8 @@
 #include <unordered_map>
 
 #include "http_client_service.h"
+#include "mcp_auth.h"
+#include "mcp_error.h"
 #include "mcp_type.h"
 #include "shared/http_common.h"
 #include "shared/jsonrpc.h"
@@ -23,22 +25,7 @@ using UserData = Http::UserData;
 using HttpRequest = Http::HttpRequest;
 using HttpResponse = Http::HttpResponse;
 using HttpCallback = Http::HttpCallback;
-constexpr const char* CONTENT_TYPE_HEADER = Http::CONTENT_TYPE_HEADER;
 
-// SSE event data structure
-struct EventData {
-    std::string event;
-    std::string id;
-    JSONRPCMessage data;
-
-    EventData() : event(""), id(""), data(JSONRPCRequest())
-    {
-    }
-    EventData(const std::string& evt, const std::string& evtId, JSONRPCMessage evtData)
-        : event(evt), id(evtId), data(std::move(evtData))
-    {
-    }
-};
 
 // HTTP Timeout constants (in milliseconds)
 constexpr int DEFAULT_HTTP_TIMEOUT_MS = 30000; // 30 seconds
@@ -50,15 +37,18 @@ public:
         std::string url, std::unordered_map<std::string, std::string> headers = {},
         std::chrono::milliseconds timeout = std::chrono::milliseconds{DEFAULT_HTTP_TIMEOUT_MS},
         std::chrono::milliseconds sseReadTimeout = std::chrono::milliseconds{DEFAULT_SSE_READ_TIMEOUT_MS},
-        const Mcp::TlsConfig& tlsConfig = Mcp::TlsConfig{});
+        const Mcp::TlsConfig& tlsConfig = Mcp::TlsConfig{},
+        std::shared_ptr<AuthProvider> authProvider = nullptr);
     virtual ~StreamableHttpClientTransport();
 
     // Send message to server
-    void SendMessage(const JSONRPCMessage& message) override;
+    void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) override;
 
     void Connect() override;
 
     void Terminate() override;
+
+    void TerminateSession(std::chrono::milliseconds timeout = std::chrono::milliseconds{1000}) override;
 
     void SetCallback(std::shared_ptr<TransportCallback> callback) override;
 
@@ -67,15 +57,23 @@ private:
     bool IsInitializationRequest(const JSONRPCMessage& message) const;
     bool IsInitializedNotification(const JSONRPCMessage& message) const;
     void HandleJsonResponse(const HttpResponse& response, bool isInitialization);
-    void HandleSseResponse(const HttpResponse& response, bool isInitialization);
-    void HandleSseEvent(const EventData& eventData, bool isInitialization);
+    bool HandleSseResponse(const HttpResponse& response, bool isInitialization);
+    bool HandleSseEvent(const Http::ServerSentEvent& sse, const std::string& method = "",
+        bool isInitialization = false);
     void HandleUnexpectedContentType(const HttpResponse& response);
     void MayExtractSessionIdFromResponse(const HttpResponse& response);
     void MayExtractProtocolVersionFromMessage(const JSONRPCMessage& message);
-    void SendSessionTerminatedError(const HttpResponse& response);
+    void ReportError(const RequestId& requestId, JsonRpcErrorCode errorCode, const std::string& message,
+                     const std::optional<nlohmann::json>& data = std::nullopt);
 
     // Handle response from server (called internally when response received, triggers session callback)
-    void HandleResponse(const HttpResponse& response);
+    bool HandleResponseHeader(const HttpResponse& response);
+    bool HandleResponseBody(const HttpResponse& response);
+
+    // SSE stream handling methods
+    void StartGetStream();
+    bool HandleGetStreamHeader(const HttpResponse& response);
+    bool HandleGetStreamBody(const HttpResponse& response);
 
     std::string url_;
     std::unordered_map<std::string, std::string> requestHeaders_;
@@ -84,10 +82,10 @@ private:
 
     std::string sessionId_;
     std::string protocolVersion_;
-    uint64_t sseConnectionId_;
 
     std::unique_ptr<Http::HttpClientService> httpClientService_;
     std::shared_ptr<TransportCallback> callback_;
+    std::shared_ptr<AuthProvider> authProvider_;
     RequestContext ctx_;
 };
 

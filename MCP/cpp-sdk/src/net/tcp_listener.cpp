@@ -22,7 +22,8 @@ static bool setReusePort(int fd, bool on)
 {
     int v = on ? 1 : 0;
     if (::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &v, static_cast<socklen_t>(sizeof(v))) != 0) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "SO_REUSEPORT failed: %s (%d)", std::strerror(errno), errno);
+        MCP_LOG(MCP_LOG_LEVEL_WARN,
+                std::string("SO_REUSEPORT failed: ") + std::strerror(errno) + " (" + std::to_string(errno) + ")");
         return false;
     }
     return true;
@@ -65,13 +66,16 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
         fd = static_cast<int>(::socket(ai->ai_family, SOCK_STREAM, 0));
         if (fd < 0) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "socket() failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                    std::string("socket() failed: ") + std::strerror(errno) + " (" + std::to_string(errno) + ")");
             continue;
         }
 
         int one = 1;
         if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, static_cast<socklen_t>(sizeof(one))) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_REUSEADDR) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("setsockopt(SO_REUSEADDR) failed: ") + std::strerror(errno) +
+                        " (" + std::to_string(errno) + ")");
         }
 
         if (reusePort) {
@@ -81,14 +85,18 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
         }
 
         if (::bind(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen)) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "bind() failed on fd %d: %s (%d)", fd, std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("bind() failed on fd ") + std::to_string(fd) + ": " + std::strerror(errno) +
+                        " (" + std::to_string(errno) + ")");
             ::close(fd);
             fd = -1;
             continue;
         }
 
         if (::listen(fd, backlog) != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "listen() failed on fd %d: %s (%d)", fd, std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("listen() failed on fd ") + std::to_string(fd) + ": " + std::strerror(errno) +
+                        " (" + std::to_string(errno) + ")");
             ::close(fd);
             fd = -1;
             continue;
@@ -103,7 +111,9 @@ bool TcpListener::Listen(const std::string& host, uint16_t port, int backlog, bo
     }
 
     if (!Socket::SetNonBlocking(fd)) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "SetNonBlocking failed on fd %d: %s (%d)", fd, std::strerror(errno), errno);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("SetNonBlocking failed on fd ") + std::to_string(fd) + ": " + std::strerror(errno) +
+                    " (" + std::to_string(errno) + ")");
         ::close(fd);
         return false;
     }

@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "name": "deepseek",
+      "base_url": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-chat",
+      "api_keys": [
+        "sk-your-deepseek-api-key"
+      ]
+    },
+    {
+      "name": "aliyun",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "model": "deepseek-v3.2",
+      "api_keys": [
+        "sk-your-aliyun-api-key"
+      ]
+    }
+  ]
+}

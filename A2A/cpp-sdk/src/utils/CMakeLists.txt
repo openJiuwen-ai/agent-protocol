@@ -1,10 +1,15 @@
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} A2A_UTILS_SOURCES)
 
-include_directories(${CMAKE_SOURCE_DIR}/src/client)
-include_directories(${CMAKE_SOURCE_DIR}/src/server)
-include_directories(${CMAKE_SOURCE_DIR}/src/server/tasks)
-include_directories(${CMAKE_SOURCE_DIR}/src/server/events)
-include_directories(${CMAKE_SOURCE_DIR}/src/transport)
+add_library(a2a_utils OBJECT ${A2A_UTILS_SOURCES})
+target_link_libraries(a2a_utils PRIVATE third_party_headers)
 
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR} A2A_SOURCES)
+target_include_directories(a2a_utils
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src/shared
+)
 
-target_sources(a2a_cpp PRIVATE ${A2A_SOURCES})
+set_target_properties(a2a_utils PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)

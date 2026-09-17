@@ -5,6 +5,7 @@
 #ifndef MCP_TRANSPORT_INCLUDE_H_
 #define MCP_TRANSPORT_INCLUDE_H_
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -55,10 +56,20 @@ public:
     virtual void Terminate() = 0;
 
     /**
+     * @brief Terminate the session gracefully.
+     * Default implementation does nothing for transports that don't support sessions.
+     * @param timeout Maximum time to wait for session termination (default 1s).
+     */
+    virtual void TerminateSession(std::chrono::milliseconds timeout = std::chrono::milliseconds{1000}) {}
+
+    /**
      * @brief Send a JSON-RPC message through the transport.
      * @param message JSON-RPC message to send.
+        * @param method Optional method name used when serializing JSON-RPC responses.
+        *               Responses in this SDK require the original request method name
+        *               to serialize/deserialize typed results.
      */
-    virtual void SendMessage(const JSONRPCMessage& message) = 0;
+        virtual void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) = 0;
 
     /**
      * @brief Set callback interface for handling transport events.
@@ -87,7 +98,7 @@ public:
      * @brief Send a JSON-RPC message through the transport.
      * @param message JSON-RPC message to send.
      */
-    virtual void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) = 0;
+    virtual void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) = 0;
 
     /**
      * @brief Set callback interface for handling transport events.

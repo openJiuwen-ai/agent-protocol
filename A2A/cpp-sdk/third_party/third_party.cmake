@@ -49,22 +49,142 @@ function(fetch_or_find_package)
   # Try to find system package first
   set(PACKAGE_FOUND FALSE)
   if(${OPTION_VAR})
-    if (${ARG_NAME} STREQUAL "cpp-httplib")
-      find_path(${ARG_NAME}_INCLUDE_DIR "httplib.h")
-      target_include_directories(third_party_headers INTERFACE
-        ${ARG_NAME}_INCLUDE_DIR)
-      message(STATUS "[${ARG_NAME}] header found in ${ARG_NAME}_INCLUDE_DIR")
-      return()
-    endif()
+    message(STATUS "try to find system ${ARG_SYSTEM_PACKAGE_NAME}")
+    # 1 Try find_package first
     find_package(${ARG_SYSTEM_PACKAGE_NAME} QUIET)
     if (${ARG_SYSTEM_PACKAGE_NAME}_FOUND)
-      message(STATUS "${ARG_SYSTEM_PACKAGE_NAME} found")
       set(PACKAGE_FOUND TRUE)
+      message(STATUS "find package success")
     endif()
+
+    # 2 Try PkgConfig to find
+    if (NOT PACKAGE_FOUND)
+      message(STATUS "find package failed")
+      find_package(PkgConfig QUIET)
+      if(PKG_CONFIG_FOUND)
+        set(_a2a_pkg_names "${ARG_SYSTEM_PACKAGE_NAME}")
+        string(TOLOWER "${ARG_SYSTEM_PACKAGE_NAME}" _a2a_pkg_lower)
+        list(APPEND _a2a_pkg_names "${_a2a_pkg_lower}")
+        list(REMOVE_DUPLICATES _a2a_pkg_names)
+
+        foreach(_a2a_pkg_name IN LISTS _a2a_pkg_names)
+          pkg_check_modules(_a2a_pkg QUIET IMPORTED_TARGET "${_a2a_pkg_name}")
+
+          if(_a2a_pkg_FOUND AND _a2a_pkg_INCLUDE_DIRS AND _a2a_pkg_LIBRARY_DIRS)
+            if(NOT "${_a2a_pkg_INCLUDE_DIRS}" STREQUAL "NOTFOUND"
+                AND NOT "${_a2a_pkg_LIBRARY_DIRS}" STREQUAL "NOTFOUND")
+              set(PACKAGE_FOUND TRUE)
+              message(STATUS "pkgconfig success")
+
+              message(STATUS "_a2a_pkg_INCLUDE_DIRS: ${_a2a_pkg_INCLUDE_DIRS}")
+              message(STATUS "_a2a_pkg_LIBRARY_DIRS: ${_a2a_pkg_LIBRARY_DIRS}")
+
+              if(NOT TARGET "${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}")
+                message(STATUS "${ARG_SYSTEM_PACKAGE_NAME} success")
+                add_library("${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}" INTERFACE IMPORTED)
+                set_target_properties("${ARG_SYSTEM_PACKAGE_NAME}::${ARG_SYSTEM_PACKAGE_NAME}" PROPERTIES
+                  INTERFACE_LINK_LIBRARIES "PkgConfig::_a2a_pkg"
+                )
+              endif()
+
+              if ("${ARG_NAME}" STREQUAL "libevent")
+                if(NOT TARGET event)
+                  message(STATUS "event success")
+                  add_library(event INTERFACE IMPORTED)
+                  set_target_properties(event PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "PkgConfig::_a2a_pkg"
+                  )
+                endif()
+                if(NOT TARGET event_pthreads)
+                  pkg_check_modules(_a2a_event_pthreads QUIET IMPORTED_TARGET event_pthreads)
+                  if(_a2a_event_pthreads_FOUND)
+                    add_library(event_pthreads INTERFACE IMPORTED)
+                    set_target_properties(event_pthreads PROPERTIES
+                      INTERFACE_LINK_LIBRARIES "PkgConfig::_a2a_event_pthreads"
+                    )
+                  endif()
+                endif()
+              elseif("${ARG_SYSTEM_PACKAGE_NAME}" STREQUAL "nlohmann_json")
+                if(NOT TARGET nlohmann_json::nlohmann_json)
+                  add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
+                  set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "PkgConfig::_a2a_pkg"
+                  )
+                endif()
+              endif()
+            endif()
+          endif()
+
+        endforeach()
+      endif()
+    endif()
+
+    # 3 find_path and find_library finally
+    if (NOT PACKAGE_FOUND)
+      message(STATUS "pkgconfig fail")
+
+      if ("${ARG_NAME}" STREQUAL "libevent")
+        message(STATUS "try find_path and find_library")
+
+        find_path(_a2a_libevent_include_dir
+          NAMES event.h
+          PATHS /usr/include /usr/local/include
+        )
+        find_library(_a2a_libevent_lib
+          NAMES event
+          PATHS /usr/lib /usr/lib64
+        )
+        find_library(_a2a_libevent_pthreads_lib
+          NAMES event_pthreads
+          PATHS /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64
+        )
+
+        if(_a2a_libevent_include_dir AND _a2a_libevent_lib AND _a2a_libevent_pthreads_lib)
+          set(PACKAGE_FOUND TRUE)
+          message(STATUS "Using system libevent: include=${_a2a_libevent_include_dir}, "
+            "lib=${_a2a_libevent_lib}, pthread_lib=${_a2a_libevent_pthreads_lib}")
+
+          if(NOT TARGET libevent)
+              add_library(libevent SHARED IMPORTED)
+              set_target_properties(libevent PROPERTIES
+              IMPORTED_LOCATION "${_a2a_libevent_lib}"
+              INTERFACE_INCLUDE_DIRECTORIES "${_a2a_libevent_include_dir}"
+          )
+          endif()
+
+          if(NOT TARGET libevent_headers)
+            add_library(libevent_headers INTERFACE)
+            target_include_directories(libevent_headers
+                INTERFACE
+                    "${_a2a_libevent_include_dir}"
+            )
+          endif()
+
+          if(NOT TARGET libevent_pthreads)
+            add_library(libevent_pthreads SHARED IMPORTED)
+            set_target_properties(libevent_pthreads PROPERTIES
+              IMPORTED_LOCATION "${_a2a_libevent_pthreads_lib}"
+              INTERFACE_INCLUDE_DIRECTORIES "${_a2a_libevent_include_dir}"
+            )
+          endif()
+
+        else()
+          message(STATUS "fail to using system libevent: include=${_a2a_libevent_include_dir}, "
+            "lib=${_a2a_libevent_lib}, pthread_lib=${_a2a_libevent_pthrad_lib}")
+        endif()
+
+        if (NOT PACKAGE_FOUND)
+          message(STATUS "find_path and find_library fail")
+        endif()
+
+      endif()
+
+    endif()
+
   endif()
 
-  set(${PACKAGE_UPPER}_SRC_DIR "${CMAKE_SOURCE_DIR}/third_party/${ARG_SYSTEM_PACKAGE_NAME}-src")
-  # If not found, fetch from repository
+  set(${PACKAGE_UPPER}_SRC_DIR "${CMAKE_SOURCE_DIR}/third_party/${ARG_NAME}-src")
+  # 4 If not found, fetch from repository
   if(NOT PACKAGE_FOUND)
     message(STATUS "find ${${PACKAGE_UPPER}_SRC_DIR}/CMakeLists.txt")
     if(EXISTS "${${PACKAGE_UPPER}_SRC_DIR}/CMakeLists.txt")
@@ -95,7 +215,6 @@ function(fetch_or_find_package)
         list(GET ARG_OPTIONS ${val_index} opt_value)
         set(${opt_name} ${opt_value} CACHE BOOL "Auto-configured by fetch_or_find_package" FORCE)
       endforeach()
-
     endif()
 
     FetchContent_MakeAvailable(${ARG_NAME})
@@ -103,35 +222,80 @@ function(fetch_or_find_package)
     # Print source and binary directories
     message(STATUS "${ARG_NAME} source dir: ${${ARG_NAME}_SOURCE_DIR}")
     message(STATUS "${ARG_NAME} binary dir: ${${ARG_NAME}_BINARY_DIR}")
+
+    if (${ARG_NAME} STREQUAL "http_parser")
+      target_include_directories(third_party_headers INTERFACE
+        "${${ARG_NAME}_BINARY_DIR}/"
+        "${${ARG_NAME}_SOURCE_DIR}/"
+      )
+    else()
+      target_include_directories(third_party_headers INTERFACE
+        "${${ARG_NAME}_BINARY_DIR}/include/"
+        "${${ARG_NAME}_SOURCE_DIR}/include/"
+      )
+    endif()
+
   else()
     message(STATUS "Using system ${ARG_NAME}")
   endif()
-  if (${ARG_NAME} STREQUAL "cpp-httplib")
-    target_include_directories(third_party_headers INTERFACE
-      "${${ARG_NAME}_BINARY_DIR}/"
-      "${${ARG_NAME}_SOURCE_DIR}/"
-    )
-  else()
-    target_include_directories(third_party_headers INTERFACE
-      "${${ARG_NAME}_BINARY_DIR}/include/"
-      "${${ARG_NAME}_SOURCE_DIR}/include/"
-    )
-  endif()
 endfunction()
 
-# Fetch cpp_httplib
+# Fetch libevent
 fetch_or_find_package(
-  NAME cpp-httplib
-  GIT_REPO https://github.com/yhirose/cpp-httplib.git
-  GIT_TAG v0.18.7
+  NAME libevent
+  GIT_REPO https://github.com/libevent/libevent.git
+  GIT_TAG release-2.1.12-stable
+  SYSTEM_PACKAGE_NAME libevent
+  OPTIONS
+    EVENT__LIBRARY_TYPE STATIC
+    EVENT__DISABLE_OPENSSL ON
+    EVENT__DISABLE_TESTS ON
+    EVENT__DISABLE_BENCHMARK ON
+    CMAKE_POSITION_INDEPENDENT_CODE ON
 )
 
 # Fetch nlohmann/json (header-only library)
 fetch_or_find_package(
   NAME nlohmann_json
   GIT_REPO https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.3
+  GIT_TAG v3.11.2
   OPTIONS
     JSON_BuildTests OFF
     JSON_Install OFF
 )
+
+# libcurl: use system package (see find_package(CURL) in CMakeLists.txt).
+
+if (NOT EXISTS "${FETCHCONTENT_BASE_DIR}/http_parser-src/http_parser.c")
+  message(STATUS "download http_parser")
+  FetchContent_Declare(
+          http_parser
+          GIT_REPOSITORY https://github.com/nodejs/http-parser.git
+          GIT_TAG        v2.9.4
+  )
+  # Fetch http_parser
+  FetchContent_MakeAvailable(http_parser)
+  message(STATUS "finish download http_parser")
+endif()
+
+if(NOT TARGET http_parser)
+  add_library(http_parser
+          STATIC
+          ${FETCHCONTENT_BASE_DIR}/http_parser-src/http_parser.c
+  )
+
+  set_target_properties(http_parser PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+  target_include_directories(http_parser
+          PUBLIC
+          ${FETCHCONTENT_BASE_DIR}/http_parser-src/
+  )
+endif()
+
+if(NOT TARGET http_parser_headers)
+  add_library(http_parser_headers INTERFACE)
+  target_include_directories(http_parser_headers
+          INTERFACE
+          ${FETCHCONTENT_BASE_DIR}/http_parser-src/
+  )
+endif()

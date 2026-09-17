@@ -13,6 +13,7 @@
 
 #define private public
 #define protected public
+#include "mcp_error.h"
 #include "shared/base_session.h"
 #include "transport/transport.h"
 #include "shared/jsonrpc.h"
@@ -31,9 +32,10 @@ public:
     void Connect() override {}
     void Terminate() override {}
 
-    void SendMessage(const JSONRPCMessage& message) override
+    void SendMessage(const JSONRPCMessage& message, std::optional<std::string> method = std::nullopt) override
     {
         (void)message;
+        (void)method;
         sentCount_++;
     }
 
@@ -57,7 +59,7 @@ public:
     void Listen() override {}
     void Terminate() override {}
 
-    void SendMessage(const JSONRPCMessage& message, const RequestContext& ctx) override
+    void SendMessage(const JSONRPCMessage& message, RequestContext& ctx) override
     {
         (void)message;
         (void)ctx;
@@ -89,13 +91,28 @@ public:
         : BaseSession(std::move(t), std::nullopt, "ut")
     {}
 
-    void SendNotification(const Notification&, std::optional<int64_t>) override {}
+    void SendNotification(
+        std::unique_ptr<Notification> notification, std::optional<RequestId> relatedRequestId) override
+    {
+        (void)notification;
+        (void)relatedRequestId;
+    }
+
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total,
+                                  const std::optional<std::string>& message) override
+    {
+        (void)progressToken;
+        (void)progress;
+        (void)total;
+        (void)message;
+    }
 
     int reqCount{0};
     int notifCount{0};
 
 protected:
-    void ReceivedRequest(int64_t, const Request&, RequestContext&) override { reqCount++; }
+    void ReceivedRequest(const RequestId&, const Request&, RequestContext&) override { reqCount++; }
     void ReceivedNotification(const Notification&) override { notifCount++; }
 };
 
@@ -105,7 +122,22 @@ public:
         : BaseSession(std::move(t), "ut")
     {}
 
-    void SendNotification(const Notification&, std::optional<int64_t>) override {}
+    void SendNotification(
+        std::unique_ptr<Notification> notification, std::optional<RequestId> relatedRequestId) override
+    {
+        (void)notification;
+        (void)relatedRequestId;
+    }
+
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total,
+                                  const std::optional<std::string>& message) override
+    {
+        (void)progressToken;
+        (void)progress;
+        (void)total;
+        (void)message;
+    }
 };
 
 class DefaultHookSession : public BaseSession {
@@ -116,10 +148,25 @@ public:
     explicit DefaultHookSession(std::shared_ptr<ServerTransport> t)
         : BaseSession(std::move(t), "hdr_ut_server") {}
 
-    void SendNotification(const Notification&, std::optional<int64_t>) override {}
+    void SendNotification(
+        std::unique_ptr<Notification> notification, std::optional<RequestId> relatedRequestId) override
+    {
+        (void)notification;
+        (void)relatedRequestId;
+    }
+
+    void SendProgressNotification(ProgressToken progressToken, double progress,
+                                  std::optional<double> total,
+                                  const std::optional<std::string>& message) override
+    {
+        (void)progressToken;
+        (void)progress;
+        (void)total;
+        (void)message;
+    }
 };
 
-static JSONRPCMessage MakeRequestMsg(int64_t id, const std::string& method)
+static JSONRPCMessage MakeRequestMsg(const RequestId& id, const std::string& method)
 {
     JSONRPCRequest r;
     r.jsonrpc_ = JSONRPC_VERSION;
@@ -264,7 +311,11 @@ TEST(BaseSessionTest, OnTransportMessage_RoutesAllKinds)
         std::atomic<int> called{0};
         s.SendRequest(std::move(req),
                       [&](std::shared_ptr<Result> r) {
-                          EXPECT_EQ(r, nullptr);
+                          auto err = std::dynamic_pointer_cast<ErrorResult>(r);
+                          ASSERT_NE(err, nullptr);
+                          EXPECT_EQ(err->code, static_cast<int>(Mcp::JsonRpcErrorCode::INTERNAL_ERROR));
+                          EXPECT_EQ(err->message, "err");
+                          EXPECT_FALSE(err->data.has_value());
                           called++;
                       },
                       std::nullopt,
@@ -291,7 +342,7 @@ TEST(BaseSessionTest, SendProgressNotification_NoCrash)
     auto t = std::make_shared<FakeClientTransport>();
     TestClientSession s(t);
 
-    EXPECT_NO_THROW(s.SendProgressNotification(1, 0.1, 1.0, std::optional<std::string>("hi")));
+    EXPECT_NO_THROW(s.SendProgressNotification("", 0.1, 1.0, std::optional<std::string>("hi")));
 }
 
 // ================= header coverage =================

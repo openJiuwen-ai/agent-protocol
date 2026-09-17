@@ -1,83 +1,34 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#ifndef A2A_A2A_SERVER
-#define A2A_A2A_SERVER
+#ifndef A2A_SERVER
+#define A2A_SERVER
 
-#include <memory>
+namespace A2A::Server {
 
-#include "server/request_handler.h"
-#include "utils/types.h"
-
-namespace a2a::server {
-
-enum ServerTransportType {
-    SERVER_TRANSPORT_TYPE_HTTP,
-    SERVER_TRANSPORT_TYPE_MAX,
-};
-
-struct HttpConfig {
-    std::string ip;
-    int port;
-};
-
-struct ServerConfig {
-    ServerTransportType type;
-    std::variant<HttpConfig> config;
-};
-
-class ServerImpl;
-
+/**
+ * @brief Top-level A2A server interface.
+ * @note 服务端生命周期：Start() → Stop()。
+ */
 class Server {
 public:
-    /**
-     * @brief constructor
-     *
-     * @param[in] transportType transport type
-     * @param[in] handler request handler
-     * @param[in] agentCard agent card
-     */
-    Server(ServerTransportType transportType, std::shared_ptr<RequestHandler> handler,
-           std::shared_ptr<AgentCard> agentCard);
+    /** @brief Virtual destructor. */
+    virtual ~Server() = default;
 
     /**
-     * @brief destructor
+     * @brief Start the server and begin listening for requests.
+     * @return 0 on success, non-zero on failure.
+     * @throws std::runtime_error if the transport fails to bind or start.
      */
-    ~Server();
+    virtual int Start() = 0;
 
     /**
-     * @brief start server and listen
-     *
-     * @param[in] config server config
+     * @brief Stop the server and release listening resources.
      */
-    int Start(const ServerConfig& config);
-
-    /**
-     * @brief stop server
-     */
-    void Stop();
-
-    /**
-     * @brief retrive authenticated extended agent card
-     *
-     * @param[in] ctx server call context
-     * @return AgentCard
-     */
-    AgentCard OnGetAuthenticatedExtendedCard(const ServerCallContext* context = nullptr);
-
-    /**
-     * @brief retrive agent card
-     *
-     * @param[in] ctx server call context
-     * @return AgentCard
-     */
-    AgentCard OnGetCard(const ServerCallContext* context = nullptr);
-
-private:
-    std::unique_ptr<ServerImpl> impl_;
+    virtual void Stop() = 0;
 };
 
-} // namespace a2a::server
+} // namespace A2A::Server
 
 #endif

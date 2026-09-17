@@ -145,7 +145,8 @@ int TcpSocket::CreateNonblockingTcpSocket(int family)
         return -1;
     }
     if (!Socket::SetNonBlocking(fd)) {
-        MCP_LOG(MCP_LOG_LEVEL_ERROR, "SetNonBlocking failed: %s (%d)", std::strerror(errno), errno);
+        MCP_LOG(MCP_LOG_LEVEL_ERROR,
+                std::string("SetNonBlocking failed: ") + std::strerror(errno) + " (" + std::to_string(errno) + ")");
         ::close(fd);
         return -1;
     }
@@ -179,7 +180,7 @@ TcpSocketPtr TcpSocket::Connect(Mcp::EventSystem& es, const std::string& host, u
     addrinfo* res = nullptr;
     int gai = ::getaddrinfo(host.c_str(), portStr, &hints, &res);
     if (gai != 0) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "getaddrinfo(%s:%s) failed: %s", host.c_str(), portStr, ::gai_strerror(gai));
+        MCP_LOG(MCP_LOG_LEVEL_WARN, "getaddrinfo(" + host + ":" + portStr + ") failed: " + ::gai_strerror(gai));
         return nullptr;
     }
 
@@ -187,7 +188,7 @@ TcpSocketPtr TcpSocket::Connect(Mcp::EventSystem& es, const std::string& host, u
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
         fd = CreateNonblockingTcpSocket(ai->ai_family);
         if (fd < 0) {
-            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "socket() create failed for family %d", ai->ai_family);
+            MCP_LOG(MCP_LOG_LEVEL_DEBUG, "socket() create failed for family " + std::to_string(ai->ai_family));
             continue;
         }
 
@@ -199,7 +200,8 @@ TcpSocketPtr TcpSocket::Connect(Mcp::EventSystem& es, const std::string& host, u
             if (errno == EINPROGRESS || errno == EALREADY) {
                 break;
             }
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "connect() failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("connect() failed: ") + std::strerror(errno) + " (" + std::to_string(errno) + ")");
             ::close(fd);
             fd = -1;
             continue;
@@ -220,7 +222,9 @@ TcpSocketPtr TcpSocket::Connect(Mcp::EventSystem& es, const std::string& host, u
     int soerr = 0;
     socklen_t slen = sizeof(soerr);
     if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "getsockopt(SO_ERROR) failed: %s (%d)", std::strerror(errno), errno);
+        MCP_LOG(MCP_LOG_LEVEL_WARN,
+                std::string("getsockopt(SO_ERROR) failed: ") + std::strerror(errno) +
+                    " (" + std::to_string(errno) + ")");
         soerr = errno;
     }
 
@@ -272,7 +276,9 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
         int val = 1;
         int rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &val, static_cast<socklen_t>(sizeof(val)));
         if (rc != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_NODELAY) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("setsockopt(TCP_NODELAY) failed: ") + std::strerror(errno) +
+                        " (" + std::to_string(errno) + ")");
         }
     }
 
@@ -280,27 +286,35 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
         int on = 1;
         int rc = ::setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE, &on, static_cast<socklen_t>(sizeof(on)));
         if (rc != 0) {
-            MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(SO_KEEPALIVE) failed: %s (%d)", std::strerror(errno), errno);
+            MCP_LOG(MCP_LOG_LEVEL_WARN,
+                    std::string("setsockopt(SO_KEEPALIVE) failed: ") + std::strerror(errno) +
+                        " (" + std::to_string(errno) + ")");
         }
         if (opts.keepAliveIdleSec > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &opts.keepAliveIdleSec,
                               static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
             if (rc != 0) {
-                MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPIDLE) failed: %s (%d)", std::strerror(errno), errno);
+                MCP_LOG(MCP_LOG_LEVEL_WARN,
+                        std::string("setsockopt(TCP_KEEPIDLE) failed: ") + std::strerror(errno) +
+                            " (" + std::to_string(errno) + ")");
             }
         }
         if (opts.keepAliveIntvlSec > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &opts.keepAliveIntvlSec,
                               static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
             if (rc != 0) {
-                MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPINTVL) failed: %s (%d)", std::strerror(errno), errno);
+                MCP_LOG(MCP_LOG_LEVEL_WARN,
+                        std::string("setsockopt(TCP_KEEPINTVL) failed: ") + std::strerror(errno) +
+                            " (" + std::to_string(errno) + ")");
             }
         }
         if (opts.keepAliveCnt > 0) {
             rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &opts.keepAliveCnt,
                               static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
             if (rc != 0) {
-                MCP_LOG(MCP_LOG_LEVEL_WARN, "setsockopt(TCP_KEEPCNT) failed: %s (%d)", std::strerror(errno), errno);
+                MCP_LOG(MCP_LOG_LEVEL_WARN,
+                        std::string("setsockopt(TCP_KEEPCNT) failed: ") + std::strerror(errno) +
+                            " (" + std::to_string(errno) + ")");
             }
         }
     }
@@ -358,7 +372,8 @@ void TcpSocket::HandleConnectWritable()
     }
 
     if (err != 0) {
-        MCP_LOG(MCP_LOG_LEVEL_WARN, "connection failed: %s (%d)", std::strerror(err), err);
+        MCP_LOG(MCP_LOG_LEVEL_WARN,
+                std::string("connection failed: ") + std::strerror(err) + " (" + std::to_string(err) + ")");
         NotifyError(err, "connect");
         Close();
         return;

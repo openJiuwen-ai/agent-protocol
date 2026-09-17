@@ -4,16 +4,60 @@
 
 #include "server/server_session.h"
 
+#include <algorithm>
+#include <future>
+#include <memory>
+
 #include "mcp_log.h"
+#include "shared/sampling_validation.h"
 
 namespace Mcp {
 
+namespace {
+
+template <typename T>
+std::function<void(std::shared_ptr<Mcp::Result>)> MakeTypedCompletion(
+    std::shared_ptr<std::promise<std::shared_ptr<T>>> promise, const char* opName)
+{
+    return [promise, opName](std::shared_ptr<Mcp::Result> resultPtr) {
+        try {
+            if (!resultPtr) {
+                throw std::runtime_error(std::string(opName) + " failed: null result");
+            }
+
+            auto typed = std::dynamic_pointer_cast<T>(resultPtr);
+            if (!typed) {
+                throw std::runtime_error(std::string(opName) + " failed: result type mismatch");
+            }
+
+            promise->set_value(typed);
+        } catch (...) {
+            promise->set_exception(std::current_exception());
+        }
+    };
+}
+
+} // namespace
+
 ServerSession::~ServerSession() = default;
+
+ClientCapabilities ServerSession::GetClientCapabilities() const
+{
+    if (clientCapabilities_.has_value()) {
+        return clientCapabilities_.value();
+    }
+    return ClientCapabilities{};
+}
 
 void ServerSession::SetServerCapabilities(const ServerCapabilities& capabilities)
 {
     // Stored and later returned in the InitializeResult during the MCP handshake.
     capabilities_ = capabilities;
+
+    if (capabilities_.resources.has_value()) {
+        // NOTE: The server currently does not support resource subscription.
+        capabilities_.resources->subscribe = false;
+    }
 }
 
 void ServerSession::SetIncomingRequestCallback(IncomingRequestCallback callback)
@@ -33,7 +77,125 @@ void ServerSession::HandleRequest(const HttpRequest& request, RequestContext& co
     serverTransport_->HandleRequest(request, context);
 }
 
-void ServerSession::ReceivedRequest(int64_t requestId, const Request& request, RequestContext& ctx)
+std::future<std::shared_ptr<ListRootsResult>> ServerSession::ListRoots()
+{
+    if (stateless_) {
+        throw std::runtime_error("roots/list is not supported in stateless server mode");
+    }
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    const auto caps = GetClientCapabilities();
+    const bool supported = caps.roots.has_value();
+    if (!supported) {
+        throw std::runtime_error("Client does not support roots/list");
+    }
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<ListRootsResult>>>();
+    auto future = promise->get_future();
+
+    auto req = std::make_unique<ListRootsRequest>();
+    SendRequest(std::move(req), MakeTypedCompletion<ListRootsResult>(promise, "ListRoots"));
+
+    return future;
+}
+
+std::future<std::shared_ptr<CreateMessageResult>> ServerSession::SamplingCreateMessage(
+    const CreateMessageParams& params)
+{
+    if (stateless_) {
+        throw std::runtime_error("sampling/createMessage is not supported in stateless server mode");
+    }
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    const auto caps = GetClientCapabilities();
+    const bool supported = caps.sampling.has_value();
+    if (!supported) {
+        throw std::runtime_error("Client does not support sampling/createMessage");
+    }
+
+    // Gate tool-enabled sampling requests by advertised capability.
+    if (params.tools.has_value() && !caps.sampling->tools) {
+        throw std::runtime_error(
+            "Tool-enabled sampling requested but client did not advertise sampling.tools capability");
+    }
+
+    // Gate includeContext values beyond "none" by advertised capability.
+    if (params.includeContext.has_value()) {
+        const auto& v = params.includeContext.value();
+        const bool wantsContext = (v == "thisServer" || v == "allServers");
+        if (wantsContext && !caps.sampling->context) {
+            throw std::runtime_error("includeContext requires sampling.context capability");
+        }
+    }
+
+    ValidateToolUseResultMessages(params.messages);
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<CreateMessageResult>>>();
+    auto future = promise->get_future();
+
+    auto req = std::make_unique<CreateMessageRequest>();
+    auto reqParams = std::make_unique<CreateMessageRequestParams>(params);
+    req->params_ = std::move(reqParams);
+
+    SendRequest(std::move(req), MakeTypedCompletion<CreateMessageResult>(promise, "SamplingCreateMessage"));
+    return future;
+}
+
+std::future<std::shared_ptr<ElicitResult>> ServerSession::elicit(const std::string& message,
+    const Mcp::MetaMap& requestedSchema)
+{
+    if (stateless_) {
+        throw std::runtime_error("elicitation/create is not supported in stateless server mode");
+    }
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<ElicitResult>>>();
+    auto future = promise->get_future();
+
+    auto params = std::make_unique<ElicitRequestFormParams>();
+    params->mode = "form";
+    params->message = message;
+    params->requestedSchema = requestedSchema;
+    auto req = std::make_unique<ElicitRequest>();
+    req->params_ = std::move(params);
+
+    SendRequest(std::move(req), MakeTypedCompletion<ElicitResult>(promise, "Elicit"));
+    return future;
+}
+
+std::future<std::shared_ptr<ElicitResult>> ServerSession::elicitUrl(const std::string& message,
+    const std::string& url, const std::string& elicitationId)
+{
+    if (stateless_) {
+        throw std::runtime_error("elicitation/create is not supported in stateless server mode");
+    }
+    if (!isInitialized_) {
+        throw std::runtime_error("Session is not initialized");
+    }
+
+    auto promise = std::make_shared<std::promise<std::shared_ptr<ElicitResult>>>();
+    auto future = promise->get_future();
+
+    auto params = std::make_unique<ElicitRequestUrlParams>();
+    params->mode = "url";
+    params->message = message;
+    params->url = url;
+    params->elicitationId = elicitationId;
+    auto req = std::make_unique<ElicitRequest>();
+    req->params_ = std::move(params);
+
+    SendRequest(std::move(req), MakeTypedCompletion<ElicitResult>(promise, "ElicitUrl"));
+
+    return future;
+}
+
+void ServerSession::ReceivedRequest(const RequestId& requestId, const Request& request, RequestContext& ctx)
 {
     // The Initialize request is handled internally because it wires up session
     // state and negotiates capabilities.
@@ -43,12 +205,13 @@ void ServerSession::ReceivedRequest(int64_t requestId, const Request& request, R
             HandleInitializeRequest(requestId, *initParams, ctx);
         }
     } else {
-        if (!isInitialized_) {
-            MCP_LOG(MCP_LOG_LEVEL_ERROR, "Received request before initialization: %s", request.method_.c_str());
+        if (!stateless_ && !isInitialized_) {
+            MCP_LOG(MCP_LOG_LEVEL_ERROR, std::string("Received request before initialization: ") + request.method_);
             return;
         }
         if (incomingRequestCallback_) {
-            incomingRequestCallback_(requestId, request, ctx);
+            ServerRequestContext serverCtx(ctx, std::dynamic_pointer_cast<ServerSession>(shared_from_this()));
+            incomingRequestCallback_(requestId, request, serverCtx);
         }
     }
 }
@@ -58,6 +221,10 @@ void ServerSession::ReceivedNotification(const Notification& notification)
     // The "initialized" notification completes the initialization handshake.
     if (notification.method_ == "notifications/initialized") {
         HandleInitializeNotification(notification);
+    } else if (notification.method_ == "notifications/cancelled") {
+        HandleCancelledNotification(notification);
+    } else if (notification.method_ == "notifications/roots/list_changed") {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "Server received notification: " + notification.method_);
     } else {
         if (incomingNotificationCallback_) {
             incomingNotificationCallback_(notification);
@@ -65,23 +232,28 @@ void ServerSession::ReceivedNotification(const Notification& notification)
     }
 }
 
-void ServerSession::HandleInitializeRequest(int64_t requestId, const InitializeRequestParams& requestParams,
+void ServerSession::HandleInitializeRequest(const RequestId& requestId, const InitializeRequestParams& requestParams,
                                             RequestContext& ctx)
 {
-    (void)requestParams;
+    // Store client-advertised capabilities for later use by server handlers.
+    clientCapabilities_ = requestParams.capabilities_;
     // Reply to the client with server capabilities and implementation info.
-    SendInitializeResponse(requestId, capabilities_, ctx);
+    SendInitializeResponse(requestId, capabilities_, requestParams.protocolVersion_, ctx);
 }
 
-void ServerSession::SendInitializeResponse(int64_t requestId, const ServerCapabilities& capabilities,
-                                           RequestContext& ctx)
+void ServerSession::SendInitializeResponse(const RequestId& requestId, const ServerCapabilities& capabilities,
+                                           const std::string& requestedProtocolVersion, RequestContext& ctx)
 {
     // Build MCP InitializeResult payload.
     Implementation serverInfo;
     serverInfo.name = serverConfig_.name;
     serverInfo.version = serverConfig_.version;
-    auto initResult = std::make_unique<InitializeResult>(DEFAULT_PROTOCOL_VERSION, capabilities, serverInfo);
-    SendResponse(requestId, std::move(initResult), ctx);
+    auto protocolVersion_ = (std::find(SUPPORTED_PROTOCOL_VERSIONS.begin(), SUPPORTED_PROTOCOL_VERSIONS.end(),
+                                       requestedProtocolVersion) != SUPPORTED_PROTOCOL_VERSIONS.end()) ?
+                             requestedProtocolVersion : LATEST_PROTOCOL_VERSION;
+    auto initResult = std::make_shared<InitializeResult>(protocolVersion_, capabilities, serverInfo);
+    SendResponse(requestId, initResult, ctx);
+    isInitialized_ = true;
 }
 
 void ServerSession::HandleInitializeNotification(const Notification& notification)
@@ -91,13 +263,116 @@ void ServerSession::HandleInitializeNotification(const Notification& notificatio
     isInitialized_ = true;
 }
 
-void ServerSession::SendNotification(const Notification& notification, std::optional<int64_t> relatedRequestId)
+void ServerSession::HandleCancelledNotification(const Notification& notification)
 {
+    auto params = dynamic_cast<CancelledNotificationParams*>(notification.params_.get());
+    if (params == nullptr) {
+        return;
+    }
+
+    RequestId reqId{params->requestId};
+
+    std::lock_guard<std::mutex> lock(reqMtx);
+    auto it = sessionRequests.find(reqId);
+    if (it != sessionRequests.end()) {
+        auto ctx = it->second;
+
+        JSONRPCError err;
+        err.id_ = reqId;
+        err.code_ = 0;
+        err.message_ = "Request cancelled";
+        SendResponse(reqId, err, ctx);
+        sessionRequests[reqId].isCancelled = true;
+    }
 }
 
-void ServerSession::SendProgressNotification(int64_t progressToken, double progress, std::optional<double> total,
-                                             const std::optional<std::string>& message)
+void ServerSession::SendNotification(std::unique_ptr<Notification> notification,
+                                     std::optional<RequestId> relatedRequestId)
 {
+    (void)relatedRequestId;
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+    // Build a JSONRPCMessage variant holding a JSONRPCNotification instance
+    // and populate only lightweight fields (strings). Do not copy any
+    // underlying unique_ptr members from the input notification.
+    JSONRPCMessage message{std::in_place_type<JSONRPCNotification>};
+    auto& rpcNotif = std::get<JSONRPCNotification>(message);
+    rpcNotif.jsonrpc_ = JSONRPC_VERSION;
+    rpcNotif.method_ = notification->method_;
+    rpcNotif.notification_ = std::move(notification);
+
+    RequestContext dummy{};
+    dummy.sessionId = GetSessionId();
+    dummy.method = rpcNotif.method_;
+    dummy.connectionId = 0;
+    dummy.isGetStream = true;
+
+    serverTransport_->SendMessage(message, dummy);
+}
+
+void ServerSession::SendLogMessage(const std::string& level, const std::string& data, const std::string& logger)
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<LoggingMessageNotification>();
+    auto params = std::make_unique<LoggingMessageNotificationParams>(std::string{}, std::string{}, std::string{});
+    params->level = level;
+    params->data = data;
+    params->logger = logger;
+    notif->params_ = std::move(params);
+
+    SendNotification(std::move(notif), std::nullopt);
+}
+
+void ServerSession::SendProgressNotification(ProgressToken progressToken, double progress,
+    std::optional<double> total, const std::optional<std::string>& message)
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<ProgressNotification>();
+    notif->method_ = "notifications/progress";
+    auto params = std::make_unique<ProgressNotificationParams>();
+    params->progressToken = std::move(progressToken);
+    params->progress = progress;
+    params->total = total;
+    params->message = message;
+    notif->params_ = std::move(params);
+    SendNotification(std::move(notif), std::nullopt);
+}
+
+void ServerSession::SendToolListChangedNotification()
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<ToolListChangedNotification>();
+    SendNotification(std::move(notif), std::nullopt);
+}
+
+void ServerSession::SendPromptListChangedNotification()
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<PromptListChangedNotification>();
+    SendNotification(std::move(notif), std::nullopt);
+}
+
+void ServerSession::SendResourceListChangedNotification()
+{
+    if (serverTransport_ == nullptr) {
+        return;
+    }
+
+    auto notif = std::make_unique<ResourceListChangedNotification>();
+    SendNotification(std::move(notif), std::nullopt);
 }
 
 } // namespace Mcp

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
 #include <cstdlib>
@@ -8,34 +8,31 @@
 #include <atomic>
 #include <csignal>
 #include <nlohmann/json.hpp>
+#include <server/agent_executor.h>
+#include <server/task_updater.h>
+#include <server/http_server_builder.h>
 
-#include "server/request_handler.h"
-#include "server/request_handler_factory.h"
 #include "server/server.h"
-#include "utils/types.h"
-#include "utils/utils_message.h"
-#include "utils/uuid.h"
+#include "types.h"
 
 using json = nlohmann::json;
 
 constexpr int MAX_PORT = 65535;
 
 // --------------------- Streaming Orchestrator Executor ---------------------
-class OrchestratorAgentExecutor : public a2a::server::AgentExecutor {
+class OrchestratorAgentExecutor : public A2A::Server::AgentExecutor {
 public:
-    void Execute(a2a::server::RequestContext& context, a2a::server::EventQueue& eventQueue) override
+    void Execute(std::shared_ptr<A2A::Server::RequestContext> context,
+        std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
     {
         std::cout << "OrchestratorAgentExecutor::Execute() called\n";
 
         // 获取请求消息
-        const a2a::Message* req = context.Message();
+        const A2A::Message* req = context->GetMessage();
         if (!req) {
             // 错误处理：发 error 事件
-            a2a::TaskStatusUpdateEvent err;
-            err.status.state = a2a::TaskState::FAILED;
-            err.status.message = makeErrorPart("No message in request");
-            eventQueue.Enqueue(err);
-            eventQueue.TaskDone();
+            const auto errMsg = makeErrorPart("No message in request");
+            taskUpdater->Failed(errMsg);
             return;
         }
 
@@ -43,123 +40,118 @@ public:
         std::string destination = "Unknown";
         std::string date = "anytime";
         for (const auto& part : req->parts) {
-            if (auto* data_part = std::get_if<a2a::DataPart>(&part)) {
-                const auto& data = data_part->data;
-                destination = data.value("destination", destination);
-                date = data.value("date", date);
+            if (part.data.has_value()) {
+                const auto& d = part.data.value();
+                nlohmann::json j = nlohmann::json::parse(std::get<std::string>(d));
+                destination = j.value("destination", destination);
+                date = j.value("date", date);
             }
         }
 
-        // 2. 生成任务 ID（用你平台的 UUID，或 fallback）
-        std::string taskId = req->taskId.value_or(a2a::generateUuid());
-        std::string ctxId = req->contextId.value_or(a2a::generateUuid());
-
-        // 3. 创建任务
-        a2a::Task task;
-        task.id = taskId;
-        task.contextId = ctxId;
-        task.kind = "task";
-        task.status.state = a2a::TaskState::WORKING;
-        eventQueue.Enqueue(task);
-
+        // 2. 生成任务 ID（用你平台的 UUID，或 fallback）--在RequestHandler的实现中执行
+        // 3. 创建任务 --在RequestHandler的实现中执行
         // 4. 创建flight info
-        a2a::TaskStatusUpdateEvent flight_status;
-        flight_status.contextId = ctxId;
-        flight_status.final = false;
-        flight_status.status.state = a2a::TaskState::WORKING;
-        flight_status.status.message = makeCombinedPart("flight-progress", {{"stage", "calling-flight"}});
-        flight_status.taskId = taskId;
-        eventQueue.Enqueue(flight_status);
+        const auto flight_status_msg = makeCombinedPart("flight-progress", {{"stage", "calling-flight"}});
+        taskUpdater->StartWork(flight_status_msg);
 
         // 5. 模拟FlightAgent的回复
-        json flight_data{
+        const json flight_data{
             {"action", "flights/info"}, {"airline", "Air France"}, {"destination", destination}, {"price", "750 USD"}};
-        a2a::TaskArtifactUpdateEvent flight_artifact;
-        flight_artifact.contextId = ctxId;
-        flight_artifact.taskId = taskId;
-        flight_artifact.artifact.artifactId = a2a::generateUuid();
-        flight_artifact.artifact.parts.push_back(a2a::TextPart{"text", std::nullopt, flight_data.dump()});
-        eventQueue.Enqueue(flight_artifact);
+        std::vector<A2A::Part> flight_artifact_parts;
+        A2A::Part flight_data_part;
+        flight_data_part.text = flight_data.dump();
+        flight_data_part.mediaType = "text/plain";
+        flight_artifact_parts.emplace_back(flight_data_part);
+
+        A2A::Server::TaskArtifactParam flight_artifact_param;
+        flight_artifact_param.parts = flight_artifact_parts;
+        taskUpdater->AddArtifact(flight_artifact_param);
 
         // 6. 创建weather info
-        a2a::TaskStatusUpdateEvent weather_status;
-        weather_status.contextId = ctxId;
-        weather_status.taskId = taskId;
-        weather_status.final = false;
-        weather_status.status.state = a2a::TaskState::WORKING;
-        weather_status.status.message = makeCombinedPart("weather-progress", {{"stage", "calling-weather"}});
-        eventQueue.Enqueue(weather_status);
+        const auto weather_status_msg = makeCombinedPart("weather-progress", {{"stage", "calling-weather"}});
+        taskUpdater->StartWork(weather_status_msg);
 
         // 7. 模拟WeatherAgent的回复
         json weather_data{
             {"action", "weather/forecast"}, {"city", destination}, {"temperature", "-2°C"}, {"conditions", "Snowy"}};
-        a2a::TaskArtifactUpdateEvent weather_artifact;
-        weather_artifact.contextId = ctxId;
-        weather_artifact.taskId = taskId;
-        weather_artifact.artifact.artifactId = a2a::generateUuid();
-        weather_artifact.artifact.parts.push_back(a2a::TextPart{"text", std::nullopt, weather_data.dump()});
-        eventQueue.Enqueue(weather_artifact);
+        std::vector<A2A::Part> weather_artifact_parts;
+        A2A::Part weather_data_part;
+        weather_data_part.text = weather_data.dump();
+        weather_data_part.mediaType = "text/plain";
+        weather_artifact_parts.emplace_back(weather_data_part);
+
+        A2A::Server::TaskArtifactParam weather_artifact_param;
+        weather_artifact_param.parts = weather_artifact_parts;
+        taskUpdater->AddArtifact(weather_artifact_param);
 
         // 8. 最终状态更新
-        a2a::TaskStatusUpdateEvent final_status;
-        final_status.contextId = ctxId;
-        final_status.taskId = taskId;
-        final_status.final = true;
-        final_status.status.state = a2a::TaskState::COMPLETED;
-        final_status.status.message = makeCombinedPart("done", {{"stage", "aggregate"}});
-        eventQueue.Enqueue(final_status);
+        const auto finish_message = makeCombinedPart("done", {{"stage", "aggregate"}});
+        taskUpdater->StartWork(finish_message);
 
         // 9. 发出最终任务，附带合并后的消息
-        task.status.state = a2a::TaskState::COMPLETED;
-        task.status.message = makeCombinedMessage(*req);
-        eventQueue.Enqueue(task);
-
-        // 10. 标记任务结束
-        eventQueue.TaskDone();
+        const auto merged_req = makeCombinedMessage(*req);
+        taskUpdater->Complete(merged_req);
     }
 
-    void Cancel(a2a::server::RequestContext& context, a2a::server::EventQueue& eventQueue) override
+    void Cancel(std::shared_ptr<A2A::Server::RequestContext> context,
+        std::shared_ptr<A2A::Server::TaskUpdater> taskUpdater) override
     {
         std::cout << "OrchestratorAgentExecutor::Cancel() called\n";
-        a2a::TaskStatusUpdateEvent cancel_event;
-        cancel_event.status.state = a2a::TaskState::CANCELED;
-        eventQueue.Enqueue(cancel_event);
-        eventQueue.TaskDone();
+        taskUpdater->Cancel();
     }
 
 private:
-    std::optional<a2a::Message> makeCombinedPart(const std::string& tag, const json& payload)
+    std::optional<A2A::Message> makeCombinedPart(const std::string& tag, const json& payload)
     {
-        a2a::DataPart dp;
-        dp.data = {{"tag", tag}, {"payload", payload}};
-        return a2a::NewAgentPartsMessage({dp});
+        A2A::Part dp;
+        dp.data = nlohmann::json({{"tag", tag}, {"payload", payload}}).dump();
+        dp.mediaType = "application/json";
+        return NewAgentPartsMessage({dp});
     }
 
-    std::optional<a2a::Message> makeErrorPart(const std::string& msg)
+    std::optional<A2A::Message> makeErrorPart(const std::string& msg)
     {
-        a2a::DataPart dp;
-        dp.data = {{"error", msg}};
-        return a2a::NewAgentPartsMessage({dp});
+        A2A::Part dp;
+        dp.data = nlohmann::json({{"error", msg}}).dump();
+        dp.mediaType = "application/json";
+        return NewAgentPartsMessage({dp});
     }
 
-    std::optional<a2a::Message> makeCombinedMessage(const a2a::Message& input)
+    std::optional<A2A::Message> makeCombinedMessage(const A2A::Message& input)
     {
         std::string destination = "Unknown";
         std::string date = "anytime";
         for (const auto& part : input.parts) {
-            if (auto* data_part = std::get_if<a2a::DataPart>(&part)) {
-                const auto& d = data_part->data;
-                destination = d.value("destination", destination);
-                date = d.value("date", date);
+            if (part.data.has_value()) {
+                const auto& d = part.data.value();
+                nlohmann::json j = nlohmann::json::parse(std::get<std::string>(d));
+                destination = j.value("destination", destination);
+                date = j.value("date", date);
             }
         }
 
         json combined{
             {"action", "tripPlan"}, {"destination", destination}, {"date", date}, {"summary", "Trip planned."}};
 
-        a2a::DataPart dp;
-        dp.data = combined;
-        return a2a::NewAgentPartsMessage({dp});
+        A2A::Part dp;
+        dp.data = combined.dump();
+        dp.mediaType = "application/json";
+        return NewAgentPartsMessage({dp});
+    }
+
+    static A2A::Message NewAgentPartsMessage(
+        const std::vector<A2A::Part>& parts,
+        const std::optional<std::string>& context_id = std::nullopt,
+        const std::optional<std::string>& task_id = std::nullopt)
+    {
+        static int count = 0;
+        A2A::Message m;
+        m.role = A2A::Role::AGENT;
+        m.parts = parts;
+        m.messageId = "message-" + std::to_string(++count);
+        m.taskId = task_id;
+        m.contextId = context_id;
+        return m;
     }
 };
 
@@ -174,16 +166,16 @@ void signal_handler(int sig)
 
 void printUsage(const char* program_name)
 {
-    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n"
-              << "\nRequired options:\n"
-              << "  -i, --ip <ip>        Server IP address to bind to\n"
-              << "  -p, --port <port>    Server port to listen on (1-65535)\n"
-              << "\nOptional:\n"
-              << "  -h, --help           Show this help message\n"
-              << "\nExamples:\n"
-              << "  " << program_name << " -i 127.0.0.1 -p 8083\n"
-              << "  " << program_name << " --ip=0.0.0.0 --port=9000\n"
-              << "  " << program_name << " -i 192.168.1.100 -p 3000\n";
+    std::cout << "Usage: " << program_name << " -i <ip> -p <port> [OPTIONS]\n" <<
+        "\nRequired options:\n" <<
+        "  -i, --ip <ip>        Server IP address to bind to\n" <<
+        "  -p, --port <port>    Server port to listen on (1-65535)\n" <<
+        "\nOptional:\n" <<
+        "  -h, --help           Show this help message\n" <<
+        "\nExamples:\n" <<
+        "  " << program_name << " -i 127.0.0.1 -p 8083\n" <<
+        "  " << program_name << " --ip=0.0.0.0 --port=9000\n" <<
+        "  " << program_name << " -i 192.168.1.100 -p 3000\n";
 }
 
 // ========================
@@ -243,9 +235,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::cout << "Server configuration:\n"
-              << "  IP: " << ip << "\n"
-              << "  Port: " << port << "\n\n";
+    std::cout << "Server configuration:\n" <<
+        "  IP: " << ip << "\n" <<
+        "  Port: " << port << "\n\n";
 
     // 1. 阻塞信号
     sigset_t sigset;
@@ -258,31 +250,37 @@ int main(int argc, char* argv[])
     auto orch_executor = std::make_shared<OrchestratorAgentExecutor>();
 
     // 3. 创建 AgentCard
-    auto agentCard = std::make_shared<a2a::AgentCard>();
-    agentCard->name = "OrchestratorAgent";
-    agentCard->description = "A2A Orchestrator Example";
-    agentCard->url = "http://" + ip + ":" + std::to_string(port) + "/stream";
-    agentCard->version = "1.0.0";
-    agentCard->defaultInputModes = {"text"};
-    agentCard->defaultOutputModes = {"text"};
-    agentCard->capabilities.streaming = true;
+    A2A::AgentCard agentCard{};
+    agentCard.name = "OrchestratorAgent";
+    agentCard.description = "A2A Orchestrator Example";
+    agentCard.version = "1.0.0";
+    agentCard.defaultInputModes = {"text"};
+    agentCard.defaultOutputModes = {"text"};
+    agentCard.capabilities.streaming = true;
+    A2A::AgentInterface primaryInterface;
+    primaryInterface.url = "http://" + ip + ":" + std::to_string(port) + "/jsonrpc";
+    primaryInterface.protocolBinding = "JSONRPC";
+    primaryInterface.protocolVersion = "1.0";
+    agentCard.supportedInterfaces = {primaryInterface};
 
     std::cout << "--Built agent card \n";
 
-    a2a::server::RequestHandlerFactory fac;
-    auto orch_handler = fac.Create(orch_executor, agentCard, nullptr);
-
-    // === Orchestrator Server ===
-    a2a::server::Server server(a2a::server::SERVER_TRANSPORT_TYPE_HTTP, orch_handler, agentCard);
-
-    a2a::server::ServerConfig config;
-    config.type = a2a::server::SERVER_TRANSPORT_TYPE_HTTP;
-    auto& httpConfig = std::get<a2a::server::HttpConfig>(config.config);
+    // 4. 创建HTTP服务器配置
+    A2A::Server::HttpConfig httpConfig;
     httpConfig.ip = ip;
     httpConfig.port = port;
 
+    // 5. 使用HTTP服务器构建器创建服务器
+    auto server = A2A::Server::HttpServerBuilder::Build(
+        httpConfig,
+        agentCard,
+        {},  // extendedAgentCard
+        orch_executor,  // agentExecutor
+        nullptr   // taskStore
+    );
+
     std::cout << "\nStarting A2A Orchestrator server..." << std::endl;
-    int ret = server.Start(config);
+    int ret = server->Start();
     if (ret != 0) {
         std::cerr << "Server failed to start\n";
         return 1;
@@ -297,6 +295,9 @@ int main(int argc, char* argv[])
     if (result == 0) {
         std::cout << "\nReceived signal " << sig << ". Shutting down...\n";
     }
+
+    // 停止服务器
+    server->Stop();
 
     std::cout << "Server stopped.\n";
     return 0;

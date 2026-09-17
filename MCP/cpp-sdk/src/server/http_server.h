@@ -29,7 +29,9 @@ using RouteMap = std::unordered_map<std::string, HttpHandler>;
 class HttpServer {
 public:
     HttpServer();
-    explicit HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes);
+    explicit HttpServer(const std::string& host, uint16_t port, const TlsConfig& tlsConfig, RouteMap& routes,
+        size_t ioThreadIndex = 0);
+    ~HttpServer();
 
     void Run();
 
@@ -50,6 +52,7 @@ private:
         BIO* rbio{nullptr};
         BIO* wbio{nullptr};
         bool handshaked{false};
+        bool sseChunked{false};
     };
 
     void HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection);
@@ -59,6 +62,7 @@ private:
 
     void HandleRequest(int fileDescriptor, ConnectionContext& context);
     std::string BuildHttpResponse(const HttpResponse& response) const;
+    std::string BuildchunkedResponse(const HttpResponse& response, bool& chunkedEnabled) const;
     bool SendRawResponse(int fileDescriptor, const std::string& response);
     void CleanupConnection(int fileDescriptor);
 
@@ -69,19 +73,20 @@ private:
     void InitializeSslContext();
 
     Mcp::EventSystem eventSystem_;
-    std::unique_ptr<Mcp::MPSCNotifyQueue<std::function<void()>>> taskQueue_;
+    std::shared_ptr<Mcp::MPSCNotifyQueue<std::function<void()>>> taskQueue_;
     std::unique_ptr<Mcp::Net::TcpListener> listener_;
     std::thread eventThread_;
 
     std::unordered_map<std::string, HttpHandler> routes_;
     HttpHandler onRecv_{nullptr};
-    std::unordered_map<int, ConnectionContext> connections_;
+    std::unordered_map<int, std::shared_ptr<ConnectionContext>> connections_;
     std::atomic<bool> running_{false};
 
     std::string host_;
     uint16_t port_{0};
     TlsConfig tlsConfig_;
-    SSL_CTX* sslContext_{nullptr};
+    std::shared_ptr<SSL_CTX> sslContext_{nullptr};
+    size_t ioThreadIndex_{0};  // Index for naming IO threads
 };
 
 } // namespace Mcp::Http

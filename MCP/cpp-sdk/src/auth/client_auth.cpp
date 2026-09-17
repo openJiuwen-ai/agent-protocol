@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "mcp_auth.h"
+#include "shared/http_common.h"
 
 namespace Mcp {
 
@@ -41,7 +42,7 @@ void BearerTokenProvider::Apply(std::unordered_map<std::string, std::string>& he
         return;
     }
 
-    headers["Authorization"] = "Bearer " + token_;
+    headers[Http::AUTHORIZATION_HEADER] = "Bearer " + token_;
 }
 
 } // namespace Mcp

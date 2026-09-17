@@ -94,6 +94,11 @@ public:
         return queue_->Empty();
     }
 
+    bool TryPop(MessageType& result)
+    {
+        return queue_->TryPop(result);
+    }
+
     void Cleanup()
     {
         if (!initialized_.load(std::memory_order_acquire)) {

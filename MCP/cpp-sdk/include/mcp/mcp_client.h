@@ -25,42 +25,63 @@ public:
      *
      * @throw std::runtime_error If the client is already initialized.
      * @throw std::runtime_error If the underlying transport or session cannot be created.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<InitializeResult>> Initialize() = 0;
 
     /**
-     * @brief List all available tools on the server.
+     * @brief List available tools starting from the specified cursor.
      *
-     * Retrieves a list of tools that are registered and available for use on the server.
+     * Retrieves a list (page) of tools. When cursor is std::nullopt, listing
+     * starts from the beginning. The returned result may contain nextCursor for
+     * subsequent pages.
      *
+     * @param cursor Optional cursor indicating the starting position. Defaults to std::nullopt.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
-    virtual std::future<std::shared_ptr<ListToolsResult>> ListTools() = 0;
-    
+    virtual std::future<std::shared_ptr<ListToolsResult>> ListTools(
+        const std::optional<std::string>& cursor = std::nullopt) = 0;
+
+    /** Progress callback for long-running operations: (progress, total?, message?). */
+    using ProgressCallback =
+        std::function<void(double progress, std::optional<double> total, const std::optional<std::string>& message)>;
+
     /**
-     * @brief Call a tool by name with optional arguments and timeout.
+     * @brief Call a tool by name with optional arguments, timeout and progress callback.
      *
      * This method invokes a tool registered on the server, passing the specified arguments.
      * The call is asynchronous and returns a future to the result.
+     * When progressCallback is provided, the request includes a progressToken in params._meta
+     * (MCP progress tracking); the server may send notifications/progress and the callback is invoked.
      *
      * @param name The name of the tool to call.
-     * @param arguments Optional arguments to pass to the tool (as a JSON value). Defaults to nullopt.
+     * @param arguments Optional arguments to pass to the tool (as a JSON string). Defaults to nullopt.
      * @param timeout Timeout in milliseconds for the tool call. If 0, uses the default timeout.
+     * @param progressCallback Optional callback for progress notifications (notifications/progress).
+     *        Defaults to nullopt.
      * @return A future to a shared pointer of CallToolResult containing the tool's response.
      *
      * @throw std::runtime_error If the client is not initialized or the call fails to start.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<CallToolResult>> CallTool(
-        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt, int timeout = 0) = 0;
-    
+        const std::string& name, const std::optional<std::string>& arguments = std::nullopt, int timeout = 0,
+        std::optional<ProgressCallback> progressCallback = std::nullopt) = 0;
+
     /**
-     * @brief List all available resources on the server.
+     * @brief List available resources starting from the specified cursor.
      *
-     * Retrieves a list of resources that are available for access on the server.
+     * Retrieves a list (page) of resources. When cursor is std::nullopt,
+     * listing starts from the beginning. The returned result may contain
+     * nextCursor for subsequent pages.
      *
+     * @param cursor Optional cursor indicating the starting position. Defaults to std::nullopt.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
-    virtual std::future<std::shared_ptr<ListResourcesResult>> ListResources() = 0;
+    virtual std::future<std::shared_ptr<ListResourcesResult>> ListResources(
+        const std::optional<std::string>& cursor = std::nullopt) = 0;
 
     /**
      * @brief Read the content of a resource by URI.
@@ -69,9 +90,10 @@ public:
      *
      * @param uri The URI of the resource to read.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ReadResourceResult>> ReadResource(const std::string& uri) = 0;
-    
+
     /**
      * @brief Subscribe to updates for a resource by URI.
      *
@@ -79,9 +101,10 @@ public:
      *
      * @param uri The URI of the resource to subscribe to.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<EmptyResult>> SubscribeResource(const std::string& uri) = 0;
-    
+
     /**
      * @brief Unsubscribe from updates for a resource by URI.
      *
@@ -89,15 +112,17 @@ public:
      *
      * @param uri The URI of the resource to unsubscribe from.
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<EmptyResult>> UnsubscribeResource(const std::string& uri) = 0;
-    
+
     /**
      * @brief List all available resource templates on the server.
      *
      * Retrieves a list of resource templates that can be used to create or access resources.
      *
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ListResourceTemplatesResult>> ListResourcesTemplates() = 0;
 
@@ -107,6 +132,7 @@ public:
      * Retrieves a list of prompt templates that are available for use on the server.
      *
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<ListPromptsResult>> ListPrompts() = 0;
 
@@ -116,11 +142,36 @@ public:
      * Retrieves the specified prompt template from the server, optionally providing arguments for rendering.
      *
      * @param name The name of the prompt to retrieve.
-     * @param arguments Optional arguments for rendering the prompt.
+     * @param arguments Optional arguments for rendering the prompt (as a JSON string).
      * @throw std::runtime_error If the client is not initialized.
+     * @throw Mcp::MCPError If the server responds with a JSON-RPC error (surfaced when calling future.get()).
      */
     virtual std::future<std::shared_ptr<GetPromptResult>> GetPrompt(
-        const std::string& name, const std::optional<JsonValue>& arguments = std::nullopt) = 0;
+        const std::string& name, const std::optional<std::string>& arguments = std::nullopt) = 0;
+
+    /**
+     * @brief Send a ping to the server to check connectivity.
+     *
+     * Sends a ping message and waits for the response to verify the client/server link.
+     * Returns an empty result object on success.
+     *
+     * @return A future to a shared pointer of EmptyResult indicating the ping outcome.
+     * @throw std::runtime_error If the client is not initialized.
+     */
+    virtual std::future<std::shared_ptr<EmptyResult>> SendPing() = 0;
+
+    /**
+     * @brief Close the client connection gracefully and cleanup resources.
+     *
+     * Gracefully closes the client connection to the server and cleans up
+     * all associated resources. After calling this method, the client should
+     * not be used for further operations.
+     *
+     * Exceptions during close are caught internally; callers do not need
+     * to wrap this call in try-catch. If the client is not initialized, this
+     * method returns without effect.
+     */
+    virtual void CloseGracefully() = 0;
 
     /**
      * @brief Notify the server that the list of root resources has changed.
@@ -130,25 +181,9 @@ public:
      * @throw std::runtime_error If the client is not initialized.
      */
     virtual void SendRootsListChanged() = 0;
-    /**
-     * @brief Send a ping to the server to check connectivity.
-     *
-     * Sends a ping message to the server and waits for a response to verify connectivity.
-     *
-     * @return A future to an EmptyResult indicating the outcome of the ping.
-     * @throw std::runtime_error If the client is not initialized.
-     */
-    virtual std::future<EmptyResult> SendPing() = 0;
 
-    /**
-     * @brief Set the capabilities supported by the client.
-     *
-     * Informs the server of the features and capabilities supported by this client instance.
-     *
-     * @param caps The capabilities supported by the client.
-     * @throw std::runtime_error If the client is not initialized.
-     */
-    virtual void SetClientCapabilities(const McpClientCapabilities& caps) = 0;
+    virtual std::future<std::shared_ptr<EmptyResult>> SetLoggingLevel(const LoggingLevel level) = 0;
+
     /**
      * @brief Get the capabilities supported by the server.
      *
@@ -163,31 +198,70 @@ public:
     //virtual ExperimentalClientFeatures Experimental();
 
     /**
-     * @brief Send a progress notification to the server.
+     * @brief Send a progress notification to the server (notifications/progress).
      *
      * Notifies the server of the current progress of a long-running operation.
      *
-     * @param progressToken Token identifying the progress operation.
-     * @param progress The current progress value.
-     * @param total The total value for completion.
-     * @param message An optional message describing the progress.
+     * @param progressToken Token identifying the progress operation (string or int64_t per MCP spec).
+     * @param progress The current progress value (MUST increase with each notification).
+     * @param total Optional total value for completion; omit if unknown.
+     * @param message Optional human-readable progress message.
+     * @return A future that completes when the notification has been sent.
      * @throw std::runtime_error If the client is not initialized.
      */
-    virtual std::future<void> SendProgressNotification(std::string progressToken, float progress, float total,
-                                                       std::string message) = 0;
+    virtual std::future<void> SendProgressNotification(ProgressToken progressToken, double progress,
+                                                       std::optional<double> total = std::nullopt,
+                                                       std::optional<std::string> message = std::nullopt) = 0;
 
     /**
-     * @brief Complete an operation of the specified type on a resource.
+     * @brief Request completion options for a prompt or resource template.
      *
-     * Requests the server to complete a specific operation on a given resource, with optional extra parameters.
+     * Sends a completion request to the server for the specified resource or prompt.
      *
-     * @param type The type of operation to complete.
-     * @param uri The URI of the resource.
-     * @param extras Additional parameters for the operation.
+     * @param ref Reference to the resource template or prompt.
+     * @param argument The completion argument containing name and value.
+     * @param context Optional completion context with additional arguments.
+     * @return A future to a shared pointer of CompleteResult containing completion options.
      * @throw std::runtime_error If the client is not initialized.
      */
-    virtual std::future<Result> Complete(std::string type, std::string uri,
-                                         std::unordered_map<std::string, std::string> extras) = 0;
+    virtual std::future<std::shared_ptr<CompleteResult>> Complete(
+        const CompleteReference& ref, const CompletionArgument& argument,
+        const std::optional<CompletionContext>& context = std::nullopt) = 0;
+
+    // Register a callback that will be invoked when the server sends `roots/list`.
+    // This must be called before Initialize() to ensure capabilities are advertised correctly.
+    virtual void SetListRootsCallback(ListRootsCallback cb) = 0;
+
+    // Register a callback that will be invoked when the server sends `notifications/message`.
+    // The default callback is print in MCP_LOG.
+    virtual void SetLoggingCallback(LoggingCallback cb) = 0;
+
+    // Register a callback that will be invoked when the server sends `elicitation/create` in form mode.
+    virtual void SetElicitCallback(ElicitCallback cb) = 0;
+    
+    // Register a callback that will be invoked when the server sends `elicitation/create` in url mode.
+    virtual void SetElicitUrlCallback(ElicitUrlCallback cb) = 0;
+
+    // Callback for handling `sampling/createMessage` requests sent from a server to the client.
+    // - Return a value to accept the sampling request and respond with a CreateMessageResult.
+    // - Return std::nullopt to indicate the user rejected the sampling request; the SDK will
+    //   reply with a JSON-RPC error code -1 as recommended by the spec.
+    using SamplingCreateMessageCallback = std::function<std::optional<CreateMessageResult>(const CreateMessageParams&)>;
+
+    /**
+     * @brief Register a callback that will be invoked when the server sends `sampling/createMessage`.
+     *
+     * This must be called before Initialize() to ensure sampling capabilities are advertised correctly.
+     *
+     * @param cb The callback to handle incoming sampling requests.
+     * @param capability Controls the advertised sampling sub-capabilities:
+     *  - capability.tools=true enables tool-enabled sampling requests (sampling.tools)
+     *  - capability.context=true enables includeContext values beyond "none" (sampling.context)
+     *
+     * @throw std::runtime_error If the client is already initialized.
+     */
+    virtual void SetSamplingCreateMessageCallback(SamplingCreateMessageCallback cb,
+        SamplingCapability capability = SamplingCapability{}) = 0;
 };
 
 class McpClientFactory {

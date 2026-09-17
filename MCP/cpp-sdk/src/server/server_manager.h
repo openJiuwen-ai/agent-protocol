@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "event/event_system.h"
+#include "mcp_auth.h"
 #include "mcp_type.h"
 #include "shared/message_queue/lock_free_queue.h"
 #include "server/http_server_manager.h"
@@ -23,6 +24,24 @@ namespace Mcp {
 struct DispatchRequestMsg {
     HttpRequest request; // Store by value, not pointer
     RequestContext context; // Store by value, not pointer
+};
+
+struct DispatchResponseMsg {
+    RequestId requestId;
+    std::shared_ptr<Result> result;
+    // Keep the owning session alive until the response is actually sent.
+    // This is critical for stateless mode where sessions are per-request.
+    std::shared_ptr<ServerSession> sessionKeepAlive;
+    RequestContext context;
+    std::string sessionId;
+};
+
+// Unified message type for worker thread queue
+enum class MessageType { REQUEST, RESPONSE };
+
+struct WorkerMessage {
+    MessageType type;
+    std::variant<DispatchRequestMsg, DispatchResponseMsg> data;
 };
 
 struct NotifyEventArg {
@@ -38,8 +57,11 @@ public:
 
     void Start();
     void Stop();
-    std::shared_ptr<ServerSession> GetSession(const std::string& sessionId);
     void SetIncomingRequestCallback(IncomingRequestCallback callback);
+    bool DispatchResponse(const RequestId& requestId, std::shared_ptr<Result> result,
+                         const RequestContext& context,
+                         std::shared_ptr<ServerSession> sessionKeepAlive = nullptr);
+    std::shared_ptr<ServerSession> GetSession(const std::string& sessionId) const;
 
 private:
     void StdioServerManagerStart();
@@ -47,6 +69,9 @@ private:
     void HttpServerManagerStart();
     void ThreadMain(int id);
     void HandleRequest(const HttpRequest& request, RequestContext& context);
+    void HandleResponse(const DispatchResponseMsg& responseMsg);
+    void HandleRequestStateful(const HttpRequest& request, RequestContext& context);
+    void HandleRequestStateless(const HttpRequest& request, RequestContext& context);
     void DispatchRequest(const HttpRequest& request, RequestContext& context);
     std::shared_ptr<ServerSession> NewSession(const std::string& sessionId);
     int GetThreadIdForSession(const std::string& sessionId) const;
@@ -60,11 +85,13 @@ private:
     std::vector<std::unique_ptr<EventSystem>> eventSystems_;
     std::vector<std::thread> workerThreads_;
     IncomingRequestCallback requestCallback_{nullptr};
+    std::shared_ptr<Authenticator> authenticator_{nullptr};
+    std::shared_ptr<Authorizer> authorizer_{nullptr};
 
     // Each thread has its own session map to avoid contention
     // Index: thread_id -> (session_id -> session)
     std::vector<std::unordered_map<std::string, std::shared_ptr<ServerSession>>> threadSessions_;
-    std::vector<std::unique_ptr<MPSCQueue<DispatchRequestMsg>>> threadQueues_;
+    std::vector<std::unique_ptr<MPSCQueue<WorkerMessage>>> threadQueues_;
     std::vector<int> threadQueueEventIds_;
     std::vector<std::shared_ptr<NotifyEventArg>> notifyArgs_;
     std::shared_ptr<ServerSession> stdioSession_{nullptr};
