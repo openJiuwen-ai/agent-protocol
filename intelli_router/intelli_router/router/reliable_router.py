@@ -1,0 +1,943 @@
+"""
+SDK LLM Router - 可靠性路由
+
+ReliableRouter: 集成状态管理、策略选择、健康检查
+"""
+from typing import Dict, List, Optional, Any, Union, Literal, AsyncIterator
+from dataclasses import dataclass, field
+import asyncio
+import time
+import json
+import httpx
+
+from .base_router import BaseRouter
+from ..core.deployment import Deployment, DeploymentStatus
+from ..core.context import RoutingContext
+from ..core.state import LocalRouterState
+from ..strategy.base_strategy import RoutingStrategy
+from ..strategy import create_strategy, StrategyType
+from ..health.checker import SDKHealthChecker
+from ..cache.local_cache import LocalCache
+from ..utils.exceptions import (
+    RouterError,
+    NoDeploymentAvailable,
+    AllDeploymentsFailed,
+    DeploymentNetworkError,
+    DeploymentRateLimitError,
+    DeploymentServerError,
+    DeploymentTimeoutError,
+)
+from ..types import (
+    AssistantMessage,
+    AssistantMessageChunk,
+    ToolCall,
+    UsageMetadata,
+)
+from ..parser.base import BaseOutputParser
+from ..observability.bus import EventBus
+from ..observability.events import RoutingEvent, RoutingEventType
+
+MODEL_WILDCARD = "*"
+
+
+class ReliableRouter(BaseRouter):
+    """
+    可靠性路由器 - 集成状态管理，策略选择，健康检查
+
+    特性:
+    - API池化: 一个模型名 → 多个部署
+    - 策略插拔: 随机/延迟/标签策略
+    - 状态管理: 失败计数、冷却机制
+    - 健康检查: 后台健康检查
+    - 重试机制: 自动重试
+    - 流式支持: 支持流式响应
+    """
+
+    _RESERVED_REQUEST_DEFAULT_KEYS = {"model", "messages", "deployment", "stream"}
+
+    def __init__(
+        self,
+        deployments: List[Deployment],
+        strategy: Union[StrategyType, RoutingStrategy] = "simple-shuffle",
+        num_retries: int = 3,
+        timeout: float = 30.0,
+        cooldown_time: float = 60.0,
+        enable_health_check: bool = False,
+        health_check_interval: float = 300,
+        cache: Optional[LocalCache] = None,
+        event_bus: Optional[EventBus] = None,
+        model_group_id: Optional[str] = None,
+        **strategy_kwargs
+    ):
+        super().__init__(
+            deployments=deployments,
+            num_retries=num_retries,
+            timeout=timeout,
+            cache=cache,
+        )
+        # 状态管理
+        self.state = LocalRouterState()
+        # 策略
+        if isinstance(strategy, str):
+            self.strategy = create_strategy(strategy, state=self.state, **strategy_kwargs)
+        else:
+            self.strategy = strategy
+            # 策略实例可能自带 state（如 AdaptiveStrategy(state=...)）。
+            # 统一采用策略的 state 作为唯一事实源，避免 router 与策略
+            # 各持一套状态导致 cooldown/统计互不可见。
+            strategy_state = getattr(self.strategy, "state", None)
+            if strategy_state is not None:
+                self.state = strategy_state
+        # cooldown 参数（须在下方 COOLDOWN 初始状态同步循环之前赋值，
+        # 循环中 cooldown_until=None 时会用它计算默认冷却截止时间）
+        self.cooldown_time = cooldown_time
+        # 同步 deployment 自带的初始状态（如配置中声明的 COOLDOWN）到 state，
+        # 避免 deployment 对象与 state 两套状态并存且互不可见。
+        for dep in deployments:
+            if dep.status == DeploymentStatus.COOLDOWN:
+                self.state.deployment_status[dep.id] = DeploymentStatus.COOLDOWN
+                self.state.cooldown_until[dep.id] = (
+                    dep.cooldown_until if dep.cooldown_until is not None
+                    else time.time() + self.cooldown_time
+                )
+        # 可观测性
+        self.event_bus = event_bus or EventBus()
+        self.model_group_id = model_group_id
+        # 健康检查（可选，用于加速恢复）
+        self.health_checker: Optional[SDKHealthChecker] = None
+        if enable_health_check:
+            self.health_checker = SDKHealthChecker(
+                deployments=deployments,
+                state=self.state,
+                check_interval=health_check_interval
+            )
+
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        if self.health_checker:
+            await self.health_checker.start_background_check()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器出口"""
+        if self.health_checker:
+            await self.health_checker.stop_background_check()
+        await self.close()
+        return False
+
+    def _get_available_deployments(self, model: str) -> List[Deployment]:
+        """获取可用部署
+
+        model="*" 时从所有 deployment 中选（统一调度）。
+        COOLDOWN 超时后自动恢复为 HEALTHY。
+        没有 FAILED 状态——所有失败都是可自愈的。
+        """
+        now = time.time()
+        with self._deployments_lock:
+            if model == MODEL_WILDCARD:
+                all_deployments = list(self.deployments)
+            else:
+                all_deployments = self.get_deployments_for_model(model)
+        with self.state.lock:
+            available = []
+            for dep in all_deployments:
+                status = self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY)
+                if status == DeploymentStatus.COOLDOWN:
+                    cooldown_until = self.state.cooldown_until.get(dep.id, 0)
+                    if now < cooldown_until:
+                        continue
+                    # 软恢复：状态与 health_state 一并恢复（reset_deployment 统一处理），
+                    # 否则 health_state 残留 False，部署永远不会被再次调度。
+                    self.state.reset_deployment(dep.id)
+                available.append(dep)
+        return available
+
+    def _request_kwargs_for_deployment(
+        self,
+        deployment: Deployment,
+        request_kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(deployment.request_defaults or {})
+        invalid_keys = self._RESERVED_REQUEST_DEFAULT_KEYS & set(merged)
+        if invalid_keys:
+            raise ValueError(
+                "deployment.request_defaults cannot contain reserved keys: "
+                f"{sorted(invalid_keys)}"
+            )
+        merged.update({key: value for key, value in request_kwargs.items() if value is not None})
+        return merged
+
+    def _fallback_to_first_on_empty_selection(self) -> bool:
+        return bool(getattr(self.strategy, "fallback_to_first_on_empty_selection", True))
+
+    def _uses_strict_fallback_errors(self) -> bool:
+        return bool(getattr(self.strategy, "strict_fallback_errors", False))
+
+    def _route_metadata(self, deployment: Deployment, **extra: Any) -> Dict[str, Any]:
+        metadata = {
+            "model_group_id": self.model_group_id,
+            "route_id": deployment.id,
+            "model_id": deployment.model_id,
+            "model_name": deployment.model_name,
+            "provider": deployment.provider,
+        }
+        metadata.update(extra)
+        return {key: value for key, value in metadata.items() if value is not None}
+
+    @staticmethod
+    def _fallback_reason_from_error(error: Exception) -> str:
+        return type(error).__name__
+
+    async def _select_deployment(
+        self,
+        available: List[Deployment],
+        context: RoutingContext,
+    ) -> Optional[Deployment]:
+        selected = await self.strategy.select_deployment(available, context)
+        if selected is not None:
+            return selected
+        if self._fallback_to_first_on_empty_selection() and available:
+            return available[0]
+        return None
+
+    @staticmethod
+    def _is_fallbackable_error(error: Exception, visible_output_started: bool = False) -> bool:
+        if visible_output_started or isinstance(error, asyncio.CancelledError):
+            return False
+        return isinstance(
+            error,
+            (
+                DeploymentNetworkError,
+                DeploymentRateLimitError,
+                DeploymentServerError,
+                DeploymentTimeoutError,
+            ),
+        )
+
+    @staticmethod
+    def _has_visible_stream_output(chunk: Dict[str, Any]) -> bool:
+        choices = chunk.get("choices") or []
+        if not choices:
+            return False
+        choice = choices[0] or {}
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        return bool(
+            delta.get("content")
+            or delta.get("reasoning_content")
+            or delta.get("tool_calls")
+            or message.get("content")
+            or message.get("reasoning_content")
+            or message.get("tool_calls")
+        )
+
+    async def completion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        **kwargs
+    ) -> Any:
+        """
+        可靠性completion - 自动路由选择和重试
+        """
+        request_id = RoutingEvent.new_request_id()
+        available = self._get_available_deployments(model)
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        if not available:
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
+            raise NoDeploymentAvailable(model, "No available deployments")
+
+        total_attempts = min(self.num_retries + 1, len(available))
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+
+        context = RoutingContext(
+            model=model,
+            messages=messages,
+            kwargs=kwargs
+        )
+        errors = []
+        overall_start = time.time()
+        last_failure_metadata = None
+
+        for attempt in range(total_attempts):
+            selected = await self._select_deployment(available, context)
+            if selected is None:
+                if errors:
+                    break
+                raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
+            context.mark_attempt(selected)
+            request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
+            try:
+                start_time = time.time()
+                actual_model = selected.model_name if model == MODEL_WILDCARD else model
+                response = await super().completion(
+                    model=actual_model,
+                    messages=messages,
+                    deployment=selected,
+                    **request_kwargs
+                )
+                end_time = time.time()
+                latency = end_time - start_time
+                usage = response.get('usage') or {}
+                tokens = usage.get('completion_tokens', 0)
+                prompt_tokens = usage.get('prompt_tokens', 0)
+                # router 层是 state 的唯一写入方：延迟/token 统计统一在此更新。
+                # 不再调用 strategy.on_success——避免按旧契约在回调内转发
+                # state 更新的自定义策略造成双重计数。自定义策略需要路由
+                # 状态时直接读共享的 router.state。
+                self.state.on_success(selected.id, latency, tokens)
+                context.set_success(selected, response)
+                route_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    **(
+                        {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                        if context.error
+                        else {}
+                    ),
+                )
+
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.REQUEST_SUCCEEDED,
+                    request_id=request_id,
+                    model=model,
+                    deployment_id=selected.id,
+                    provider=selected.provider,
+                    latency=latency,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=tokens,
+                    total_tokens=prompt_tokens + tokens,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    extra=route_metadata,
+                ))
+                return response
+            except Exception as e:
+                # router 层是 state 的唯一写入方：失败计数与 cooldown 退避
+                # 统一在此更新（含 cooldown_time 透传）。不再调用
+                # strategy.on_failure——避免旧契约自定义策略双重计数。
+                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                context.set_failure(e)
+                errors.append((selected.id, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                )
+
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    raise
+
+                available = [d for d in available if d.id != selected.id]
+                can_retry = attempt < total_attempts - 1 and bool(available)
+                if can_retry:
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_RETRIED,
+                        request_id=request_id,
+                        model=model,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error_type=self._fallback_reason_from_error(e),
+                        error_message=str(e),
+                        extra=self._route_metadata(
+                            selected,
+                            fallback_reason=self._fallback_reason_from_error(e),
+                        ),
+                    ))
+
+                if not available:
+                    break
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            error_type=type(context.error).__name__ if context.error else None,
+            error_message=str(context.error) if context.error else None,
+            extra=last_failure_metadata or request_extra,
+        ))
+        raise AllDeploymentsFailed(model=model, errors=errors)
+
+    async def stream_completion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        **kwargs
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        可靠性流式completion - 自动路由选择和重试
+
+        Retry only happens before the first chunk is received.
+        Once streaming starts, mid-stream errors are raised directly.
+        """
+        available = self._get_available_deployments(model)
+        if not available:
+            raise NoDeploymentAvailable(model, "No available deployments")
+
+        context = RoutingContext(
+            model=model,
+            messages=messages,
+            kwargs=kwargs
+        )
+
+        errors = []
+        total_attempts = min(self.num_retries + 1, len(available))
+        request_id = RoutingEvent.new_request_id()
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.STREAM_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+        overall_start = time.time()
+        last_failure_metadata = None
+        for attempt in range(total_attempts):
+            selected = await self._select_deployment(available, context)
+            if selected is None:
+                if errors:
+                    break
+                raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
+
+            context.mark_attempt(selected)
+            visible_output_started = False
+            route_selected_emitted = False
+            ttfb = 0.0
+            request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
+
+            try:
+                start_time = time.time()
+                actual_model = selected.model_name if model == MODEL_WILDCARD else model
+                chunk_count = 0
+                async for chunk in self.acompletion_stream(
+                    model=actual_model,
+                    messages=messages,
+                    deployment=selected,
+                    **request_kwargs,
+                ):
+                    chunk_count += 1
+                    if not visible_output_started and self._has_visible_stream_output(chunk):
+                        visible_output_started = True
+                        ttfb = time.time() - start_time
+                        await self.event_bus.emit(RoutingEvent(
+                            event_type=RoutingEventType.STREAM_ROUTE_SELECTED,
+                            request_id=request_id,
+                            model=model,
+                            deployment_id=selected.id,
+                            provider=selected.provider,
+                            latency=ttfb,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            extra=self._route_metadata(
+                                selected,
+                                attempt=attempt + 1,
+                                **(
+                                    {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                                    if context.error
+                                    else {}
+                                ),
+                                ttft=ttfb,
+                            ),
+                        ))
+                        route_selected_emitted = True
+                    yield chunk
+
+                self.state.on_success(selected.id, ttfb, 0)
+                context.set_success(selected, None)
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.STREAM_SUCCEEDED,
+                    request_id=request_id,
+                    model=model,
+                    deployment_id=selected.id,
+                    provider=selected.provider,
+                    latency=time.time() - overall_start,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    chunk_count=chunk_count,
+                    extra=self._route_metadata(
+                        selected,
+                        attempt=attempt + 1,
+                        **(
+                            {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                            if context.error
+                            else {}
+                        ),
+                        **({"ttft": ttfb} if route_selected_emitted else {}),
+                    ),
+                ))
+                return
+
+            except Exception as e:
+                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                if visible_output_started:
+                    raise
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    raise
+                context.set_failure(e)
+                errors.append((selected.id, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                )
+                available = [d for d in available if d.id != selected.id]
+                if attempt < total_attempts - 1 and available:
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_RETRIED,
+                        request_id=request_id,
+                        model=model,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error_type=self._fallback_reason_from_error(e),
+                        error_message=str(e),
+                        extra=self._route_metadata(
+                            selected,
+                            fallback_reason=self._fallback_reason_from_error(e),
+                        ),
+                    ))
+
+                if not available:
+                    break
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            error_type=self._fallback_reason_from_error(context.error) if context.error else None,
+            error_message=str(context.error) if context.error else None,
+            extra=last_failure_metadata or request_extra,
+        ))
+        raise AllDeploymentsFailed(model=model, errors=errors)
+
+    async def batch_completion(
+        self,
+        requests: List[Dict[str, Any]],
+        max_concurrent: int = 10
+    ) -> List[Any]:
+        """
+        批量completion
+
+        Args:
+            requests: 请求列表，每个包含 model, messages, **kwargs
+            max_concurrent: 最大并发数
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+        async def process_one(req):
+            async with semaphore:
+                return await self.completion(**req)
+        tasks = [process_one(req) for req in requests]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    def update_deployments(self, new_deployments: List[Deployment]) -> None:
+        """更新部署列表（热替换）
+
+        加锁保证并发请求期间不会读到半更新的索引/部署列表，
+        并清理已移除部署在 state 中的残留状态。
+        """
+        with self._deployments_lock:
+            old_ids = {dep.id for dep in self.deployments}
+            new_ids = {dep.id for dep in new_deployments}
+            removed_ids = old_ids - new_ids
+
+            self.deployments = new_deployments
+            self._build_model_indices()
+            if self.health_checker:
+                self.health_checker.deployments = new_deployments
+
+            # 仅清理本 router 之前管理、且已从新列表移除的部署状态
+            # （cooldown/延迟统计等）。不能按新列表全集反向清理——
+            # 多个 router 可能共享同一 state，全集清理会误删其他
+            # router 管理的部署状态。
+            if removed_ids:
+                for dep_id in removed_ids:
+                    self.state.remove_deployment(dep_id)
+
+    # ------------------------------------------------------------------
+    # Typed invoke / stream (高层 SDK 接口)
+    # ------------------------------------------------------------------
+
+    def _build_params(self, **kwargs) -> Dict[str, Any]:
+        """从 kwargs 中滤除 None 值，构建传递给 completion 的参数 dict。"""
+        return {k: v for k, v in kwargs.items() if v is not None}
+
+    def _resolve_model_name(self, model: Optional[str] = None) -> str:
+        if model:
+            return model
+        if not self.deployments:
+            raise ValueError(
+                "No model specified and no deployments configured. "
+                "Use model='*' for unified routing across all deployments."
+            )
+        return self.deployments[0].model_name
+
+    async def invoke(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        output_parser: Optional[BaseOutputParser] = None,
+        **kwargs,
+    ) -> AssistantMessage:
+        """发送 chat completion 请求，返回类型化响应。
+
+        Args:
+            messages: 消息列表 [{"role": "user", "content": "..."}]
+            tools: 工具定义列表
+            temperature: 采样温度
+            top_p: 核采样参数
+            model: 模型名（覆盖 deployment 配置）
+            max_tokens: 最大生成 token 数
+            stop: 停止序列
+            output_parser: 可选输出解析器，用于解析 content
+            **kwargs: 透传给底层 completion 的额外参数
+
+        Returns:
+            AssistantMessage: 类型化响应
+        """
+        params = self._build_params(
+            tools=tools, temperature=temperature, top_p=top_p,
+            max_tokens=max_tokens, stop=stop, **kwargs,
+        )
+        model_name = self._resolve_model_name(model)
+
+        raw = await self.completion(
+            model=model_name,
+            messages=messages,
+            **params,
+        )
+        msg = self._response_to_message(raw)
+
+        if output_parser is not None and msg.content:
+            try:
+                parsed = await output_parser.parse(msg)
+                if parsed is not None:
+                    msg.content = json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, dict) else str(parsed)
+            except Exception:
+                pass
+
+        return msg
+
+    async def stream(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        **kwargs,
+    ) -> AsyncIterator[AssistantMessageChunk]:
+        """流式 chat completion，逐 chunk 返回 AssistantMessageChunk。
+
+        参数同 invoke()。支持连接阶段的 retry/failover。
+        """
+        params = self._build_params(
+            tools=tools, temperature=temperature, top_p=top_p,
+            max_tokens=max_tokens, stop=stop, **kwargs,
+        )
+        model_name = self._resolve_model_name(model)
+
+        request_id = RoutingEvent.new_request_id()
+        available = self._get_available_deployments(model_name)
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        if not available:
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model_name,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
+            raise NoDeploymentAvailable(model_name, "No available deployments")
+
+        total_attempts = min(self.num_retries + 1, len(available))
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.STREAM_STARTED,
+            request_id=request_id,
+            model=model_name,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+
+        overall_start = time.time()
+        errors = []
+        last_failure_metadata = None
+        last_fallback_reason = None
+
+        for attempt in range(total_attempts):
+            selected = await self._select_deployment(available, RoutingContext(
+                model=model_name, messages=messages, kwargs=params,
+            ))
+            if selected is None:
+                if errors:
+                    break
+                raise NoDeploymentAvailable(model_name, "No deployment matched routing strategy")
+            request_kwargs = self._request_kwargs_for_deployment(selected, params)
+            try:
+                actual_model = selected.model_name if model_name == MODEL_WILDCARD else model_name
+                chunk_count = 0
+                ttft = None
+                visible_output_started = False
+                route_selected_emitted = False
+                stream_start = time.time()
+                async for chunk in self.acompletion_stream(
+                    model=actual_model,
+                    messages=messages,
+                    deployment=selected,
+                    **request_kwargs,
+                ):
+                    parsed = self._chunk_to_assistant_message_chunk(chunk)
+                    if parsed is not None:
+                        chunk_count += 1
+                        if parsed.content or parsed.reasoning_content or parsed.tool_calls:
+                            if not route_selected_emitted:
+                                ttft = time.time() - stream_start
+                                await self.event_bus.emit(RoutingEvent(
+                                    event_type=RoutingEventType.STREAM_ROUTE_SELECTED,
+                                    request_id=request_id,
+                                    model=model_name,
+                                    deployment_id=selected.id,
+                                    provider=selected.provider,
+                                    latency=ttft,
+                                    attempt=attempt + 1,
+                                    total_attempts=total_attempts,
+                                    extra=self._route_metadata(
+                                        selected,
+                                        attempt=attempt + 1,
+                                        **({"fallback_reason": last_fallback_reason} if last_fallback_reason else {}),
+                                        ttft=ttft,
+                                    ),
+                                ))
+                                route_selected_emitted = True
+                            visible_output_started = True
+                        yield parsed
+                # 成功后统一更新状态（延迟统计口径与 stream_completion 一致：ttft/首 chunk 耗时，
+                # 而非整条流的总时长；空流无可解析 chunk 时兜底为 0.0）
+                self.state.on_success(selected.id, ttft if ttft is not None else 0.0, 0)
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.STREAM_SUCCEEDED,
+                    request_id=request_id,
+                    model=model_name,
+                    deployment_id=selected.id,
+                    provider=selected.provider,
+                    latency=time.time() - overall_start,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    chunk_count=chunk_count,
+                    extra=self._route_metadata(
+                        selected,
+                        attempt=attempt + 1,
+                        **({"fallback_reason": last_fallback_reason} if last_fallback_reason else {}),
+                        **({"ttft": ttft} if ttft is not None else {}),
+                    ),
+                ))
+                return
+            except Exception as e:
+                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                if visible_output_started:
+                    raise
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    raise
+                last_fallback_reason = self._fallback_reason_from_error(e)
+                errors.append((selected.id, last_fallback_reason, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=last_fallback_reason,
+                )
+
+                available = [d for d in available if d.id != selected.id]
+                if attempt < total_attempts - 1 and available:
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_RETRIED,
+                        request_id=request_id,
+                        model=model_name,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error_type=last_fallback_reason,
+                        error_message=str(e),
+                        extra=self._route_metadata(selected, fallback_reason=last_fallback_reason),
+                    ))
+
+                if not available:
+                    break
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model_name,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            error_type=errors[-1][1] if errors else None,
+            error_message=errors[-1][2] if errors else None,
+            extra=last_failure_metadata or request_extra,
+        ))
+        raise RouterError(f"All deployments failed for stream after {total_attempts} attempts: {errors}")
+
+    # ------------------------------------------------------------------
+    # Internal: type conversion helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _response_to_message(raw: Dict[str, Any]) -> AssistantMessage:
+        """将 OpenAI 格式的 dict 响应转换为 AssistantMessage。"""
+        choices = raw.get("choices", [])
+        if not choices:
+            return AssistantMessage(content="")
+
+        choice = choices[0]
+        message = choice.get("message", {})
+
+        content = message.get("content") or ""
+        finish_reason = choice.get("finish_reason") or "stop"
+        reasoning_content = message.get("reasoning_content")
+
+        # Parse tool_calls
+        tool_calls = None
+        raw_tool_calls = message.get("tool_calls")
+        if raw_tool_calls:
+            tool_calls = []
+            for idx, tc in enumerate(raw_tool_calls):
+                func = tc.get("function", {})
+                tool_calls.append(ToolCall(
+                    id=tc.get("id", ""),
+                    type=tc.get("type", "function"),
+                    name=func.get("name", ""),
+                    arguments=func.get("arguments", ""),
+                    index=tc.get("index", idx),
+                ))
+
+        # Parse usage
+        usage_metadata = None
+        usage = raw.get("usage")
+        if usage:
+            prompt_tokens = usage.get("prompt_tokens") or 0
+            completion_tokens = usage.get("completion_tokens") or 0
+            total_tokens = usage.get("total_tokens") or 0
+
+            cache_tokens = 0
+            prompt_tokens_details = usage.get("prompt_tokens_details")
+            if prompt_tokens_details:
+                cache_tokens = prompt_tokens_details.get("cached_tokens") or 0
+
+            usage_metadata = UsageMetadata(
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                cache_tokens=cache_tokens,
+            )
+
+        return AssistantMessage(
+            content=content,
+            tool_calls=tool_calls,
+            usage_metadata=usage_metadata,
+            finish_reason=finish_reason,
+            reasoning_content=reasoning_content,
+        )
+
+    @staticmethod
+    def _chunk_to_assistant_message_chunk(
+        chunk: Dict[str, Any],
+    ) -> Optional[AssistantMessageChunk]:
+        """将 OpenAI 格式的 streaming chunk dict 转换为 AssistantMessageChunk。"""
+        choices = chunk.get("choices")
+        if not choices:
+            return None
+
+        choice = choices[0]
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason")
+
+        content = delta.get("content") or ""
+        reasoning_content = delta.get("reasoning_content")
+        raw_tool_calls = delta.get("tool_calls")
+
+        if not content and not finish_reason and not raw_tool_calls and not reasoning_content:
+            return None
+
+        tool_calls = None
+        if raw_tool_calls:
+            tool_calls = []
+            for tc in raw_tool_calls:
+                func = tc.get("function", {})
+                tool_calls.append(ToolCall(
+                    id=tc.get("id", ""),
+                    type=tc.get("type", "function"),
+                    name=func.get("name", ""),
+                    arguments=func.get("arguments", ""),
+                    index=tc.get("index"),
+                ))
+
+        return AssistantMessageChunk(
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+        )
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取统计信息"""
+        return {
+            "total_deployments": len(self.deployments),
+            "model_list": self.get_model_list(),
+            "deployment_status": {
+                dep.id: self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY).value
+                for dep in self.deployments
+            },
+            "consecutive_failures": dict(self.state.consecutive_failures),
+            "latency_stats": {
+                dep.id: {
+                    # 真实延迟（秒），无记录为 None；保留4位小数避免浮点精度噪声
+                    # （各值只取一次，避免重复 O(n) 求均值及两次调用间的读数偏差）
+                    "avg_latency": (
+                        round(raw_latency, 4)
+                        if (raw_latency := self.state.get_average_latency_raw(dep.id)) is not None
+                        else None
+                    ),
+                    # 归一化延迟（latency/tokens），供策略参考
+                    "avg_normalized_latency": (
+                        round(norm_latency, 4)
+                        if (norm_latency := self.state.get_average_latency(dep.id)) != float('inf')
+                        else None
+                    ),
+                    "total_tokens": self.state.total_tokens.get(dep.id, 0),
+                    "total_requests": self.state.total_requests.get(dep.id, 0),
+                }
+                for dep in self.deployments
+            }
+        }
