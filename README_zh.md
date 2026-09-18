@@ -6,12 +6,13 @@
 
 **Agent Protocol** 是一套智能体互操作与授权协议的软件开发工具包（SDK）集合，帮助开发者在不同运行环境中快速集成智能体与工具/智能体之间的互操作能力，并建立可验证的授权边界。
 
-当前，仓库包含四个软件开发工具包：
+当前，仓库包含五个软件开发工具包：
 
 - Model Context Protocol (MCP) CPP SDK
 - Agent2Agent Protocol (A2A) CPP SDK
 - A2X agent registry
 - A4P (Agentic Authentication, Authorization, and Audit Protocol) Python SDK
+- [IIAP（智能交互辅助协议）SDK](./IIAP/README_zh.md)
 
 ## 参与贡献
 

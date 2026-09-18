@@ -6,12 +6,13 @@ English | [简体中文](./README_zh.md)
 
 **Agent Protocol** is a collection of software development kits (SDKs) for agent interoperability and authorization protocols. It helps developers quickly integrate agents, enable agent-to-tool / agent-to-agent interoperability, and establish verifiable authorization boundaries across different runtime environments.
 
-This repository currently includes four SDKs:
+This repository currently includes five SDKs:
 
 - Model Context Protocol (MCP) CPP SDK
 - Agent2Agent Protocol (A2A) CPP SDK
 - A2X agent registry
 - A4P (Agentic Authentication, Authorization, and Audit Protocol) Python SDK
+- [IIAP (Intelligent Interaction Assistance Protocol) SDK](./IIAP/README.md)
 
 ## Contributing
 
