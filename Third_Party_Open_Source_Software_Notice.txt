@@ -611,6 +611,72 @@ Copyright (c) 2024 Anthropic, PBC
 Please see the full MIT License text in Appendix B.
 
 ================================================================================
+IIAP SDK Third-Party Dependencies
+================================================================================
+
+Software: jsonschema 4.26.0
+
+License: MIT License
+
+Copyright (c) 2013 Julian Berman
+
+Please see the full MIT License text in Appendix B.
+
+--------------------------------------------------------------------------------
+Software: attrs 26.1.0
+
+License: MIT License
+
+Copyright (c) 2015 Hynek Schlawack and the attrs contributors
+
+Please see the full MIT License text in Appendix B.
+
+--------------------------------------------------------------------------------
+Software: jsonschema-specifications 2025.9.1
+
+License: MIT License
+
+Copyright (c) 2022 Julian Berman
+
+Please see the full MIT License text in Appendix B.
+
+--------------------------------------------------------------------------------
+Software: referencing 0.37.0
+
+License: MIT License
+
+Copyright (c) 2022 Julian Berman
+
+Please see the full MIT License text in Appendix B.
+
+--------------------------------------------------------------------------------
+Software: rpds-py 2026.6.3
+
+License: MIT License
+
+Copyright (c) 2023 Julian Berman
+
+Please see the full MIT License text in Appendix B.
+
+--------------------------------------------------------------------------------
+Software: typing-extensions 4.16.0 (conditional transitive dependency)
+
+License: Python Software Foundation License 2.0
+
+Copyright (c) Python Software Foundation
+
+License text: https://docs.python.org/3/license.html#psf-license
+
+--------------------------------------------------------------------------------
+Software: React 18.3.1 (optional peer dependency; not bundled)
+
+License: MIT License
+
+Copyright (c) Facebook, Inc. and its affiliates.
+
+Please see the full MIT License text in Appendix B.
+
+================================================================================
 APPENDIX A: APACHE LICENSE, VERSION 2.0
 ================================================================================
 
