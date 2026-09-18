@@ -1,0 +1,31 @@
+{
+  "iiapVersion": "0.1",
+  "packetId": "pkt_example",
+  "sessionId": "session_example",
+  "messageId": "message_example",
+  "originalSurfaceId": "booking",
+  "surfaceInstanceId": "message_example:booking",
+  "protocolVersion": "0.9.1",
+  "timestamp": "2026-08-02T00:00:03.000Z",
+  "window": {"startTime": "2026-08-02T00:00:00.000Z", "endTime": "2026-08-02T00:00:03.000Z", "durationMs": 3000},
+  "surfaceContext": {
+    "protocol": "a2ui", "protocolVersion": "0.9.1", "snapshotType": "sanitized_effective_definition",
+    "definition": [
+      {"createSurface": {"surfaceId": "booking", "root": "form"}},
+      {"updateComponents": {"surfaceId": "booking", "components": [{"id": "form", "component": {"type": "DateTimeInput", "properties": {"label": {"literalString": "Date"}, "value": {"path": "/date"}}}}]}}
+    ],
+    "redaction": {"dataModelExcluded": true, "actionContextValuesExcluded": true, "unreachableComponentsExcluded": true, "unknownCustomPropertiesExcluded": true, "truncated": false}
+  },
+  "observations": {
+    "tokenScope": "component_within_surface_instance",
+    "events": [
+      {"eventId": "event_1", "sequence": 1, "offsetMs": 0, "componentId": "form", "eventType": "change", "valueToken": "token:A"},
+      {"eventId": "event_2", "sequence": 2, "offsetMs": 1000, "componentId": "form", "eventType": "change", "valueToken": "token:B"},
+      {"eventId": "event_3", "sequence": 3, "offsetMs": 2000, "componentId": "form", "eventType": "change", "valueToken": "token:A"}
+    ],
+    "completeness": {"complete": true, "droppedEventCount": 0}
+  },
+  "patterns": [{"patternId": "pattern.form.datetime_churn", "type": "state_alternation", "componentId": "form", "basedOnEvents": ["event_1", "event_2", "event_3"], "metrics": {"changeCount": 3, "switchPattern": "A-B-A"}}],
+  "reportHistory": [],
+  "allowedOperations": {"updateTargets": [{"componentId": "form", "componentType": "DateTimeInput", "originalSurfaceId": "booking", "bindingPath": "/date", "allowedValues": ["evening"]}]}
+}

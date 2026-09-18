@@ -1,0 +1,28 @@
+{
+  "name": "openjiuwen-iiap-workspace",
+  "private": true,
+  "version": "0.1.0-rc.1",
+  "type": "module",
+  "workspaces": [
+    "implementations/typescript/packages/core"
+  ],
+  "scripts": {
+    "build": "node implementations/typescript/scripts/clean-dist.mjs && tsc -p implementations/typescript/tsconfig.json && node implementations/typescript/scripts/build-artifacts.mjs",
+    "test": "npm run build && node --test implementations/typescript/dist/implementations/typescript/tests/*.test.js",
+    "contracts": "uv run --with jsonschema python scripts/check_contracts.py",
+    "docs": "uv run python scripts/check_docs.py",
+    "packages:smoke": "npm run build && node scripts/check_packages.mjs",
+    "demo:build": "vite build examples/browser --outDir ../../build/browser-demo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "vite": "^8.2.0",
+    "typescript": "^5.3.0"
+  },
+  "description": "IIAP (Intelligent Interaction Assistance Protocol) detects privacy-safe UI interaction patterns and offers optional, non-blocking assistance. This source tree is self-contained and is designed to be moved to `agent-protocol/IIAP`.",
+  "license": "Apache-2.0"
+}

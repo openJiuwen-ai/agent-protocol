@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjiuwen.org/iiap/0.1/decision.schema.json",
+  "title": "IIAP Decision Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "iiapVersion", "decisionId", "packetId", "surfaceInstanceId", "payload"],
+  "properties": {
+    "type": {"const": "iiap.decision"},
+    "iiapVersion": {"const": "0.1"},
+    "decisionId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "packetId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "surfaceInstanceId": {"type": "string", "minLength": 1, "maxLength": 512},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "reason", "offerType", "uiStyle", "message"],
+      "properties": {
+        "decision": {"enum": ["offer_help", "no_intervention", "defer"]},
+        "reason": {"type": "string", "maxLength": 512},
+        "offerType": {"enum": ["update_suggestion", "text_assistance", "none"]},
+        "helpTopic": {"enum": ["compare_options", "explain_rules", "fix_block", "save_progress"]},
+        "uiStyle": {"enum": ["inline_card", "none"]},
+        "message": {"type": "string", "maxLength": 2048},
+        "updateSuggestion": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "updates"],
+          "properties": {
+            "kind": {"const": "data_model_update"},
+            "updates": {
+              "type": "array", "minItems": 1, "maxItems": 8,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["surfaceId", "path", "value"],
+                "properties": {
+                  "surfaceId": {"type": "string"}, "surfaceInstanceId": {"type": "string"},
+                  "path": {"type": "string"},
+                  "value": {
+                    "anyOf": [
+                      {"type": ["string", "number", "boolean", "null"]},
+                      {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": ["string", "number", "boolean", "null"]}}
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"decision": {"const": "offer_help"}}, "required": ["decision"]},
+          "then": {
+            "properties": {
+              "offerType": {"enum": ["update_suggestion", "text_assistance"]},
+              "uiStyle": {"const": "inline_card"}
+            }
+          },
+          "else": {
+            "properties": {"offerType": {"const": "none"}, "uiStyle": {"const": "none"}},
+            "allOf": [
+              {"not": {"required": ["helpTopic"]}},
+              {"not": {"required": ["updateSuggestion"]}}
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"offerType": {"const": "text_assistance"}}, "required": ["offerType"]},
+          "then": {
+            "required": ["helpTopic"],
+            "not": {"required": ["updateSuggestion"]}
+          }
+        },
+        {
+          "if": {"properties": {"offerType": {"const": "update_suggestion"}}, "required": ["offerType"]},
+          "then": {
+            "required": ["updateSuggestion"],
+            "not": {"required": ["helpTopic"]}
+          }
+        }
+      ]
+    }
+  }
+}

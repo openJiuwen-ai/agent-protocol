@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjiuwen.org/iiap/0.1/packet-envelope.schema.json",
+  "title": "IIAP Intent Context Packet Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "iiapVersion", "packet"],
+  "properties": {
+    "type": {"const": "iiap.intent_context_packet"},
+    "iiapVersion": {"const": "0.1"},
+    "packet": {"$ref": "intent-context-packet.schema.json"}
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjiuwen.org/iiap/0.1/feedback.schema.json",
+  "title": "IIAP Feedback",
+  "type": "object", "additionalProperties": false,
+  "required": ["type", "iiapVersion", "packetId", "decisionId", "surfaceInstanceId", "offerType", "interaction", "timestamp"],
+  "properties": {
+    "type": {"const": "iiap.feedback"}, "iiapVersion": {"const": "0.1"}, "packetId": {"type": "string"},
+    "decisionId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "surfaceInstanceId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "offerType": {"enum": ["text_assistance", "update_suggestion"]},
+    "interaction": {"enum": ["accepted", "dismissed", "rejected", "ignored", "timed_out"]},
+    "outcome": {"enum": ["succeeded", "failed"]},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "reasonCode": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"}
+  },
+  "allOf": [
+    {"if": {"properties": {"interaction": {"const": "accepted"}}, "required": ["interaction"]}, "then": {"required": ["outcome"]}, "else": {"not": {"required": ["outcome"]}}}
+  ]
+}
