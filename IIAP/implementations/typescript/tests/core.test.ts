@@ -829,8 +829,12 @@ test('decision parser recovers prose-wrapped model output without inventing a de
   // 说明文字里的花括号不能凭空造出 decision。
   assert.equal(describeModelOutput('The set {a, b} is fine.'), 'no_json_object');
   assert.equal(coerceModelObject('The set {a, b} is fine.'), null);
+  assert.equal(parseDecision({
+    decision: 'offer_help', reason: 'x'.repeat(1024), offerType: 'text_assistance',
+    helpTopic: 'explain_rules', message: 'help',
+  }).decision, 'offer_help', 'reason at the protocol hard limit remains valid');
   for (const invalidText of [
-    { decision: 'offer_help', reason: 'x'.repeat(513), offerType: 'text_assistance', message: 'help' },
+    { decision: 'offer_help', reason: 'x'.repeat(1025), offerType: 'text_assistance', message: 'help' },
     { decision: 'offer_help', reason: 'x', offerType: 'text_assistance', message: 'x'.repeat(2049) },
     { decision: 'offer_help', reason: 1, offerType: 'text_assistance', message: 'help' },
   ]) {

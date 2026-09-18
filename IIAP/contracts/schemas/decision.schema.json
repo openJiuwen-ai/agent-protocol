@@ -17,7 +17,7 @@
       "required": ["decision", "reason", "offerType", "uiStyle", "message"],
       "properties": {
         "decision": {"enum": ["offer_help", "no_intervention", "defer"]},
-        "reason": {"type": "string", "maxLength": 512},
+        "reason": {"type": "string", "maxLength": 1024},
         "offerType": {"enum": ["update_suggestion", "text_assistance", "none"]},
         "helpTopic": {"enum": ["compare_options", "explain_rules", "fix_block", "save_progress"]},
         "uiStyle": {"enum": ["inline_card", "none"]},

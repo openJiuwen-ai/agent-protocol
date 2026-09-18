@@ -105,8 +105,13 @@ def test_privacy_and_update_validation():
     boolean_value = {**value, "updateSuggestion": {"kind": "data_model_update", "updates": [{"surfaceId": "booking", "path": "/date", "value": True}]}}
     assert validate_decision(boolean_value, packet=numeric_packet)["offerType"] == "text_assistance"
 
+    boundary_reason = {
+        "decision": "offer_help", "reason": "x" * 1024,
+        "offerType": "text_assistance", "helpTopic": "explain_rules", "message": "help",
+    }
+    assert validate_decision(boundary_reason, packet=packet())["decision"] == "offer_help"
     for invalid_text in (
-        {"decision": "offer_help", "reason": "x" * 513, "offerType": "text_assistance", "message": "help"},
+        {"decision": "offer_help", "reason": "x" * 1025, "offerType": "text_assistance", "message": "help"},
         {"decision": "offer_help", "reason": "x", "offerType": "text_assistance", "message": "x" * 2049},
         {"decision": "offer_help", "reason": 1, "offerType": "text_assistance", "message": "help"},
     ):
@@ -341,8 +346,21 @@ def test_ui_style_is_derived_and_never_invalidates_a_decision():
     assert describe_decision_rejection(rejected) == "invalid_decision_value"
     assert describe_decision_rejection(json.dumps({"reason": "r"})) == "missing_decision"
     assert describe_decision_rejection(
-        json.dumps({"decision": "offer_help", "offerType": "unknown"})
+        json.dumps({"decision": "offer_help", "reason": "r", "message": "m", "offerType": "unknown"})
     ) == "invalid_offer_type"
+    overlong_reason = {
+        "decision": "offer_help",
+        "reason": "r" * 1025,
+        "offerType": "update_suggestion",
+        "message": "safe",
+        "updateSuggestion": {
+            "kind": "data_model_update",
+            "updates": [{"surfaceId": "booking", "path": "/date", "value": "evening"}],
+        },
+    }
+    assert validate_decision(overlong_reason, packet=packet())["decision"] == "no_intervention"
+    assert describe_decision_rejection(overlong_reason) == "reason_too_long"
+    assert describe_decision_rejection({**overlong_reason, "reason": "safe", "message": "m" * 2049}) == "message_too_long"
     assert "secret-model-text" not in describe_decision_rejection(rejected)
 
 

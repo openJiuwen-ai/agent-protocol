@@ -98,6 +98,16 @@ def describe_decision_rejection(value: object) -> str:
     decision = parsed.get("decision")
     if decision not in VALID_DECISIONS:
         return "invalid_decision_value" if isinstance(decision, str) else "missing_decision"
+    reason = parsed.get("reason")
+    if not isinstance(reason, str):
+        return "missing_reason" if reason is None else "invalid_reason_type"
+    if len(reason) > 1024:
+        return "reason_too_long"
+    message = parsed.get("message")
+    if not isinstance(message, str):
+        return "missing_message" if message is None else "invalid_message_type"
+    if len(message) > 2048:
+        return "message_too_long"
     if decision != "offer_help":
         return "none"
     offer = parsed.get("offerType")
@@ -105,7 +115,9 @@ def describe_decision_rejection(value: object) -> str:
         return "missing_offer_type"
     if offer not in OFFER_STYLES:
         return "invalid_offer_type"
-    return "invalid_update_payload" if parsed.get("updateSuggestion") is not None else "other"
+    if offer == "update_suggestion":
+        return "invalid_update_payload" if parsed.get("updateSuggestion") is not None else "missing_update_payload"
+    return "other"
 
 
 def _safe_updates(value: object, packet: dict[str, Any]) -> list[dict[str, Any]]:
@@ -211,7 +223,7 @@ def validate_decision(value: object, *, packet: dict[str, Any]) -> dict[str, Any
         return default_no_intervention()
     reason = parsed.get("reason")
     message = parsed.get("message")
-    if (not isinstance(reason, str) or len(reason) > 512
+    if (not isinstance(reason, str) or len(reason) > 1024
             or not isinstance(message, str) or len(message) > 2048):
         return default_no_intervention()
     decision = parsed["decision"]

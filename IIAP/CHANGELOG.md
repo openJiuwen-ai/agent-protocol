@@ -27,3 +27,6 @@
   preventing A2UI returned by an IIAP assistance turn from taking observation ownership.
 - Enforce a text-only assistance output contract without prescribing whether
   the host reuses its business agent or routes to a dedicated model.
+- State the decision `reason`/`message` length limits in both model prompts,
+  raise the `reason` hard limit from 512 to 1024 characters for realistic model
+  variance, and report over-limit output with the correct fail-closed category.

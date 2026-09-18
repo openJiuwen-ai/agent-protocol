@@ -29,7 +29,7 @@ function inferHelpTopic(packet?: IntentContextPacket): NonNullable<IIAPDecision[
 export function parseDecision(value: string | unknown, packet?: IntentContextPacket): IIAPDecision {
   const parsed: unknown = coerceModelObject(value);
   if (!record(parsed) || !DECISIONS.has(String(parsed.decision))) return { ...NO_INTERVENTION };
-  const reason = boundedText(parsed.reason, 512);
+  const reason = boundedText(parsed.reason, 1024);
   const message = boundedText(parsed.message, 2048);
   if (reason === null || message === null) return { ...NO_INTERVENTION };
   const decision = parsed.decision as IIAPDecision['decision'];

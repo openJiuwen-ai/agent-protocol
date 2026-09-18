@@ -523,7 +523,7 @@ class Session implements IIAPSession {
       && typeof value.packetId === 'string' && Boolean(value.packetId)
       && typeof value.surfaceInstanceId === 'string' && Boolean(value.surfaceInstanceId)
       && Boolean(value.payload) && ['offer_help', 'no_intervention', 'defer'].includes(value.payload.decision)
-      && typeof value.payload.reason === 'string' && value.payload.reason.length <= 512
+      && typeof value.payload.reason === 'string' && value.payload.reason.length <= 1024
       && typeof value.payload.message === 'string' && value.payload.message.length <= 2048
       && ['update_suggestion', 'text_assistance', 'none'].includes(value.payload.offerType)
       && ['inline_card', 'none'].includes(value.payload.uiStyle);
