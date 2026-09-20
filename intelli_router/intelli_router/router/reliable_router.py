@@ -13,7 +13,7 @@ import httpx
 from .base_router import BaseRouter
 from ..core.deployment import Deployment, DeploymentStatus
 from ..core.context import RoutingContext
-from ..core.state import LocalRouterState
+from ..core.state import LocalRouterState, TokenUsage, RPMTracker
 from ..strategy.base_strategy import RoutingStrategy
 from ..strategy import create_strategy, StrategyType
 from ..health.checker import SDKHealthChecker
@@ -100,6 +100,11 @@ class ReliableRouter(BaseRouter):
                     dep.cooldown_until if dep.cooldown_until is not None
                     else time.time() + self.cooldown_time
                 )
+        # 把部署声明的 tpm/rpm 配额接入 state（token_usage/rpm_tracker），
+        # 否则 TokenUsage()/RPMTracker() 的 limit 恒 0，remaining 恒 0，
+        # TokenAware/RateLimitAware/Adaptive 的配额评分完全失效
+        # （未预热部署的 inf 反而优于已预热部署的 0，排序反向）。
+        self._sync_quota_state(deployments)
         # 可观测性
         self.event_bus = event_bus or EventBus()
         self.model_group_id = model_group_id
@@ -124,6 +129,22 @@ class ReliableRouter(BaseRouter):
             await self.health_checker.stop_background_check()
         await self.close()
         return False
+
+    def _sync_quota_state(self, deployments: List[Deployment]) -> None:
+        """把部署声明的 tpm/rpm 配额接入 state（review 4，P0）。
+
+        - tpm/rpm 已配置：初始化对应 TokenUsage/RPMTracker（保留已有条目的
+          累计 used/requests，仅当部署未注册时创建，避免热替换重置计数）。
+        - tpm/rpm 为 None：不创建条目，get_token_remaining/get_rpm_remaining
+          对该部署返回 inf（"未配置即不设限"语义）。
+        - 已从列表移除的部署：条目由调用方（update_deployments）负责清理。
+        """
+        with self.state.lock:
+            for dep in deployments:
+                if dep.tpm is not None and dep.id not in self.state.token_usage:
+                    self.state.token_usage[dep.id] = TokenUsage(limit=dep.tpm)
+                if dep.rpm is not None and dep.id not in self.state.rpm_tracker:
+                    self.state.rpm_tracker[dep.id] = RPMTracker(rpm_limit=dep.rpm)
 
     def _get_available_deployments(self, model: str) -> List[Deployment]:
         """获取可用部署
@@ -575,6 +596,11 @@ class ReliableRouter(BaseRouter):
             if removed_ids:
                 for dep_id in removed_ids:
                     self.state.remove_deployment(dep_id)
+
+            # 为新列表中的部署初始化 tpm/rpm 配额条目（含新增部署；
+            # 已有条目保留累计值）。移除部署的配额条目已随上面的
+            # remove_deployment 一并清理。
+            self._sync_quota_state(new_deployments)
 
     # ------------------------------------------------------------------
     # Typed invoke / stream (高层 SDK 接口)

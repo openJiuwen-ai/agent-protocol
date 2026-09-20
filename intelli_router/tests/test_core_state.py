@@ -283,11 +283,22 @@ def test_get_available_deployments_empty(router_state):
 
 
 def test_get_token_remaining_with_usage(router_state):
+    """State 层语义：on_success 未预先注册配额时 limit=0，remaining=0。"""
     dep_id = "dep1"
     router_state.on_success(dep_id, latency=0.1, tokens=50)
     remaining = router_state.get_token_remaining(dep_id)
     # TokenUsage.limit=0, used=50, so remaining = max(0, 0-50) = 0
     assert remaining == 0
+
+
+def test_get_token_remaining_with_configured_limit(router_state):
+    """已配置配额时 remaining 反映真实 limit（review 4 接线后的语义）。"""
+    dep_id = "dep1"
+    router_state.token_usage[dep_id] = TokenUsage(limit=100000)
+    # 未使用时 remaining == limit
+    assert router_state.get_token_remaining(dep_id) == 100000
+    router_state.on_success(dep_id, latency=0.1, tokens=50)
+    assert router_state.get_token_remaining(dep_id) == 100000 - 50
 
 
 def test_get_token_remaining_no_usage(router_state):
@@ -296,11 +307,21 @@ def test_get_token_remaining_no_usage(router_state):
 
 
 def test_get_rpm_remaining_with_tracker(router_state):
+    """State 层语义：未预先注册配额时 rpm_limit=0，remaining=0。"""
     dep_id = "dep1"
     router_state.on_success(dep_id, latency=0.1, tokens=50)
     # rpm_limit=0 by default, so remaining should be 0
     remaining = router_state.get_rpm_remaining(dep_id)
     assert remaining == 0  # max(0, 0 - 1)
+
+
+def test_get_rpm_remaining_with_configured_limit(router_state):
+    """已配置 rpm_limit 时 remaining 反映真实配额（review 4 接线后的语义）。"""
+    dep_id = "dep1"
+    router_state.rpm_tracker[dep_id] = RPMTracker(rpm_limit=1000)
+    assert router_state.get_rpm_remaining(dep_id) == 1000
+    router_state.on_success(dep_id, latency=0.1, tokens=50)
+    assert router_state.get_rpm_remaining(dep_id) == 1000 - 1
 
 
 def test_get_rpm_remaining_no_tracker(router_state):
@@ -395,3 +416,85 @@ def test_cleanup_deployments_nothing_to_remove(router_state):
     removed = router_state.cleanup_deployments(["dep1"])
     assert removed == []
     assert router_state.total_tokens["dep1"] == 10
+
+
+# -------- tpm/rpm wiring through ReliableRouter (review 4, P0) --------
+
+class TestRouterQuotaWiring:
+    """ReliableRouter 注册部署时，tpm/rpm 必须接入 state 的配额追踪。"""
+
+    def _router(self, deployments):
+        from intelli_router.router.reliable_router import ReliableRouter
+        return ReliableRouter(deployments=deployments, strategy="simple-shuffle")
+
+    def test_constructor_initializes_quota_entries(
+        self, deployment_gpt4_1, deployment_gpt3
+    ):
+        """带 tpm/rpm 的部署经构造注册后，state 中有对应配额条目。"""
+        router = self._router([deployment_gpt4_1, deployment_gpt3])
+        usage = router.state.token_usage.get("dep_gpt4_1")
+        assert usage is not None
+        assert usage.limit == 100000
+        # 未使用时 remaining 反映真实 limit（修复前恒 0）
+        assert router.state.get_token_remaining("dep_gpt4_1") == 100000
+        tracker = router.state.rpm_tracker.get("dep_gpt4_1")
+        assert tracker is not None
+        assert tracker.rpm_limit == 1000
+        assert router.state.get_rpm_remaining("dep_gpt4_1") == 1000
+
+    def test_constructor_none_quota_keeps_inf_semantics(self, deployment_gpt3):
+        """tpm/rpm 为 None 的部署不创建条目，remaining 保持 inf（未配置即不设限）。"""
+        router = self._router([deployment_gpt3])
+        assert "dep_gpt3" not in router.state.token_usage
+        assert "dep_gpt3" not in router.state.rpm_tracker
+        assert router.state.get_token_remaining("dep_gpt3") == float('inf')
+        assert router.state.get_rpm_remaining("dep_gpt3") == float('inf')
+
+    def test_constructor_partial_quota(self, deployment_gpt4_1):
+        """只配置 tpm（rpm=None）时仅初始化 token 侧。"""
+        from intelli_router.core.deployment import Deployment
+        dep = Deployment(
+            id="dep_tpm_only", model_name="m", api_key="k", api_base="b", tpm=5000
+        )
+        router = self._router([dep])
+        assert router.state.get_token_remaining("dep_tpm_only") == 5000
+        assert "dep_tpm_only" not in router.state.rpm_tracker
+        assert router.state.get_rpm_remaining("dep_tpm_only") == float('inf')
+
+    def test_update_deployments_initializes_new_and_cleans_removed(
+        self, deployment_gpt4_1, deployment_gpt4_2, deployment_gpt3
+    ):
+        """热替换后：新增部署的配额条目被初始化，移除部署的条目被清理。"""
+        router = self._router([deployment_gpt4_1, deployment_gpt4_2])
+        assert router.state.get_token_remaining("dep_gpt4_1") == 100000
+        assert router.state.get_rpm_remaining("dep_gpt4_2") == 500
+
+        # 替换：移除 gpt4 两个部署，加入 gpt3（无配额）+ 新的带配额部署
+        from intelli_router.core.deployment import Deployment
+        dep_new = Deployment(
+            id="dep_new", model_name="m2", api_key="k", api_base="b",
+            tpm=20000, rpm=200,
+        )
+        router.update_deployments([deployment_gpt3, dep_new])
+
+        # 移除的部署：配额条目清理
+        assert "dep_gpt4_1" not in router.state.token_usage
+        assert "dep_gpt4_2" not in router.state.rpm_tracker
+        # 新部署：条目初始化
+        assert router.state.get_token_remaining("dep_new") == 20000
+        assert router.state.get_rpm_remaining("dep_new") == 200
+        # None 配置：无条目，inf 语义
+        assert "dep_gpt3" not in router.state.token_usage
+
+    def test_update_deployments_preserves_accumulated_usage(
+        self, deployment_gpt4_1, deployment_gpt3
+    ):
+        """同一部署保留在列表中时，热替换不应重置其累计 used。"""
+        router = self._router([deployment_gpt4_1])
+        router.state.on_success("dep_gpt4_1", latency=0.1, tokens=300)
+        assert router.state.get_token_remaining("dep_gpt4_1") == 100000 - 300
+
+        router.update_deployments([deployment_gpt4_1])
+        # 累计值保留（不重建条目）
+        assert router.state.token_usage["dep_gpt4_1"].used == 300
+        assert router.state.get_token_remaining("dep_gpt4_1") == 100000 - 300
