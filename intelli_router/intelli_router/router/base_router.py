@@ -71,9 +71,17 @@ class BaseRouter:
         self.model_indices = indices
 
     def get_deployments_for_model(self, model: str) -> List[Deployment]:
-        """获取指定模型的所有部署"""
-        indices = self.model_indices.get(model, [])
-        return [self.deployments[i] for i in indices]
+        """获取指定模型的所有部署
+
+        与 update_deployments 的"先换列表再重建索引"热替换并发时，
+        无锁读取可能拿到新列表+旧索引（或反之）导致 IndexError。
+        加锁把"取索引 + 取列表"变成原子操作；_deployments_lock 是
+        RLock，外层已持锁的调用方（如 _get_available_deployments）
+        重入不会死锁。
+        """
+        with self._deployments_lock:
+            indices = self.model_indices.get(model, [])
+            return [self.deployments[i] for i in indices]
 
     def get_model_list(self) -> List[str]:
         """获取所有模型名列表"""

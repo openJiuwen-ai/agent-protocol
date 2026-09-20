@@ -1,8 +1,12 @@
 """Tests for intelli_router.router.base_router."""
+import threading
+import time
+
 import httpx
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from intelli_router.router.base_router import BaseRouter
+from intelli_router.router.reliable_router import ReliableRouter
 from intelli_router.core.deployment import Deployment
 from intelli_router.utils.exceptions import (
     NoDeploymentAvailable, RouterError,
@@ -64,6 +68,63 @@ def test_get_deployment_config_by_model(base_router):
         assert "api_key" not in c
         assert isinstance(c["has_api_key"], bool)
         assert c["has_api_key"] is True
+
+
+# -------- concurrency: update_deployments vs get_deployments_for_model --------
+
+def test_concurrent_update_and_get_deployments_for_model(sample_deployments):
+    """Regression test for the index/list swap race.
+
+    update_deployments() hot-swaps self.deployments and rebuilds
+    self.model_indices. A reader that grabs the index and the list
+    without the lock can mix the new list with the old index (or vice
+    versa) and hit IndexError. Hammer both sides from multiple threads
+    and assert no exception escapes.
+    """
+    router = ReliableRouter(
+        deployments=sample_deployments,
+        num_retries=0,
+        enable_health_check=False,
+    )
+    # 缩短后的列表：只保留一个 gpt-4 部署，反复热替换 4 个 <-> 1 个
+    short_list = [sample_deployments[0]]
+    full_list = list(sample_deployments)
+
+    stop = threading.Event()
+    errors: list = []
+
+    def updater():
+        try:
+            toggle = False
+            while not stop.is_set():
+                router.update_deployments(short_list if toggle else full_list)
+                toggle = not toggle
+        except Exception as e:  # pragma: no cover - only on regression
+            errors.append(e)
+
+    def reader():
+        try:
+            while not stop.is_set():
+                deps = router.get_deployments_for_model("gpt-4")
+                for d in deps:
+                    assert d.model_name == "gpt-4"
+        except Exception as e:  # pragma: no cover - only on regression
+            errors.append(e)
+
+    threads = [threading.Thread(target=updater)] + [
+        threading.Thread(target=reader) for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    time.sleep(1.0)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert not errors, f"concurrent access raised: {errors}"
+    # 热替换结束后读取仍应一致：最后一次是 short_list 或 full_list 之一
+    deps = router.get_deployments_for_model("gpt-4")
+    assert 1 <= len(deps) <= 3
 
 
 # -------- _ensure_client --------
