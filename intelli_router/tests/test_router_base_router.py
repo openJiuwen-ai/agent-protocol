@@ -50,13 +50,20 @@ def test_get_deployment_configs(base_router):
         assert "model_id" in cfg
         assert "model_name" in cfg
         assert "api_base" in cfg
-        assert "api_key" in cfg
+        # api_key 明文不应泄露，只暴露是否已配置
+        assert "api_key" not in cfg
+        assert isinstance(cfg["has_api_key"], bool)
+        assert cfg["has_api_key"] is True
 
 
 def test_get_deployment_config_by_model(base_router):
     configs = base_router.get_deployment_config_by_model("gpt-4")
     assert len(configs) == 3
     assert all(c["model_name"] == "gpt-4" for c in configs)
+    for c in configs:
+        assert "api_key" not in c
+        assert isinstance(c["has_api_key"], bool)
+        assert c["has_api_key"] is True
 
 
 # -------- _ensure_client --------

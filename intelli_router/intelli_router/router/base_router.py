@@ -80,14 +80,17 @@ class BaseRouter:
         return list(self.model_indices.keys())
 
     def get_deployment_configs(self) -> List[Dict[str, Any]]:
-        """获取所有部署配置详情"""
+        """获取所有部署配置详情
+
+        出于安全考虑不回传 api_key 明文，只暴露是否已配置（has_api_key）。
+        """
         return [
             {
                 "id": dep.id,
                 "model_id": dep.model_id,
                 "model_name": dep.model_name,
                 "api_base": dep.api_base,
-                "api_key": dep.api_key,
+                "has_api_key": bool(dep.api_key),
                 "fallback_tag": dep.fallback_tag,
                 "model_description": dep.model_description,
             }
@@ -95,14 +98,17 @@ class BaseRouter:
         ]
 
     def get_deployment_config_by_model(self, model: str) -> List[Dict[str, Any]]:
-        """获取指定模型的部署配置详情"""
+        """获取指定模型的部署配置详情
+
+        出于安全考虑不回传 api_key 明文，只暴露是否已配置（has_api_key）。
+        """
         return [
             {
                 "id": dep.id,
                 "model_id": dep.model_id,
                 "model_name": dep.model_name,
                 "api_base": dep.api_base,
-                "api_key": dep.api_key,
+                "has_api_key": bool(dep.api_key),
                 "fallback_tag": dep.fallback_tag,
                 "model_description": dep.model_description,
             }
