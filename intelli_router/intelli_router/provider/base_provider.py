@@ -226,23 +226,31 @@ class BaseProviderAdapter(ABC):
     _TOOL_CALL_FUNC_FIELDS = ("name", "arguments")
 
     @staticmethod
-    def sanitize_tool_calls(messages: List[Dict[str, Any]]) -> None:
+    def sanitize_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """清洗 tool_calls，只保留 OpenAI 标准字段：id/type/function.name/function.arguments
 
         一些 provider（SiliconFlow、InferenceAffinity 等）对 tool_calls 中
-        的非标准字段（如 index）敏感，需要原地清洗。
+        的非标准字段（如 index）敏感，需要清洗。
+
+        不修改调用方传入的消息：对含 tool_calls 的 assistant 消息返回
+        浅拷贝替换（{**msg, "tool_calls": [...]}），其余消息原样保留引用。
 
         Args:
-            messages: 消息列表（原地修改）
+            messages: 消息列表
+
+        Returns:
+            清洗后的新消息列表
         """
         def _normalize(call: Dict[str, Any]) -> Dict[str, Any]:
             raw_func = call.get("function") or {}
             func = {k: raw_func.get(k, "") for k in BaseProviderAdapter._TOOL_CALL_FUNC_FIELDS}
             return {"id": call.get("id", ""), "type": "function", "function": func}
 
+        new_messages: List[Dict[str, Any]] = []
         for msg in messages:
-            if msg.get("role") != "assistant":
-                continue
-            calls = msg.get("tool_calls")
-            if isinstance(calls, list):
-                msg["tool_calls"] = [_normalize(c) for c in calls if isinstance(c, dict)]
+            if msg.get("role") == "assistant":
+                calls = msg.get("tool_calls")
+                if isinstance(calls, list):
+                    msg = {**msg, "tool_calls": [_normalize(c) for c in calls if isinstance(c, dict)]}
+            new_messages.append(msg)
+        return new_messages

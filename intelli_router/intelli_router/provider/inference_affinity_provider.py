@@ -26,7 +26,7 @@ class InferenceAffinityProviderAdapter(OpenAIProviderAdapter):
         return_token_ids = kwargs.pop("return_token_ids", None)
 
         body = super().transform_request(model, messages, deployment, **kwargs)
-        BaseProviderAdapter.sanitize_tool_calls(body.get("messages", []))
+        body["messages"] = BaseProviderAdapter.sanitize_tool_calls(body.get("messages", []))
 
         if enable_cache_sharing and session_id:
             body["cache_sharing"] = True

@@ -21,5 +21,5 @@ class SiliconFlowProviderAdapter(OpenAIProviderAdapter):
         **kwargs,
     ) -> Dict[str, Any]:
         body = super().transform_request(model, messages, deployment, **kwargs)
-        BaseProviderAdapter.sanitize_tool_calls(body.get("messages", []))
+        body["messages"] = BaseProviderAdapter.sanitize_tool_calls(body.get("messages", []))
         return body
