@@ -351,7 +351,9 @@ class BaseRouter:
             标准 OpenAI 格式的 streaming chunk dict
         """
         if deployment is None:
-            deployments = self.get_deployments_for_model(model)
+            deployments = self._state_available_deployments(
+                self.get_deployments_for_model(model)
+            )
             if not deployments:
                 raise NoDeploymentAvailable(model, "No deployment")
             deployment = deployments[0]

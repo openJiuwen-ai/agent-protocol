@@ -392,6 +392,96 @@ async def test_completion_explicit_deployment_bypasses_filter(
         mock_req.assert_called_once()
 
 
+# -------- acompletion_stream availability filtering (final review) --------
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_skips_state_cooldown_deployment(sample_deployments):
+    """BaseRouter.acompletion_stream 未显式指定 deployment 时，state 中标记
+    COOLDOWN（且仍在冷却期内）的部署应被跳过，取下一个可用部署（与
+    completion() 的过滤行为对称）。
+
+    修复前：直接取 deployments[0]，运行期冷却状态（只存在于 state）被无视。
+    """
+    from intelli_router.core.deployment import DeploymentStatus
+
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    first = sample_deployments[0]  # dep_gpt4_1：model_indices 中 gpt-4 的第一个
+    # 运行期冷却只写 state（对象 status 仍是 HEALTHY）
+    router.state.deployment_status[first.id] = DeploymentStatus.COOLDOWN
+    router.state.cooldown_until[first.id] = time.time() + 3600
+
+    requested = []
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            response = MagicMock()
+            response.raise_for_status = MagicMock()
+            return response
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _SingleChunkIter:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    def make_adapter(dep):
+        return MagicMock(
+            get_api_url=MagicMock(return_value="https://api.example.com/v1"),
+            get_headers=MagicMock(return_value={}),
+            sign_request=MagicMock(side_effect=lambda m, u, h, b, d: h),
+            transform_request=MagicMock(return_value={}),
+            validate_request_config=MagicMock(return_value=None),
+            iter_stream_events=MagicMock(return_value=_SingleChunkIter()),
+        )
+
+    def fake_get_adapter(dep):
+        requested.append(dep.id)
+        return make_adapter(dep)
+
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.stream = MagicMock(return_value=_StreamCtx())
+        mock_cls.return_value = mock_client
+
+        with patch.object(router, "_get_adapter", side_effect=fake_get_adapter):
+            with patch.object(
+                router, "_ensure_client", return_value=mock_client
+            ):
+                chunks = [
+                    c async for c in router.acompletion_stream(
+                        "gpt-4", [{"role": "user", "content": "hi"}]
+                    )
+                ]
+
+    assert chunks == []
+    # dep_gpt4_1 被跳过，dep_gpt4_2 被选中（dep_cooldown 的对象级 status
+    # 已在 BaseRouter 构建索引时被忽略，state 中未登记默认 HEALTHY）
+    assert requested == [sample_deployments[1].id]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_all_state_cooldown_raises(sample_deployments):
+    """全部部署在 state 中标记冷却 → NoDeploymentAvailable（而非盲目打第一个）。"""
+    from intelli_router.core.deployment import DeploymentStatus
+
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    for dep in sample_deployments:
+        if dep.model_name != "gpt-4":
+            continue
+        router.state.deployment_status[dep.id] = DeploymentStatus.COOLDOWN
+        router.state.cooldown_until[dep.id] = time.time() + 3600
+
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.acompletion_stream(
+            "gpt-4", [{"role": "user", "content": "hi"}]
+        ):
+            pass  # pragma: no cover - 不应产出任何 chunk
+
+
 # -------- completion_with_fallback --------
 
 @pytest.mark.asyncio

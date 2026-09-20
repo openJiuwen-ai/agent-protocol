@@ -1472,9 +1472,9 @@ except DeploymentAuthError as e:
 except DeploymentRateLimitError as e:
     print(f"Rate limited: {e}")
 except NoDeploymentAvailable as e:
-    print(f"No deployment available for {e.model}")
+    print(f"No deployment available for {e.details['model']}")
 except AllDeploymentsFailed as e:
-    print(f"All deployments failed: {e.errors}")
+    print(f"All deployments failed: {e.details['errors']}")
 except IntelliRouterError as e:
     print(f"SDK Error: {e.to_dict()}")
     status_code = get_status_code(e)
