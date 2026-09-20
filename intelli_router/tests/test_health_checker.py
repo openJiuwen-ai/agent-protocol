@@ -1,5 +1,6 @@
 """Tests for intelli_router.health.checker."""
 import asyncio
+import json
 import time
 from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
@@ -36,9 +37,16 @@ def test_health_check_result_dataclass():
     assert result.timestamp > 0
 
 
+def _fresh_state():
+    """A fresh LocalRouterState for checkers built inside a single test."""
+    from intelli_router.core.state import LocalRouterState
+    return LocalRouterState()
+
+
 def _setup_check_client_mock(health_checker, side_effect):
     """Set up a mock _ensure_client that returns a client with the given
     post side_effect. Clears any previously cached client."""
+    health_checker._clients = {}
     health_checker._client = None
     mock_client = AsyncMock()
     mock_client.post.side_effect = side_effect
@@ -187,3 +195,193 @@ async def test_background_loop(health_checker):
         # Wait a brief moment
         await asyncio.sleep(0.05)
         mock_check.assert_called()
+
+
+# -------- request signing + bytes body (review 7) --------
+
+@pytest.mark.asyncio
+async def test_check_deployment_signs_request_for_bedrock(health_deployments):
+    """A signing provider (aws-bedrock) must have its health check request
+    passed through adapter.sign_request, with signed headers on the wire."""
+    dep = Deployment(
+        id="dep_bedrock",
+        model_name="anthropic.claude-3-haiku",
+        api_key="AKIA-test:secret",
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        provider="aws-bedrock",
+    )
+    checker = SDKHealthChecker(
+        deployments=[dep],
+        state=_fresh_state(),
+        check_interval=300,
+        check_timeout=5,
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_client = _setup_check_client_mock(checker, [mock_response])
+
+    signed_headers = {
+        "Content-Type": "application/json",
+        "Authorization": "AWS4-HMAC-SHA256 Credential=AKIA-test/...",
+        "X-Amz-Date": "20260920T000000Z",
+    }
+    mock_adapter = MagicMock(
+        transform_request=MagicMock(return_value={"messages": []}),
+        get_api_url=MagicMock(
+            return_value="https://bedrock-runtime.us-east-1.amazonaws.com"
+            "/model/anthropic.claude-3-haiku/converse"
+        ),
+        get_headers=MagicMock(return_value={"Content-Type": "application/json"}),
+        sign_request=MagicMock(return_value=signed_headers),
+    )
+    with patch.object(
+        checker,
+        "_get_cached_adapter",
+        MagicMock(return_value=mock_adapter),
+    ):
+        result = await checker.check_deployment(dep)
+
+    assert result.is_healthy is True
+    # sign_request was called before the post
+    mock_adapter.sign_request.assert_called_once()
+    sign_args = mock_adapter.sign_request.call_args.args
+    assert sign_args[0] == "POST"  # method
+    assert "converse" in sign_args[1]  # url
+    # the signed headers are the ones actually sent
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert post_kwargs["headers"] is signed_headers
+    assert "Authorization" in post_kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_check_deployment_body_sent_as_bytes(health_checker, deployment_gpt4_1):
+    """The request body must be passed as bytes via content= (not json=),
+    so that SigV4 signs the exact bytes on the wire."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_client = _setup_check_client_mock(health_checker, [mock_response])
+
+    await health_checker.check_deployment(deployment_gpt4_1)
+
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert "json" not in post_kwargs, "health check must not use json= (breaks signing)"
+    body = post_kwargs.get("content")
+    assert isinstance(body, bytes)
+    parsed = json.loads(body.decode("utf-8"))
+    assert parsed["model"] == deployment_gpt4_1.model_name
+    assert parsed["messages"] == health_checker.check_message
+
+
+@pytest.mark.asyncio
+async def test_check_deployment_signature_covers_sent_bytes(deployment_gpt4_1):
+    """sign_request must receive exactly the bytes later sent via content=."""
+    dep = deployment_gpt4_1
+    checker = SDKHealthChecker(
+        deployments=[dep],
+        state=_fresh_state(),
+        check_interval=300,
+        check_timeout=5,
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_client = _setup_check_client_mock(checker, [mock_response])
+
+    captured = {}
+
+    def fake_sign(method, url, headers, body, deployment):
+        captured["body"] = body
+        signed = dict(headers)
+        signed["X-Signature"] = "sig"
+        return signed
+
+    real_adapter = checker._get_cached_adapter(dep.provider)
+    with patch.object(
+        real_adapter, "sign_request", side_effect=fake_sign
+    ):
+        result = await checker.check_deployment(dep)
+
+    assert result.is_healthy is True
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert captured["body"] is post_kwargs["content"]
+    assert post_kwargs["headers"].get("X-Signature") == "sig"
+
+
+# -------- verify_ssl client grouping in health checker (review 7) --------
+
+def test_health_checker_client_grouped_by_verify(health_deployments):
+    """Health checker caches one client per verify_ssl group."""
+    checker = SDKHealthChecker(
+        deployments=health_deployments,
+        state=_fresh_state(),
+        check_interval=300,
+        check_timeout=5,
+    )
+    client_true = checker._ensure_client(True)
+    client_false = checker._ensure_client(False)
+    assert client_true is not client_false
+    assert checker._ensure_client(True) is client_true
+    assert checker._ensure_client(False) is client_false
+    assert set(checker._clients.keys()) == {True, False}
+
+
+@pytest.mark.asyncio
+async def test_health_checker_uses_deployment_verify_ssl(health_deployments):
+    """check_deployment selects the client group from deployment.verify_ssl."""
+    dep = Deployment(
+        id="dep_nossl",
+        model_name="gpt-4",
+        api_key="sk-test",
+        api_base="https://self-signed.example.com",
+        verify_ssl=False,
+    )
+    checker = SDKHealthChecker(
+        deployments=[dep],
+        state=_fresh_state(),
+        check_interval=300,
+        check_timeout=5,
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    created = {}
+
+    def fake_client_cls(**kwargs):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [mock_response]
+        created["kwargs"] = kwargs
+        created["client"] = mock_client
+        return mock_client
+
+    with patch("intelli_router.health.checker.httpx.AsyncClient", side_effect=fake_client_cls):
+        result = await checker.check_deployment(dep)
+
+    assert result.is_healthy is True
+    assert created["kwargs"].get("verify") is False
+    # the client was cached in the False group
+    assert checker._clients.get(False) is created["client"]
+
+
+@pytest.mark.asyncio
+async def test_health_checker_close_closes_all_groups(health_deployments):
+    """close() closes every cached client, not just the last used one."""
+    checker = SDKHealthChecker(
+        deployments=health_deployments,
+        state=_fresh_state(),
+        check_interval=300,
+        check_timeout=5,
+    )
+    with patch("intelli_router.health.checker.httpx.AsyncClient") as mock_cls:
+        clients = []
+        for _verify in (True, False):
+            mock_client = AsyncMock()
+            mock_client.is_closed = False
+            clients.append(mock_client)
+        mock_cls.side_effect = clients
+        checker._ensure_client(True)
+        checker._ensure_client(False)
+
+        await checker.close()
+        for c in clients:
+            c.aclose.assert_awaited_once()
+        assert checker._clients == {}
+        assert checker._client is None
