@@ -122,3 +122,17 @@ def test_get_list_all(client):
     r = client.get("/api/instances")
     assert r.status_code == 200
     assert len(r.json()) == 2
+
+
+def test_get_list_unknown_filter_keys_ignored(client):
+    """未知 filter key（如 instance_id / foo）被忽略：200 + 无过滤效果（V1.2 固化口径）。
+
+    白名单外的 query 参数按忽略语义处理（OpenAPI 未定义 400），
+    instance_id 不是查询维度（需求澄清 §1.1）。
+    """
+    _register(client, make_entry(user="alice", framework="langchain", node="192.168.0.11"))
+    _register(client, make_entry(user="bob", framework="langchain", node="192.168.0.12"))
+    for q in ("foo=bar", "instance_id=yr-inst-x"):
+        r = client.get(f"/api/instances?{q}")
+        assert r.status_code == 200
+        assert len(r.json()) == 2

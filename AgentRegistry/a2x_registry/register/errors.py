@@ -37,8 +37,15 @@ class NotOwnedError(Exception):
 
 class ImageInUseError(Exception):
     """Raised when deregistering an image that still has running instances.
-    The router maps this to HTTP 409 (conflict).
+
+    The router maps this to HTTP 409 and assembles the structured
+    ``ImageInUseError`` body (``{code: image_in_use, detail, instances}``)
+    from the carried ``instances`` list (referencing service_ids).
     """
+
+    def __init__(self, message: str, instances: "list[str] | None" = None) -> None:
+        super().__init__(message)
+        self.instances = list(instances or [])
 
 
 class ExternalDependencyError(Exception):
