@@ -145,6 +145,36 @@ async def test_completion_no_deployment_emits_exhausted(event_bus, recorder):
 
 
 @pytest.mark.asyncio
+async def test_stream_completion_no_deployment_emits_exhausted(event_bus, recorder):
+    """意见12: stream_completion() 无可用 deployment 时也触发 ALL_DEPLOYMENTS_EXHAUSTED
+    （与 completion() 对齐），MetricsCollector 的 exhausted 计数 +1。"""
+    from intelli_router.core.deployment import Deployment
+    from intelli_router.observability.metrics import MetricsCollector
+
+    collector = MetricsCollector()
+    event_bus.register(collector)
+
+    router = ReliableRouter(
+        deployments=[Deployment(id="dep-1", model_name="claude-3", provider="anthropic", api_key="k", api_base="https://api.anthropic.com")],
+        event_bus=event_bus,
+    )
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.stream_completion(
+            "nonexistent-model", [{"role": "user", "content": "hi"}]
+        ):
+            pass
+
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_message == "No available deployments"
+    assert exhausted[0].model == "nonexistent-model"
+
+    # MetricsCollector 口径：exhausted 即最终失败，计数 +1
+    stats = collector.get_stats()
+    assert stats["exhausted"] == 1
+
+
+@pytest.mark.asyncio
 async def test_request_id_consistent_across_events(router_with_events, recorder):
     """同一请求的所有事件共享相同 request_id"""
     call_count = {"n": 0}

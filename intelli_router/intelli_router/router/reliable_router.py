@@ -432,6 +432,17 @@ class ReliableRouter(BaseRouter):
         """
         available = self._get_available_deployments(model)
         if not available:
+            # 与 completion() 对齐：无可用部署也发 ALL_DEPLOYMENTS_EXHAUSTED
+            # （否则监控侧 stream 请求的最终失败不可见），再抛 NoDeploymentAvailable。
+            request_id = RoutingEvent.new_request_id()
+            request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
             raise NoDeploymentAvailable(model, "No available deployments")
 
         context = RoutingContext(
