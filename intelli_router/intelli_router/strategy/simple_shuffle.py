@@ -14,12 +14,13 @@ if TYPE_CHECKING:
 
 class SimpleShuffleStrategy(RoutingStrategy):
     """
-    箄单随机策略 - 按权重随机选择
+    焄简随机策略 - 按权重随机选择
+
+    传入的 deployments 已由 router 按可用性过滤（state 唯一事实源）。
 
     答法:
-    1. 过滤可用部署
-    2. 按权重构概率分布
-    3. 随机选择
+    1. 按权重构概率分布
+    2. 随机选择
     """
 
     def __init__(
@@ -36,30 +37,26 @@ class SimpleShuffleStrategy(RoutingStrategy):
         context: "RoutingContext"
     ) -> Optional["Deployment"]:
         """按权重随机选择"""
-        import time
-        now = time.time()
-        # 过滤可用部署
-        available = [d for d in deployments if d.is_available(now)]
-        if not available:
+        if not deployments:
             return None
         # 获取权重
         weights = [
             self.weights.get(d.id, self.default_weight)
-            for d in available
+            for d in deployments
         ]
         # 归一化
         total = sum(weights)
         if total == 0:
-            return random.choice(available)
+            return random.choice(deployments)
         prob = [w / total for w in weights]
-        # 箄机选择
+        # 焄机选择
         r = random.random()
         cumsum = 0.0
         for i, p in enumerate(prob):
             cumsum += p
             if r <= cumsum:
-                return available[i]
-        return available[-1]
+                return deployments[i]
+        return deployments[-1]
 
     def on_success(self, deployment: "Deployment", latency: float, tokens: int) -> None:
         """成功回调 - 箄机策略无状态更新"""

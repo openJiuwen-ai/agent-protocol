@@ -541,6 +541,88 @@ async def test_adaptive_exploration(deployment_gpt4_1, deployment_gpt4_2):
     assert selected in deps
 
 
+# ======== is_available unification (review 5) ========
+
+class TestStrategyNoObjectLevelAvailabilityFilter:
+    """策略契约：传入列表已过滤，策略不再读 Deployment 对象自身状态。
+
+    修复前：8 个策略都用 d.is_available(now) 过滤，而运行期冷却状态
+    全在 state.deployment_status——对象级过滤对运行期 COOLDOWN 恒 True
+    （空操作）。修复后策略不依赖对象状态，router 侧的
+    _get_available_deployments 过滤生效即可。
+    """
+
+    @staticmethod
+    def _runtime_cooldown_dep(dep_id: str, model: str = "m") -> Deployment:
+        """构造一个对象级 HEALTHY（is_available 恒 True）但会被
+        router 按 state 过滤的部署——即运行期冷却的真实形态。"""
+        return Deployment(id=dep_id, model_name=model, api_key="k", api_base="b")
+
+    @pytest.mark.asyncio
+    async def test_runtime_cooldown_excluded_via_router_filter(self):
+        """state 标记 COOLDOWN 的部署经 _get_available_deployments 过滤后
+        不进入策略——策略侧无需（也没有）is_available 过滤。"""
+        from intelli_router.router.reliable_router import ReliableRouter
+
+        healthy = self._runtime_cooldown_dep("dep_ok")
+        cooled = self._runtime_cooldown_dep("dep_cold")
+        router = ReliableRouter(
+            deployments=[healthy, cooled], strategy="ordered-failover"
+        )
+        # 运行期冷却只写 state（对象 status 仍是默认 HEALTHY，
+        # 对象级 is_available 过滤对它恒 True——这正是修复前的缺陷形态）
+        assert cooled.is_available(time.time()) is True
+        router.state.deployment_status["dep_cold"] = DeploymentStatus.COOLDOWN
+        router.state.cooldown_until["dep_cold"] = time.time() + 3600
+
+        available = router._get_available_deployments("m")
+        assert [d.id for d in available] == ["dep_ok"]
+
+        # 策略在已过滤列表上正确工作：返回唯一可用部署
+        ctx = RoutingContext(model="m", messages=[])
+        selected = await router.strategy.select_deployment(available, ctx)
+        assert selected.id == "dep_ok"
+
+    @pytest.mark.asyncio
+    async def test_all_runtime_cooldown_yields_empty_list_to_strategy(self):
+        """全部运行期冷却 → 策略收到空列表，返回 None（而非旧对象级
+        过滤下'看起来都可用'）。"""
+        from intelli_router.router.reliable_router import ReliableRouter
+
+        cooled = self._runtime_cooldown_dep("dep_cold")
+        router = ReliableRouter(deployments=[cooled], strategy="simple-shuffle")
+        router.state.deployment_status["dep_cold"] = DeploymentStatus.COOLDOWN
+        router.state.cooldown_until["dep_cold"] = time.time() + 3600
+
+        available = router._get_available_deployments("m")
+        assert available == []
+        ctx = RoutingContext(model="m", messages=[])
+        assert await router.strategy.select_deployment(available, ctx) is None
+
+    @pytest.mark.asyncio
+    async def test_strategies_select_from_unfiltered_list_as_is(self):
+        """策略本身不再做对象级过滤：对象级 COOLDOWN（构造时声明）的部署
+        若仍在传入列表中，策略照常选择——可用性判断完全交给上游。"""
+        dep_static_cooldown = Deployment(
+            id="dep_static", model_name="m", api_key="k", api_base="b",
+            status=DeploymentStatus.COOLDOWN,
+            cooldown_until=time.time() + 3600,
+        )
+        # 对象级 is_available 为 False，但策略不再读它
+        assert dep_static_cooldown.is_available(time.time()) is False
+
+        for strategy in (
+            SimpleShuffleStrategy(),
+            OrderedFailoverStrategy(),
+        ):
+            ctx = RoutingContext(model="m", messages=[])
+            selected = await strategy.select_deployment(
+                [dep_static_cooldown], ctx
+            )
+            # 策略照单全收：唯一的部署被返回（无对象级过滤）
+            assert selected is dep_static_cooldown
+
+
 # ======== tpm/rpm wiring integration (review 4, P0) ========
 
 class TestQuotaWiringStrategyIntegration:

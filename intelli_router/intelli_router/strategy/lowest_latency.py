@@ -4,7 +4,6 @@ SDK LLM Strategy - 最低延迟
 LowestLatencyStrategy: 选择平均延迟最低的部署
 """
 from typing import List, Optional, TYPE_CHECKING
-import time
 from .base_strategy import RoutingStrategy
 if TYPE_CHECKING:
     from ..core.deployment import Deployment
@@ -15,10 +14,11 @@ class LowestLatencyStrategy(RoutingStrategy):
     """
     最低延迟策略 - 选择平均延迟最低的部署
 
+    传入的 deployments 已由 router 按可用性过滤（state 唯一事实源）。
+
     答法:
-    1. 过滤可用部署
-    2. 获每个部署的平均归一化延迟
-    3. 择延迟最低的
+    1. 获每个部署的平均归一化延迟
+    2. 择延迟最低的
     """
 
     def __init__(
@@ -35,24 +35,21 @@ class LowestLatencyStrategy(RoutingStrategy):
         context: "RoutingContext"
     ) -> Optional["Deployment"]:
         """选择延迟最低的部署"""
-        now = time.time()
-        # 过滤可用部署
-        available = [d for d in deployments if d.is_available(now)]
-        if not available:
+        if not deployments:
             return None
-        # 探索: 箄机选择一个
+        # 探索: 焄机选择一个
         import random
         if random.random() < self.exploration_ratio:
-            return random.choice(available)
+            return random.choice(deployments)
         # 利用: 择延迟最低的
         best_deployment = None
         best_latency = float('inf')
-        for d in available:
+        for d in deployments:
             avg_latency = self.state.get_average_latency(d.id)
             if avg_latency < best_latency:
                 best_latency = avg_latency
                 best_deployment = d
-        return best_deployment or available[0]
+        return best_deployment or deployments[0]
 
     def on_success(self, deployment: "Deployment", latency: float, tokens: int) -> None:
         """成功回调 - 无额外策略状态（router 层已统一更新 state）"""

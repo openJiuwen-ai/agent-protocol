@@ -8,6 +8,7 @@ import json
 import asyncio
 import logging
 import threading
+import time
 
 import httpx
 
@@ -50,6 +51,10 @@ class BaseRouter:
         self.num_retries = num_retries
         self.timeout = timeout
         self.cache = cache or LocalCache()
+        # 运行期状态（部署状态/冷却等）。BaseRouter 自身只读它做
+        # 可用性过滤；ReliableRouter 会以自己的 state 覆盖此属性
+        # （ReliableRouter 是该 state 的唯一写入方）。
+        self.state = LocalRouterState()
         # 按 verify_ssl 分组缓存的 httpx 客户端：{verify: AsyncClient}。
         # _client 单属性仅作兼容视图指向最后创建/使用的 client。
         self._clients: Dict[bool, httpx.AsyncClient] = {}
@@ -269,6 +274,25 @@ class BaseRouter:
     async def __aexit__(self, *args):
         await self.close()
 
+    def _state_available_deployments(self, deployments: List[Deployment]) -> List[Deployment]:
+        """按 state（唯一事实源）过滤可用部署。
+
+        state 中标记为 COOLDOWN 且仍在冷却期内的部署被跳过；
+        冷却已过期的部署软恢复后视为可用；未登记的部署默认 HEALTHY。
+        供 BaseRouter.completion 在未显式指定 deployment 时复用
+        ReliableRouter 同款的可用性判断。
+        """
+        now = time.time()
+        available = []
+        for dep in deployments:
+            status = self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY)
+            if status == DeploymentStatus.COOLDOWN:
+                cooldown_until = self.state.cooldown_until.get(dep.id, 0)
+                if now < cooldown_until:
+                    continue
+            available.append(dep)
+        return available
+
     async def completion(
         self,
         model: str,
@@ -289,7 +313,9 @@ class BaseRouter:
             API响应
         """
         if deployment is None:
-            deployments = self.get_deployments_for_model(model)
+            deployments = self._state_available_deployments(
+                self.get_deployments_for_model(model)
+            )
             if not deployments:
                 raise NoDeploymentAvailable(model, "No deployment")
             deployment = deployments[0]

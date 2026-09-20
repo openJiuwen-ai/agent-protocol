@@ -9,7 +9,10 @@ if TYPE_CHECKING:
 
 
 class OrderedFailoverStrategy(RoutingStrategy):
-    """Always choose the first available deployment in the current order."""
+    """Always choose the first deployment in the given (already availability-
+    filtered) order. Availability filtering is owned by the router; state is
+    the single source of truth.
+    """
     strict_fallback_errors = True
 
     async def select_deployment(
@@ -17,13 +20,7 @@ class OrderedFailoverStrategy(RoutingStrategy):
         deployments: List["Deployment"],
         context: "RoutingContext",
     ) -> Optional["Deployment"]:
-        import time
-
-        now = time.time()
-        for deployment in deployments:
-            if deployment.is_available(now):
-                return deployment
-        return None
+        return deployments[0] if deployments else None
 
     def on_success(self, deployment: "Deployment", latency: float, tokens: int) -> None:
         return None

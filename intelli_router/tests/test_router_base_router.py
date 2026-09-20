@@ -298,6 +298,100 @@ async def test_completion_model_not_found(base_router):
         await base_router.completion("unknown-model", [{"role": "user", "content": "hi"}])
 
 
+# -------- completion availability filtering (review 5) --------
+
+@pytest.mark.asyncio
+async def test_completion_skips_state_cooldown_deployment(sample_deployments):
+    """BaseRouter.completion 未显式指定 deployment 时，state 中标记 COOLDOWN
+    （且仍在冷却期内）的部署应被跳过，取下一个可用部署。
+
+    修复前：直接取 deployments[0]，运行期冷却状态（只存在于 state）被无视。
+    """
+    from intelli_router.core.deployment import DeploymentStatus
+
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    first = sample_deployments[0]  # dep_gpt4_1：model_indices 中 gpt-4 的第一个
+    # 运行期冷却只写 state（对象 status 仍是 HEALTHY）
+    router.state.deployment_status[first.id] = DeploymentStatus.COOLDOWN
+    router.state.cooldown_until[first.id] = time.time() + 3600
+
+    requested = []
+
+    async def mock_make_request(deployment, request_body):
+        requested.append(deployment.id)
+        return {"ok": True}
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result == {"ok": True}
+    assert requested == [sample_deployments[1].id]  # dep_gpt4_2 被选中
+
+
+@pytest.mark.asyncio
+async def test_completion_all_state_cooldown_raises(sample_deployments):
+    """全部部署在 state 中标记冷却 → NoDeploymentAvailable（而非盲目打第一个）。"""
+    from intelli_router.core.deployment import DeploymentStatus
+
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    for dep in sample_deployments:
+        if dep.model_name != "gpt-4":
+            continue
+        router.state.deployment_status[dep.id] = DeploymentStatus.COOLDOWN
+        router.state.cooldown_until[dep.id] = time.time() + 3600
+
+    with patch.object(
+        router, '_make_request', new=AsyncMock(return_value={"ok": True})
+    ) as mock_req:
+        with pytest.raises(NoDeploymentAvailable):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        mock_req.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_completion_state_cooldown_expired_is_available(sample_deployments):
+    """state 中冷却已过期的部署不再被跳过（按当前时间判断）。"""
+    from intelli_router.core.deployment import DeploymentStatus
+
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    first = sample_deployments[0]
+    # COOLDOWN 但冷却截止时间已过
+    router.state.deployment_status[first.id] = DeploymentStatus.COOLDOWN
+    router.state.cooldown_until[first.id] = time.time() - 10
+
+    requested = []
+
+    async def mock_make_request(deployment, request_body):
+        requested.append(deployment.id)
+        return {"ok": True}
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert requested == [first.id]
+
+
+@pytest.mark.asyncio
+async def test_completion_explicit_deployment_bypasses_filter(
+    base_router, deployment_gpt4_1
+):
+    """显式指定 deployment 的语义不变：调用方指定即使用（不做可用性过滤）。"""
+    from intelli_router.core.deployment import DeploymentStatus
+
+    base_router.state.deployment_status[deployment_gpt4_1.id] = DeploymentStatus.COOLDOWN
+    base_router.state.cooldown_until[deployment_gpt4_1.id] = time.time() + 3600
+
+    with patch.object(
+        base_router, '_make_request', new=AsyncMock(return_value={"ok": True})
+    ) as mock_req:
+        result = await base_router.completion(
+            "gpt-4", [{"role": "user", "content": "hi"}],
+            deployment=deployment_gpt4_1,
+        )
+        assert result == {"ok": True}
+        mock_req.assert_called_once()
+
+
 # -------- completion_with_fallback --------
 
 @pytest.mark.asyncio
