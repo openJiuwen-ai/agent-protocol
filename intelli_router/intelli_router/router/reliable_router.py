@@ -6,6 +6,7 @@ ReliableRouter: 集成状态管理、策略选择、健康检查
 from typing import Dict, List, Optional, Any, Union, Literal, AsyncIterator
 from dataclasses import dataclass, field
 import asyncio
+import logging
 import time
 import json
 import httpx
@@ -37,6 +38,8 @@ from ..observability.bus import EventBus
 from ..observability.events import RoutingEvent, RoutingEventType
 
 MODEL_WILDCARD = "*"
+
+logger = logging.getLogger(__name__)
 
 
 class ReliableRouter(BaseRouter):
@@ -679,6 +682,7 @@ class ReliableRouter(BaseRouter):
             **params,
         )
         msg = self._response_to_message(raw)
+        deployment_id = raw.get("deployment_id") if isinstance(raw, dict) else None
 
         if output_parser is not None and msg.content:
             try:
@@ -686,7 +690,14 @@ class ReliableRouter(BaseRouter):
                 if parsed is not None:
                     msg.content = json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, dict) else str(parsed)
             except Exception:
-                pass
+                # 降级行为保留：解析失败时调用方仍拿到原始 content，
+                # 但不再静默——记录 warning（含解析器类型与异常栈）便于排查。
+                logger.warning(
+                    "output_parser %s failed for deployment %s, returning raw content",
+                    type(output_parser).__name__,
+                    deployment_id,
+                    exc_info=True,
+                )
 
         return msg
 
