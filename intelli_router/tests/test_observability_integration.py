@@ -302,6 +302,10 @@ async def test_stream_emits_retried_and_exhausted(router_with_events, recorder):
     assert len(exhausted) == 1
     assert exhausted[0].extra["route_id"]
     assert exhausted[0].extra["fallback_reason"] == "RuntimeError"
+    # error_type 保持异常类名口径（与 completion()/stream_completion() 的
+    # EXHAUSTED 事件一致），而非与 error_message 相同的错误消息文本
+    assert exhausted[0].error_type == "RuntimeError"
+    assert exhausted[0].error_message == "stream failed"
 
 
 # ---------- backward compatibility ----------

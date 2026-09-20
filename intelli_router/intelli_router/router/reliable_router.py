@@ -872,7 +872,10 @@ class ReliableRouter(BaseRouter):
             latency=time.time() - overall_start,
             attempt=len(errors),
             total_attempts=total_attempts,
-            error_type=errors[-1][1] if errors else None,
+            # error_type 保持异常类名口径（与 completion()/stream_completion()
+            # 的同类事件一致），不随 errors 二元组化取 str(e)——那会让
+            # error_type 与 error_message 完全相同。
+            error_type=last_fallback_reason if errors else None,
             error_message=errors[-1][1] if errors else None,
             extra=last_failure_metadata or request_extra,
         ))

@@ -1044,7 +1044,8 @@ class NoDeploymentAvailable(RouterError):
 
 ```python
 class AllDeploymentsFailed(RouterError):
-    def __init__(self, model: str, errors: List[Exception])
+    # errors: [(deployment_id, error_message), ...] 二元组列表
+    def __init__(self, model: str, errors: List[Tuple[str, str]])
 ```
 
 ---

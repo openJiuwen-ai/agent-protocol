@@ -364,13 +364,23 @@ async def test_stream_does_not_fallback_after_visible_output(reliable_router):
     assert attempts == [dep1.id]
 
 
+def _failing_stream(error: Exception):
+    """返回总是抛出指定异常的 async generator（模拟 acompletion_stream
+    连接失败）。AsyncMock 不实现 __aiter__，不能用于 patch async
+    generator 方法（会抛 TypeError 且产生 coroutine never awaited 警告）。"""
+    async def failing(*args, **kwargs):
+        raise error
+        yield  # pragma: no cover
+    return failing
+
+
 @pytest.mark.asyncio
 async def test_stream_all_fail_raises_all_deployments_failed(reliable_router):
     """意见10: stream() 全部部署失败应抛 AllDeploymentsFailed（而非裸 RouterError）。"""
     with patch.object(
         reliable_router,
         'acompletion_stream',
-        new=AsyncMock(side_effect=DeploymentNetworkError("dep", "fail")),
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
     ):
         with pytest.raises(AllDeploymentsFailed) as exc_info:
             async for _ in reliable_router.stream(
@@ -389,7 +399,7 @@ async def test_stream_all_fail_errors_are_two_tuples(reliable_router):
     with patch.object(
         reliable_router,
         'acompletion_stream',
-        new=AsyncMock(side_effect=DeploymentNetworkError("dep", "fail")),
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
     ):
         with pytest.raises(AllDeploymentsFailed) as exc_info:
             async for _ in reliable_router.stream(
@@ -407,6 +417,8 @@ async def test_stream_all_fail_errors_are_two_tuples(reliable_router):
         assert isinstance(deployment_id, str)
         assert isinstance(error_message, str)
         assert error_message  # 非空错误消息
+        # 模拟的是 DeploymentNetworkError，消息应含其文本而非 TypeError 之类
+        assert "fail" in error_message
 
 
 @pytest.mark.asyncio
@@ -417,7 +429,7 @@ async def test_stream_all_fail_maps_to_503(reliable_router):
     with patch.object(
         reliable_router,
         'acompletion_stream',
-        new=AsyncMock(side_effect=DeploymentNetworkError("dep", "fail")),
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
     ):
         with pytest.raises(AllDeploymentsFailed) as exc_info:
             async for _ in reliable_router.stream(
