@@ -1,4 +1,5 @@
 """Tests for provider adapters (OpenAI / Anthropic / Gemini / Registry)."""
+import asyncio
 import json
 import logging
 import pytest
@@ -23,7 +24,7 @@ class TestOpenAIProviderAdapter:
             id="test-openai",
             model_name="gpt-4",
             api_key="sk-test-key",
-            api_base="https://api.openai.com",
+            api_base="https://api.openai.com/v1",
             provider="openai",
         )
 
@@ -34,7 +35,23 @@ class TestOpenAIProviderAdapter:
         dep = Deployment(
             model_name="gpt-4",
             api_key="sk-test",
-            api_base="https://api.openai.com/",
+            api_base="https://api.openai.com/v1/",
+        )
+        assert self.adapter.get_api_url(dep) == "https://api.openai.com/v1/chat/completions"
+
+    def test_get_api_url_with_bare_host_does_not_invent_v1(self):
+        dep = Deployment(
+            model_name="gpt-4",
+            api_key="sk-test",
+            api_base="https://api.openai.com",
+        )
+        assert self.adapter.get_api_url(dep) == "https://api.openai.com/chat/completions"
+
+    def test_get_api_url_with_full_chat_completions_url(self):
+        dep = Deployment(
+            model_name="gpt-4",
+            api_key="sk-test",
+            api_base="https://api.openai.com/v1/chat/completions",
         )
         assert self.adapter.get_api_url(dep) == "https://api.openai.com/v1/chat/completions"
 
@@ -96,6 +113,30 @@ class TestAnthropicProviderAdapter:
     def test_get_api_url(self):
         assert self.adapter.get_api_url(self.dep) == "https://api.anthropic.com/v1/messages"
 
+    def test_get_api_url_with_v1_base(self):
+        dep = Deployment(
+            model_name="claude-3-opus",
+            api_key="sk-ant-test",
+            api_base="https://api.anthropic.com/v1",
+        )
+        assert self.adapter.get_api_url(dep) == "https://api.anthropic.com/v1/messages"
+
+    def test_get_api_url_with_full_messages_url(self):
+        dep = Deployment(
+            model_name="claude-3-opus",
+            api_key="sk-ant-test",
+            api_base="https://api.anthropic.com/v1/messages",
+        )
+        assert self.adapter.get_api_url(dep) == "https://api.anthropic.com/v1/messages"
+
+    def test_get_api_url_with_dashscope_anthropic_base(self):
+        dep = Deployment(
+            model_name="qwen3.8-max",
+            api_key="sk-ant-test",
+            api_base="https://dashscope.aliyuncs.com/apps/anthropic",
+        )
+        assert self.adapter.get_api_url(dep) == "https://dashscope.aliyuncs.com/apps/anthropic/v1/messages"
+
     def test_get_headers(self):
         headers = self.adapter.get_headers(self.dep)
         assert headers["x-api-key"] == "sk-ant-test"
@@ -145,7 +186,7 @@ class TestAnthropicProviderAdapter:
             top_p=0.9,
         )
         assert result["temperature"] == 0.7
-        assert result["top_p"] == 0.9
+        assert "top_p" not in result
 
     def test_transform_request_tools_conversion(self):
         result = self.adapter.transform_request(
@@ -182,9 +223,46 @@ class TestAnthropicProviderAdapter:
         assert result["id"] == "msg_123"
         assert result["object"] == "chat.completion"
         assert result["choices"][0]["message"]["content"] == "Hello"
+        assert result["provider_content"] is raw
         assert result["choices"][0]["finish_reason"] == "stop"
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["prompt_tokens"] == 10
+
+    def test_transform_response_with_thinking_content(self):
+        raw = {
+            "id": "msg_123",
+            "content": [
+                {"type": "thinking", "thinking": "I should answer briefly."},
+                {"type": "text", "text": "Hello"},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+        result = self.adapter.transform_response(raw, "claude-3-opus", self.dep)
+
+        message = result["choices"][0]["message"]
+        assert message["content"] == "Hello"
+        assert message["reasoning_content"] == "I should answer briefly."
+
+    def test_transform_response_maps_anthropic_cache_usage(self):
+        raw = {
+            "id": "msg_123",
+            "content": [{"type": "text", "text": "Hello"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 2,
+            },
+        }
+
+        result = self.adapter.transform_response(raw, "claude-3-opus", self.dep)
+
+        assert result["usage"]["prompt_tokens"] == 15
+        assert result["usage"]["cache_read_tokens"] == 3
+        assert result["usage"]["cache_write_tokens"] == 2
 
     def test_transform_response_with_tool_calls(self):
         raw = {
@@ -215,11 +293,32 @@ class TestAnthropicProviderAdapter:
         assert result is not None
         assert result["choices"][0]["delta"]["role"] == "assistant"
 
+    def test_transform_stream_chunk_message_start_preserves_input_usage(self):
+        chunk = {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "model": "claude-3-opus",
+                "usage": {"input_tokens": 7, "cache_read_input_tokens": 2},
+            },
+        }
+        result = self.adapter.transform_stream_chunk(chunk, "claude-3-opus", self.dep)
+        assert result is not None
+        assert result["usage"]["prompt_tokens"] == 9
+        assert result["usage"]["cache_read_tokens"] == 2
+
     def test_transform_stream_chunk_text_delta(self):
         chunk = {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}
         result = self.adapter.transform_stream_chunk(chunk, "claude-3-opus", self.dep)
         assert result is not None
         assert result["choices"][0]["delta"]["content"] == "Hello"
+        assert result["provider_content"] is chunk
+
+    def test_transform_stream_chunk_thinking_delta(self):
+        chunk = {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "Thinking"}}
+        result = self.adapter.transform_stream_chunk(chunk, "claude-3-opus", self.dep)
+        assert result is not None
+        assert result["choices"][0]["delta"]["reasoning_content"] == "Thinking"
 
     def test_transform_stream_chunk_ping_is_skipped(self):
         chunk = {"type": "ping"}
@@ -231,6 +330,7 @@ class TestAnthropicProviderAdapter:
         result = self.adapter.transform_stream_chunk(chunk, "claude-3-opus", self.dep)
         assert result is not None
         assert result["choices"][0]["finish_reason"] == "stop"
+        assert result["usage"]["prompt_tokens"] == 0
         assert result["usage"]["completion_tokens"] == 10
 
     def test_convert_tools(self):
@@ -427,6 +527,10 @@ class TestProviderRegistry:
     def test_get_openai_adapter(self):
         adapter = get_provider_adapter("openai")
         assert isinstance(adapter, OpenAIProviderAdapter)
+
+    def test_get_openai_compatible_alias_adapters(self):
+        assert isinstance(get_provider_adapter("dashscope"), OpenAIProviderAdapter)
+        assert isinstance(get_provider_adapter("zhipu"), OpenAIProviderAdapter)
 
     def test_get_anthropic_adapter(self):
         adapter = get_provider_adapter("anthropic")
@@ -1224,6 +1328,28 @@ class TestOpenAIStreamChunk:
         result = self.adapter.transform_stream_chunk(chunk, "gpt-4", self.dep)
         assert result is chunk
 
+    def test_iter_stream_events_accepts_data_without_space_and_raw_json_lines(self):
+        class FakeResponse:
+            async def aiter_lines(self):
+                for line in (
+                    'data:{"choices":[{"delta":{"content":"a"}}]}',
+                    '{"choices":[{"delta":{"content":"b"}}]}',
+                    "data: [DONE]",
+                ):
+                    yield line
+
+        async def collect():
+            return [
+                event
+                async for event in self.adapter.iter_stream_events(FakeResponse())
+            ]
+
+        result = asyncio.run(collect())
+        assert result == [
+            {"choices": [{"delta": {"content": "a"}}]},
+            {"choices": [{"delta": {"content": "b"}}]},
+        ]
+
     def test_transform_stream_chunk_returns_none(self):
         chunk = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
         result = self.adapter.transform_stream_chunk(chunk, "gpt-4", self.dep)
@@ -1302,6 +1428,58 @@ class TestAnthropicRequestKwargs:
             metadata={"user_id": "abc"},
         )
         assert result["metadata"] == {"user_id": "abc"}
+
+    def test_thinking_controls_passthrough(self):
+        result = self.adapter.transform_request(
+            model="claude-3-opus",
+            messages=[{"role": "user", "content": "Hi"}],
+            deployment=self.dep,
+            max_tokens=4096,
+            thinking={"type": "enabled", "budget_tokens": 8192},
+            output_config={"effort": "high"},
+        )
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 8192}
+        assert result["output_config"] == {"effort": "high"}
+        assert result["max_tokens"] == 8192 + AnthropicProviderAdapter.THINKING_BUDGET_MARGIN
+
+    def test_zero_thinking_budget_does_not_raise_max_tokens(self):
+        result = self.adapter.transform_request(
+            model="claude-3-opus",
+            messages=[{"role": "user", "content": "Hi"}],
+            deployment=self.dep,
+            max_tokens=128,
+            thinking={"type": "enabled", "budget_tokens": 0},
+        )
+        assert result["max_tokens"] == 128
+
+    def test_thinking_drops_sampling_controls(self):
+        result = self.adapter.transform_request(
+            model="claude-3-opus",
+            messages=[{"role": "user", "content": "Hi"}],
+            deployment=self.dep,
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            temperature=0.2,
+            top_p=0.8,
+            top_k=10,
+        )
+        assert "temperature" not in result
+        assert "top_p" not in result
+        assert "top_k" not in result
+
+    def test_anthropic_compatible_reasoning_controls_passthrough(self):
+        result = self.adapter.transform_request(
+            model="claude-3-opus",
+            messages=[{"role": "user", "content": "Hi"}],
+            deployment=self.dep,
+            reasoning_effort="high",
+            thinking_budget=2048,
+            enable_thinking=True,
+            chat_template_kwargs={"enable_thinking": True},
+        )
+        assert result["reasoning_effort"] == "high"
+        assert result["thinking_budget"] == 2048
+        assert result["enable_thinking"] is True
+        assert result["chat_template_kwargs"] == {"enable_thinking": True}
 
 
 # =========================================================================
