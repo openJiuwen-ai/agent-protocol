@@ -344,7 +344,7 @@ registry-a2x/instances/generic_3f9a1b2c
 
 | HTTP | 场景（etcd 后端） | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 rootfs.imageurl 缺失 / filter key 不在白名单 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `400` | 注册镜像 rootfs.imageurl 缺失 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
 | `404` | 不存在的 name launch-spec / PATCH 不存在 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |

@@ -90,7 +90,7 @@ async def list_images(
     name: Optional[str] = Query(None, description="按镜像主键 name 筛选"),
     framework: Optional[str] = Query(None, description="按 framework 展示字段筛选"),
     uploaded_by: Optional[str] = Query(None),
-    size: int = Query(-1, description="Page size; -1 = no pagination"),
+    size: int = Query(-1, ge=-1, description="Page size; -1 = no pagination"),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     response: Response = None,  # noqa: B008 - FastAPI injected
 ):
@@ -167,6 +167,15 @@ async def deregister_image(name: str, version: str):
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ImageInUseError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        # 按 OpenAPI ImageInUseError schema 组装结构化错误体：
+        # {code: image_in_use, detail, instances: [service_id, ...]}
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "image_in_use",
+                "detail": str(exc),
+                "instances": exc.instances,
+            },
+        )
     except ExternalDependencyError as exc:
         raise HTTPException(status_code=502, detail=str(exc))

@@ -447,7 +447,7 @@ curl 'http://127.0.0.1:8000/api/instances?node=192.168.0.12&include_unhealthy=tr
 ```
 
 **效果**：`status` 为落库字段（`data.status`：运行 / 停止 / 异常，gateway 据元戎 List 经 PATCH 写入，注册中心不派生）；`include_unhealthy=false` 默认只回 `运行`（`停止`/`异常` 均被过滤，SQL 下推 `COALESCE(json_extract(data,'$.status'),'运行')='运行'`）。
-**支持的 filter key**：`include_unhealthy` / `node` / `framework` / `kind` / `user`（白名单，其他 key 返回 `400`）。
+**支持的 filter key**：`include_unhealthy` / `node` / `framework` / `kind` / `user`（白名单）。不在白名单的 key（如 `instance_id`、`foo`）**被忽略、无过滤效果，仍返回 `200` 全集**（`instance_id` 不是查询维度，需求澄清 §1.1；与 OpenAPI 契约一致，未知 query 参数按忽略语义处理）。
 
 **数据库验证**：
 ```bash
@@ -763,7 +763,7 @@ sqlite3 "$A2X_REGISTRY_DB" \
 
 | HTTP | 场景 | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
+| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 | `{"detail":"..."}` |
 | `404` | 取不存在的 name launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `502` | 注销镜像时镜像仓删除接口失败（外部依赖） | `{"detail":"..."}` |
