@@ -19,7 +19,6 @@ from ..strategy import create_strategy, StrategyType
 from ..health.checker import SDKHealthChecker
 from ..cache.local_cache import LocalCache
 from ..utils.exceptions import (
-    RouterError,
     NoDeploymentAvailable,
     AllDeploymentsFailed,
     DeploymentNetworkError,
@@ -816,7 +815,10 @@ class ReliableRouter(BaseRouter):
                 if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
                     raise
                 last_fallback_reason = self._fallback_reason_from_error(e)
-                errors.append((selected.id, last_fallback_reason, str(e)))
+                # errors 统一为二元组 (deployment_id, error_message)，
+                # 与 completion()/stream_completion() 一致；fallback_reason
+                # 已记录在事件的 extra 中，不进 errors。
+                errors.append((selected.id, str(e)))
                 last_failure_metadata = self._route_metadata(
                     selected,
                     attempt=attempt + 1,
@@ -849,10 +851,10 @@ class ReliableRouter(BaseRouter):
             attempt=len(errors),
             total_attempts=total_attempts,
             error_type=errors[-1][1] if errors else None,
-            error_message=errors[-1][2] if errors else None,
+            error_message=errors[-1][1] if errors else None,
             extra=last_failure_metadata or request_extra,
         ))
-        raise RouterError(f"All deployments failed for stream after {total_attempts} attempts: {errors}")
+        raise AllDeploymentsFailed(model=model_name, errors=errors)
 
     # ------------------------------------------------------------------
     # Internal: type conversion helpers
