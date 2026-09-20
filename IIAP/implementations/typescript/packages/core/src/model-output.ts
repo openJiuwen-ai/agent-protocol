@@ -15,7 +15,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i;
 
-export function extractJsonObject(text: string): Record<string, unknown> | null {
+function extractJsonObject(text: string): Record<string, unknown> | null {
   const candidates = [text];
   const fenced = FENCE.exec(text.trim());
   if (fenced) candidates.unshift(fenced[1].trim());
@@ -75,22 +75,4 @@ export function describeModelOutput(value: unknown): string {
   if (!text) return 'empty';
   if (!coerceModelObject(value)) return 'no_json_object';
   return text.startsWith('{') ? 'recovered' : 'prose_wrapped';
-}
-
-const OFFER_STYLES: Record<string, string> = {
-  text_assistance: 'inline_card',
-  update_suggestion: 'inline_card',
-};
-
-/**
- * Host-owned presentation style for an offer.
- *
- * `uiStyle` is a display hint, not a safety boundary: the real boundary is the
- * `updateSuggestion` value allowlist. Asking the model to infer it added a field whose only
- * effect was a two-valued show/hide gate, and a single invented word (e.g. `inline_hint`)
- * voided an otherwise correct decision. Derive it from `offerType` instead, so presentation
- * can never invalidate a decision.
- */
-export function offerStyle(offerType: unknown): string {
-  return OFFER_STYLES[String(offerType)] ?? 'none';
 }

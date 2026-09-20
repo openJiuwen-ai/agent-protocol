@@ -1,6 +1,6 @@
 # Quickstart
 
-Last updated: 2026-09-18
+Last updated: 2026-09-20
 
 ## Requirements
 
@@ -28,7 +28,9 @@ fixed source commit.
 import { createIIAPRuntime } from '@openjiuwen/iiap';
 import { A2UIV08Adapter } from '@openjiuwen/iiap/a2ui-v08';
 
-const runtime = createIIAPRuntime();
+const runtime = createIIAPRuntime({
+  onPacket: async (packet) => sendThroughExistingChannel(packet),
+});
 const session = runtime.createSession({ sessionId: 'session-1' });
 const plan = new A2UIV08Adapter().buildObservationPlans({
   sessionId: 'session-1',
@@ -52,6 +54,10 @@ runtime.dispose();
 
 Use the complete v0.8 example in `examples/typescript/complete-v08.ts` to wire
 a transport, presenter, assistance flow, and consent-gated updates.
+
+Choose exactly one packet-delivery mode: Host-managed `onPacket` or SDK-managed
+`transport`. Configuring both is rejected. Feedback upload is controlled only
+by the Runtime `feedbackUpload` option.
 
 ## Connect a Python decision service
 

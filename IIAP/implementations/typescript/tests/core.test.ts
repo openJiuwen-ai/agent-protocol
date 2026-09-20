@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { A2UIV08Adapter } from '../../../adapters/a2ui-v0.8/src/index.js';
-import { A2UIV091Adapter } from '../../../adapters/a2ui-v0.9.1/src/index.js';
-import { ValidatedSuggestionExecutor, coerceModelObject, createIIAPRuntime, describeModelOutput, offerStyle, validateAssistanceText, validateDataModelSuggestion, validatePrivacy, type ComponentEvent } from '../packages/core/src/index.js';
+import { ValidatedSuggestionExecutor, coerceModelObject, createIIAPRuntime, validateAssistanceText, validateDataModelSuggestion, validatePrivacy, type AssistanceRequest, type ComponentEvent, type IntentContextPacket } from '../packages/core/src/index.js';
+import { describeModelOutput } from '../packages/core/src/model-output.js';
 import { HTTPDecisionTransport } from '../../../transports/http/src/index.js';
 import { createManualClock, systemClock } from '../packages/core/src/clock.js';
 import { FeedbackController } from '../packages/core/src/feedback.js';
@@ -91,6 +91,30 @@ test('HTTP transport exposes stable errors for invalid decisions, status failure
       init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
     }),
   }).decide(packet), { code: 'MODEL_TIMEOUT', retryable: true });
+});
+
+test('HTTP transport sends feedback when the runtime invokes it', async () => {
+  const requests: Array<{ url: string; body: unknown }> = [];
+  const transport = new HTTPDecisionTransport({
+    baseUrl: 'https://example.invalid/',
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  await transport.sendFeedback({
+    type: 'iiap.feedback', iiapVersion: '0.1', packetId: 'packet-1', decisionId: 'decision-1',
+    surfaceInstanceId: 'surface-1', offerType: 'text_assistance', interaction: 'dismissed',
+    timestamp: new Date(0).toISOString(),
+  });
+  assert.deepEqual(requests, [{
+    url: 'https://example.invalid/feedback',
+    body: {
+      type: 'iiap.feedback', iiapVersion: '0.1', packetId: 'packet-1', decisionId: 'decision-1',
+      surfaceInstanceId: 'surface-1', offerType: 'text_assistance', interaction: 'dismissed',
+      timestamp: new Date(0).toISOString(),
+    },
+  }]);
 });
 
 test('v0.8 adapter builds an equivalent observation plan', () => {
@@ -424,6 +448,18 @@ test('host-managed async transport uses onPacket and cancelDecision without a se
   runtime.dispose();
 });
 
+test('runtime rejects simultaneous host-managed and SDK-managed delivery', () => {
+  assert.throws(() => createIIAPRuntime({
+    onPacket: () => undefined,
+    transport: {
+      decide: async (packet: IntentContextPacket) => noIntervention(packet),
+      assist: async (request: AssistanceRequest) => ({
+        type: 'iiap.assistance.response', iiapVersion: '0.1', requestId: request.requestId, message: 'help',
+      }),
+    },
+  } as never), /mutually exclusive/);
+});
+
 test('replacing the same surface preserves completed history and ignores stale handle deactivation', async () => {
   let packetNumber = 0;
   const runtime = createIIAPRuntime({
@@ -588,24 +624,6 @@ test('privacy and safe suggestion validation fail closed', () => {
   assert.equal(validateDataModelSuggestion({ kind: 'data_model_update', updates: [{ surfaceId: 'booking', path: '/unsafe', value: 'A' }] }, context), null);
   assert.equal(validateDataModelSuggestion({ kind: 'data_model_update', updates: [{ surfaceId: 'booking', path: '/date', value: 'B' }] }, context), null);
   assert.equal(validateDataModelSuggestion({ kind: 'data_model_update', updates: [{ surfaceId: 'booking', path: '/date', value: 'A' }] }, { ...context, accepted: false }), null);
-});
-
-test('unpublished v0.9.1 prototype covers lifecycle and custom catalog', () => {
-  const adapter = new A2UIV091Adapter({ Rating: 'scalar_adjust' }, {
-    resolveAllowedValues: ({ declaredValues }) => declaredValues,
-  });
-  const plan = adapter.buildObservationPlans({ sessionId: 's', messageId: 'm', namespace: 'n', messages: [
-    { createSurface: { surfaceId: 'main', catalogId: 'custom' } },
-    { updateComponents: { surfaceId: 'main', components: [{ id: 'rating', component: { type: 'Rating', properties: { bindingPath: '/rating', suggestionValues: [1, 5] } } }] } },
-    { updateDataModel: { surfaceId: 'main', path: '/rating', value: 3 } },
-    { deleteSurface: { surfaceId: 'old' } },
-  ] })[0];
-  assert.ok(plan);
-  assert.equal(plan.protocolVersion, '0.9.1');
-  assert.equal(plan.components[0]?.capability, 'scalar_adjust');
-  assert.equal(plan.components[0]?.bindingPath, '/rating');
-  assert.deepEqual(plan.components[0]?.allowedValues, [1, 5]);
-  assert.equal(plan.surfaceContext.redaction.unknownCustomPropertiesExcluded, false);
 });
 
 test('adapters do not authorize suggestions without an explicit host policy', () => {
@@ -867,8 +885,6 @@ test('uiStyle is derived from offerType and never invalidates a decision', () =>
   }));
   assert.equal(negative.decision, 'no_intervention');
   assert.equal(negative.uiStyle, 'none');
-  assert.equal(offerStyle('none'), 'none');
-  assert.equal(offerStyle('update_suggestion'), 'inline_card');
 });
 
 test('decision parser accepts safe output and rejects unsafe updates', () => {

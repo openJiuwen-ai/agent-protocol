@@ -50,16 +50,6 @@ export interface ComponentEvent {
   timestamp?: number;
 }
 
-export interface CandidateSignal {
-  signalId: string;
-  componentId: string;
-  componentType: string;
-  componentRole: string;
-  signalType: string;
-  metrics: Record<string, Scalar>;
-  evidence: string[];
-}
-
 export interface ObservedEvent {
   eventId: string;
   sequence: number;

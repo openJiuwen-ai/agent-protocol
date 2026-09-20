@@ -17,7 +17,7 @@ export class ValidatedSuggestionExecutor implements SuggestionExecutor<SafeDataM
       throw new IIAPError('STALE_SURFACE', 'Suggestion targets a stale surface');
     }
     const safe = validateDataModelSuggestion(suggestion, context);
-    if (!safe) throw new IIAPError(context.accepted ? 'UNSAFE_SUGGESTION' : 'UNSAFE_SUGGESTION', 'Suggestion was not explicitly accepted or is outside allowed targets');
+    if (!safe) throw new IIAPError('UNSAFE_SUGGESTION', 'Suggestion was not explicitly accepted or is outside allowed targets');
     await this.applyBatch(safe.updates);
   }
 }

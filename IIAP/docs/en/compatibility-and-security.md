@@ -1,6 +1,6 @@
 # Compatibility and security
 
-Last updated: 2026-09-18
+Last updated: 2026-09-20
 
 ## Supported baseline
 
@@ -12,8 +12,8 @@ Last updated: 2026-09-18
 | Node.js | 20 or newer |
 | React presenter | React `^18.2.0`, optional peer |
 
-A2UI v0.9.1 is not exported or packaged. Implement a tested custom adapter or
-wait for a future conformance-complete release.
+A2UI v0.9.1 has no built-in adapter or source prototype. Implement a tested
+custom adapter or wait for a future conformance-complete release.
 
 ## Security invariants
 

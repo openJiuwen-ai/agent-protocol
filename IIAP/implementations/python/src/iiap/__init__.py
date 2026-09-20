@@ -5,6 +5,7 @@ from .assistance import AssistanceTextViolation, validate_assistance_text
 from .models import AgentRouter, ModelAdapter, ModelRequest
 from .packet import validate_intent_context_packet
 from .privacy import contains_forbidden_key, validate_privacy
+from .prompts import decision_prompt
 from .services import AssistanceService, DecisionService
 from .validation import (
     create_decision_envelope,
@@ -18,7 +19,7 @@ from .validation import (
 __all__ = [
     "AgentRouter", "AssistanceService", "AssistanceTextViolation", "DecisionService", "ModelAdapter",
     "ModelRequest", "contains_forbidden_key", "create_decision_envelope", "default_no_intervention",
-    "describe_decision_parse_status", "describe_decision_rejection", "offer_style",
+    "decision_prompt", "describe_decision_parse_status", "describe_decision_rejection", "offer_style",
     "validate_assistance_text", "validate_decision",
     "validate_intent_context_packet", "validate_privacy", "validate_v08_decision",
 ]

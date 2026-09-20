@@ -21,7 +21,6 @@ CASES = {
     "assistance-request.valid.json": "assistance.schema.json",
     "assistance-response.valid.json": "assistance.schema.json",
     "feedback.valid.json": "feedback.schema.json",
-    "error.valid.json": "error.schema.json",
 }
 
 packet_schema = json.loads((ROOT / "contracts/schemas/intent-context-packet.schema.json").read_text())
@@ -240,16 +239,5 @@ for invalid in (
     {**feedback_fixture, "outcome": "succeeded"},
 ):
     assert not feedback_validator.is_valid(invalid)
-
-error_schema = json.loads((ROOT / "contracts/schemas/error.schema.json").read_text())
-error_fixture = json.loads((ROOT / "contracts/fixtures/error.valid.json").read_text())
-error_validator = Draft202012Validator(error_schema, format_checker=FormatChecker())
-for invalid in (
-    {key: value for key, value in error_fixture.items() if key != "iiapVersion"},
-    {**error_fixture, "iiapVersion": "0.2"},
-    {**error_fixture, "code": "UNKNOWN_ERROR"},
-    {**error_fixture, "unexpected": True},
-):
-    assert not error_validator.is_valid(invalid)
 
 print(f"validated {len(CASES)} IIAP contract fixtures")

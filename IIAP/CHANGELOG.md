@@ -4,8 +4,8 @@
 
 - Extract the IIAP runtime, contracts, services, adapters, transport, presenter,
   and host integration boundary from the embedded JiuwenSwarm implementation.
-- Add the verified A2UI v0.8 migration adapter. Retain a source-only v0.9.1
-  prototype for research; it is not exported or included in the npm package.
+- Add the verified A2UI v0.8 migration adapter. A2UI v0.9.1 remains a wire
+  version for custom adapters; no incomplete default prototype is shipped.
 - Validate every Python `DecisionService` packet against the packaged canonical
   Schema before model invocation and reject malformed input as `INVALID_PACKET`.
 - Add TypeScript and Python conformance suites and standalone package builds.
@@ -30,3 +30,9 @@
 - State the decision `reason`/`message` length limits in both model prompts,
   raise the `reason` hard limit from 512 to 1024 characters for realistic model
   variance, and report over-limit output with the correct fail-closed category.
+- Make Host-managed `onPacket` and SDK-managed `transport` delivery mutually
+  exclusive, and make Runtime the sole owner of feedback-upload policy.
+- Remove unused public parsing helpers and the unimplemented wire error
+  envelope, while retaining stable local SDK error codes.
+- Reduce the public documentation to five maintained entry points and keep
+  Host-specific plaintext assistance prompting outside the SDK.

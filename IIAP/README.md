@@ -11,10 +11,12 @@ Version: `0.1.0-rc.1`
 - TypeScript npm package: `@openjiuwen/iiap`, built from `implementations/typescript/packages/core`
 - TypeScript subpath modules: `/decision`, `/http`, `/a2ui-v08`, `/react`, and `/testing`
 - Python services: `implementations/python`
-- Source modules: the supported A2UI v0.8 adapter and unpublished v0.9.1 experiments in `adapters/`, HTTP transport in `transports/http`, and the optional React presenter in `presenters/react`
+- Source modules: the supported A2UI v0.8 adapter in `adapters/`, HTTP transport in `transports/http`, and the optional React presenter in `presenters/react`
 
 The SDK never submits a form or applies a suggestion without an explicit host
-action. Feedback upload is optional and disabled by default.
+action. Feedback upload is optional and disabled by default. Runtime packet
+delivery is either Host-managed (`onPacket`) or SDK-managed (`transport`);
+configuring both is rejected.
 
 Before distributing local artifacts, run `npm run packages:smoke`. The command
 builds the TypeScript SDK, packs it, installs the tarball in a fresh temporary

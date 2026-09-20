@@ -10,7 +10,6 @@ export interface HTTPTransportOptions {
   fetch?: typeof globalThis.fetch;
   headers?: Record<string, string>;
   timeoutMs?: number;
-  feedbackUpload?: boolean;
 }
 
 export class HTTPDecisionTransport implements DecisionTransport {
@@ -41,7 +40,6 @@ export class HTTPDecisionTransport implements DecisionTransport {
     return value as unknown as AssistanceResponse;
   }
   async sendFeedback(feedback: IIAPFeedback): Promise<void> {
-    if (!this.options.feedbackUpload) return;
     await this.post('/feedback', feedback);
   }
   private async post(path: string, body: unknown): Promise<unknown> {

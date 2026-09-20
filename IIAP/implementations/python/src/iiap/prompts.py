@@ -111,19 +111,3 @@ def assistance_prompt(request: dict[str, Any]) -> str:
         "iiap.assistance.response, iiapVersion=0.1, the same requestId, and a non-empty message.\nINPUT="
         + json.dumps(request, ensure_ascii=False, separators=(",", ":"))
     )
-
-
-def assistance_message_prompt(request: dict[str, Any]) -> str:
-    """Build the Jiuwen Host prompt whose model output is message text, not wire JSON."""
-    topic_instruction = _assistance_topic_instruction(request.get("topic"))
-    return (
-        "This instruction applies only to this IIAP assistance request. IIAP is a plugin capability "
-        "of the current Agent, not its persona or identity. Provide concise optional assistance for "
-        "the requested topic. Do not guess raw values, claim knowledge of intent, perform an action, "
-        "or create A2UI, structured UI, UI components, or UI actions. "
-        + topic_instruction
-        + " Return only the final assistance message. Do not return JSON, a protocol envelope, or a "
-        "code fence. Markdown is supported; when comparing multiple items, use a short heading and "
-        "a readable Markdown list with concise emphasis.\nINPUT="
-        + json.dumps(request, ensure_ascii=False, separators=(",", ":"))
-    )

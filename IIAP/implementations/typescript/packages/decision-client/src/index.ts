@@ -1,7 +1,7 @@
 import type {
   IIAPDecision, IIAPDecisionEnvelope, IntentContextPacket,
 } from '@openjiuwen/iiap';
-import { coerceModelObject, offerStyle, validateDataModelSuggestion } from '@openjiuwen/iiap';
+import { coerceModelObject, validateDataModelSuggestion } from '@openjiuwen/iiap';
 
 const NO_INTERVENTION: IIAPDecision = {
   decision: 'no_intervention', reason: 'invalid_or_insufficient_iiap_decision',
@@ -10,6 +10,9 @@ const NO_INTERVENTION: IIAPDecision = {
 const DECISIONS = new Set(['offer_help', 'no_intervention', 'defer']);
 const OFFERS = new Set(['update_suggestion', 'text_assistance']);
 const TOPICS = new Set(['compare_options', 'explain_rules', 'fix_block', 'save_progress']);
+const offerStyle = (offerType: IIAPDecision['offerType']): IIAPDecision['uiStyle'] => (
+  offerType === 'none' ? 'none' : 'inline_card'
+);
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -65,19 +68,6 @@ export function parseDecision(value: string | unknown, packet?: IntentContextPac
   }
   result.uiStyle = offerStyle(result.offerType) as IIAPDecision['uiStyle'];
   return result;
-}
-
-export function createDecisionEnvelope(
-  value: string | unknown,
-  packet: IntentContextPacket,
-  decisionId: string,
-): IIAPDecisionEnvelope {
-  if (!decisionId) throw new Error('decisionId is required');
-  return {
-    type: 'iiap.decision', iiapVersion: '0.1', decisionId,
-    packetId: packet.packetId, surfaceInstanceId: packet.surfaceInstanceId,
-    payload: parseDecision(value, packet),
-  };
 }
 
 export function parseDecisionEnvelope(

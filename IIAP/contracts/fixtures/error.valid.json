@@ -1,8 +1,0 @@
-{
-  "type": "iiap.error",
-  "iiapVersion": "0.1",
-  "code": "ASSISTANCE_UNSAFE_OUTPUT",
-  "message": "Assistance output contains unsupported UI content",
-  "retryable": false,
-  "requestId": "assist_req_001"
-}

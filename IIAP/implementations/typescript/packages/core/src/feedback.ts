@@ -17,5 +17,4 @@ export class FeedbackController {
       : interaction;
     this.blockedUntil = Math.max(this.blockedUntil, this.clock.now() + this.policy.feedbackBackoffMs[category]);
   }
-  reset(): void { this.blockedUntil = 0; }
 }

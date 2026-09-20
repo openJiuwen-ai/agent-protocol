@@ -1,6 +1,6 @@
 # Testing and release
 
-Last updated: 2026-09-18
+Last updated: 2026-09-20
 
 Run from `IIAP/`:
 
@@ -21,7 +21,7 @@ Schema resources, metadata, and installed imports.
 
 Contract fixtures prove wire compatibility. Unit and integration tests prove
 runtime and service behavior. They do not prove remote-model content quality,
-screen-reader behavior, unsupported A2UI v0.9.1 conformance, or every custom UI
+screen-reader behavior, A2UI v0.9.1 conformance, or every custom UI
 catalog.
 
 Release artifacts must be built from a fixed `agent-protocol` commit. The

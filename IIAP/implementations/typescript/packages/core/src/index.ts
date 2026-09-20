@@ -4,7 +4,7 @@ export { ValidatedSuggestionExecutor } from './executor.js';
 export { createIIAPRuntime } from './runtime.js';
 export { packetByteSize, validatePrivacy } from './privacy.js';
 export { validateDataModelSuggestion } from './suggestion.js';
-export { coerceModelObject, describeModelOutput, extractJsonObject, offerStyle } from './model-output.js';
+export { coerceModelObject } from './model-output.js';
 export { IIAP_VERSION } from './types.js';
 
 export type { IIAPErrorCode } from './errors.js';

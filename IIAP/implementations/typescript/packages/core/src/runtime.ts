@@ -1,7 +1,7 @@
-import { buildBehaviorPatterns, buildComponentSignal, type ComponentState } from './aggregation.js';
+import { buildBehaviorPatterns, type ComponentState } from './aggregation.js';
 import { systemClock, type Clock } from './clock.js';
 import { FeedbackController } from './feedback.js';
-import { packetByteSize, validatePrivacy } from './privacy.js';
+import { privacyStatus, validatePrivacy } from './privacy.js';
 import { resolvePolicy, type PolicyOverrides, type RuntimePolicy } from './policy.js';
 import {
   IIAP_VERSION, type ComponentEvent, type DecisionTransport, type DeactivationReason,
@@ -10,21 +10,25 @@ import {
   type ObservationPlan, type ObservedEvent, type SessionContext,
 } from './types.js';
 
-export interface RuntimeOptions {
+interface RuntimeCommonOptions {
   clock?: Clock;
   policy?: PolicyOverrides;
-  transport?: DecisionTransport;
   presenter?: HelpPresenter;
   feedbackUpload?: boolean;
   idFactory?: () => string;
   onError?: (error: Error) => void;
-  onPacket?: (packet: IntentContextPacket) => Promise<void> | void;
   onAccept?: (decision: IIAPDecisionEnvelope['payload'], context: { packet: IntentContextPacket; decisionId: string }) => Promise<void> | void;
   onEventRejected?: (reason: 'missing_owner' | 'owner_mismatch' | 'unknown_component') => void;
   onDecisionRejected?: (reason: 'invalid_envelope' | 'unknown_packet' | 'owner_mismatch' | 'stale' | 'duplicate_decision') => void;
   onFeedbackRejected?: (reason: 'invalid_feedback' | 'unknown_decision' | 'owner_mismatch' | 'offer_mismatch' | 'duplicate_feedback') => void;
   onFlushSkipped?: (reason: FlushSkipReason, context: FlushSkipContext) => void;
 }
+
+export type RuntimeOptions = RuntimeCommonOptions & (
+  | { transport: DecisionTransport; onPacket?: never }
+  | { onPacket: (packet: IntentContextPacket) => Promise<void> | void; transport?: never }
+  | { transport?: undefined; onPacket?: undefined }
+);
 
 export type FlushSkipReason =
   | 'not_focused'
@@ -45,7 +49,6 @@ export interface FlushSkipContext {
 interface ObservationState {
   plan: ObservationPlan;
   windowStart: number;
-  lastEventAt: number;
   lastReportAt: number;
   reportCount: number;
   history: IntentContextPacket['reportHistory'];
@@ -133,7 +136,7 @@ class Session implements IIAPSession {
     }
     const now = this.clock.now();
     const state: ObservationState = {
-      plan, windowStart: now, lastEventAt: now,
+      plan, windowStart: now,
       lastReportAt: previous?.lastReportAt ?? Number.NEGATIVE_INFINITY,
       reportCount: previous?.reportCount ?? 0,
       history: previous?.history.slice(-this.policy.reportHistoryLimit) ?? [],
@@ -291,7 +294,6 @@ class Session implements IIAPSession {
     if (component.reportCount >= this.policy.maxReportsPerComponent) return;
     this.focusState(state);
     component.events.push(normalizedEvent(event, this.clock.now()));
-    state.lastEventAt = this.clock.now();
     if (state.quietTimer) this.clock.clearTimeout(state.quietTimer);
     state.quietTimer = this.clock.setTimeout(() => void this.flush(state, true), this.policy.componentQuietMs);
     this.scheduleIdle(state);
@@ -316,17 +318,15 @@ class Session implements IIAPSession {
     if (now - state.lastReportAt < this.policy.minReportIntervalMs) {
       return this.skipFlush(state, automatic, 'report_interval');
     }
-    const signals = [...state.components.values()]
-      .filter((component) => component.reportCount < this.policy.maxReportsPerComponent)
-      .map((component) => buildComponentSignal(component, this.policy.thresholds))
-      .filter((item): item is NonNullable<typeof item> => item !== null);
+    const reportableComponents = [...state.components.values()]
+      .filter((component) => component.reportCount < this.policy.maxReportsPerComponent);
     // 事件数组必须与 packet schema 的 maxItems 对齐；超出时保留最近事实并如实上报丢弃数量。
     // 先裁剪再构建 pattern，保证 basedOnEvents 不会引用已被丢弃的 eventId。
     const allEvents = observedEvents(state);
     const droppedEventCount = Math.max(0, allEvents.length - this.policy.maxEventsPerPacket);
     const events = droppedEventCount > 0 ? allEvents.slice(droppedEventCount) : allEvents;
     const retainedEventIds = new Set(events.map((event) => event.eventId));
-    const patterns = buildBehaviorPatterns(signals, events)
+    const patterns = buildBehaviorPatterns(reportableComponents, events, this.policy.thresholds)
       .filter((item) => item.basedOnEvents.every((eventId) => retainedEventIds.has(eventId)));
     const surface = state.plan.surface;
     if (patterns.length === 0) return this.skipFlush(state, automatic, 'no_pattern');
@@ -362,15 +362,13 @@ class Session implements IIAPSession {
           })).slice(0, 8),
       },
     };
-    if (!validatePrivacy(packet)) return this.skipFlush(state, automatic, 'privacy_rejected');
-    if (packetByteSize(packet) > this.policy.packetMaxBytes) {
-      return this.skipFlush(state, automatic, 'packet_too_large');
-    }
+    const packetPrivacy = privacyStatus(packet, this.policy.packetMaxBytes);
+    if (packetPrivacy !== 'valid') return this.skipFlush(state, automatic, packetPrivacy);
     state.inFlight = true;
     state.lastReportAt = now;
     state.reportCount += 1;
     for (const component of state.components.values()) {
-      if (signals.some((item) => item.componentId === component.observation.componentId)) component.reportCount += 1;
+      if (patterns.some((item) => item.componentId === component.observation.componentId)) component.reportCount += 1;
       component.events = [];
     }
     state.history = [...state.history, {
@@ -436,7 +434,6 @@ class Session implements IIAPSession {
     this.focusedSurfaceInstanceId = surfaceInstanceId;
     const now = this.clock.now();
     state.windowStart = now;
-    state.lastEventAt = now;
     this.scheduleIdle(state);
   }
 
@@ -560,6 +557,9 @@ class Session implements IIAPSession {
 }
 
 export function createIIAPRuntime(options: RuntimeOptions = {}): IIAPRuntime {
+  if (options.transport && options.onPacket) {
+    throw new TypeError('RuntimeOptions transport and onPacket are mutually exclusive');
+  }
   const clock = options.clock ?? systemClock;
   const policy = resolvePolicy(options.policy);
   const sessions = new Map<string, Session>();

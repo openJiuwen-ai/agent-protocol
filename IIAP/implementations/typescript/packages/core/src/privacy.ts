@@ -38,12 +38,21 @@ function containsNonFiniteNumber(value: unknown, ancestors = new Set<object>()):
   }
 }
 
-export function validatePrivacy(value: unknown, maxBytes = Number.POSITIVE_INFINITY): boolean {
+export function privacyStatus(
+  value: unknown,
+  maxBytes = Number.POSITIVE_INFINITY,
+): 'valid' | 'privacy_rejected' | 'packet_too_large' {
   try {
     const byteSize = packetByteSize(value);
-    return !containsForbiddenKey(value) && !containsNonFiniteNumber(value)
-      && Number.isFinite(byteSize) && byteSize <= maxBytes;
+    if (containsForbiddenKey(value) || containsNonFiniteNumber(value) || !Number.isFinite(byteSize)) {
+      return 'privacy_rejected';
+    }
+    return byteSize <= maxBytes ? 'valid' : 'packet_too_large';
   } catch {
-    return false;
+    return 'privacy_rejected';
   }
+}
+
+export function validatePrivacy(value: unknown, maxBytes = Number.POSITIVE_INFINITY): boolean {
+  return privacyStatus(value, maxBytes) === 'valid';
 }

@@ -20,5 +20,5 @@ and safe-suggestion corpora. A captured packet may be either the packet object
 itself or an `iiap.intent_context_packet` envelope.
 
 Passing these commands proves schema and cross-language behavior only. It does
-not prove A2UI v0.9.1 official conformance, custom catalog privacy coverage, or
-browser rendering behavior; see `docs/zh/sdk-integration/05-demos-testing-and-troubleshooting.md`.
+not prove A2UI v0.9.1 conformance, custom catalog privacy coverage, or browser
+rendering behavior; see `docs/zh/testing-and-compatibility.md`.
