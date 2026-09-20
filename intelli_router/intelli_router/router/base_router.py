@@ -50,6 +50,9 @@ class BaseRouter:
         self.num_retries = num_retries
         self.timeout = timeout
         self.cache = cache or LocalCache()
+        # 按 verify_ssl 分组缓存的 httpx 客户端：{verify: AsyncClient}。
+        # _client 单属性仅作兼容视图指向最后创建/使用的 client。
+        self._clients: Dict[bool, httpx.AsyncClient] = {}
         self._client: Optional[httpx.AsyncClient] = None
         self._adapter_cache: Dict[str, BaseProviderAdapter] = {}
         # 保护 deployments/model_indices 的热替换（读多写少）
@@ -133,10 +136,17 @@ class BaseRouter:
             self._adapter_cache[provider] = get_provider_adapter(provider)
         return self._adapter_cache[provider]
 
-    def _ensure_client(self) -> httpx.AsyncClient:
-        """获取或创建可复用的httpx客户端"""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
+    def _ensure_client(self, verify: bool = True) -> httpx.AsyncClient:
+        """获取或创建可复用的httpx客户端（按 verify_ssl 分组缓存）
+
+        同一 verify 配置的部署共享一个 client；不同 verify 配置
+        （如 verify_ssl=False 的自签/内网部署）各持有独立 client，
+        避免共享 client 吞掉 verify_ssl 差异。
+        """
+        client = self._clients.get(verify)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(
+                verify=verify,
                 timeout=httpx.Timeout(
                     connect=self.timeout,
                     read=self.timeout,
@@ -144,7 +154,16 @@ class BaseRouter:
                     pool=self.timeout,
                 )
             )
-        return self._client
+            self._clients[verify] = client
+        # 兼容视图：供测试/外部注入直接读 _client（如注入 MockTransport client）
+        self._client = client
+        return client
+
+    def _request_timeout(self, deployment: Deployment) -> float:
+        """计算请求实际生效的超时：deployment 显式设置优先，否则回退 router 默认。"""
+        if deployment.timeout is not None:
+            return deployment.timeout
+        return self.timeout
 
     async def _make_request(
         self,
@@ -169,22 +188,26 @@ class BaseRouter:
             DeploymentNetworkError: 网络连接错误
             DeploymentError: 其他部署错误
         """
-        client = self._ensure_client()
+        client = self._ensure_client(deployment.verify_ssl)
         adapter = self._get_adapter(deployment)
         url = adapter.get_api_url(deployment, stream=False)
         headers = adapter.get_headers(deployment)
         body_bytes = json.dumps(request_body).encode("utf-8")
         headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
+        # per-request 超时覆盖 client 默认值（deployment 显式设置优先）
+        request_timeout = self._request_timeout(deployment)
 
         try:
-            response = await client.post(url, headers=headers, content=body_bytes)
+            response = await client.post(
+                url, headers=headers, content=body_bytes, timeout=request_timeout
+            )
             response.raise_for_status()
             raw = response.json()
             return adapter.transform_response(raw, deployment.model_name, deployment)
         except httpx.TimeoutException as e:
             raise DeploymentTimeoutError(
                 deployment_id=deployment.id,
-                timeout=self.timeout,
+                timeout=request_timeout,
             ) from e
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -233,10 +256,12 @@ class BaseRouter:
             ) from e
 
     async def close(self) -> None:
-        """关闭底层httpx客户端，释放连接池"""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """关闭底层httpx客户端，释放连接池（关闭所有 verify 分组的缓存 client）"""
+        for client in self._clients.values():
+            if client is not None and not client.is_closed:
+                await client.aclose()
+        self._clients.clear()
+        self._client = None
 
     async def __aenter__(self):
         return self
@@ -306,15 +331,18 @@ class BaseRouter:
         request_body = adapter.transform_request(
             model=model, messages=messages, deployment=deployment, **stream_kwargs
         )
-        client = self._ensure_client()
+        client = self._ensure_client(deployment.verify_ssl)
         url = adapter.get_api_url(deployment, stream=True)
         headers = adapter.get_headers(deployment)
         body_bytes = json.dumps(request_body).encode("utf-8")
         headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
+        # per-request 超时覆盖 client 默认值（deployment 显式设置优先）
+        request_timeout = self._request_timeout(deployment)
 
         try:
             async with client.stream(
-                "POST", url, headers=headers, content=body_bytes
+                "POST", url, headers=headers, content=body_bytes,
+                timeout=request_timeout,
             ) as response:
                 response.raise_for_status()
                 async for chunk in adapter.iter_stream_events(response):
@@ -326,7 +354,7 @@ class BaseRouter:
         except httpx.TimeoutException as e:
             raise DeploymentTimeoutError(
                 deployment_id=deployment.id,
-                timeout=self.timeout,
+                timeout=request_timeout,
             ) from e
         except httpx.HTTPStatusError as e:
             status = e.response.status_code

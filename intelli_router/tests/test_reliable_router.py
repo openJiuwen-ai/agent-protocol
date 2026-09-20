@@ -62,11 +62,13 @@ class EventCapture:
 
 
 def attach_mock_transport(router: ReliableRouter, capture: RequestCapture) -> None:
-    """Replace router's httpx client with mock transport."""
-    router._client = AsyncClient(
+    """Replace router's httpx client with mock transport (all verify groups)."""
+    client = AsyncClient(
         transport=MockTransport(capture.handler),
         timeout=5.0,
     )
+    router._clients = {True: client, False: client}
+    router._client = client
 
 
 # ---------------------------------------------------------------------------

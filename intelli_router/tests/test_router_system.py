@@ -68,11 +68,13 @@ def make_streaming_handler(stream_lines: List[str]) -> RequestCapture:
 
 
 def attach_mock_transport(router, capture: RequestCapture):
-    """Replace the router's httpx client with one using MockTransport."""
-    router._client = httpx.AsyncClient(
+    """Replace the router's httpx client with one using MockTransport (all verify groups)."""
+    client = httpx.AsyncClient(
         transport=MockTransport(capture.handler),
         timeout=httpx.Timeout(5.0),
     )
+    router._clients = {True: client, False: client}
+    router._client = client
 
 
 def openai_response(content: str = "hello") -> Response:

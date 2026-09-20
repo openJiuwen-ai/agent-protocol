@@ -372,3 +372,222 @@ async def test_async_context_manager(base_router):
     async with base_router as r:
         assert r is base_router
     assert base_router._client is None
+
+
+# -------- verify_ssl client grouping (review 6) --------
+
+@pytest.mark.asyncio
+async def test_ensure_client_verify_false_passed_to_client(sample_deployments):
+    """A verify_ssl=False deployment must get a client created with verify=False."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    dep = Deployment(
+        id="dep_nossl",
+        model_name="gpt-4",
+        api_key="sk-test",
+        api_base="https://self-signed.example.com",
+        verify_ssl=False,
+    )
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"choices": [{"text": "hi"}]}
+        mock_client.post.return_value = mock_response
+
+        await router._make_request(dep, {"model": "gpt-4"})
+        # constructor was called with verify=False for the deployment's group
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs.get("verify") is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_client_verify_true_default(sample_deployments, deployment_gpt4_1):
+    """A default (verify_ssl=True) deployment gets a client created with verify=True."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"choices": [{"text": "hi"}]}
+        mock_client.post.return_value = mock_response
+
+        await router._make_request(deployment_gpt4_1, {"model": "gpt-4"})
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs.get("verify") is True
+
+
+def test_ensure_client_grouped_by_verify(sample_deployments):
+    """verify_ssl=True and False deployments share one client per group,
+    but the two groups hold distinct client instances."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    client_true = router._ensure_client(True)
+    client_true_again = router._ensure_client(True)
+    client_false = router._ensure_client(False)
+    client_false_again = router._ensure_client(False)
+
+    assert client_true is client_true_again
+    assert client_false is client_false_again
+    assert client_true is not client_false
+    assert set(router._clients.keys()) == {True, False}
+
+
+def test_ensure_client_default_arg_is_verify_true(sample_deployments):
+    """_ensure_client() with no argument keeps the historical verify=True behavior."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    assert router._ensure_client() is router._clients[True]
+
+
+@pytest.mark.asyncio
+async def test_close_closes_all_verify_groups(sample_deployments):
+    """close() must close every cached client, not just the last used one."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        clients = []
+        for _verify in (True, False):
+            mock_client = AsyncMock()
+            mock_client.is_closed = False
+            clients.append(mock_client)
+        mock_cls.side_effect = clients
+        router._ensure_client(True)
+        router._ensure_client(False)
+
+        await router.close()
+        for c in clients:
+            c.aclose.assert_awaited_once()
+        assert router._clients == {}
+        assert router._client is None
+
+
+# -------- per-deployment timeout (review 8) --------
+
+@pytest.mark.asyncio
+async def test_make_request_deployment_timeout_overrides_router_timeout(
+    sample_deployments,
+):
+    """deployment.timeout=5 wins over router timeout=30 and is passed to client.post."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    dep = Deployment(
+        id="dep_fast",
+        model_name="gpt-4",
+        api_key="sk-test",
+        api_base="https://api.example.com",
+        timeout=5,
+    )
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"choices": [{"text": "hi"}]}
+        mock_client.post.return_value = mock_response
+
+        await router._make_request(dep, {"model": "gpt-4"})
+        kwargs = mock_client.post.call_args.kwargs
+        assert kwargs.get("timeout") == 5
+
+
+@pytest.mark.asyncio
+async def test_make_request_timeout_falls_back_to_router_timeout(
+    sample_deployments, deployment_gpt4_1,
+):
+    """Without deployment.timeout, the router-level timeout applies per request."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"choices": [{"text": "hi"}]}
+        mock_client.post.return_value = mock_response
+
+        await router._make_request(deployment_gpt4_1, {"model": "gpt-4"})
+        kwargs = mock_client.post.call_args.kwargs
+        assert kwargs.get("timeout") == 30.0
+
+
+@pytest.mark.asyncio
+async def test_make_request_timeout_error_reports_effective_timeout(
+    sample_deployments,
+):
+    """DeploymentTimeoutError message/details carry the timeout actually in effect."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    dep = Deployment(
+        id="dep_fast",
+        model_name="gpt-4",
+        api_key="sk-test",
+        api_base="https://api.example.com",
+        timeout=5,
+    )
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.post.side_effect = httpx.TimeoutException(
+            "timeout", request=MagicMock()
+        )
+
+        with pytest.raises(DeploymentTimeoutError) as exc:
+            await router._make_request(dep, {})
+        assert "5s" in str(exc.value)
+        assert exc.value.details.get("timeout") == 5
+
+
+@pytest.mark.asyncio
+async def test_stream_request_deployment_timeout_overrides_router_timeout(
+    sample_deployments,
+):
+    """Stream path also applies per-deployment timeout and verify_ssl grouping."""
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    dep = Deployment(
+        id="dep_fast",
+        model_name="gpt-4",
+        api_key="sk-test",
+        api_base="https://api.example.com",
+        timeout=5,
+    )
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+
+        class _StreamCtx:
+            async def __aenter__(self):
+                response = MagicMock()
+                response.raise_for_status = MagicMock()
+                return response
+
+            async def __aexit__(self, *args):
+                return False
+
+        # plain MagicMock: calling .stream(...) must synchronously return the ctx
+        mock_client.stream = MagicMock(return_value=_StreamCtx())
+
+        # empty async iterator: adapter.iter_stream_events yields nothing
+        class _EmptyAsyncIter:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        with patch.object(
+            router, "_get_adapter", return_value=MagicMock(
+                get_api_url=MagicMock(return_value="https://api.example.com/v1"),
+                get_headers=MagicMock(return_value={}),
+                sign_request=MagicMock(side_effect=lambda m, u, h, b, d: h),
+                transform_request=MagicMock(return_value={}),
+                validate_request_config=MagicMock(return_value=None),
+                iter_stream_events=MagicMock(return_value=_EmptyAsyncIter()),
+            )
+        ):
+            chunks = [
+                c async for c in router.acompletion_stream(
+                    "gpt-4", [{"role": "user", "content": "hi"}], deployment=dep
+                )
+            ]
+        assert chunks == []
+        kwargs = mock_client.stream.call_args.kwargs
+        assert kwargs.get("timeout") == 5
+        assert mock_cls.call_args.kwargs.get("verify") is True
