@@ -1,6 +1,6 @@
 # @openjiuwen/iiap
 
-TypeScript SDK for the Intelligent Interaction Assistance Protocol (IIAP).
+TypeScript SDK for the Implicit Intent Aware Protocol (IIAP).
 It turns privacy-safe UI interaction events into intent context packets and
 supports optional, non-blocking assistance.
 

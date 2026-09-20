@@ -12,7 +12,7 @@ This repository currently includes five SDKs:
 - Agent2Agent Protocol (A2A) CPP SDK
 - A2X agent registry
 - A4P (Agentic Authentication, Authorization, and Audit Protocol) Python SDK
-- [IIAP (Intelligent Interaction Assistance Protocol) SDK](./IIAP/README.md)
+- [IIAP (Implicit Intent Aware Protocol) SDK](./IIAP/README.md)
 
 ## Contributing
 

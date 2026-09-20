@@ -12,7 +12,7 @@
 - Agent2Agent Protocol (A2A) CPP SDK
 - A2X agent registry
 - A4P (Agentic Authentication, Authorization, and Audit Protocol) Python SDK
-- [IIAP（智能交互辅助协议）SDK](./IIAP/README_zh.md)
+- [IIAP（Implicit Intent Aware Protocol，隐式意图感知协议）SDK](./IIAP/README_zh.md)
 
 ## 参与贡献
 

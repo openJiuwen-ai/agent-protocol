@@ -23,6 +23,6 @@
     "vite": "^8.2.0",
     "typescript": "^5.3.0"
   },
-  "description": "IIAP (Intelligent Interaction Assistance Protocol) detects privacy-safe UI interaction patterns and offers optional, non-blocking assistance. This source tree is self-contained and is designed to be moved to `agent-protocol/IIAP`.",
+  "description": "IIAP (Implicit Intent Aware Protocol) detects privacy-safe UI interaction patterns and offers optional, non-blocking assistance.",
   "license": "Apache-2.0"
 }

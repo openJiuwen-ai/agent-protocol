@@ -2,7 +2,7 @@
 
 最后更新：2026-09-20
 
-IIAP（智能交互辅助协议）观察 A2UI 的隐私安全语义事件，在端侧形成中性行为模式，
+IIAP（Implicit Intent Aware Protocol，隐式意图感知协议）观察 A2UI 的隐私安全语义事件，在端侧形成中性行为模式，
 将 IntentContextPacket 交给后端判断是否提供可选、非阻塞帮助，并把用户对建议的反馈
 关联回同一 packet 和 decision。
 

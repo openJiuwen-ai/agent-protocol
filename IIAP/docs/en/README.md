@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-20
 
-IIAP observes privacy-safe UI interaction metadata and offers optional,
+IIAP (Implicit Intent Aware Protocol) observes privacy-safe UI interaction metadata and offers optional,
 non-blocking assistance. Version `0.1.0-rc.1` formally supports A2UI v0.8.
 
 - [Quickstart](quickstart.md)
