@@ -329,6 +329,32 @@ def test_get_rpm_remaining_no_tracker(router_state):
     assert remaining == float('inf')
 
 
+def test_remaining_and_latency_return_types_are_float(router_state):
+    """get_token_remaining/get_rpm_remaining/get_average_latency 的返回注解为 float：
+
+    有记录时返回数值，无记录时返回 float('inf')（"未配置即不设限"）。
+    标注 int 与 inf 返回值矛盾（review 19）。
+    """
+    import inspect
+    from intelli_router.core.state import LocalRouterState as _State
+
+    hints = {
+        name: inspect.signature(getattr(_State, name)).return_annotation
+        for name in ("get_token_remaining", "get_rpm_remaining", "get_average_latency")
+    }
+    assert hints["get_token_remaining"] is float
+    assert hints["get_rpm_remaining"] is float
+    assert hints["get_average_latency"] is float
+
+    # 无记录 → inf（不设限语义）
+    assert router_state.get_token_remaining("nonexistent") == float('inf')
+    assert router_state.get_rpm_remaining("nonexistent") == float('inf')
+    assert router_state.get_average_latency("nonexistent") == float('inf')
+    # 有记录 → 有限数值
+    router_state.token_usage["d"] = TokenUsage(limit=100, used=30)
+    assert router_state.get_token_remaining("d") == 70
+
+
 def test_get_token_utilization_with_usage(router_state):
     dep_id = "dep1"
     router_state.on_success(dep_id, latency=0.1, tokens=50)

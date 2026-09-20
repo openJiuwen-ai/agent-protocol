@@ -220,7 +220,11 @@ class LocalRouterState:
             self.health_state[deployment_id] = False
 
     def get_average_latency(self, deployment_id: str) -> float:
-        """获取平均归一化延迟（latency/tokens，供策略打分使用）"""
+        """获取平均归一化延迟（latency/tokens，供策略打分使用）。
+
+        无延迟记录时返回 float('inf')（未预热部署），策略据此
+        将其延迟得分记为最低优先级，而非报错。
+        """
         records = self.latencies.get(deployment_id, [])
         if not records:
             return float('inf')
@@ -250,8 +254,11 @@ class LocalRouterState:
                         available.append(dep_id)
             return available
 
-    def get_token_remaining(self, deployment_id: str) -> int:
-        """获取剩余Token配额"""
+    def get_token_remaining(self, deployment_id: str) -> float:
+        """获取剩余Token配额。
+
+        无使用记录（未配置配额）时返回 float('inf')，表示不设限。
+        """
         usage = self.token_usage.get(deployment_id)
         if usage:
             return usage.remaining
@@ -326,8 +333,11 @@ class LocalRouterState:
         # 去重保序
         return list(dict.fromkeys(removed))
 
-    def get_rpm_remaining(self, deployment_id: str) -> int:
-        """获取剩余RPM配额"""
+    def get_rpm_remaining(self, deployment_id: str) -> float:
+        """获取剩余RPM配额。
+
+        无追踪记录（未配置配额）时返回 float('inf')，表示不设限。
+        """
         tracker = self.rpm_tracker.get(deployment_id)
         if tracker:
             return tracker.remaining
