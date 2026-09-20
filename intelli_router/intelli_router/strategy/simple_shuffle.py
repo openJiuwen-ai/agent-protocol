@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 class SimpleShuffleStrategy(RoutingStrategy):
     """
-    焄简随机策略 - 按权重随机选择
+    简单随机策略 - 按权重随机选择
 
     传入的 deployments 已由 router 按可用性过滤（state 唯一事实源）。
 
@@ -49,7 +49,7 @@ class SimpleShuffleStrategy(RoutingStrategy):
         if total == 0:
             return random.choice(deployments)
         prob = [w / total for w in weights]
-        # 焄机选择
+        # 随机选择
         r = random.random()
         cumsum = 0.0
         for i, p in enumerate(prob):

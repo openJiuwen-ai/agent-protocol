@@ -131,20 +131,39 @@ class ReliableRouter(BaseRouter):
         return False
 
     def _sync_quota_state(self, deployments: List[Deployment]) -> None:
-        """把部署声明的 tpm/rpm 配额接入 state（review 4，P0）。
+        """把部署声明的 tpm/rpm 配额接入/同步到 state（review 4，P0）。
 
-        - tpm/rpm 已配置：初始化对应 TokenUsage/RPMTracker（保留已有条目的
-          累计 used/requests，仅当部署未注册时创建，避免热替换重置计数）。
-        - tpm/rpm 为 None：不创建条目，get_token_remaining/get_rpm_remaining
-          对该部署返回 inf（"未配置即不设限"语义）。
+        - tpm/rpm 已配置且无条目：创建（首次注册）。
+        - tpm/rpm 已配置且已有条目：热替换变更配额值时更新 limit
+          （保留累计 used/requests，不重置计数）。
+        - tpm/rpm 变为 None：移除既有条目，remaining 回到 inf
+          （"未配置即不设限"）。
         - 已从列表移除的部署：条目由调用方（update_deployments）负责清理。
         """
         with self.state.lock:
             for dep in deployments:
-                if dep.tpm is not None and dep.id not in self.state.token_usage:
-                    self.state.token_usage[dep.id] = TokenUsage(limit=dep.tpm)
-                if dep.rpm is not None and dep.id not in self.state.rpm_tracker:
-                    self.state.rpm_tracker[dep.id] = RPMTracker(rpm_limit=dep.rpm)
+                # Token (tpm)
+                if dep.tpm is not None:
+                    usage = self.state.token_usage.get(dep.id)
+                    if usage is None:
+                        self.state.token_usage[dep.id] = TokenUsage(limit=dep.tpm)
+                    elif usage.limit != dep.tpm:
+                        # 热更新配额值：只改 limit，保留累计 used
+                        usage.limit = dep.tpm
+                elif dep.id in self.state.token_usage:
+                    # 配额被移除（变 None）：回到 inf 语义
+                    del self.state.token_usage[dep.id]
+
+                # RPM (rpm)
+                if dep.rpm is not None:
+                    tracker = self.state.rpm_tracker.get(dep.id)
+                    if tracker is None:
+                        self.state.rpm_tracker[dep.id] = RPMTracker(rpm_limit=dep.rpm)
+                    elif tracker.rpm_limit != dep.rpm:
+                        # 热更新配额值：只改 limit，保留请求记录
+                        tracker.rpm_limit = dep.rpm
+                elif dep.id in self.state.rpm_tracker:
+                    del self.state.rpm_tracker[dep.id]
 
     def _get_available_deployments(self, model: str) -> List[Deployment]:
         """获取可用部署

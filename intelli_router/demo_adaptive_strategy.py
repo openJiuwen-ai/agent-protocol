@@ -203,11 +203,14 @@ async def demo_adaptive():
     print(f"\n选择的部署: {selected.id}")
 
     # 模拟请求成功
-    strategy.on_success(selected, latency=0.4, tokens=80)
+    # 说明：策略的 on_success 是 no-op（router 才是 state 的唯一写入方），
+    # 演示直接调用策略不经 router，因此这里手动更新 state 以展示请求后的变化；
+    # 读取处用 .get() 容错（total_requests 等统计仅 state.on_success 才写）。
+    state.on_success(selected.id, latency=0.4, tokens=80)
     print(f"\n请求成功后:")
     print(f"  - Token已使用: {state.token_usage[selected.id].used}")
     print(f"  - 当前RPM: {state.rpm_tracker[selected.id].current_rpm}")
-    print(f"  - 总请求数: {state.total_requests[selected.id]}")
+    print(f"  - 总请求数: {state.total_requests.get(selected.id, 0)}")
 
 
 async def demo_token_exhaustion():
@@ -235,9 +238,10 @@ async def demo_token_exhaustion():
     print(f"Token快耗尽时选择的部署: {selected.id}")
     print(f"  - Token剩余: {state.token_usage[selected.id].remaining}")
 
-    # 模拟多次请求直到耗尽
+    # 模拟多次请求直到耗尽（策略 on_success 是 no-op——router 才是
+    # state 的唯一写入方——因此这里手动累计 token 使用量）
     for i in range(3):
-        strategy.on_success(selected, latency=0.5, tokens=50)
+        state.token_usage[selected.id].used += 50
         print(f"\n第{i+1}次请求后:")
         print(f"  - Token剩余: {state.token_usage[selected.id].remaining}")
 

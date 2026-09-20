@@ -37,7 +37,7 @@ class LowestLatencyStrategy(RoutingStrategy):
         """选择延迟最低的部署"""
         if not deployments:
             return None
-        # 探索: 焄机选择一个
+        # 探索: 随机选择一个
         import random
         if random.random() < self.exploration_ratio:
             return random.choice(deployments)

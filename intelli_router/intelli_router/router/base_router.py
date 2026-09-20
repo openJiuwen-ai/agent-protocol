@@ -275,12 +275,17 @@ class BaseRouter:
         await self.close()
 
     def _state_available_deployments(self, deployments: List[Deployment]) -> List[Deployment]:
-        """按 state（唯一事实源）过滤可用部署。
+        """按 state 过滤可用部署（BaseRouter 层的简化判断）。
 
-        state 中标记为 COOLDOWN 且仍在冷却期内的部署被跳过；
-        冷却已过期的部署软恢复后视为可用；未登记的部署默认 HEALTHY。
-        供 BaseRouter.completion 在未显式指定 deployment 时复用
-        ReliableRouter 同款的可用性判断。
+        state 中标记为 COOLDOWN 且冷却截止时间未过的部署被跳过；
+        冷却已过期的部署直接视为可用（不写回 state）；未登记的部署
+        默认 HEALTHY。
+
+        与 ReliableRouter._get_available_deployments 的差异：本方法
+        不加 state 锁（BaseRouter 读多写少的轻量路径），也不做冷却
+        到期的软恢复（reset_deployment，恢复 health_state 等）——那
+        些写操作属于 ReliableRouter 的职责。锁与软恢复的统一不在
+        本轮范围内。
         """
         now = time.time()
         available = []
