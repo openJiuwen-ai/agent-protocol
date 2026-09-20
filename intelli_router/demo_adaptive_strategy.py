@@ -128,8 +128,9 @@ async def demo_token_aware():
     print(f"  - Token剩余: {state.get_token_remaining(selected.id)}")
     print(f"  - Token使用率: {state.get_token_utilization(selected.id):.2%}")
 
-    # 模拟请求成功
-    strategy.on_success(selected, latency=0.5, tokens=100)
+    # 模拟请求成功（策略的 on_success 是 no-op——router 才是 state 的
+    # 唯一写入方——因此直接更新 state，使展示数值真实递增）
+    state.on_success(selected.id, latency=0.5, tokens=100)
     print(f"\n请求成功后:")
     print(f"  - Token已使用: {state.token_usage[selected.id].used}")
     print(f"  - Token剩余: {state.token_usage[selected.id].remaining}")
@@ -156,8 +157,9 @@ async def demo_rate_limit_aware():
     print(f"  - RPM剩余: {state.get_rpm_remaining(selected.id)}")
     print(f"  - RPM使用率: {state.get_rpm_utilization(selected.id):.2%}")
 
-    # 模拟请求成功
-    strategy.on_success(selected, latency=0.3, tokens=50)
+    # 模拟请求成功（策略的 on_success 是 no-op——router 才是 state 的
+    # 唯一写入方——因此直接更新 state，使展示数值真实递增）
+    state.on_success(selected.id, latency=0.3, tokens=50)
     print(f"\n请求成功后:")
     print(f"  - 当前RPM: {state.rpm_tracker[selected.id].current_rpm}")
     print(f"  - RPM剩余: {state.rpm_tracker[selected.id].remaining}")

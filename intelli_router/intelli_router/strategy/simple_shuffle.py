@@ -59,9 +59,9 @@ class SimpleShuffleStrategy(RoutingStrategy):
         return deployments[-1]
 
     def on_success(self, deployment: "Deployment", latency: float, tokens: int) -> None:
-        """成功回调 - 箄机策略无状态更新"""
+        """成功回调 - 随机策略无状态更新"""
         pass
 
     def on_failure(self, deployment: "Deployment", error: Exception) -> None:
-        """失败回调 - 箄机策略无状态更新"""
+        """失败回调 - 随机策略无状态更新"""
         pass
