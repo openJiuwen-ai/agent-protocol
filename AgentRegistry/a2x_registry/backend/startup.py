@@ -214,7 +214,14 @@ def run_warmup() -> None:
                 # the registry no longer receives node heartbeats or derives
                 # instance status; the gateway polls 元戎 and PATCHes status.
         except Exception as exc:
-            logger.error("  SQL backend init failed: %s", exc, exc_info=True)
+            from a2x_registry.register.etcd_client import EtcdError
+
+            if isinstance(exc, EtcdError):
+                # One-line connection error — no traceback (etcd down /
+                # unreachable is an ops issue, the message says it all).
+                logger.error("  etcd backend init failed: %s", exc)
+            else:
+                logger.error("  SQL backend init failed: %s", exc, exc_info=True)
             raise
 
         # 1. Registry
@@ -437,7 +444,12 @@ def run_warmup() -> None:
         logger.info("Warmup [100%%] complete — total %.1fs", time.time() - t0)
 
     except Exception as e:
-        import traceback
+        from a2x_registry.register.etcd_client import EtcdError
+
         warmup_state["error"] = str(e)
         warmup_state["ready"] = True
-        logger.error("Warmup error: %s\n%s", e, traceback.format_exc())
+        if isinstance(e, EtcdError):
+            logger.error("Warmup error: %s", e)  # one-liner, no traceback
+        else:
+            import traceback
+            logger.error("Warmup error: %s\n%s", e, traceback.format_exc())
