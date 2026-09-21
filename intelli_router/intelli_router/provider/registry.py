@@ -29,8 +29,6 @@ from .bedrock_provider import BedrockProviderAdapter
 from .deepseek_provider import DeepSeekProviderAdapter
 from .siliconflow_provider import SiliconFlowProviderAdapter
 from .inference_affinity_provider import InferenceAffinityProviderAdapter
-from .dashscope_provider import DashScopeProviderAdapter
-from .zhipu_provider import ZhipuProviderAdapter
 
 register_provider("openai", OpenAIProviderAdapter)
 register_provider("anthropic", AnthropicProviderAdapter)
@@ -39,5 +37,5 @@ register_provider("aws-bedrock", BedrockProviderAdapter)
 register_provider("deepseek", DeepSeekProviderAdapter)
 register_provider("siliconflow", SiliconFlowProviderAdapter)
 register_provider("inference-affinity", InferenceAffinityProviderAdapter)
-register_provider("dashscope", DashScopeProviderAdapter)
-register_provider("zhipu", ZhipuProviderAdapter)
+register_provider("dashscope", OpenAIProviderAdapter)
+register_provider("zhipu", OpenAIProviderAdapter)

@@ -1,7 +1,7 @@
 """Anthropic provider adapter — 消息/工具/Streaming 格式转换。"""
 import json
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Mapping
 
 from ..core.deployment import Deployment
 from ..utils.media import is_data_uri, parse_data_uri
@@ -14,10 +14,19 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
 
     ANTHROPIC_VERSION = "2023-06-01"
     DEFAULT_MAX_TOKENS = 4096
+    THINKING_BUDGET_MARGIN = 1024
+
+    @staticmethod
+    def _messages_url(api_base: str) -> str:
+        base = str(api_base or "").strip().rstrip("/")
+        if base.endswith("/v1/messages"):
+            base = base[: -len("/v1/messages")].rstrip("/")
+        elif base.endswith("/v1"):
+            base = base[: -len("/v1")].rstrip("/")
+        return f"{base}/v1/messages"
 
     def get_api_url(self, deployment: Deployment, stream: bool = False) -> str:
-        base = deployment.api_base.rstrip("/")
-        return f"{base}/v1/messages"
+        return self._messages_url(deployment.api_base)
 
     def get_headers(self, deployment: Deployment) -> Dict[str, str]:
         return {
@@ -54,13 +63,49 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
         if tool_choice:
             body["tool_choice"] = self._convert_tool_choice(tool_choice)
 
+        sampling_params: Dict[str, Any] = {}
         for k, v in kwargs.items():
             if k in ("temperature", "top_p", "top_k"):
-                body[k] = v
+                sampling_params[k] = v
             elif k == "stop":
                 body["stop_sequences"] = [v] if isinstance(v, str) else v
             elif k == "metadata":
                 body["metadata"] = v
+            elif k in (
+                "thinking",
+                "output_config",
+                "reasoning_effort",
+                "thinking_budget",
+                "thinking_strategy",
+                "enable_thinking",
+                "service_tier",
+                "chat_template_kwargs",
+            ):
+                body[k] = v
+
+        thinking = body.get("thinking")
+        if isinstance(thinking, dict):
+            budget = thinking.get("budget_tokens")
+            if isinstance(budget, int) and body["max_tokens"] <= budget:
+                body["max_tokens"] = budget + self.THINKING_BUDGET_MARGIN
+        thinking_type = (
+            str(thinking.get("type") or "").strip().lower()
+            if isinstance(thinking, dict)
+            else ""
+        )
+        if thinking_type not in {"enabled", "adaptive"}:
+            if sampling_params.get("temperature") is not None:
+                body["temperature"] = sampling_params["temperature"]
+            elif sampling_params.get("top_p") is not None and sampling_params.get("top_p") != 1.0:
+                body["top_p"] = sampling_params["top_p"]
+            if sampling_params.get("top_k") is not None:
+                body["top_k"] = sampling_params["top_k"]
+
+        extra_body = kwargs.get("extra_body")
+        if isinstance(extra_body, Mapping):
+            body.update(extra_body)
+        elif extra_body is not None:
+            body["extra_body"] = extra_body
 
         if system_blocks:
             body["system"] = system_blocks
@@ -74,10 +119,13 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
         deployment: Deployment,
     ) -> Dict[str, Any]:
         content = []
+        reasoning_content = []
         tool_calls = []
         for block in raw_response.get("content", []):
             if block.get("type") == "text":
                 content.append(block.get("text", ""))
+            elif block.get("type") == "thinking":
+                reasoning_content.append(block.get("thinking", ""))
             elif block.get("type") == "tool_use":
                 tool_calls.append({
                     "id": block["id"],
@@ -92,24 +140,25 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
             "role": "assistant",
             "content": "".join(content) if content else None,
         }
+        if reasoning_content:
+            message["reasoning_content"] = "".join(reasoning_content)
         if tool_calls:
             message["tool_calls"] = tool_calls
 
         stop_reason = raw_response.get("stop_reason")
         finish_reason = self.ANTHROPIC_STOP_REASON_MAP.get(stop_reason, "stop")
 
-        usage = raw_response.get("usage", {})
-        pi = usage.get("input_tokens", 0)
-        co = usage.get("output_tokens", 0)
-
-        return self._build_completion_response(
+        result = self._build_completion_response(
             id=raw_response.get("id", ""),
             model=model,
             message=message,
             finish_reason=finish_reason,
-            prompt_tokens=pi,
-            completion_tokens=co,
+            prompt_tokens=0,
+            completion_tokens=0,
         )
+        result["usage"] = self._usage_to_openai_usage(raw_response.get("usage", {}))
+        result["provider_content"] = raw_response
+        return result
 
     def transform_stream_chunk(
         self,
@@ -121,48 +170,121 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
 
         if event_type == "message_start":
             msg = chunk.get("message", {})
-            return self._build_chunk_response(
-                model=model, delta={"role": "assistant"}, id=msg.get("id", ""),
+            usage = msg.get("usage") if isinstance(msg, dict) else None
+            return self._with_provider_content(
+                self._build_chunk_response(
+                    model=model,
+                    delta={"role": "assistant"},
+                    id=msg.get("id", "") if isinstance(msg, dict) else "",
+                    usage=self._usage_to_openai_usage(usage) if usage else None,
+                ),
+                chunk,
             )
         elif event_type == "content_block_delta":
             block_index = chunk.get("index", 0)
             delta = chunk.get("delta", {})
             if delta.get("type") == "text_delta":
-                return self._build_chunk_response(
-                    model=model, delta={"content": delta.get("text", "")},
+                return self._with_provider_content(
+                    self._build_chunk_response(
+                        model=model, delta={"content": delta.get("text", "")},
+                    ),
+                    chunk,
                 )
+            elif delta.get("type") == "thinking_delta":
+                thinking = delta.get("thinking", "")
+                if not thinking:
+                    return None
+                return self._with_provider_content(
+                    self._build_chunk_response(
+                        model=model,
+                        delta={"reasoning_content": thinking},
+                    ),
+                    chunk,
+                )
+            elif delta.get("type") == "signature_delta":
+                return None
             elif delta.get("type") == "input_json_delta":
-                return self._build_chunk_response(
-                    model=model,
-                    delta={"tool_calls": [{"index": block_index, "function": {"arguments": delta.get("partial_json", "")}}]},
+                return self._with_provider_content(
+                    self._build_chunk_response(
+                        model=model,
+                        delta={"tool_calls": [{"index": block_index, "function": {"arguments": delta.get("partial_json", "")}}]},
+                    ),
+                    chunk,
                 )
         elif event_type == "content_block_start":
             block_index = chunk.get("index", 0)
             block = chunk.get("content_block", {})
             if block.get("type") == "tool_use":
-                return self._build_chunk_response(
-                    model=model,
-                    delta={"tool_calls": [{
-                        "index": block_index, "id": block.get("id", ""),
-                        "type": "function",
-                        "function": {"name": block.get("name", ""), "arguments": ""},
-                    }]},
+                return self._with_provider_content(
+                    self._build_chunk_response(
+                        model=model,
+                        delta={"tool_calls": [{
+                            "index": block_index, "id": block.get("id", ""),
+                            "type": "function",
+                            "function": {"name": block.get("name", ""), "arguments": ""},
+                        }]},
+                    ),
+                    chunk,
                 )
         elif event_type == "message_delta":
             delta = chunk.get("delta", {})
             stop_reason = delta.get("stop_reason")
             usage = chunk.get("usage", {})
-            co = usage.get("output_tokens", 0)
-            return self._build_chunk_response(
-                model=model,
-                delta={},
-                finish_reason=self.ANTHROPIC_STOP_REASON_MAP.get(stop_reason, "stop"),
-                usage={"completion_tokens": co},
+            return self._with_provider_content(
+                self._build_chunk_response(
+                    model=model,
+                    delta={},
+                    finish_reason=self.ANTHROPIC_STOP_REASON_MAP.get(stop_reason, "stop"),
+                    usage=self._usage_to_openai_usage(usage) if usage else None,
+                ),
+                chunk,
             )
         elif event_type == "ping":
             return None
 
         return None
+
+    @staticmethod
+    def _with_provider_content(response: Optional[Dict[str, Any]], raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if response is not None:
+            response["provider_content"] = raw
+        return response
+
+    @staticmethod
+    def _usage_to_openai_usage(usage: Any) -> Dict[str, Any]:
+        if not isinstance(usage, Mapping):
+            usage = {}
+
+        def _int_value(name: str) -> int:
+            value = usage.get(name, 0)
+            if value is None or isinstance(value, bool):
+                return 0
+            try:
+                return max(int(float(value)), 0)
+            except (TypeError, ValueError):
+                return 0
+
+        uncached_input = _int_value("input_tokens")
+        output_tokens = _int_value("output_tokens")
+        cache_read = _int_value("cache_read_input_tokens")
+        cache_write = _int_value("cache_creation_input_tokens")
+        prompt_tokens = uncached_input + cache_read + cache_write
+        cache_miss = uncached_input + cache_write
+        result = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": prompt_tokens + output_tokens,
+            "cache_tokens": cache_read,
+            "cache_read_tokens": cache_read,
+            "cache_miss_tokens": cache_miss,
+            "cache_write_tokens": cache_write,
+            "cache_status": "observed",
+            "cache_source": "provider_usage",
+            "cache_authoritative": True,
+        }
+        if "cache_creation_input_tokens" in usage:
+            result["cache_creation_input_tokens"] = cache_write
+        return result
 
     def _extract_system(
         self, messages: List[Dict[str, Any]]
