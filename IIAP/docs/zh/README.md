@@ -1,6 +1,6 @@
 # IIAP SDK 中文文档
 
-最后更新：2026-09-20
+最后更新：2026-09-21
 
 IIAP（Implicit Intent Aware Protocol，隐式意图感知协议）观察 A2UI 的隐私安全语义事件，在端侧形成中性行为模式，
 将 IntentContextPacket 交给后端判断是否提供可选、非阻塞帮助，并把用户对建议的反馈
@@ -14,6 +14,7 @@ IIAP（Implicit Intent Aware Protocol，隐式意图感知协议）观察 A2UI �
 |---|---|
 | 构建 SDK 并完成首次接入 | [快速开始](quickstart.md) |
 | 查询 TypeScript/Python 稳定接口 | [API 参考](api-reference.md) |
+| 了解目录、模块依赖和逐文件职责 | [SDK 结构与文件职责](sdk-structure-and-file-guide.md) |
 | 理解 wire、隐私和安全更新边界 | [协议与安全](protocol-and-security.md) |
 | 执行测试、查看兼容范围和发布门 | [测试与兼容性](testing-and-compatibility.md) |
 

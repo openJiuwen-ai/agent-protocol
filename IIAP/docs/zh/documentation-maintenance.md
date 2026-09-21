@@ -1,10 +1,10 @@
 # IIAP 文档维护规则
 
-最后更新：2026-09-20
+最后更新：2026-09-21
 
 ## 1. 入口与权威来源
 
-- `IIAP/docs/zh/README.md` 是中文 SDK 文档入口；`IIAP/docs/en/README.md` 是英文入口。公开内容收敛为 README、Quickstart、API、协议与安全、测试与兼容性五个入口。
+- `IIAP/docs/zh/README.md` 是中文 SDK 文档入口；`IIAP/docs/en/README.md` 是英文入口。公开规范仍由 README、Quickstart、API、协议与安全、测试与兼容性五个主入口承担；`sdk-structure-and-file-guide.md` 只作为源码导航附录，不重复定义 API 或协议。
 - 当前源码和通过的测试定义已实现行为；已确认的产品规范定义目标行为。
 - JSON Schema 是跨语言 wire contract 的权威来源，TypeScript/Python 类型和示例必须与其一致。
 - 历史提交、proposal 和 JiuwenSwarm 审计只证明历史能力，不自动成为 SDK 规范。
