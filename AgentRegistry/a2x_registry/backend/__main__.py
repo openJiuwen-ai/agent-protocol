@@ -282,6 +282,13 @@ def _serve(argv) -> None:
             ssl_cert_reqs=ssl.CERT_REQUIRED,
         )
 
+    import signal
+    # SIGTERM (systemctl stop): exit cleanly with code 0 instead of being
+    # killed by the default disposition (exit code 15). Covers the import /
+    # startup window; once the server loop runs, uvicorn's own handler takes
+    # over and also shuts down gracefully.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
     import uvicorn
     _configure_logging(cfg)
     uvicorn.run(

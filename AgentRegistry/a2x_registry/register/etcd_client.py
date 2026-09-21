@@ -124,12 +124,13 @@ class EtcdClient:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise EtcdError(
-                f"etcd HTTP {exc.code} on {path}: "
+                f"etcd request failed (HTTP {exc.code}) on {self.endpoint}{path}: "
                 f"{exc.read().decode('utf-8', errors='replace')}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise EtcdError(
-                f"etcd unreachable on {self.endpoint}{path}: {exc}"
+                f"etcd unreachable on {self.endpoint}{path} "
+                f"(timeout={self.timeout}s): {exc}"
             ) from exc
 
     def _get_kv(self, key: str) -> Optional[dict]:
