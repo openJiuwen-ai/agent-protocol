@@ -213,6 +213,11 @@ function update(data) {
   timelineChart.data.datasets[0].data = recentWithLatency.map(e => e.latency);
   timelineChart.update();
 
+  // 每次刷新前清空 tbody，避免轮询刷新时行无限累积
+  function clearRows(tbody) {
+    while (tbody.rows.length) tbody.deleteRow(-1);
+  }
+
   // 用 DOM API 填充一行（textContent 逐单元格赋值，杜绝 XSS）
   function fillRow(tbody, cells, className) {
     const tr = tbody.insertRow(-1);
@@ -225,6 +230,7 @@ function update(data) {
   }
 
   const dt = document.getElementById('deploy-table');
+  clearRows(dt);
   for (const [dep, stats] of Object.entries(data.by_deployment || {})) {
     const lat = stats.latency && stats.latency.count > 0 ? stats.latency.avg.toFixed(3) + 's' : '-';
     fillRow(dt, [dep, stats.provider || '-', stats.requests, stats.successes, stats.failures, lat, formatTokens(stats.tokens || 0)]);
@@ -235,6 +241,7 @@ function update(data) {
   }
 
   const mt = document.getElementById('model-table');
+  clearRows(mt);
   for (const [model, stats] of Object.entries(data.by_model || {})) {
     const lat = stats.latency && stats.latency.count > 0 ? stats.latency.avg.toFixed(3) + 's' : '-';
     const ttft = stats.ttft && stats.ttft.count > 0 ? stats.ttft.avg.toFixed(3) + 's' : '-';
@@ -246,6 +253,7 @@ function update(data) {
   }
 
   const et = document.getElementById('error-table');
+  clearRows(et);
   for (const [err, count] of Object.entries(data.errors_by_type || {})) {
     fillRow(et, [err, count]);
   }

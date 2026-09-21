@@ -1,6 +1,7 @@
 """Tests for intelli_router.observability.web_dashboard."""
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -288,6 +289,63 @@ class TestMetricsWebServer:
         stats = metrics.get_stats()
         evil = '<img src=x onerror=alert(1)>'
 
+        rendered = self._run_node_harness(node, stats)
+        # 恶意字符串以纯文本出现在渲染产物中（textContent 不解析标记）
+        assert evil in rendered
+        assert "<script>alert(2)</script>" in rendered
+        # 渲染产物中不存在可执行的 onerror 属性语义：
+        # textContent 赋值产物是纯文本节点，这里 dump 出的
+        # 是 textContent 的拼接，不应产生新的可执行节点。
+        # 若用 innerHTML 拼接，evil 会被解析为元素而非文本。
+
+    # -------- refresh clears table rows (review regression) --------
+
+    def test_tables_clear_rows_on_repeated_update(self, metrics):
+        """行为测试：同一数据连续两次 update() 后三张表行数不翻倍。
+        回归保护：XSS 修复曾删除刷新前清空 tbody 的逻辑，导致
+        2 秒轮询下行无限累积。无 node 环境时跳过。"""
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not available for JS behavior test")
+
+        async def emit():
+            bus = EventBus()
+            bus.register(metrics)
+            await bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id="r1", model="gpt-4"))
+            await bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_SUCCEEDED,
+                request_id="r1", model="gpt-4",
+                deployment_id="dep-1", latency=0.2))
+            await bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_RETRIED,
+                request_id="r1", model="gpt-4",
+                error_type="TimeoutError"))
+
+        asyncio.run(emit())
+        stats = metrics.get_stats()
+
+        # 连续两次全量刷新同一份数据，行数不应随刷新次数增长
+        # （每张表恰好 1 行数据：dep-1 / gpt-4 / TimeoutError）
+        rendered = self._run_node_harness(node, stats, updates=2)
+        assert "deploy:1 model:1 error:1" in rendered
+
+    def test_js_clears_tbody_before_fill(self):
+        """静态断言：表格渲染前有清空 tbody 的逻辑。"""
+        js = self._inline_js()
+        # 存在清空函数，且三张表填充前都调用
+        assert "function clearRows" in js
+        assert "deleteRow(-1)" in js
+        assert js.count("clearRows(") >= 4  # 1 处定义 + 3 处调用
+        # 不得退回 innerHTML 清空/拼接（XSS 向量）
+        assert "innerHTML" not in js
+
+    # -------- node harness helpers --------
+
+    def _run_node_harness(self, node, stats, updates=1):
+        """在 node 里执行看板 JS：模拟 DOM、调用 updates 次 update(stats)，
+        返回 stdout（表格 dump 与行数统计）。"""
         # 提取内联 JS（去掉自启动尾部）
         js = self._inline_js()
         js_funcs = re.sub(
@@ -310,6 +368,8 @@ function makeEl(tag) {{
     data: {{labels: [], datasets: [{{data: []}}]}},
     insertRow() {{ const r = makeEl('tr'); this.children.push(r); return r; }},
     insertCell() {{ const c = makeEl('td'); this.cells.push(c); this.children.push(c); return c; }},
+    get rows() {{ return this.children; }},
+    deleteRow() {{ this.children.pop(); }},
     getContext() {{ return {{}}; }},
     update() {{}},
   }};
@@ -327,11 +387,14 @@ globalThis.Chart = Chart;
 eval({json.dumps(js_funcs)});
 initCharts();
 const data = JSON.parse('{stats_json}');
-update(data);
+for (let i = 0; i < {updates}; i++) update(data);
 function dump(el) {{ return (el.textContent || '') + el.children.map(c => dump(c)).join(''); }}
 console.log(JSON.stringify(dump(els['model-table'])));
 console.log(JSON.stringify(dump(els['deploy-table'])));
 console.log(JSON.stringify(dump(els['error-table'])));
+console.log('deploy:' + els['deploy-table'].children.length
+  + ' model:' + els['model-table'].children.length
+  + ' error:' + els['error-table'].children.length);
 """
         with tempfile.NamedTemporaryFile(
             "w", suffix=".js", delete=False
@@ -342,17 +405,9 @@ console.log(JSON.stringify(dump(els['error-table'])));
             r = subprocess.run(
                 [node, path], capture_output=True, text=True, timeout=30)
         finally:
-            import os
             os.unlink(path)
         assert r.returncode == 0, f"node harness failed:\n{r.stderr}"
-        rendered = r.stdout
-        # 恶意字符串以纯文本出现在渲染产物中（textContent 不解析标记）
-        assert evil in rendered
-        assert "<script>alert(2)</script>" in rendered
-        # 渲染产物中不存在可执行的 onerror 属性语义：
-        # textContent 赋值产物是纯文本节点，这里 dump 出的
-        # 是 textContent 的拼接，不应产生新的可执行节点。
-        # 若用 innerHTML 拼接，evil 会被解析为元素而非文本。
+        return r.stdout
 
     def test_dashboard_html_cards_unchanged(self, server):
         """卡片区仍走 textContent（回归保护）。"""

@@ -56,6 +56,8 @@ Deployment(
   场景由调用方自行封装
 - `tpm`/`rpm`：正整数或 `None`（排除 bool）；`consecutive_failures`：非负 int；
   `timeout`：正数或 `None`
+- 注意：当前 `tpm` 配额为**自启动累计**语义（无每分钟窗口重置），
+  严格 per-minute 语义见后续 issue；`rpm` 为 60 秒滑动窗口
 - `request_defaults` 会先于单次调用参数合并；单次调用参数优先级更高。
   该字段不能包含 `model`、`messages`、`deployment`、`stream` 等保留键
 - `custom_headers` 在 OpenAI 兼容 Provider 中允许覆盖默认请求头；若覆盖
@@ -222,7 +224,7 @@ class BaseProviderAdapter(ABC):
 | `_build_completion_response(id, model, message, finish_reason, prompt_tokens, completion_tokens)` | 构建 OpenAI 格式完整响应 |
 | `_build_chunk_response(model, delta, finish_reason, id, usage)` | 构建 OpenAI 格式流式 chunk |
 | `_extract_system_messages(messages)` | 分离 system 消息和其他消息 |
-| `sanitize_tool_calls(messages)` | 清理消息中 tool_calls 的非标准字段 |
+| `sanitize_tool_calls(messages)` | 清理消息中 tool_calls 的非标准字段；返回清洗后的**新列表**，不修改调用方传入的消息（对含 tool_calls 的 assistant 消息返回浅拷贝替换，其余消息原样保留引用） |
 
 ---
 
@@ -566,6 +568,13 @@ class RoutingStrategy(ABC):
 > 回调内转发 `state.on_success/on_failure`——回调不会被触发，且若未来
 > 版本恢复调用会造成双重计数。
 
+> **输入契约**：`ReliableRouter` 传入 `select_deployment` 的 `deployments`
+> 列表已按运行期状态（`state.deployment_status` / cooldown）过滤——
+> 策略拿到的一律是当前可用部署，无需（也不应）重复过滤。直接实例化
+> 策略、绕过 `ReliableRouter` 使用的进阶用户需自行完成同样的预过滤
+> （参考 `demo_adaptive_strategy.py` 的 `filter_available`），否则策略
+> 会看到冷却中的部署。
+
 ### `OrderedFailoverStrategy`
 
 按传入 deployments 的顺序选择第一个可用部署。常用于主备容灾场景。
@@ -782,8 +791,8 @@ def create_strategy(
 | `get_available_deployments` | `get_available_deployments(now: float) -> List[str]` | 获取可用部署ID列表 |
 | `cleanup_deployments` | `cleanup_deployments(keep_ids: List[str]) -> List[str]` | 清理不在 keep_ids 中的部署残留状态（热替换场景），返回被清理的 ID 列表 |
 | `remove_deployment` | `remove_deployment(deployment_id: str) -> bool` | 精确删除单个部署的全部运行时状态（多 router 共享 state 时使用） |
-| `get_token_remaining` | `get_token_remaining(deployment_id: str) -> int` | 获取剩余Token |
-| `get_rpm_remaining` | `get_rpm_remaining(deployment_id: str) -> int` | 获取剩余RPM |
+| `get_token_remaining` | `get_token_remaining(deployment_id: str) -> float` | 获取剩余Token配额（无使用记录即未配置配额时返回 `float('inf')`，表示不设限） |
+| `get_rpm_remaining` | `get_rpm_remaining(deployment_id: str) -> float` | 获取剩余RPM配额（无追踪记录即未配置配额时返回 `float('inf')`，表示不设限） |
 | `get_token_utilization` | `get_token_utilization(deployment_id: str) -> float` | 获取Token使用率 |
 | `get_rpm_utilization` | `get_rpm_utilization(deployment_id: str) -> float` | 获取RPM使用率 |
 
