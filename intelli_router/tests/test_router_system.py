@@ -103,7 +103,7 @@ class TestBaseRouterOpenAI:
             id="test_openai",
             model_name="gpt-4",
             api_key="sk-test",
-            api_base="https://api.openai.com",
+            api_base="https://api.openai.com/v1",
             provider="openai",
         )
         router = BaseRouter(deployments=[dep])
@@ -117,7 +117,7 @@ class TestBaseRouterOpenAI:
         assert result["choices"][0]["message"]["content"] == "hello world"
         assert len(capture.requests) == 1
         req = capture.requests[0]
-        # URL from OpenAI adapter: {base}/v1/chat/completions
+        # URL from OpenAI adapter: {base}/chat/completions
         assert str(req.url) == "https://api.openai.com/v1/chat/completions"
         # Headers from OpenAI adapter
         assert req.headers.get("authorization") == "Bearer sk-test"

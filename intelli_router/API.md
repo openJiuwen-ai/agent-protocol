@@ -250,7 +250,8 @@ get_provider_adapter(provider: str) -> BaseProviderAdapter
 | `"deepseek"` | `DeepSeekProviderAdapter` | DeepSeek API (继承 OpenAI，自动补 reasoning_content) |
 | `"siliconflow"` | `SiliconFlowProviderAdapter` | SiliconFlow (继承 OpenAI，清理 tool_calls) |
 | `"inference-affinity"` | `InferenceAffinityProviderAdapter` | InferenceAffinity (支持 cache_sharing / session_id) |
-| `"dashscope"` | `DashScopeProviderAdapter` | 阿里云 DashScope (URL: `/compatible-mode/v1/chat/completions`) |
+| `"dashscope"` | `OpenAIProviderAdapter` | 阿里云 DashScope / OpenAI-compatible endpoint alias |
+| `"zhipu"` | `OpenAIProviderAdapter` | 智谱 GLM / OpenAI-compatible endpoint alias |
 
 ---
 

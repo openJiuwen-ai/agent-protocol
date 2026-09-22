@@ -945,6 +945,80 @@ class ReliableRouter(BaseRouter):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _provider_metadata_from_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+        allowed = (
+            "system_fingerprint",
+            "service_tier",
+            "status",
+            "stop_reason",
+            "stop_sequence",
+            "incomplete_details",
+        )
+        return {key: raw[key] for key in allowed if key in raw}
+
+    @staticmethod
+    def _usage_to_metadata(
+        usage: Optional[Dict[str, Any]],
+        model_name: Optional[str] = None,
+    ) -> Optional[UsageMetadata]:
+        if not usage:
+            return None
+
+        def _int_value(value: Any) -> int:
+            if value is None or isinstance(value, bool):
+                return 0
+            try:
+                return max(int(float(value)), 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _optional_int(value: Any) -> Optional[int]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return max(int(float(value)), 0)
+            except (TypeError, ValueError):
+                return None
+
+        def _float_value(value: Any) -> float:
+            if value is None or isinstance(value, bool):
+                return 0.0
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+        completion_tokens_details = usage.get("completion_tokens_details") or {}
+        cache_status = usage.get("cache_status")
+        cache_source = usage.get("cache_source")
+        cache_authoritative = usage.get("cache_authoritative")
+        return UsageMetadata(
+            model_name=model_name,
+            input_tokens=_int_value(usage.get("prompt_tokens")),
+            output_tokens=_int_value(usage.get("completion_tokens")),
+            total_tokens=_int_value(usage.get("total_tokens")),
+            cache_tokens=_int_value(prompt_tokens_details.get("cached_tokens") or usage.get("cache_tokens")),
+            cache_read_tokens=_optional_int(usage.get("cache_read_tokens")),
+            cache_miss_tokens=_optional_int(usage.get("cache_miss_tokens")),
+            cache_write_tokens=_optional_int(usage.get("cache_write_tokens")),
+            cache_status=cache_status if isinstance(cache_status, str) else None,
+            cache_source=cache_source if isinstance(cache_source, str) else None,
+            cache_authoritative=cache_authoritative is True,
+            cache_creation_input_tokens=_optional_int(
+                usage.get("cache_creation_input_tokens")
+                or prompt_tokens_details.get("cache_creation_input_tokens")
+            ),
+            reasoning_tokens=_int_value(
+                completion_tokens_details.get("reasoning_tokens")
+                or usage.get("reasoning_tokens")
+            ),
+            input_cost=_float_value(usage.get("input_cost")),
+            output_cost=_float_value(usage.get("output_cost")),
+            total_cost=_float_value(usage.get("total_cost")),
+        )
+
+    @staticmethod
     def _response_to_message(raw: Dict[str, Any]) -> AssistantMessage:
         """将 OpenAI 格式的 dict 响应转换为 AssistantMessage。"""
         choices = raw.get("choices", [])
@@ -973,25 +1047,8 @@ class ReliableRouter(BaseRouter):
                     index=tc.get("index", idx),
                 ))
 
-        # Parse usage
-        usage_metadata = None
-        usage = raw.get("usage")
-        if usage:
-            prompt_tokens = usage.get("prompt_tokens") or 0
-            completion_tokens = usage.get("completion_tokens") or 0
-            total_tokens = usage.get("total_tokens") or 0
-
-            cache_tokens = 0
-            prompt_tokens_details = usage.get("prompt_tokens_details")
-            if prompt_tokens_details:
-                cache_tokens = prompt_tokens_details.get("cached_tokens") or 0
-
-            usage_metadata = UsageMetadata(
-                input_tokens=prompt_tokens,
-                output_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                cache_tokens=cache_tokens,
-            )
+        usage_metadata = ReliableRouter._usage_to_metadata(raw.get("usage"), raw.get("model"))
+        choice_provider_metadata = ReliableRouter._provider_metadata_from_response(choice)
 
         return AssistantMessage(
             content=content,
@@ -999,6 +1056,14 @@ class ReliableRouter(BaseRouter):
             usage_metadata=usage_metadata,
             finish_reason=finish_reason,
             reasoning_content=reasoning_content,
+            logprobs=choice.get("logprobs"),
+            response_id=raw.get("id"),
+            response_model=raw.get("model"),
+            provider_metadata={
+                **ReliableRouter._provider_metadata_from_response(raw),
+                **choice_provider_metadata,
+            },
+            provider_content=raw.get("provider_content", raw),
         )
 
     @staticmethod
@@ -1008,7 +1073,19 @@ class ReliableRouter(BaseRouter):
         """将 OpenAI 格式的 streaming chunk dict 转换为 AssistantMessageChunk。"""
         choices = chunk.get("choices")
         if not choices:
-            return None
+            usage_metadata = ReliableRouter._usage_to_metadata(
+                chunk.get("usage"),
+                chunk.get("model"),
+            )
+            if usage_metadata is None:
+                return None
+            return AssistantMessageChunk(
+                usage_metadata=usage_metadata,
+                response_id=chunk.get("id"),
+                response_model=chunk.get("model"),
+                provider_metadata=ReliableRouter._provider_metadata_from_response(chunk),
+                provider_content=chunk.get("provider_content", chunk),
+            )
 
         choice = choices[0]
         delta = choice.get("delta", {})
@@ -1017,8 +1094,15 @@ class ReliableRouter(BaseRouter):
         content = delta.get("content") or ""
         reasoning_content = delta.get("reasoning_content")
         raw_tool_calls = delta.get("tool_calls")
+        usage_metadata = ReliableRouter._usage_to_metadata(chunk.get("usage"), chunk.get("model"))
 
-        if not content and not finish_reason and not raw_tool_calls and not reasoning_content:
+        if (
+            not content
+            and not finish_reason
+            and not raw_tool_calls
+            and not reasoning_content
+            and usage_metadata is None
+        ):
             return None
 
         tool_calls = None
@@ -1039,6 +1123,15 @@ class ReliableRouter(BaseRouter):
             reasoning_content=reasoning_content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            usage_metadata=usage_metadata,
+            logprobs=choice.get("logprobs"),
+            response_id=chunk.get("id"),
+            response_model=chunk.get("model"),
+            provider_metadata={
+                **ReliableRouter._provider_metadata_from_response(chunk),
+                **ReliableRouter._provider_metadata_from_response(choice),
+            },
+            provider_content=chunk.get("provider_content", chunk),
         )
 
     def get_stats(self) -> Dict[str, Any]:

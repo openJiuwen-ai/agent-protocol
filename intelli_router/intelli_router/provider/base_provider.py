@@ -115,14 +115,21 @@ class BaseProviderAdapter(ABC):
         async for line in response.aiter_lines():
             if not line:
                 continue
-            if line.startswith("data: "):
-                data = line[6:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    yield json.loads(data)
-                except json.JSONDecodeError:
-                    continue
+            line = line.strip()
+            if line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                data = line[5:].strip()
+            elif line.startswith("{") and line.endswith("}"):
+                data = line
+            else:
+                continue
+            if data == "[DONE]":
+                break
+            try:
+                yield json.loads(data)
+            except json.JSONDecodeError:
+                continue
 
     @staticmethod
     def _build_completion_response(

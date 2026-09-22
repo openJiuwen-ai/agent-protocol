@@ -16,9 +16,15 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
     内部本就是用 OpenAI 格式作为标准格式。
     """
 
+    @staticmethod
+    def _chat_completions_url(api_base: str) -> str:
+        base = str(api_base or "").strip().rstrip("/")
+        if base.endswith("/chat/completions"):
+            base = base[: -len("/chat/completions")].rstrip("/")
+        return f"{base}/chat/completions"
+
     def get_api_url(self, deployment: Deployment, stream: bool = False) -> str:
-        base = deployment.api_base.rstrip("/")
-        return f"{base}/v1/chat/completions"
+        return self._chat_completions_url(deployment.api_base)
 
     def get_headers(self, deployment: Deployment) -> Dict[str, str]:
         headers = {

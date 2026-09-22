@@ -102,6 +102,8 @@ class TestReliableRouterInvoke:
         assert result.usage_metadata is not None
         assert result.usage_metadata.input_tokens == 10
         assert result.usage_metadata.output_tokens == 20
+        assert result.provider_content["id"] == "chatcmpl-test"
+        assert result.provider_content["choices"][0]["message"]["content"] == "Hello!"
         assert not hasattr(result, "metadata")
         success_events = [
             event for event in events.events
@@ -139,6 +141,90 @@ class TestReliableRouterInvoke:
         assert result["deployment_id"] == "openai-7"
         # provider 原生字段不受影响
         assert result["choices"][0]["message"]["content"] == "Hello!"
+
+    def test_invoke_maps_cache_usage_metadata_fields(self):
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class CacheUsageCapture(RequestCapture):
+            def _respond(self, request):
+                return Response(200, json={
+                    "id": "chatcmpl-cache",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 2,
+                        "total_tokens": 12,
+                        "cache_tokens": 3,
+                        "cache_read_tokens": 3,
+                        "cache_miss_tokens": 7,
+                        "cache_write_tokens": 1,
+                        "cache_status": "observed",
+                        "cache_source": "provider_usage",
+                        "cache_authoritative": True,
+                    },
+                })
+
+        capture = CacheUsageCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            r = await router.invoke(messages=[{"role": "user", "content": "hi"}])
+            await router.close()
+            return r
+
+        result = asyncio.run(runner())
+        usage = result.usage_metadata
+        assert usage.cache_tokens == 3
+        assert usage.cache_read_tokens == 3
+        assert usage.cache_miss_tokens == 7
+        assert usage.cache_write_tokens == 1
+        assert usage.cache_status == "observed"
+        assert usage.cache_source == "provider_usage"
+        assert usage.cache_authoritative is True
+
+    def test_invoke_treats_non_bool_cache_authoritative_as_false(self):
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class CacheUsageCapture(RequestCapture):
+            def _respond(self, request):
+                return Response(200, json={
+                    "id": "chatcmpl-cache",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 2,
+                        "total_tokens": 12,
+                        "cache_authoritative": "false",
+                    },
+                })
+
+        capture = CacheUsageCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            r = await router.invoke(messages=[{"role": "user", "content": "hi"}])
+            await router.close()
+            return r
+
+        result = asyncio.run(runner())
+        assert result.usage_metadata.cache_authoritative is False
 
     def test_invoke_with_tool_calls(self):
         dep = Deployment(
@@ -412,6 +498,51 @@ class TestReliableRouterStream:
         texts = "".join(ch.content for ch in result)
         assert "Hello" in texts
         assert "world" in texts
+
+    def test_stream_preserves_usage_only_chunk(self):
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class StreamCapture(RequestCapture):
+            def _respond(self, request):
+                content = "data: " + json.dumps({
+                    "id": "chatcmpl-1",
+                    "model": "gpt-4o-mini",
+                    "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}],
+                }) + "\n\n"
+                content += "data: " + json.dumps({
+                    "id": "chatcmpl-1",
+                    "model": "gpt-4o-mini",
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2,
+                        "total_tokens": 5,
+                        "completion_tokens_details": {"reasoning_tokens": 1},
+                    },
+                }) + "\n\n"
+                content += "data: [DONE]\n\n"
+                return Response(200, text=content)
+
+        capture = StreamCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            chunks = []
+            async for ch in router.stream(messages=[{"role": "user", "content": "hi"}]):
+                chunks.append(ch)
+            await router.close()
+            return chunks
+
+        result = asyncio.run(runner())
+        assert result[-1].usage_metadata.total_tokens == 5
+        assert result[-1].usage_metadata.reasoning_tokens == 1
+        assert result[0].provider_content["choices"][0]["delta"]["content"] == "Hello"
+        assert result[-1].provider_content["usage"]["total_tokens"] == 5
+        assert result[-1].response_model == "gpt-4o-mini"
 
     def test_stream_records_ttft_not_total_duration(self):
         """stream() 成功回调记录 ttft（首 chunk 耗时），而非整条流总时长（与 stream_completion 口径一致）。"""
