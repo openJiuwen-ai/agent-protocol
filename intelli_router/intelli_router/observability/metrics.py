@@ -376,7 +376,8 @@ class MetricsCollector(EventHandler):
                     if model in self._ttft_by_model else None,
                 }
                 # 并集：有请求或有失败记录的 model 都应出现
-                # （exhausted 最终失败可能没有配对的 REQUEST_STARTED）
+                # （正常路径下失败均有配对的 STARTED 事件；取并集是防御旧版本
+                # 事件流或外部直发事件时的 key 缺失）
                 for model in self._model_requests.keys() | self._model_failures.keys()
             },
             "by_deployment": {
@@ -397,7 +398,7 @@ class MetricsCollector(EventHandler):
 
     def expose_prometheus(
         self, port: int = 9090, addr: str = "127.0.0.1"
-    ) -> Optional[tuple]:
+    ) -> tuple:
         """启动 Prometheus HTTP 服务，暴露指标供 Grafana 等 scrape
 
         Args:
