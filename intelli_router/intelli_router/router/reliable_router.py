@@ -286,6 +286,15 @@ class ReliableRouter(BaseRouter):
         available = self._get_available_deployments(model)
         request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
         if not available:
+            # 计数口径配对：请求已进入 router，先发 REQUEST_STARTED 使
+            # total_requests +1，再发 EXHAUSTED（最终失败，failed +1）。
+            # 否则只有 failed +1 而 total 不变，会出现 failed > total_requests。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model,
+                extra=request_extra,
+            ))
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
@@ -319,6 +328,16 @@ class ReliableRouter(BaseRouter):
             if selected is None:
                 if errors:
                     break
+                # 计数口径配对：REQUEST_STARTED 已发但尚无终态事件，
+                # raise 前补发 EXHAUSTED（failed +1），避免 total+1 而
+                # failed 不变（successful + failed + 在途 != total_requests）。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
                 raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
             context.mark_attempt(selected)
             request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
@@ -436,6 +455,17 @@ class ReliableRouter(BaseRouter):
             # （否则监控侧 stream 请求的最终失败不可见），再抛 NoDeploymentAvailable。
             request_id = RoutingEvent.new_request_id()
             request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+            # 计数口径配对：先发 REQUEST_STARTED 使 total_requests +1，
+            # 与随后的 EXHAUSTED（failed +1）配对，避免 failed > total_requests。
+            # 注意这里用 REQUEST_STARTED 而非 STREAM_STARTED——此路径连
+            # 可用性检查都未通过，不应计入 streams（streams 统计进入流式
+            # 入口的请求，STREAM_STARTED 在部署选择前发出）。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model,
+                extra=request_extra,
+            ))
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
@@ -469,6 +499,15 @@ class ReliableRouter(BaseRouter):
             if selected is None:
                 if errors:
                     break
+                # 计数口径配对：STREAM_STARTED 已发但尚无终态事件，raise 前
+                # 补发 EXHAUSTED（failed +1），避免 total+1 而 failed 不变。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
                 raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
 
             context.mark_attempt(selected)
@@ -738,6 +777,17 @@ class ReliableRouter(BaseRouter):
         available = self._get_available_deployments(model_name)
         request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
         if not available:
+            # 计数口径配对：先发 REQUEST_STARTED 使 total_requests +1，
+            # 与随后的 EXHAUSTED（failed +1）配对，避免 failed > total_requests。
+            # 注意这里用 REQUEST_STARTED 而非 STREAM_STARTED——此路径连
+            # 可用性检查都未通过，不应计入 streams（streams 统计进入流式
+            # 入口的请求，STREAM_STARTED 在部署选择前发出）。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model_name,
+                extra=request_extra,
+            ))
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
@@ -769,6 +819,15 @@ class ReliableRouter(BaseRouter):
             if selected is None:
                 if errors:
                     break
+                # 计数口径配对：STREAM_STARTED 已发但尚无终态事件，raise 前
+                # 补发 EXHAUSTED（failed +1），避免 total+1 而 failed 不变。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model_name,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
                 raise NoDeploymentAvailable(model_name, "No deployment matched routing strategy")
             request_kwargs = self._request_kwargs_for_deployment(selected, params)
             try:

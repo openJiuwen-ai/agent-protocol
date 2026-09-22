@@ -747,7 +747,7 @@ def create_strategy(
 | `REQUEST_STARTED` | 非流式请求开始 |
 | `REQUEST_SUCCEEDED` | 非流式请求成功 |
 | `REQUEST_RETRIED` | 当前 deployment 失败，即将 fallback 到其他 deployment |
-| `ALL_DEPLOYMENTS_EXHAUSTED` | 所有可尝试 deployment 均失败或无可用 deployment |
+| `ALL_DEPLOYMENTS_EXHAUSTED` | 所有可尝试 deployment 均失败、无可用 deployment，或路由策略未选出 deployment |
 | `STREAM_STARTED` | 流式请求开始 |
 | `STREAM_ROUTE_SELECTED` | 流式请求拿到首个可见输出后、yield 给调用方前发出，表示本次回答已提交到该 route |
 | `STREAM_SUCCEEDED` | 流式请求完整结束 |
