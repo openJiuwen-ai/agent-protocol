@@ -152,8 +152,33 @@ async def test_make_request_success(base_router, deployment_gpt4_1):
         # Re-create client after patch
         base_router._client = None
         result = await base_router._make_request(deployment_gpt4_1, {"model": "gpt-4"})
-        assert result == {"choices": [{"text": "hello"}]}
+        # dict 响应附带 deployment_id，标识实际服务的部署（PR !315 检视意见）
+        assert result == {
+            "choices": [{"text": "hello"}],
+            "deployment_id": "dep_gpt4_1",
+        }
         mock_client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_make_request_does_not_override_provider_deployment_id(
+    base_router, deployment_gpt4_1
+):
+    """setdefault 语义：provider 响应已含 deployment_id 字段时不覆盖。"""
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"text": "hello"}],
+            "deployment_id": "provider-declared",
+        }
+        mock_client.post.return_value = mock_response
+
+        base_router._client = None
+        result = await base_router._make_request(deployment_gpt4_1, {"model": "gpt-4"})
+        assert result["deployment_id"] == "provider-declared"
 
 
 @pytest.mark.asyncio

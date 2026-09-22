@@ -183,7 +183,8 @@ class BaseRouter:
             request_body: 请求体
 
         Returns:
-            API响应JSON
+            API响应JSON（dict 响应会附带 deployment_id 字段，
+            标识实际服务该请求的部署；provider 已提供该字段则不覆盖）
 
         Raises:
             DeploymentTimeoutError: 请求超时
@@ -208,7 +209,14 @@ class BaseRouter:
             )
             response.raise_for_status()
             raw = response.json()
-            return adapter.transform_response(raw, deployment.model_name, deployment)
+            result = adapter.transform_response(raw, deployment.model_name, deployment)
+            # 响应附带 deployment_id 标识实际服务的部署：provider 适配器
+            # 不会写该字段，上层（如 invoke() 的解析失败告警）依赖它定位
+            # 具体部署。setdefault：provider 已提供则不覆盖；非 dict 响应
+            # 原样返回。流式路径（acompletion_stream）不附带。
+            if isinstance(result, dict):
+                result.setdefault("deployment_id", deployment.id)
+            return result
         except httpx.TimeoutException as e:
             raise DeploymentTimeoutError(
                 deployment_id=deployment.id,

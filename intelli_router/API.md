@@ -115,7 +115,7 @@ HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `completion` | `async completion(model: str, messages: List[Dict], **kwargs) -> Dict` | 发送 completion 请求，返回 OpenAI 格式原始字典 |
+| `completion` | `async completion(model: str, messages: List[Dict], **kwargs) -> Dict` | 发送 completion 请求，返回 OpenAI 格式原始字典（附带 `deployment_id` 标识实际服务的部署） |
 | `stream_completion` | `async stream_completion(model: str, messages: List[Dict], **kwargs) -> AsyncIterator[Dict]` | 发送流式 completion 请求，返回 OpenAI 格式原始 chunk |
 | `invoke` | `async invoke(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, output_parser=None, **kwargs) -> AssistantMessage` | 类型化 completion 请求，返回 `AssistantMessage` |
 | `stream` | `async stream(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, **kwargs) -> AsyncIterator[AssistantMessageChunk]` | 流式 completion，逐 chunk 返回 `AssistantMessageChunk` |
