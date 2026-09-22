@@ -36,11 +36,11 @@ class RegisterInstanceRequest(BaseModel):
     kind: str = Field(..., description="实例种类：三方 / 九问")
     framework: str = Field(..., description="框架名")
     framework_version: str = Field(..., description="框架版本")
-    node: str = Field(..., description="元戎落点 nodeIP")
+    node: str = Field("", description="元戎落点 nodeIP（可空，后续 PATCH 补写）")
     instance_id: Optional[str] = Field(
         None, description="元戎实例 ID（gateway 拉起后回填；非元戎拉起可空、不做主键）"
     )
-    address: str = Field(..., description="实例访问地址 (IP:port)")
+    address: str = Field("", description="实例访问地址 (IP:port)（可空，后续 PATCH 补写）")
     user: str = Field(..., description="创建 / 所属用户")
 
 

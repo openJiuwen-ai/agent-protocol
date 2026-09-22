@@ -44,7 +44,7 @@ _VALID_STATUSES = ("运行", "停止", "异常")
 # Required fields for register_instance.
 _REQUIRED_FIELDS = (
     "service_id", "kind", "framework", "framework_version",
-    "node", "address", "user",
+    "user",
 )
 
 # Deterministic sort order for instance listing (V2).
@@ -89,10 +89,10 @@ class InstanceService:
             "kind": entry["kind"],
             "framework": entry["framework"],
             "framework_version": entry["framework_version"],
-            "node": entry["node"],
+            "node": entry.get("node") or "",
             "user": entry["user"],
             "data": {
-                "address": entry["address"],
+                "address": entry.get("address") or "",
                 "instance_id": entry.get("instance_id") or "",
                 "created_at": created_at,
                 "last_active_at": now,
