@@ -148,6 +148,8 @@ class ReqMethod(Enum):
     PROJECT_GIT_REDO_TURN_CHANGES = "project.git.redo_turn_changes"
 
     # Designer execution graph (canvas + subagent orchestration shell)
+    DESIGNER_WORKSPACE_CREATE = "designer.workspace.create"
+    DESIGNER_WORKSPACE_GET = "designer.workspace.get"
     DESIGNER_GRAPH_GET = "designer.graph.get"
     DESIGNER_GRAPH_LIST = "designer.graph.list"
     DESIGNER_GRAPH_SAVE = "designer.graph.save"
