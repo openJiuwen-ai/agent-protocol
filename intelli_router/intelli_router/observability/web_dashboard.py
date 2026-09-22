@@ -326,7 +326,9 @@ class MetricsWebServer:
         self._metrics = metrics
         self._port = port
         self._addr = addr
-        # None: 不发送 ACAO 头；str/list: 按值发送（"*" 即通配）
+        # None: 不发送 ACAO 头；"*": 无条件通配；str/list: 白名单，
+        # 仅当请求 Origin 精确命中时回显该单个源（list 中的 "*" 只是
+        # 普通白名单条目、不会当作通配——通配请直接传 "*" 字符串）
         self._cors_origins = cors_origins
         self._thread = None
         self._httpd = None
@@ -367,12 +369,25 @@ class MetricsWebServer:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 if cors_origins is not None:
-                    origin = (
-                        cors_origins
-                        if isinstance(cors_origins, str)
-                        else ",".join(cors_origins)
-                    )
-                    self.send_header("Access-Control-Allow-Origin", origin)
+                    if cors_origins == "*":
+                        # 通配：无条件放行，响应与 Origin 无关，无需 Vary
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                    else:
+                        # CORS 规范只允许 ACAO 为单个源或 "*"，多个源用逗号
+                        # 拼接会被浏览器整体拒绝（多源配置静默失效）。
+                        # 因此白名单命中后只回显请求的那一个源；
+                        # 未命中或不带 Origin 头则不放行。
+                        allowed = (
+                            [cors_origins]
+                            if isinstance(cors_origins, str)
+                            else cors_origins
+                        )
+                        origin = self.headers.get("Origin")
+                        if origin is not None and origin in allowed:
+                            self.send_header("Access-Control-Allow-Origin", origin)
+                            # 回显的 ACAO 随请求 Origin 变化，
+                            # 声明 Vary 防止缓存把响应错配给其他源
+                            self.send_header("Vary", "Origin")
                 self.end_headers()
                 self.wfile.write(data.encode("utf-8"))
 

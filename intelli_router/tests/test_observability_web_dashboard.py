@@ -172,19 +172,101 @@ class TestMetricsWebServer:
         assert resp.status == 200
         assert resp.headers.get("Access-Control-Allow-Origin") is None
 
-    @pytest.mark.parametrize("origins,expected", [
-        ("https://example.com", "https://example.com"),
-        ("*", "*"),
-        (["https://a.com", "https://b.com"], "https://a.com,https://b.com"),
-    ])
-    def test_cors_origins_sent_when_configured(self, metrics, origins, expected):
-        """传入 cors_origins 时按值发送 ACAO 头。"""
-        srv = MetricsWebServer(metrics, port=0, cors_origins=origins)
+    # -------- CORS origin matching (review fix on issue #17) --------
+    # 旧实现把 list 多源用 ",".join 拼成单个 ACAO 值，浏览器一律拒绝；
+    # 新语义：白名单命中请求 Origin 后只回显该单个源。
+
+    def test_cors_list_whitelist_origin_hit(self, metrics):
+        """list 白名单 + Origin 命中：ACAO 等于命中的那个源（非逗号拼接），
+        且响应带 Vary: Origin。"""
+        srv = MetricsWebServer(
+            metrics, port=0,
+            cors_origins=["https://a.com", "https://b.com"])
+        srv.start()
+        try:
+            req = urllib.request.Request(
+                f"{srv.url}/api/stats", headers={"Origin": "https://b.com"})
+            resp = urllib.request.urlopen(req)
+            assert resp.status == 200
+            assert (
+                resp.headers.get("Access-Control-Allow-Origin") == "https://b.com"
+            )
+            assert resp.headers.get("Vary") == "Origin"
+        finally:
+            srv.stop()
+
+    def test_cors_list_whitelist_origin_miss(self, metrics):
+        """list 白名单 + Origin 未命中：不发送 ACAO 头。"""
+        srv = MetricsWebServer(
+            metrics, port=0,
+            cors_origins=["https://a.com", "https://b.com"])
+        srv.start()
+        try:
+            req = urllib.request.Request(
+                f"{srv.url}/api/stats", headers={"Origin": "https://evil.com"})
+            resp = urllib.request.urlopen(req)
+            assert resp.status == 200
+            assert resp.headers.get("Access-Control-Allow-Origin") is None
+        finally:
+            srv.stop()
+
+    def test_cors_list_whitelist_no_origin_header(self, metrics):
+        """list 白名单 + 请求不带 Origin 头：不发送 ACAO 头。"""
+        srv = MetricsWebServer(
+            metrics, port=0,
+            cors_origins=["https://a.com", "https://b.com"])
         srv.start()
         try:
             resp = urllib.request.urlopen(f"{srv.url}/api/stats")
             assert resp.status == 200
-            assert resp.headers.get("Access-Control-Allow-Origin") == expected
+            assert resp.headers.get("Access-Control-Allow-Origin") is None
+        finally:
+            srv.stop()
+
+    def test_cors_single_str_origin_hit(self, metrics):
+        """单个 str 源 + Origin 匹配：ACAO 等于该源，且带 Vary: Origin。"""
+        srv = MetricsWebServer(
+            metrics, port=0, cors_origins="https://example.com")
+        srv.start()
+        try:
+            req = urllib.request.Request(
+                f"{srv.url}/api/stats",
+                headers={"Origin": "https://example.com"})
+            resp = urllib.request.urlopen(req)
+            assert resp.status == 200
+            assert (
+                resp.headers.get("Access-Control-Allow-Origin")
+                == "https://example.com"
+            )
+            assert resp.headers.get("Vary") == "Origin"
+        finally:
+            srv.stop()
+
+    def test_cors_single_str_origin_mismatch(self, metrics):
+        """单个 str 源 + Origin 不匹配：不发送 ACAO 头。"""
+        srv = MetricsWebServer(
+            metrics, port=0, cors_origins="https://example.com")
+        srv.start()
+        try:
+            req = urllib.request.Request(
+                f"{srv.url}/api/stats",
+                headers={"Origin": "https://other.com"})
+            resp = urllib.request.urlopen(req)
+            assert resp.status == 200
+            assert resp.headers.get("Access-Control-Allow-Origin") is None
+        finally:
+            srv.stop()
+
+    def test_cors_wildcard_with_origin(self, metrics):
+        """"*" 通配 + 带 Origin 请求：无条件发 ACAO: *。"""
+        srv = MetricsWebServer(metrics, port=0, cors_origins="*")
+        srv.start()
+        try:
+            req = urllib.request.Request(
+                f"{srv.url}/api/stats", headers={"Origin": "https://any.com"})
+            resp = urllib.request.urlopen(req)
+            assert resp.status == 200
+            assert resp.headers.get("Access-Control-Allow-Origin") == "*"
         finally:
             srv.stop()
 
