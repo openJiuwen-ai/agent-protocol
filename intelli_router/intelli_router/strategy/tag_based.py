@@ -15,6 +15,8 @@ class TagBasedStrategy(RoutingStrategy):
     """
     标签路由策略 - 按标签过滤部署
 
+    传入的 deployments 已由 router 按可用性过滤（state 唯一事实源）。
+
     答法:
     1. 从上下文提取求签
     2. 过滤匹配标签的部署
@@ -45,22 +47,18 @@ class TagBasedStrategy(RoutingStrategy):
         context: "RoutingContext"
     ) -> Optional["Deployment"]:
         """按标签过滤后选择"""
-        import time
-        now = time.time()
-        # 过滤可用部署
-        available = [d for d in deployments if d.is_available(now)]
-        if not available:
+        if not deployments:
             return None
         # 获取请求标签
         request_tags = self._get_request_tags(context)
         # 过滤匹配标签的部署
         matched = []
-        for d in available:
+        for d in deployments:
             if d.tags and request_tags & set(d.tags):
                 matched.append(d)
         # 无匹配则使用所有可用
         if not matched:
-            matched = available
+            matched = deployments
         # 委托给fallback策略
         return await self.fallback_strategy.select_deployment(matched, context)
 

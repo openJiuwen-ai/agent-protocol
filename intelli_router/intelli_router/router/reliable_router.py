@@ -6,6 +6,7 @@ ReliableRouter: 集成状态管理、策略选择、健康检查
 from typing import Dict, List, Optional, Any, Union, Literal, AsyncIterator
 from dataclasses import dataclass, field
 import asyncio
+import logging
 import time
 import json
 import httpx
@@ -13,13 +14,12 @@ import httpx
 from .base_router import BaseRouter
 from ..core.deployment import Deployment, DeploymentStatus
 from ..core.context import RoutingContext
-from ..core.state import LocalRouterState
+from ..core.state import LocalRouterState, TokenUsage, RPMTracker
 from ..strategy.base_strategy import RoutingStrategy
 from ..strategy import create_strategy, StrategyType
 from ..health.checker import SDKHealthChecker
 from ..cache.local_cache import LocalCache
 from ..utils.exceptions import (
-    RouterError,
     NoDeploymentAvailable,
     AllDeploymentsFailed,
     DeploymentNetworkError,
@@ -38,6 +38,8 @@ from ..observability.bus import EventBus
 from ..observability.events import RoutingEvent, RoutingEventType
 
 MODEL_WILDCARD = "*"
+
+logger = logging.getLogger(__name__)
 
 
 class ReliableRouter(BaseRouter):
@@ -100,6 +102,11 @@ class ReliableRouter(BaseRouter):
                     dep.cooldown_until if dep.cooldown_until is not None
                     else time.time() + self.cooldown_time
                 )
+        # 把部署声明的 tpm/rpm 配额接入 state（token_usage/rpm_tracker），
+        # 否则 TokenUsage()/RPMTracker() 的 limit 恒 0，remaining 恒 0，
+        # TokenAware/RateLimitAware/Adaptive 的配额评分完全失效
+        # （未预热部署的 inf 反而优于已预热部署的 0，排序反向）。
+        self._sync_quota_state(deployments)
         # 可观测性
         self.event_bus = event_bus or EventBus()
         self.model_group_id = model_group_id
@@ -124,6 +131,41 @@ class ReliableRouter(BaseRouter):
             await self.health_checker.stop_background_check()
         await self.close()
         return False
+
+    def _sync_quota_state(self, deployments: List[Deployment]) -> None:
+        """把部署声明的 tpm/rpm 配额接入/同步到 state（review 4，P0）。
+
+        - tpm/rpm 已配置且无条目：创建（首次注册）。
+        - tpm/rpm 已配置且已有条目：热替换变更配额值时更新 limit
+          （保留累计 used/requests，不重置计数）。
+        - tpm/rpm 变为 None：移除既有条目，remaining 回到 inf
+          （"未配置即不设限"）。
+        - 已从列表移除的部署：条目由调用方（update_deployments）负责清理。
+        """
+        with self.state.lock:
+            for dep in deployments:
+                # Token (tpm)
+                if dep.tpm is not None:
+                    usage = self.state.token_usage.get(dep.id)
+                    if usage is None:
+                        self.state.token_usage[dep.id] = TokenUsage(limit=dep.tpm)
+                    elif usage.limit != dep.tpm:
+                        # 热更新配额值：只改 limit，保留累计 used
+                        usage.limit = dep.tpm
+                elif dep.id in self.state.token_usage:
+                    # 配额被移除（变 None）：回到 inf 语义
+                    del self.state.token_usage[dep.id]
+
+                # RPM (rpm)
+                if dep.rpm is not None:
+                    tracker = self.state.rpm_tracker.get(dep.id)
+                    if tracker is None:
+                        self.state.rpm_tracker[dep.id] = RPMTracker(rpm_limit=dep.rpm)
+                    elif tracker.rpm_limit != dep.rpm:
+                        # 热更新配额值：只改 limit，保留请求记录
+                        tracker.rpm_limit = dep.rpm
+                elif dep.id in self.state.rpm_tracker:
+                    del self.state.rpm_tracker[dep.id]
 
     def _get_available_deployments(self, model: str) -> List[Deployment]:
         """获取可用部署
@@ -244,6 +286,15 @@ class ReliableRouter(BaseRouter):
         available = self._get_available_deployments(model)
         request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
         if not available:
+            # 计数口径配对：请求已进入 router，先发 REQUEST_STARTED 使
+            # total_requests +1，再发 EXHAUSTED（最终失败，failed +1）。
+            # 否则只有 failed +1 而 total 不变，会出现 failed > total_requests。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model,
+                extra=request_extra,
+            ))
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
@@ -277,6 +328,16 @@ class ReliableRouter(BaseRouter):
             if selected is None:
                 if errors:
                     break
+                # 计数口径配对：REQUEST_STARTED 已发但尚无终态事件，
+                # raise 前补发 EXHAUSTED（failed +1），避免 total+1 而
+                # failed 不变（successful + failed + 在途 != total_requests）。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
                 raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
             context.mark_attempt(selected)
             request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
@@ -390,6 +451,28 @@ class ReliableRouter(BaseRouter):
         """
         available = self._get_available_deployments(model)
         if not available:
+            # 与 completion() 对齐：无可用部署也发 ALL_DEPLOYMENTS_EXHAUSTED
+            # （否则监控侧 stream 请求的最终失败不可见），再抛 NoDeploymentAvailable。
+            request_id = RoutingEvent.new_request_id()
+            request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+            # 计数口径配对：先发 REQUEST_STARTED 使 total_requests +1，
+            # 与随后的 EXHAUSTED（failed +1）配对，避免 failed > total_requests。
+            # 注意这里用 REQUEST_STARTED 而非 STREAM_STARTED——此路径连
+            # 可用性检查都未通过，不应计入 streams（streams 统计进入流式
+            # 入口的请求，STREAM_STARTED 在部署选择前发出）。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model,
+                extra=request_extra,
+            ))
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
             raise NoDeploymentAvailable(model, "No available deployments")
 
         context = RoutingContext(
@@ -416,6 +499,15 @@ class ReliableRouter(BaseRouter):
             if selected is None:
                 if errors:
                     break
+                # 计数口径配对：STREAM_STARTED 已发但尚无终态事件，raise 前
+                # 补发 EXHAUSTED（failed +1），避免 total+1 而 failed 不变。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
                 raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
 
             context.mark_attempt(selected)
@@ -576,6 +668,11 @@ class ReliableRouter(BaseRouter):
                 for dep_id in removed_ids:
                     self.state.remove_deployment(dep_id)
 
+            # 为新列表中的部署初始化 tpm/rpm 配额条目（含新增部署；
+            # 已有条目保留累计值）。移除部署的配额条目已随上面的
+            # remove_deployment 一并清理。
+            self._sync_quota_state(new_deployments)
+
     # ------------------------------------------------------------------
     # Typed invoke / stream (高层 SDK 接口)
     # ------------------------------------------------------------------
@@ -635,6 +732,7 @@ class ReliableRouter(BaseRouter):
             **params,
         )
         msg = self._response_to_message(raw)
+        deployment_id = raw.get("deployment_id") if isinstance(raw, dict) else None
 
         if output_parser is not None and msg.content:
             try:
@@ -642,7 +740,14 @@ class ReliableRouter(BaseRouter):
                 if parsed is not None:
                     msg.content = json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, dict) else str(parsed)
             except Exception:
-                pass
+                # 降级行为保留：解析失败时调用方仍拿到原始 content，
+                # 但不再静默——记录 warning（含解析器类型与异常栈）便于排查。
+                logger.warning(
+                    "output_parser %s failed for deployment %s, returning raw content",
+                    type(output_parser).__name__,
+                    deployment_id,
+                    exc_info=True,
+                )
 
         return msg
 
@@ -672,6 +777,17 @@ class ReliableRouter(BaseRouter):
         available = self._get_available_deployments(model_name)
         request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
         if not available:
+            # 计数口径配对：先发 REQUEST_STARTED 使 total_requests +1，
+            # 与随后的 EXHAUSTED（failed +1）配对，避免 failed > total_requests。
+            # 注意这里用 REQUEST_STARTED 而非 STREAM_STARTED——此路径连
+            # 可用性检查都未通过，不应计入 streams（streams 统计进入流式
+            # 入口的请求，STREAM_STARTED 在部署选择前发出）。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model_name,
+                extra=request_extra,
+            ))
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
                 request_id=request_id,
@@ -703,6 +819,15 @@ class ReliableRouter(BaseRouter):
             if selected is None:
                 if errors:
                     break
+                # 计数口径配对：STREAM_STARTED 已发但尚无终态事件，raise 前
+                # 补发 EXHAUSTED（failed +1），避免 total+1 而 failed 不变。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model_name,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
                 raise NoDeploymentAvailable(model_name, "No deployment matched routing strategy")
             request_kwargs = self._request_kwargs_for_deployment(selected, params)
             try:
@@ -771,7 +896,10 @@ class ReliableRouter(BaseRouter):
                 if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
                     raise
                 last_fallback_reason = self._fallback_reason_from_error(e)
-                errors.append((selected.id, last_fallback_reason, str(e)))
+                # errors 统一为二元组 (deployment_id, error_message)，
+                # 与 completion()/stream_completion() 一致；fallback_reason
+                # 已记录在事件的 extra 中，不进 errors。
+                errors.append((selected.id, str(e)))
                 last_failure_metadata = self._route_metadata(
                     selected,
                     attempt=attempt + 1,
@@ -803,11 +931,14 @@ class ReliableRouter(BaseRouter):
             latency=time.time() - overall_start,
             attempt=len(errors),
             total_attempts=total_attempts,
-            error_type=errors[-1][1] if errors else None,
-            error_message=errors[-1][2] if errors else None,
+            # error_type 保持异常类名口径（与 completion()/stream_completion()
+            # 的同类事件一致），不随 errors 二元组化取 str(e)——那会让
+            # error_type 与 error_message 完全相同。
+            error_type=last_fallback_reason if errors else None,
+            error_message=errors[-1][1] if errors else None,
             extra=last_failure_metadata or request_extra,
         ))
-        raise RouterError(f"All deployments failed for stream after {total_attempts} attempts: {errors}")
+        raise AllDeploymentsFailed(model=model_name, errors=errors)
 
     # ------------------------------------------------------------------
     # Internal: type conversion helpers

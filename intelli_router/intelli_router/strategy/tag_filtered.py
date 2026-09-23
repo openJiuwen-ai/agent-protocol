@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 class TagFilteredStrategy(RoutingStrategy):
     """Filter deployments by fallback_tag, then delegate selection.
 
+    Deployments passed in are already availability-filtered by the router
+    (state is the single source of truth).
+
     ``model_description`` is intentionally not used for routing. It is carried
     on Deployment for future cluster-level model understanding.
     """
@@ -34,23 +37,19 @@ class TagFilteredStrategy(RoutingStrategy):
         deployments: List["Deployment"],
         context: "RoutingContext",
     ) -> Optional["Deployment"]:
-        import time
-
-        now = time.time()
-        available = [deployment for deployment in deployments if deployment.is_available(now)]
-        if not available:
+        if not deployments:
             return None
 
         fallback_tag = self._request_fallback_tag()
         if fallback_tag:
-            available = [
+            deployments = [
                 deployment
-                for deployment in available
+                for deployment in deployments
                 if deployment.fallback_tag == fallback_tag
             ]
-        if not available:
+        if not deployments:
             return None
-        return await self.fallback_strategy.select_deployment(available, context)
+        return await self.fallback_strategy.select_deployment(deployments, context)
 
     def on_success(self, deployment: "Deployment", latency: float, tokens: int) -> None:
         self.fallback_strategy.on_success(deployment, latency, tokens)

@@ -190,15 +190,16 @@ class LocalRouterState:
             # 更新健庭状态
             self.health_state[deployment_id] = True
 
-            # 更新Token使用
-            if deployment_id not in self.token_usage:
-                self.token_usage[deployment_id] = TokenUsage()
-            self.token_usage[deployment_id].used += tokens
-
-            # 更新RPM
-            if deployment_id not in self.rpm_tracker:
-                self.rpm_tracker[deployment_id] = RPMTracker()
-            self.rpm_tracker[deployment_id].add_request()
+            # 更新Token使用 / RPM。注意：这里不为未注册配额的部署自动创建
+            # 默认条目（TokenUsage()/RPMTracker() 的 limit 恒 0，会让
+            # remaining 从 inf 塌缩为 0，破坏"未配置即不设限"语义）。
+            # 配额条目只应由 router 的 quota wiring（_sync_quota_state）
+            # 在部署注册时创建；未配置配额的部署服务请求后
+            # get_token_remaining/get_rpm_remaining 仍返回 inf。
+            if deployment_id in self.token_usage:
+                self.token_usage[deployment_id].used += tokens
+            if deployment_id in self.rpm_tracker:
+                self.rpm_tracker[deployment_id].add_request()
 
     def on_failure(
         self,
@@ -220,7 +221,11 @@ class LocalRouterState:
             self.health_state[deployment_id] = False
 
     def get_average_latency(self, deployment_id: str) -> float:
-        """获取平均归一化延迟（latency/tokens，供策略打分使用）"""
+        """获取平均归一化延迟（latency/tokens，供策略打分使用）。
+
+        无延迟记录时返回 float('inf')（未预热部署），策略据此
+        将其延迟得分记为最低优先级，而非报错。
+        """
         records = self.latencies.get(deployment_id, [])
         if not records:
             return float('inf')
@@ -250,8 +255,11 @@ class LocalRouterState:
                         available.append(dep_id)
             return available
 
-    def get_token_remaining(self, deployment_id: str) -> int:
-        """获取剩余Token配额"""
+    def get_token_remaining(self, deployment_id: str) -> float:
+        """获取剩余Token配额。
+
+        无使用记录（未配置配额）时返回 float('inf')，表示不设限。
+        """
         usage = self.token_usage.get(deployment_id)
         if usage:
             return usage.remaining
@@ -326,8 +334,11 @@ class LocalRouterState:
         # 去重保序
         return list(dict.fromkeys(removed))
 
-    def get_rpm_remaining(self, deployment_id: str) -> int:
-        """获取剩余RPM配额"""
+    def get_rpm_remaining(self, deployment_id: str) -> float:
+        """获取剩余RPM配额。
+
+        无追踪记录（未配置配额）时返回 float('inf')，表示不设限。
+        """
         tracker = self.rpm_tracker.get(deployment_id)
         if tracker:
             return tracker.remaining

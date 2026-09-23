@@ -4,6 +4,7 @@ SDK LLM Health - 健康检查
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 import asyncio
+import json
 import time
 import httpx
 from ..core.deployment import Deployment
@@ -52,13 +53,23 @@ class SDKHealthChecker:
         self.check_max_tokens = check_max_tokens
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        # 按 verify_ssl 分组缓存的 httpx 客户端（与 BaseRouter._ensure_client 同范式）
+        self._clients: Dict[bool, httpx.AsyncClient] = {}
         self._client: Optional[httpx.AsyncClient] = None
         self._adapter_cache: dict = {}
 
-    def _ensure_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.check_timeout)
-        return self._client
+    def _ensure_client(self, verify: bool = True) -> httpx.AsyncClient:
+        """获取或创建可复用的httpx客户端（按 verify_ssl 分组缓存）"""
+        client = self._clients.get(verify)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(
+                verify=verify,
+                timeout=self.check_timeout,
+            )
+            self._clients[verify] = client
+        # 兼容视图：供测试/外部注入直接读 _client
+        self._client = client
+        return client
 
     def _get_cached_adapter(self, provider: str):
         if provider not in self._adapter_cache:
@@ -66,9 +77,12 @@ class SDKHealthChecker:
         return self._adapter_cache[provider]
 
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """关闭所有缓存的httpx客户端（含全部 verify 分组）"""
+        for client in self._clients.values():
+            if client is not None and not client.is_closed:
+                await client.aclose()
+        self._clients.clear()
+        self._client = None
 
     async def check_deployment(
         self,
@@ -89,10 +103,17 @@ class SDKHealthChecker:
             )
             url = adapter.get_api_url(deployment)
             headers = adapter.get_headers(deployment)
+            # SigV4 签名的是 body 字节：必须先 json.dumps 成 bytes，
+            # 再以 content= 传递，保证签名与实际请求体一致
+            # （json= 参数会由 httpx 重新序列化，字节可能不一致）。
+            body_bytes = json.dumps(request_body).encode("utf-8")
+            headers = adapter.sign_request(
+                "POST", url, headers, body_bytes, deployment
+            )
 
-            client = self._ensure_client()
+            client = self._ensure_client(deployment.verify_ssl)
             response = await client.post(
-                url, headers=headers, json=request_body
+                url, headers=headers, content=body_bytes
             )
             if response.status_code == 200:
                 latency = time.time() - start

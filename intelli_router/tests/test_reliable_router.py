@@ -62,11 +62,13 @@ class EventCapture:
 
 
 def attach_mock_transport(router: ReliableRouter, capture: RequestCapture) -> None:
-    """Replace router's httpx client with mock transport."""
-    router._client = AsyncClient(
+    """Replace router's httpx client with mock transport (all verify groups)."""
+    client = AsyncClient(
         transport=MockTransport(capture.handler),
         timeout=5.0,
     )
+    router._clients = {True: client, False: client}
+    router._client = client
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +118,29 @@ class TestReliableRouterInvoke:
             "provider": "openai",
             "attempt": 1,
         }
+
+    def test_completion_response_includes_deployment_id(self):
+        """PR !315 检视意见: completion 响应 dict 附带 deployment_id，
+        标识实际服务该请求的部署（invoke() 解析失败告警依赖此字段定位）。"""
+        capture = RequestCapture()
+        dep = Deployment(
+            id="openai-7", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            r = await router.completion(
+                "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+            )
+            await router.close()
+            return r
+        result = asyncio.run(runner())
+
+        assert isinstance(result, dict)
+        assert result["deployment_id"] == "openai-7"
+        # provider 原生字段不受影响
+        assert result["choices"][0]["message"]["content"] == "Hello!"
 
     def test_invoke_maps_cache_usage_metadata_fields(self):
         dep = Deployment(
@@ -248,6 +273,108 @@ class TestReliableRouterInvoke:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "get_weather"
         assert "Beijing" in result.tool_calls[0].arguments
+
+    def test_invoke_parser_failure_logs_warning_and_returns_raw_content(self, caplog):
+        """意见11: 解析器抛异常时不再静默吞掉——记录 warning（含解析器类名
+        与异常栈），同时降级行为保留（调用方拿到原始 content）。"""
+        import logging
+
+        from intelli_router.parser.base import BaseOutputParser
+
+        class ExplodingParser(BaseOutputParser):
+            """总是失败的解析器。"""
+
+            async def parse(self, inputs):
+                raise ValueError("invalid JSON payload")
+
+            async def stream_parse(self, streaming_inputs):
+                raise ValueError("invalid JSON payload")  # pragma: no cover
+
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+        capture = RequestCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            r = await router.invoke(
+                messages=[{"role": "user", "content": "hi"}],
+                output_parser=ExplodingParser(),
+            )
+            await router.close()
+            return r
+
+        with caplog.at_level(
+            logging.WARNING, logger="intelli_router.router.reliable_router"
+        ):
+            result = asyncio.run(runner())
+
+        # 降级行为保留：原始 content 原样返回
+        assert isinstance(result, AssistantMessage)
+        assert "Hello!" in result.content
+
+        # warning 已记录，含解析器类名与异常栈（exc_info）
+        warnings = [
+            rec for rec in caplog.records
+            if rec.levelno == logging.WARNING
+            and "output_parser" in rec.message
+            and "ExplodingParser" in rec.message
+            and "returning raw content" in rec.message
+        ]
+        assert len(warnings) == 1, [r.message for r in caplog.records]
+        assert warnings[0].exc_info is not None
+        assert isinstance(warnings[0].exc_info[1], ValueError)
+
+    def test_invoke_parser_failure_warning_names_real_deployment(self, caplog):
+        """PR !315 检视意见: 解析失败 warning 中的 deployment 应为真实
+        deployment id（响应附带 deployment_id 后不再恒为 None）。"""
+        import logging
+
+        from intelli_router.parser.base import BaseOutputParser
+
+        class ExplodingParser(BaseOutputParser):
+            """总是失败的解析器。"""
+
+            async def parse(self, inputs):
+                raise ValueError("invalid JSON payload")
+
+            async def stream_parse(self, streaming_inputs):
+                raise ValueError("invalid JSON payload")  # pragma: no cover
+
+        dep = Deployment(
+            id="openai-42", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+        capture = RequestCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            r = await router.invoke(
+                messages=[{"role": "user", "content": "hi"}],
+                output_parser=ExplodingParser(),
+            )
+            await router.close()
+            return r
+
+        with caplog.at_level(
+            logging.WARNING, logger="intelli_router.router.reliable_router"
+        ):
+            result = asyncio.run(runner())
+
+        # 降级行为保留：原始 content 原样返回
+        assert "Hello!" in result.content
+
+        warnings = [
+            rec for rec in caplog.records
+            if rec.levelno == logging.WARNING
+            and "output_parser" in rec.message
+            and "returning raw content" in rec.message
+        ]
+        assert len(warnings) == 1, [r.message for r in caplog.records]
+        # warning 文本包含实际服务的部署 id，而非 "None"
+        assert "deployment openai-42" in warnings[0].message
+        assert "deployment None" not in warnings[0].message
 
     def test_invoke_passes_request_params(self):
         class ParamCapture(RequestCapture):

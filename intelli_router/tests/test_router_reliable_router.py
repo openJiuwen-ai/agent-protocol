@@ -364,6 +364,82 @@ async def test_stream_does_not_fallback_after_visible_output(reliable_router):
     assert attempts == [dep1.id]
 
 
+def _failing_stream(error: Exception):
+    """返回总是抛出指定异常的 async generator（模拟 acompletion_stream
+    连接失败）。AsyncMock 不实现 __aiter__，不能用于 patch async
+    generator 方法（会抛 TypeError 且产生 coroutine never awaited 警告）。"""
+    async def failing(*args, **kwargs):
+        raise error
+        yield  # pragma: no cover
+    return failing
+
+
+@pytest.mark.asyncio
+async def test_stream_all_fail_raises_all_deployments_failed(reliable_router):
+    """意见10: stream() 全部部署失败应抛 AllDeploymentsFailed（而非裸 RouterError）。"""
+    with patch.object(
+        reliable_router,
+        'acompletion_stream',
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            async for _ in reliable_router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    # 精确类型断言：不是父类 RouterError 的其他子类
+    assert type(exc_info.value) is AllDeploymentsFailed
+    assert exc_info.value.details["model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_stream_all_fail_errors_are_two_tuples(reliable_router):
+    """意见10: stream() errors 与 completion()/stream_completion() 统一为二元组。"""
+    with patch.object(
+        reliable_router,
+        'acompletion_stream',
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            async for _ in reliable_router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    errors = exc_info.value.details["errors"]
+    assert len(errors) >= 1
+    for entry in errors:
+        # 二元组 (deployment_id, error_message)——不含 fallback_reason
+        assert isinstance(entry, tuple)
+        assert len(entry) == 2
+        deployment_id, error_message = entry
+        assert isinstance(deployment_id, str)
+        assert isinstance(error_message, str)
+        assert error_message  # 非空错误消息
+        # 模拟的是 DeploymentNetworkError，消息应含其文本而非 TypeError 之类
+        assert "fail" in error_message
+
+
+@pytest.mark.asyncio
+async def test_stream_all_fail_maps_to_503(reliable_router):
+    """意见10: stream() 全失败的 AllDeploymentsFailed 应映射 HTTP 503。"""
+    from intelli_router.utils.exceptions import get_status_code
+
+    with patch.object(
+        reliable_router,
+        'acompletion_stream',
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            async for _ in reliable_router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    assert get_status_code(exc_info.value) == 503
+
+
 # -------- batch_completion --------
 
 @pytest.mark.asyncio

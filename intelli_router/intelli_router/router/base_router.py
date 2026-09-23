@@ -8,6 +8,7 @@ import json
 import asyncio
 import logging
 import threading
+import time
 
 import httpx
 
@@ -50,6 +51,13 @@ class BaseRouter:
         self.num_retries = num_retries
         self.timeout = timeout
         self.cache = cache or LocalCache()
+        # 运行期状态（部署状态/冷却等）。BaseRouter 自身只读它做
+        # 可用性过滤；ReliableRouter 会以自己的 state 覆盖此属性
+        # （ReliableRouter 是该 state 的唯一写入方）。
+        self.state = LocalRouterState()
+        # 按 verify_ssl 分组缓存的 httpx 客户端：{verify: AsyncClient}。
+        # _client 单属性仅作兼容视图指向最后创建/使用的 client。
+        self._clients: Dict[bool, httpx.AsyncClient] = {}
         self._client: Optional[httpx.AsyncClient] = None
         self._adapter_cache: Dict[str, BaseProviderAdapter] = {}
         # 保护 deployments/model_indices 的热替换（读多写少）
@@ -71,23 +79,34 @@ class BaseRouter:
         self.model_indices = indices
 
     def get_deployments_for_model(self, model: str) -> List[Deployment]:
-        """获取指定模型的所有部署"""
-        indices = self.model_indices.get(model, [])
-        return [self.deployments[i] for i in indices]
+        """获取指定模型的所有部署
+
+        与 update_deployments 的"先换列表再重建索引"热替换并发时，
+        无锁读取可能拿到新列表+旧索引（或反之）导致 IndexError。
+        加锁把"取索引 + 取列表"变成原子操作；_deployments_lock 是
+        RLock，外层已持锁的调用方（如 _get_available_deployments）
+        重入不会死锁。
+        """
+        with self._deployments_lock:
+            indices = self.model_indices.get(model, [])
+            return [self.deployments[i] for i in indices]
 
     def get_model_list(self) -> List[str]:
         """获取所有模型名列表"""
         return list(self.model_indices.keys())
 
     def get_deployment_configs(self) -> List[Dict[str, Any]]:
-        """获取所有部署配置详情"""
+        """获取所有部署配置详情
+
+        出于安全考虑不回传 api_key 明文，只暴露是否已配置（has_api_key）。
+        """
         return [
             {
                 "id": dep.id,
                 "model_id": dep.model_id,
                 "model_name": dep.model_name,
                 "api_base": dep.api_base,
-                "api_key": dep.api_key,
+                "has_api_key": bool(dep.api_key),
                 "fallback_tag": dep.fallback_tag,
                 "model_description": dep.model_description,
             }
@@ -95,14 +114,17 @@ class BaseRouter:
         ]
 
     def get_deployment_config_by_model(self, model: str) -> List[Dict[str, Any]]:
-        """获取指定模型的部署配置详情"""
+        """获取指定模型的部署配置详情
+
+        出于安全考虑不回传 api_key 明文，只暴露是否已配置（has_api_key）。
+        """
         return [
             {
                 "id": dep.id,
                 "model_id": dep.model_id,
                 "model_name": dep.model_name,
                 "api_base": dep.api_base,
-                "api_key": dep.api_key,
+                "has_api_key": bool(dep.api_key),
                 "fallback_tag": dep.fallback_tag,
                 "model_description": dep.model_description,
             }
@@ -119,10 +141,17 @@ class BaseRouter:
             self._adapter_cache[provider] = get_provider_adapter(provider)
         return self._adapter_cache[provider]
 
-    def _ensure_client(self) -> httpx.AsyncClient:
-        """获取或创建可复用的httpx客户端"""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
+    def _ensure_client(self, verify: bool = True) -> httpx.AsyncClient:
+        """获取或创建可复用的httpx客户端（按 verify_ssl 分组缓存）
+
+        同一 verify 配置的部署共享一个 client；不同 verify 配置
+        （如 verify_ssl=False 的自签/内网部署）各持有独立 client，
+        避免共享 client 吞掉 verify_ssl 差异。
+        """
+        client = self._clients.get(verify)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(
+                verify=verify,
                 timeout=httpx.Timeout(
                     connect=self.timeout,
                     read=self.timeout,
@@ -130,7 +159,16 @@ class BaseRouter:
                     pool=self.timeout,
                 )
             )
-        return self._client
+            self._clients[verify] = client
+        # 兼容视图：供测试/外部注入直接读 _client（如注入 MockTransport client）
+        self._client = client
+        return client
+
+    def _request_timeout(self, deployment: Deployment) -> float:
+        """计算请求实际生效的超时：deployment 显式设置优先，否则回退 router 默认。"""
+        if deployment.timeout is not None:
+            return deployment.timeout
+        return self.timeout
 
     async def _make_request(
         self,
@@ -145,7 +183,8 @@ class BaseRouter:
             request_body: 请求体
 
         Returns:
-            API响应JSON
+            API响应JSON（dict 响应会附带 deployment_id 字段，
+            标识实际服务该请求的部署；provider 已提供该字段则不覆盖）
 
         Raises:
             DeploymentTimeoutError: 请求超时
@@ -155,22 +194,33 @@ class BaseRouter:
             DeploymentNetworkError: 网络连接错误
             DeploymentError: 其他部署错误
         """
-        client = self._ensure_client()
+        client = self._ensure_client(deployment.verify_ssl)
         adapter = self._get_adapter(deployment)
         url = adapter.get_api_url(deployment, stream=False)
         headers = adapter.get_headers(deployment)
         body_bytes = json.dumps(request_body).encode("utf-8")
         headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
+        # per-request 超时覆盖 client 默认值（deployment 显式设置优先）
+        request_timeout = self._request_timeout(deployment)
 
         try:
-            response = await client.post(url, headers=headers, content=body_bytes)
+            response = await client.post(
+                url, headers=headers, content=body_bytes, timeout=request_timeout
+            )
             response.raise_for_status()
             raw = response.json()
-            return adapter.transform_response(raw, deployment.model_name, deployment)
+            result = adapter.transform_response(raw, deployment.model_name, deployment)
+            # 响应附带 deployment_id 标识实际服务的部署：provider 适配器
+            # 不会写该字段，上层（如 invoke() 的解析失败告警）依赖它定位
+            # 具体部署。setdefault：provider 已提供则不覆盖；非 dict 响应
+            # 原样返回。流式路径（acompletion_stream）不附带。
+            if isinstance(result, dict):
+                result.setdefault("deployment_id", deployment.id)
+            return result
         except httpx.TimeoutException as e:
             raise DeploymentTimeoutError(
                 deployment_id=deployment.id,
-                timeout=self.timeout,
+                timeout=request_timeout,
             ) from e
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -219,16 +269,42 @@ class BaseRouter:
             ) from e
 
     async def close(self) -> None:
-        """关闭底层httpx客户端，释放连接池"""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """关闭底层httpx客户端，释放连接池（关闭所有 verify 分组的缓存 client）"""
+        for client in self._clients.values():
+            if client is not None and not client.is_closed:
+                await client.aclose()
+        self._clients.clear()
+        self._client = None
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
         await self.close()
+
+    def _state_available_deployments(self, deployments: List[Deployment]) -> List[Deployment]:
+        """按 state 过滤可用部署（BaseRouter 层的简化判断）。
+
+        state 中标记为 COOLDOWN 且冷却截止时间未过的部署被跳过；
+        冷却已过期的部署直接视为可用（不写回 state）；未登记的部署
+        默认 HEALTHY。
+
+        与 ReliableRouter._get_available_deployments 的差异：本方法
+        不加 state 锁（BaseRouter 读多写少的轻量路径），也不做冷却
+        到期的软恢复（reset_deployment，恢复 health_state 等）——那
+        些写操作属于 ReliableRouter 的职责。锁与软恢复的统一不在
+        本轮范围内。
+        """
+        now = time.time()
+        available = []
+        for dep in deployments:
+            status = self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY)
+            if status == DeploymentStatus.COOLDOWN:
+                cooldown_until = self.state.cooldown_until.get(dep.id, 0)
+                if now < cooldown_until:
+                    continue
+            available.append(dep)
+        return available
 
     async def completion(
         self,
@@ -250,7 +326,9 @@ class BaseRouter:
             API响应
         """
         if deployment is None:
-            deployments = self.get_deployments_for_model(model)
+            deployments = self._state_available_deployments(
+                self.get_deployments_for_model(model)
+            )
             if not deployments:
                 raise NoDeploymentAvailable(model, "No deployment")
             deployment = deployments[0]
@@ -281,7 +359,9 @@ class BaseRouter:
             标准 OpenAI 格式的 streaming chunk dict
         """
         if deployment is None:
-            deployments = self.get_deployments_for_model(model)
+            deployments = self._state_available_deployments(
+                self.get_deployments_for_model(model)
+            )
             if not deployments:
                 raise NoDeploymentAvailable(model, "No deployment")
             deployment = deployments[0]
@@ -292,15 +372,18 @@ class BaseRouter:
         request_body = adapter.transform_request(
             model=model, messages=messages, deployment=deployment, **stream_kwargs
         )
-        client = self._ensure_client()
+        client = self._ensure_client(deployment.verify_ssl)
         url = adapter.get_api_url(deployment, stream=True)
         headers = adapter.get_headers(deployment)
         body_bytes = json.dumps(request_body).encode("utf-8")
         headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
+        # per-request 超时覆盖 client 默认值（deployment 显式设置优先）
+        request_timeout = self._request_timeout(deployment)
 
         try:
             async with client.stream(
-                "POST", url, headers=headers, content=body_bytes
+                "POST", url, headers=headers, content=body_bytes,
+                timeout=request_timeout,
             ) as response:
                 response.raise_for_status()
                 async for chunk in adapter.iter_stream_events(response):
@@ -312,7 +395,7 @@ class BaseRouter:
         except httpx.TimeoutException as e:
             raise DeploymentTimeoutError(
                 deployment_id=deployment.id,
-                timeout=self.timeout,
+                timeout=request_timeout,
             ) from e
         except httpx.HTTPStatusError as e:
             status = e.response.status_code

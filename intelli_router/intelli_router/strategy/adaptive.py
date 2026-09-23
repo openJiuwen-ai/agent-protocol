@@ -18,8 +18,11 @@ class AdaptiveStrategy(RoutingStrategy):
     """
     自适应策略 - 多级决策树
 
+    传入的 deployments 已由 router 按可用性过滤（state 唯一事实源），
+    本策略只做打分与选择：
+
     决策层级:
-    1. 健康检查 → 排除不健康部署
+    1. Session亲和 → 命中历史映射直接返回
     2. Token剩余 → 优先Token充足的
     3. RPM剩余 → 优先RPM配额充足的
     4. 延迟收益 → 优先低延迟的
@@ -102,30 +105,32 @@ class AdaptiveStrategy(RoutingStrategy):
         deployments: List["Deployment"],
         context: "RoutingContext"
     ) -> Optional["Deployment"]:
-        """选择最优部署"""
-        now = time.time()
+        """选择最优部署
 
-        # 过滤可用部署
-        available = [d for d in deployments if d.is_available(now)]
-        if not available:
+        契约：传入的 deployments 已由 router 按可用性（state）过滤，
+        策略不再重复过滤。
+        """
+        if not deployments:
             return None
+
+        now = time.time()
 
         # Session 亲和性检查 (软亲和性)
         session_id = context.kwargs.get("session_id")
         if session_id:
             affinity_deployment = self._get_session_affinity_deployment(
-                session_id, available, now
+                session_id, deployments, now
             )
             if affinity_deployment:
                 return affinity_deployment
 
         # 探索: 随机选择
         if random.random() < self.exploration_ratio:
-            return random.choice(available)
+            return random.choice(deployments)
 
         # 利用: 计算每个部署得分
         scored = []
-        for d in available:
+        for d in deployments:
             score = self._calculate_score(d, now)
             scored.append((d, score))
 
@@ -133,7 +138,7 @@ class AdaptiveStrategy(RoutingStrategy):
         scored.sort(key=lambda x: x[1], reverse=True)
 
         # 返回得分最高的
-        deployment = scored[0][0] if scored else available[0]
+        deployment = scored[0][0] if scored else deployments[0]
 
         # 更新 session 映射
         if session_id:

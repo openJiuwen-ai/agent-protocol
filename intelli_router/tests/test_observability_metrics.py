@@ -113,6 +113,45 @@ class TestMetricsCollector:
         stats = collector.get_stats()
         assert stats["exhausted"] == 1
 
+    async def test_exhausted_counts_as_failed(self, collector):
+        """意见13: exhausted 即最终失败，failed 必须递增（此前恒为 0）。"""
+        await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+        await collector.handle_event(_event(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED))
+        stats = collector.get_stats()
+        assert stats["failed"] == 1
+        assert stats["exhausted"] == 1
+
+    async def test_exhausted_increments_by_model_failures(self, collector):
+        """意见13: by_model 的 failures 随最终失败递增。"""
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_STARTED, model="gpt-4"))
+        await collector.handle_event(_event(
+            RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED, model="gpt-4"))
+        stats = collector.get_stats()
+        assert stats["by_model"]["gpt-4"]["failures"] == 1
+
+    async def test_retry_is_not_final_failure(self, collector):
+        """意见13 口径: 重试≠最终失败，failed 不应在 retried 时递增
+        （避免与 successful 重复计数）。"""
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_RETRIED, error_type="TimeoutError"))
+        stats = collector.get_stats()
+        assert stats["retries"] == 1
+        assert stats["failed"] == 0
+
+    async def test_failed_accumulates_across_exhaustions(self, collector):
+        """多次最终失败累计计数，reset 归零。"""
+        for _ in range(3):
+            await collector.handle_event(_event(
+                RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED, model="gpt-4"))
+        stats = collector.get_stats()
+        assert stats["failed"] == 3
+        assert stats["by_model"]["gpt-4"]["failures"] == 3
+        collector.reset()
+        stats = collector.get_stats()
+        assert stats["failed"] == 0
+        assert stats["by_model"] == {}
+
     async def test_stream_lifecycle(self, collector):
         await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
         await collector.handle_event(_event(
@@ -184,6 +223,7 @@ class TestMetricsCollector:
         assert "errors_by_type" in stats
         assert "qps" in stats
         assert "tokens_per_sec" in stats
+        assert "chunks_per_sec" in stats
 
     async def test_qps(self, collector):
         import time
@@ -218,7 +258,11 @@ class TestMetricsCollector:
         assert stats["tokens_per_sec"]["count"] == 1
         assert stats["tokens_per_sec"]["avg"] == 50.0
 
-    async def test_tokens_per_sec_stream(self, collector):
+    async def test_tokens_per_sec_stream_not_polluted_by_chunks(self, collector):
+        """流式 chunk 速率应进入 chunks_per_sec，不污染 tokens_per_sec。
+
+        chunk ≠ token，若混入 tokens_per_sec 会冒充吐字速率（意见14）。
+        """
         await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
         await collector.handle_event(_event(
             RoutingEventType.STREAM_SUCCEEDED,
@@ -227,9 +271,34 @@ class TestMetricsCollector:
             chunk_count=80,
         ))
         stats = collector.get_stats()
-        # 80 chunks / 1s = 80 tokens/s
+        # 80 chunks / 1s = 80 chunks/s
+        assert stats["chunks_per_sec"]["count"] == 1
+        assert stats["chunks_per_sec"]["avg"] == 80.0
+        # tokens_per_sec 不应被流式 chunk 样本污染
+        assert stats["tokens_per_sec"]["count"] == 0
+        assert stats["tokens_per_sec"]["avg"] == 0.0
+
+    async def test_chunks_per_sec_and_tokens_per_sec_independent(self, collector):
+        """流式与非流式样本分别进入两个独立序列。"""
+        # 非流式：100 tokens / 2s = 50 tokens/s
+        await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_SUCCEEDED,
+            latency=2.0,
+            completion_tokens=100,
+        ))
+        # 流式：80 chunks / 1s = 80 chunks/s
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_SUCCEEDED,
+            latency=1.0,
+            chunk_count=80,
+        ))
+        stats = collector.get_stats()
         assert stats["tokens_per_sec"]["count"] == 1
-        assert stats["tokens_per_sec"]["avg"] == 80.0
+        assert stats["tokens_per_sec"]["avg"] == 50.0
+        assert stats["chunks_per_sec"]["count"] == 1
+        assert stats["chunks_per_sec"]["avg"] == 80.0
 
     async def test_prometheus_import_error(self):
         """enable_prometheus=True without prometheus_client raises ImportError."""
@@ -273,3 +342,61 @@ class TestPrometheusPrefixValidation:
     def test_non_string_prefix_raises(self):
         with pytest.raises(TypeError, match="prometheus_prefix"):
             MetricsCollector(prometheus_prefix=123)
+
+
+class TestExposePrometheus:
+    """意见17: expose_prometheus 默认绑定 127.0.0.1，并返回可停止的服务句柄。"""
+
+    def _prom_available(self):
+        if importlib.util.find_spec("prometheus_client") is None:
+            pytest.skip("prometheus-client is not installed")
+        return True
+
+    def test_default_addr_is_loopback(self):
+        """默认 addr 应为 127.0.0.1（仅本机），而非 0.0.0.0。"""
+        import inspect
+        from intelli_router.observability.metrics import MetricsCollector as MC
+        sig = inspect.signature(MC.expose_prometheus)
+        assert sig.parameters["addr"].default == "127.0.0.1"
+
+    def test_expose_prometheus_returns_handle_and_stops(self):
+        """返回 (server, thread) 句柄，且句柄可用于停止服务。"""
+        self._prom_available()
+        import urllib.request
+        collector = MetricsCollector(
+            enable_prometheus=True, prometheus_prefix="test_expose")
+        result = collector.expose_prometheus(port=0)
+        assert isinstance(result, tuple) and len(result) == 2
+        server, thread = result
+        try:
+            # 句柄已存到实例属性
+            assert collector._prom_server is server
+            assert collector._prom_thread is thread
+            port = server.server_port
+            assert port != 0
+            body = urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/metrics").read()
+            assert len(body) > 0
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        # 停止后端口不再可访问
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=2)
+            reachable = True
+        except Exception:
+            reachable = False
+        assert not reachable
+
+    def test_expose_prometheus_default_returns_handle(self):
+        """默认参数（无 enable_prometheus）也能启动并返回句柄。"""
+        self._prom_available()
+        collector = MetricsCollector(prometheus_prefix="test_expose2")
+        server, thread = collector.expose_prometheus(port=0)
+        try:
+            assert server.server_port != 0
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)

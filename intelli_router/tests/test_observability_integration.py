@@ -145,6 +145,230 @@ async def test_completion_no_deployment_emits_exhausted(event_bus, recorder):
 
 
 @pytest.mark.asyncio
+async def test_stream_completion_no_deployment_emits_exhausted(event_bus, recorder):
+    """意见12: stream_completion() 无可用 deployment 时也触发 ALL_DEPLOYMENTS_EXHAUSTED
+    （与 completion() 对齐），MetricsCollector 的 exhausted 计数 +1。"""
+    from intelli_router.core.deployment import Deployment
+    from intelli_router.observability.metrics import MetricsCollector
+
+    collector = MetricsCollector()
+    event_bus.register(collector)
+
+    router = ReliableRouter(
+        deployments=[Deployment(id="dep-1", model_name="claude-3", provider="anthropic", api_key="k", api_base="https://api.anthropic.com")],
+        event_bus=event_bus,
+    )
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.stream_completion(
+            "nonexistent-model", [{"role": "user", "content": "hi"}]
+        ):
+            pass
+
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_message == "No available deployments"
+    assert exhausted[0].model == "nonexistent-model"
+
+    # MetricsCollector 口径：exhausted 即最终失败，计数 +1
+    stats = collector.get_stats()
+    assert stats["exhausted"] == 1
+
+
+# ---------- metrics 计数口径不变式（PR !315 检视意见） ----------
+# 目标不变式：每个进入 ReliableRouter 的请求，total_requests 与终态
+# 一一配对，successful + failed + 在途 == total_requests。
+# 修复前两类路径破坏配对：
+#   A 类「无可用部署」早退：只发 EXHAUSTED 不发 STARTED → failed 可能 > total
+#   B 类「策略没选出部署」：发了 STARTED 无终态事件 → total+1 而 failed 不变
+
+
+def _router_with_collector(event_bus, deployments, **kwargs):
+    """构造带 MetricsCollector 的 ReliableRouter，返回 (router, collector)。"""
+    from intelli_router.observability.metrics import MetricsCollector
+
+    collector = MetricsCollector()
+    event_bus.register(collector)
+    router = ReliableRouter(deployments=deployments, event_bus=event_bus, **kwargs)
+    return router, collector
+
+
+def _no_dep_router(event_bus):
+    """只有一个 claude-3 部署的 router：请求 nonexistent-model 触发 A 类早退。"""
+    from intelli_router.core.deployment import Deployment
+    return _router_with_collector(
+        event_bus,
+        [Deployment(
+            id="dep-1", model_name="claude-3", provider="anthropic",
+            api_key="k", api_base="https://api.anthropic.com",
+        )],
+    )
+
+
+def _tag_mismatch_router(event_bus):
+    """tag-filtered 策略 + 不匹配的 fallback_tag：select 恒为 None，触发 B 类路径。"""
+    from intelli_router.core.deployment import Deployment
+    return _router_with_collector(
+        event_bus,
+        [
+            Deployment(
+                id="dep-1", model_name="gpt-4", provider="openai",
+                api_key="k", api_base="https://api.openai.com", fallback_tag="primary",
+            ),
+            Deployment(
+                id="dep-2", model_name="gpt-4", provider="openai",
+                api_key="k", api_base="https://api.openai.com", fallback_tag="backup",
+            ),
+        ],
+        strategy="tag-filtered",
+        fallback_tag="missing",
+    )
+
+
+@pytest.mark.asyncio
+async def test_completion_no_deployment_metrics_pairing(event_bus, recorder):
+    """A 类早退（completion）：先发 REQUEST_STARTED 再发 EXHAUSTED，
+    total_requests 与 failed 一一配对（修复前 failed > total_requests）。"""
+    router, collector = _no_dep_router(event_bus)
+    with pytest.raises(NoDeploymentAvailable):
+        await router.completion("nonexistent-model", [{"role": "user", "content": "hi"}])
+
+    stats = collector.get_stats()
+    assert stats["total_requests"] == 1
+    assert stats["failed"] == 1
+    assert stats["exhausted"] == 1
+    assert stats["successful"] == 0
+    assert stats["streams"] == 0
+    assert stats["by_model"]["nonexistent-model"]["failures"] == 1
+
+    # 同一请求的起止事件共享 request_id
+    started = recorder.events_of_type(RoutingEventType.REQUEST_STARTED)
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(started) == 1
+    assert len(exhausted) == 1
+    assert started[0].request_id == exhausted[0].request_id
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_no_deployment_metrics_pairing(event_bus, recorder):
+    """A 类早退（stream_completion）：total 与 failed 配对，且流从未开始 →
+    streams 不 +1（早退补发 REQUEST_STARTED 而非 STREAM_STARTED）。"""
+    router, collector = _no_dep_router(event_bus)
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.stream_completion(
+            "nonexistent-model", [{"role": "user", "content": "hi"}]
+        ):
+            pass
+
+    stats = collector.get_stats()
+    assert stats["total_requests"] == 1
+    assert stats["failed"] == 1
+    assert stats["exhausted"] == 1
+    assert stats["successful"] == 0
+    # 关键：流根本没开始，_stream_count 不应 +1
+    assert stats["streams"] == 0
+    assert stats["by_model"]["nonexistent-model"]["failures"] == 1
+
+    started = recorder.events_of_type(RoutingEventType.REQUEST_STARTED)
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(started) == 1
+    assert len(exhausted) == 1
+    assert started[0].request_id == exhausted[0].request_id
+
+
+@pytest.mark.asyncio
+async def test_stream_no_deployment_metrics_pairing(event_bus, recorder):
+    """A 类早退（stream 高层接口）：total 与 failed 配对，streams 不 +1。"""
+    router, collector = _no_dep_router(event_bus)
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.stream(
+            messages=[{"role": "user", "content": "hi"}], model="nonexistent-model"
+        ):
+            pass
+
+    stats = collector.get_stats()
+    assert stats["total_requests"] == 1
+    assert stats["failed"] == 1
+    assert stats["exhausted"] == 1
+    assert stats["successful"] == 0
+    # 关键：流根本没开始，_stream_count 不应 +1
+    assert stats["streams"] == 0
+    assert stats["by_model"]["nonexistent-model"]["failures"] == 1
+
+    started = recorder.events_of_type(RoutingEventType.REQUEST_STARTED)
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(started) == 1
+    assert len(exhausted) == 1
+    assert started[0].request_id == exhausted[0].request_id
+
+
+@pytest.mark.asyncio
+async def test_completion_strategy_mismatch_metrics_pairing(event_bus, recorder):
+    """B 类（completion 策略未选出部署）：raise 前补发 EXHAUSTED，
+    total_requests 与 failed 配对（修复前 total+1 而 failed 不变）。"""
+    router, collector = _tag_mismatch_router(event_bus)
+    with pytest.raises(NoDeploymentAvailable):
+        await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    stats = collector.get_stats()
+    assert stats["total_requests"] == 1
+    assert stats["failed"] == 1
+    assert stats["exhausted"] == 1
+    assert stats["successful"] == 0
+
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_message == "No deployment matched routing strategy"
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_strategy_mismatch_metrics_pairing(event_bus, recorder):
+    """B 类（stream_completion 策略未选出部署）：raise 前补发 EXHAUSTED。"""
+    router, collector = _tag_mismatch_router(event_bus)
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.stream_completion(
+            "gpt-4", [{"role": "user", "content": "hi"}]
+        ):
+            pass
+
+    stats = collector.get_stats()
+    assert stats["total_requests"] == 1
+    assert stats["failed"] == 1
+    assert stats["exhausted"] == 1
+    assert stats["successful"] == 0
+    # 口径：STREAM_STARTED 在部署选择前发出，策略未选中时 streams 仍 +1
+    # （streams 统计进入流式入口的请求；A 类早退发生在 STREAM_STARTED 之前，为 0）
+    assert stats["streams"] == 1
+
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_message == "No deployment matched routing strategy"
+
+
+@pytest.mark.asyncio
+async def test_stream_strategy_mismatch_metrics_pairing(event_bus, recorder):
+    """B 类（stream 高层接口策略未选出部署）：raise 前补发 EXHAUSTED。"""
+    router, collector = _tag_mismatch_router(event_bus)
+    with pytest.raises(NoDeploymentAvailable):
+        async for _ in router.stream(
+            messages=[{"role": "user", "content": "hi"}], model="gpt-4"
+        ):
+            pass
+
+    stats = collector.get_stats()
+    assert stats["total_requests"] == 1
+    assert stats["failed"] == 1
+    assert stats["exhausted"] == 1
+    assert stats["successful"] == 0
+    # 口径：STREAM_STARTED 在部署选择前发出，策略未选中时 streams 仍 +1
+    # （streams 统计进入流式入口的请求；A 类早退发生在 STREAM_STARTED 之前，为 0）
+    assert stats["streams"] == 1
+
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_message == "No deployment matched routing strategy"
+
+
+@pytest.mark.asyncio
 async def test_request_id_consistent_across_events(router_with_events, recorder):
     """同一请求的所有事件共享相同 request_id"""
     call_count = {"n": 0}
@@ -272,6 +496,10 @@ async def test_stream_emits_retried_and_exhausted(router_with_events, recorder):
     assert len(exhausted) == 1
     assert exhausted[0].extra["route_id"]
     assert exhausted[0].extra["fallback_reason"] == "RuntimeError"
+    # error_type 保持异常类名口径（与 completion()/stream_completion() 的
+    # EXHAUSTED 事件一致），而非与 error_message 相同的错误消息文本
+    assert exhausted[0].error_type == "RuntimeError"
+    assert exhausted[0].error_message == "stream failed"
 
 
 # ---------- backward compatibility ----------

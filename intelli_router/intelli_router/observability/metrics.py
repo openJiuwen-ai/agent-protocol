@@ -144,8 +144,10 @@ class MetricsCollector(EventHandler):
         self._ttft: LatencyStats = LatencyStats()
         self._ttft_by_model: Dict[str, LatencyStats] = defaultdict(LatencyStats)
 
-        # 吐字速率 (tokens/s)
+        # 吐字速率 (tokens/s)：仅统计非流式请求的真实 token 速率
         self._tokens_per_sec: LatencyStats = LatencyStats()
+        # 出块速率 (chunks/s)：流式请求的 chunk 速率（chunk ≠ token，不可混入 tokens_per_sec）
+        self._chunks_per_sec: LatencyStats = LatencyStats()
 
         # QPS 追踪（最近 60s 请求时间戳）
         self._request_timestamps: Deque[float] = deque()
@@ -155,6 +157,9 @@ class MetricsCollector(EventHandler):
 
         # Prometheus (延迟初始化)
         self._prom = None
+        # expose_prometheus 启动的 HTTP 服务句柄（延迟赋值）
+        self._prom_server = None
+        self._prom_thread = None
         if enable_prometheus:
             self._init_prometheus()
 
@@ -283,6 +288,9 @@ class MetricsCollector(EventHandler):
 
     def _on_all_exhausted(self, event: RoutingEvent) -> None:
         self._exhausted_count += 1
+        # exhausted 即请求最终失败（重试后仍无可用部署），计入 failed
+        self._failure_count += 1
+        self._model_failures[event.model] += 1
         if self._prom:
             self._prom["requests_total"].labels(model=event.model, status="exhausted").inc()
 
@@ -307,9 +315,9 @@ class MetricsCollector(EventHandler):
             self._latency_by_model[event.model].observe(event.latency)
         if event.chunk_count:
             self._total_chunks += event.chunk_count
-        # 吐字速率
+        # 出块速率（chunk ≠ token，独立统计，不污染 tokens_per_sec）
         if event.chunk_count and event.latency and event.latency > 0:
-            self._tokens_per_sec.observe(event.chunk_count / event.latency)
+            self._chunks_per_sec.observe(event.chunk_count / event.latency)
         # TTFT
         ttft = event.extra.get("ttft")
         if ttft is not None:
@@ -349,6 +357,7 @@ class MetricsCollector(EventHandler):
             "total_chunks": self._total_chunks,
             "qps": round(qps, 2),
             "tokens_per_sec": self._tokens_per_sec.to_dict(),
+            "chunks_per_sec": self._chunks_per_sec.to_dict(),
             "latency": self._latency.to_dict(),
             "ttft": self._ttft.to_dict(),
             "tokens": {
@@ -358,7 +367,7 @@ class MetricsCollector(EventHandler):
             },
             "by_model": {
                 model: {
-                    "requests": self._model_requests[model],
+                    "requests": self._model_requests.get(model, 0),
                     "successes": self._model_successes.get(model, 0),
                     "failures": self._model_failures.get(model, 0),
                     "latency": self._latency_by_model[model].to_dict()
@@ -366,7 +375,10 @@ class MetricsCollector(EventHandler):
                     "ttft": self._ttft_by_model[model].to_dict()
                     if model in self._ttft_by_model else None,
                 }
-                for model in self._model_requests
+                # 并集：有请求或有失败记录的 model 都应出现
+                # （正常路径下失败均有配对的 STARTED 事件；取并集是防御旧版本
+                # 事件流或外部直发事件时的 key 缺失）
+                for model in self._model_requests.keys() | self._model_failures.keys()
             },
             "by_deployment": {
                 dep_id: {
@@ -384,16 +396,23 @@ class MetricsCollector(EventHandler):
             "timeline": list(self._timeline),
         }
 
-    def expose_prometheus(self, port: int = 9090, addr: str = "0.0.0.0") -> None:
+    def expose_prometheus(
+        self, port: int = 9090, addr: str = "127.0.0.1"
+    ) -> tuple:
         """启动 Prometheus HTTP 服务，暴露指标供 Grafana 等 scrape
 
         Args:
             port: HTTP 服务端口，默认 9090
-            addr: 绑定地址，默认 0.0.0.0
+            addr: 绑定地址，默认 127.0.0.1（仅本机访问；
+                对外暴露需显式传入如 "0.0.0.0"）
+
+        Returns:
+            (server, thread) 元组（prometheus_client.start_http_server
+            的返回值），调用方可用其 shutdown()/server_close() 停止服务。
 
         用法:
             collector = MetricsCollector(enable_prometheus=True)
-            collector.expose_prometheus(port=9090)
+            server, thread = collector.expose_prometheus(port=9090)
             # 然后 curl http://localhost:9090/metrics
         """
         if not self._enable_prometheus:
@@ -408,7 +427,9 @@ class MetricsCollector(EventHandler):
                 "Install with: pip install intelli-router[metrics]"
             )
 
-        start_http_server(port, addr=addr)
+        # 保留句柄，供调用方（或后续 stop_prometheus）停止服务
+        self._prom_server, self._prom_thread = start_http_server(port, addr=addr)
+        return self._prom_server, self._prom_thread
 
     def reset(self) -> None:
         """重置所有内存指标"""
@@ -436,5 +457,6 @@ class MetricsCollector(EventHandler):
         self._ttft = LatencyStats()
         self._ttft_by_model.clear()
         self._tokens_per_sec = LatencyStats()
+        self._chunks_per_sec = LatencyStats()
         self._request_timestamps.clear()
         self._timeline.clear()

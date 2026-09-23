@@ -1,8 +1,8 @@
 """轻量 Web 指标看板 - 基于 stdlib http.server"""
 import json
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import TYPE_CHECKING
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
     from .metrics import MetricsCollector
@@ -106,6 +106,7 @@ tbody tr:last-child td { border-bottom: none; }
   <div class="card"><div class="value" id="success-rate">-</div><div class="label">Success Rate</div></div>
   <div class="card"><div class="value" id="avg-latency">-</div><div class="label">Avg Latency</div><div class="sub" id="latency-pct"></div></div>
   <div class="card"><div class="value" id="tokens-per-sec">-</div><div class="label">Tokens/s</div></div>
+  <div class="card"><div class="value" id="chunks-per-sec">-</div><div class="label">Chunks/s</div></div>
   <div class="card"><div class="value" id="total-tokens">-</div><div class="label">Tokens</div></div>
   <div class="card"><div class="value" id="ttft">-</div><div class="label">Avg TTFT</div></div>
 </div>
@@ -189,6 +190,8 @@ function update(data) {
   document.getElementById('latency-pct').textContent = lp.p50 != null ? `P50 ${lp.p50.toFixed(3)}s · P95 ${lp.p95.toFixed(3)}s · P99 ${lp.p99.toFixed(3)}s` : '';
   const tps = data.tokens_per_sec;
   document.getElementById('tokens-per-sec').textContent = tps && tps.count > 0 ? tps.avg.toFixed(0) : '-';
+  const cps = data.chunks_per_sec;
+  document.getElementById('chunks-per-sec').textContent = cps && cps.count > 0 ? cps.avg.toFixed(0) : '-';
   document.getElementById('total-tokens').textContent = formatTokens(data.tokens.total);
   document.getElementById('ttft').textContent = data.ttft && data.ttft.count > 0 ? data.ttft.avg.toFixed(3) + 's' : '-';
   document.getElementById('status-text').textContent = 'Live · ' + new Date().toLocaleTimeString();
@@ -210,29 +213,54 @@ function update(data) {
   timelineChart.data.datasets[0].data = recentWithLatency.map(e => e.latency);
   timelineChart.update();
 
+  // 每次刷新前清空 tbody，避免轮询刷新时行无限累积
+  function clearRows(tbody) {
+    while (tbody.rows.length) tbody.deleteRow(-1);
+  }
+
+  // 用 DOM API 填充一行（textContent 逐单元格赋值，杜绝 XSS）
+  function fillRow(tbody, cells, className) {
+    const tr = tbody.insertRow(-1);
+    if (className) tr.className = className;
+    for (const cell of cells) {
+      const td = tr.insertCell(-1);
+      td.textContent = cell;
+    }
+    return tr;
+  }
+
   const dt = document.getElementById('deploy-table');
-  dt.innerHTML = '';
+  clearRows(dt);
   for (const [dep, stats] of Object.entries(data.by_deployment || {})) {
     const lat = stats.latency && stats.latency.count > 0 ? stats.latency.avg.toFixed(3) + 's' : '-';
-    dt.innerHTML += `<tr><td>${dep}</td><td>${stats.provider || '-'}</td><td>${stats.requests}</td><td>${stats.successes}</td><td>${stats.failures}</td><td>${lat}</td><td>${formatTokens(stats.tokens || 0)}</td></tr>`;
+    fillRow(dt, [dep, stats.provider || '-', stats.requests, stats.successes, stats.failures, lat, formatTokens(stats.tokens || 0)]);
   }
-  if (!depLabels.length) dt.innerHTML = '<tr><td colspan="7" class="empty">No data yet</td></tr>';
+  if (!depLabels.length) {
+    const tr = fillRow(dt, ['No data yet'], 'empty');
+    tr.cells[0].colSpan = 7;
+  }
 
   const mt = document.getElementById('model-table');
-  mt.innerHTML = '';
+  clearRows(mt);
   for (const [model, stats] of Object.entries(data.by_model || {})) {
     const lat = stats.latency && stats.latency.count > 0 ? stats.latency.avg.toFixed(3) + 's' : '-';
     const ttft = stats.ttft && stats.ttft.count > 0 ? stats.ttft.avg.toFixed(3) + 's' : '-';
-    mt.innerHTML += `<tr><td>${model}</td><td>${stats.requests}</td><td>${stats.successes}</td><td>${stats.failures}</td><td>${lat}</td><td>${ttft}</td></tr>`;
+    fillRow(mt, [model, stats.requests, stats.successes, stats.failures, lat, ttft]);
   }
-  if (!Object.keys(data.by_model || {}).length) mt.innerHTML = '<tr><td colspan="6" class="empty">No data yet</td></tr>';
+  if (!Object.keys(data.by_model || {}).length) {
+    const tr = fillRow(mt, ['No data yet'], 'empty');
+    tr.cells[0].colSpan = 6;
+  }
 
   const et = document.getElementById('error-table');
-  et.innerHTML = '';
+  clearRows(et);
   for (const [err, count] of Object.entries(data.errors_by_type || {})) {
-    et.innerHTML += `<tr><td>${err}</td><td>${count}</td></tr>`;
+    fillRow(et, [err, count]);
   }
-  if (!Object.keys(data.errors_by_type || {}).length) et.innerHTML = '<tr><td colspan="2" class="empty">No errors</td></tr>';
+  if (!Object.keys(data.errors_by_type || {}).length) {
+    const tr = fillRow(et, ['No errors'], 'empty');
+    tr.cells[0].colSpan = 2;
+  }
 }
 
 async function fetchStats() {
@@ -258,7 +286,8 @@ _DASHBOARD_HTML_BYTES = _DASHBOARD_HTML.encode("utf-8")
 class MetricsWebServer:
     """轻量 Web 指标看板
 
-    基于 Python stdlib http.server，提供一个实时刷新的 HTML 看板页面。
+    基于 Python stdlib http.server（多线程 ThreadingHTTPServer），
+    提供一个实时刷新的 HTML 看板页面。
     零额外依赖，图表使用浏览器端 Chart.js CDN。
 
     用法:
@@ -271,13 +300,17 @@ class MetricsWebServer:
         server.start()
         # 浏览器打开 http://localhost:8080
         server.stop()
+
+    默认仅绑定 127.0.0.1（本机访问）；如需对外暴露，
+    请显式传入 addr（如 "0.0.0.0"）并自行确保网络安全。
     """
 
     def __init__(
         self,
         metrics: "MetricsCollector",
         port: int = 8080,
-        addr: str = "0.0.0.0",
+        addr: str = "127.0.0.1",
+        cors_origins: Optional[Union[str, list]] = None,
     ):
         if isinstance(port, bool) or not isinstance(port, int):
             raise TypeError(f"port must be an int, got {type(port).__name__}")
@@ -285,16 +318,29 @@ class MetricsWebServer:
             raise ValueError(
                 f"port must be in range 0-65535 (0 = dynamic assignment), got {port}"
             )
+        if cors_origins is not None and not isinstance(cors_origins, (str, list)):
+            raise TypeError(
+                f"cors_origins must be a str, a list of str, or None, "
+                f"got {type(cors_origins).__name__}"
+            )
         self._metrics = metrics
         self._port = port
         self._addr = addr
+        # None: 不发送 ACAO 头；"*": 无条件通配；str/list: 白名单，
+        # 仅当请求 Origin 精确命中时回显该单个源（list 中的 "*" 只是
+        # 普通白名单条目、不会当作通配——通配请直接传 "*" 字符串）
+        self._cors_origins = cors_origins
         self._thread = None
         self._httpd = None
 
     @property
     def url(self) -> str:
         """看板访问地址"""
-        host = "localhost" if self._addr == "0.0.0.0" else self._addr
+        host = (
+            "localhost"
+            if self._addr in ("0.0.0.0", "127.0.0.1", "::")
+            else self._addr
+        )
         return f"http://{host}:{self._port}"
 
     def start(self) -> None:
@@ -322,7 +368,26 @@ class MetricsWebServer:
                 data = json.dumps(metrics.get_stats(), ensure_ascii=False)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                if cors_origins is not None:
+                    if cors_origins == "*":
+                        # 通配：无条件放行，响应与 Origin 无关，无需 Vary
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                    else:
+                        # CORS 规范只允许 ACAO 为单个源或 "*"，多个源用逗号
+                        # 拼接会被浏览器整体拒绝（多源配置静默失效）。
+                        # 因此白名单命中后只回显请求的那一个源；
+                        # 未命中或不带 Origin 头则不放行。
+                        allowed = (
+                            [cors_origins]
+                            if isinstance(cors_origins, str)
+                            else cors_origins
+                        )
+                        origin = self.headers.get("Origin")
+                        if origin is not None and origin in allowed:
+                            self.send_header("Access-Control-Allow-Origin", origin)
+                            # 回显的 ACAO 随请求 Origin 变化，
+                            # 声明 Vary 防止缓存把响应错配给其他源
+                            self.send_header("Vary", "Origin")
                 self.end_headers()
                 self.wfile.write(data.encode("utf-8"))
 
@@ -355,7 +420,12 @@ class MetricsWebServer:
             def log_message(self, format, *args):
                 pass  # 静默，不输出到 stderr
 
-        self._httpd = HTTPServer((self._addr, self._port), Handler)
+        cors_origins = self._cors_origins
+
+        class ThreadingHTTPServerWithDaemon(ThreadingHTTPServer):
+            daemon_threads = True
+
+        self._httpd = ThreadingHTTPServerWithDaemon((self._addr, self._port), Handler)
         # port=0 时 OS 会动态分配端口，绑定后回读实际端口
         self._port = self._httpd.server_port
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
@@ -365,6 +435,9 @@ class MetricsWebServer:
         """停止 HTTP 服务"""
         if self._httpd:
             self._httpd.shutdown()
+            # shutdown 只停止 serve_forever 循环，不关闭监听 socket；
+            # 必须显式 server_close 才能立即释放端口
+            self._httpd.server_close()
             self._httpd = None
         if self._thread:
             self._thread.join(timeout=5)
