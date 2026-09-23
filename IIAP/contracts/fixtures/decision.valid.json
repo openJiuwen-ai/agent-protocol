@@ -1,0 +1,1 @@
+{"type":"iiap.decision","iiapVersion":"0.1","decisionId":"dec_demo_001","packetId":"pkt_demo_001","surfaceInstanceId":"message-1:booking","payload":{"decision":"offer_help","reason":"comparison_need","offerType":"text_assistance","helpTopic":"compare_options","uiStyle":"inline_card","message":"我可以帮你梳理这些选项。"}}

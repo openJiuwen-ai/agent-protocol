@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjiuwen.org/iiap/0.1/assistance.schema.json",
+  "title": "IIAP Assistance",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "iiapVersion", "requestId", "packetId", "decisionId", "surfaceInstanceId", "topic", "language"],
+      "properties": {
+        "type": {"const": "iiap.assistance.request"}, "iiapVersion": {"const": "0.1"}, "requestId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "packetId": {"type": "string", "minLength": 1, "maxLength": 128}, "decisionId": {"type": "string", "minLength": 1, "maxLength": 128}, "surfaceInstanceId": {"type": "string", "minLength": 1, "maxLength": 512},
+        "topic": {"enum": ["compare_options", "explain_rules", "fix_block", "save_progress"]},
+        "language": {"type": "string", "minLength": 1, "maxLength": 64}
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "iiapVersion", "requestId", "message"],
+      "properties": {
+        "type": {"const": "iiap.assistance.response"}, "iiapVersion": {"const": "0.1"}, "requestId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "message": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "name": "plain text",
+    "message": "I can help you compare the visible options.",
+    "valid": true
+  },
+  {
+    "name": "ordinary markdown",
+    "message": "## 建议\n\n先确认必填项，再提交表单。",
+    "valid": true
+  },
+  {
+    "name": "ordinary json example",
+    "message": "```json\n{\"status\":\"ready\"}\n```",
+    "valid": true
+  },
+  {
+    "name": "tagged a2ui",
+    "message": "请参考：<a2ui-json>[{\"beginRendering\":{\"surfaceId\":\"help\"}}]</a2ui-json>",
+    "valid": false,
+    "reason": "a2ui_tag"
+  },
+  {
+    "name": "v08 raw message",
+    "message": "[{\"surfaceUpdate\":{\"surfaceId\":\"help\",\"components\":[]}}]",
+    "valid": false,
+    "reason": "a2ui_message"
+  },
+  {
+    "name": "v091 raw message",
+    "message": "{\"createSurface\":{\"surfaceId\":\"help\"}}",
+    "valid": false,
+    "reason": "a2ui_message"
+  },
+  {
+    "name": "a2ui jsonl",
+    "message": "{\"updateComponents\":{\"surfaceId\":\"help\",\"components\":[]}}\n{\"updateDataModel\":{\"surfaceId\":\"help\",\"path\":\"/\",\"value\":{}}}",
+    "valid": false,
+    "reason": "a2ui_message"
+  },
+  {
+    "name": "embedded fenced a2ui",
+    "message": "这里是帮助。\n```json\n[{\"dataModelUpdate\":{\"surfaceId\":\"help\",\"path\":\"/x\",\"value\":1}}]\n```",
+    "valid": false,
+    "reason": "a2ui_message"
+  }
+]

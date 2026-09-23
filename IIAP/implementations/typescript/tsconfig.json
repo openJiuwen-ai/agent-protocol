@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@openjiuwen/iiap": ["packages/core/src/index.ts"],
+      "@openjiuwen/iiap/decision": ["packages/decision-client/src/index.ts"],
+      "@openjiuwen/iiap/a2ui-v08": ["../../adapters/a2ui-v0.8/src/index.ts"],
+      "@openjiuwen/iiap/http": ["../../transports/http/src/index.ts"],
+      "@openjiuwen/iiap/react": ["../../presenters/react/src/index.tsx"],
+      "@openjiuwen/iiap/testing": ["packages/core/src/testing.ts"]
+    },
+    "rootDir": "../..",
+    "outDir": "dist",
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "packages/**/*.ts",
+    "tests/**/*.ts",
+    "../../adapters/**/*.ts",
+    "../../transports/**/*.ts",
+    "../../presenters/**/*.ts",
+    "../../presenters/**/*.tsx",
+    "../../examples/typescript/**/*.ts",
+    "../../tests/conformance/**/*.ts",
+    "../../tests/integration/**/*.ts"
+  ]
+}

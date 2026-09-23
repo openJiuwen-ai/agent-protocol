@@ -1,0 +1,31 @@
+{
+  "name": "@openjiuwen/iiap",
+  "version": "0.1.0-rc.1",
+  "description": "Privacy-safe interaction observation and optional assistance for agent-driven UIs.",
+  "author": "openJiuwen",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitcode.com/openJiuwen/agent-protocol.git",
+    "directory": "IIAP"
+  },
+  "homepage": "https://gitcode.com/openJiuwen/agent-protocol/tree/A2UI/IIAP",
+  "bugs": {"url": "https://gitcode.com/openJiuwen/agent-protocol/issues"},
+  "keywords": ["openjiuwen", "iiap", "agent-protocol", "a2ui", "interaction-assistance"],
+  "engines": {"node": ">=20"},
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
+    "./decision": {"types": "./dist/decision/index.d.ts", "import": "./dist/decision/index.js"},
+    "./http": {"types": "./dist/http/index.d.ts", "import": "./dist/http/index.js"},
+    "./a2ui-v08": {"types": "./dist/a2ui-v08/index.d.ts", "import": "./dist/a2ui-v08/index.js"},
+    "./react": {"types": "./dist/react/index.d.ts", "import": "./dist/react/index.js"},
+    "./testing": {"types": "./dist/testing.d.ts", "import": "./dist/testing.js"},
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "LICENSE", "README.md"],
+  "peerDependencies": {"react": "^18.2.0"},
+  "peerDependenciesMeta": {"react": {"optional": true}}
+}

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openjiuwen-iiap"
+version = "0.1.0rc1"
+description = "IIAP decision and assistance services"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{name = "openJiuwen"}]
+keywords = ["openjiuwen", "iiap", "agent-protocol", "a2ui", "interaction-assistance"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+]
+dependencies = ["jsonschema>=4.23"]
+
+[project.urls]
+Homepage = "https://gitcode.com/openJiuwen/agent-protocol/tree/A2UI/IIAP"
+Repository = "https://gitcode.com/openJiuwen/agent-protocol"
+Issues = "https://gitcode.com/openJiuwen/agent-protocol/issues"
+Documentation = "https://gitcode.com/openJiuwen/agent-protocol/tree/A2UI/IIAP/docs"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"iiap.schemas" = ["*.json"]

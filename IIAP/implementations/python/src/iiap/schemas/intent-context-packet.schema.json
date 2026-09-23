@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjiuwen.org/iiap/0.1/intent-context-packet.schema.json",
+  "title": "IIAP IntentContextPacket",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["iiapVersion", "packetId", "sessionId", "messageId", "originalSurfaceId", "surfaceInstanceId", "protocolVersion", "timestamp", "window", "surfaceContext", "observations", "patterns", "reportHistory", "allowedOperations"],
+  "properties": {
+    "iiapVersion": {"const": "0.1"},
+    "packetId": {"type": "string", "minLength": 1},
+    "sessionId": {"type": "string", "minLength": 1},
+    "messageId": {"type": "string", "minLength": 1},
+    "originalSurfaceId": {"type": "string", "minLength": 1},
+    "surfaceInstanceId": {"type": "string", "minLength": 1},
+    "protocolVersion": {"enum": ["0.8", "0.9.1"]},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "window": {"$ref": "#/$defs/window"},
+    "surfaceContext": {"$ref": "#/$defs/surfaceContext"},
+    "observations": {"$ref": "#/$defs/observations"},
+    "patterns": {"type": "array", "items": {"$ref": "#/$defs/pattern"}, "maxItems": 32},
+    "reportHistory": {"type": "array", "items": {"$ref": "#/$defs/history"}, "maxItems": 3},
+    "allowedOperations": {"$ref": "#/$defs/allowedOperations"},
+    "testScenario": {
+      "enum": ["model", "compare_options", "explain_rules", "fix_block", "save_progress", "update_suggestion", "no_intervention", "defer", "invalid_json"],
+      "description": "仅由宿主 test profile 写入的确定性场景约束。production 包禁止携带该字段；服务端只能因它改变决策倾向，不得放宽任何隐私、安全或白名单校验，也不得改写 packet 的其他协议事实。"
+    }
+  },
+  "$defs": {
+    "scalar": {"type": ["string", "number", "boolean"]},
+    "window": {
+      "type": "object", "additionalProperties": false,
+      "required": ["startTime", "endTime", "durationMs"],
+      "properties": {
+        "startTime": {"type": "string", "format": "date-time"},
+        "endTime": {"type": "string", "format": "date-time"},
+        "durationMs": {"type": "number", "minimum": 0}
+      }
+    },
+    "redaction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dataModelExcluded", "actionContextValuesExcluded", "unreachableComponentsExcluded", "unknownCustomPropertiesExcluded", "truncated"],
+      "properties": {
+        "dataModelExcluded": {"const": true},
+        "actionContextValuesExcluded": {"const": true},
+        "unreachableComponentsExcluded": {"type": "boolean"},
+        "unknownCustomPropertiesExcluded": {"type": "boolean"},
+        "truncated": {"type": "boolean"}
+      }
+    },
+    "surfaceContext": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "snapshotType", "definition", "redaction"],
+      "properties": {
+        "protocol": {"const": "a2ui"},
+        "protocolVersion": {"enum": ["0.8", "0.9.1"]},
+        "snapshotType": {"const": "sanitized_effective_definition"},
+        "definition": {
+          "type": "array", "items": {"type": "object"}, "minItems": 1,
+          "description": "脱敏后的 A2UI 增量 message 序列，每个元素是一条可重放的 message（如 beginRendering + surfaceUpdate）。条数不设上限，其内的组件总数由 Adapter 限制为 128 并在约 16 KiB 时从尾部裁剪，裁剪结果必须由 surfaceContext.redaction.truncated 标记。"
+        },
+        "redaction": {"$ref": "#/$defs/redaction"}
+      }
+    },
+    "event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "sequence", "offsetMs", "componentId", "eventType"],
+      "properties": {
+        "eventId": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "offsetMs": {"type": "number", "minimum": 0},
+        "componentId": {"type": "string", "minLength": 1},
+        "eventType": {"enum": ["change", "validation_error", "open", "close", "tab_change", "play", "pause", "seek", "scroll", "explicit_action"]},
+        "valueToken": {"type": "string"},
+        "optionToken": {"type": "string"},
+        "selectionState": {"enum": ["selected", "cleared"]},
+        "validityState": {"enum": ["valid", "invalid"]},
+        "interactionKind": {"type": "string"}
+      }
+    },
+    "completeness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["complete", "droppedEventCount"],
+      "properties": {"complete": {"type": "boolean"}, "droppedEventCount": {"type": "integer", "minimum": 0}}
+    },
+    "observations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tokenScope", "events", "completeness"],
+      "properties": {
+        "tokenScope": {"const": "component_within_surface_instance"},
+        "events": {
+          "type": "array", "items": {"$ref": "#/$defs/event"}, "maxItems": 128,
+          "description": "本报告窗口内的脱敏事实，最多 128 条。Runtime 按事件序号保留最近事实，并把被丢弃的数量写入 observations.completeness.droppedEventCount；任何裁剪都必须使 complete 为 false。patterns.basedOnEvents 只能引用本数组内存在的 eventId。"
+        },
+        "completeness": {"$ref": "#/$defs/completeness"}
+      }
+    },
+    "pattern": {
+      "type": "object", "additionalProperties": false,
+      "required": ["patternId", "type", "componentId", "basedOnEvents", "metrics"],
+      "properties": {
+        "patternId": {"type": "string", "minLength": 1},
+        "type": {"enum": ["state_alternation", "repeated_change", "selection_reversal", "validation_failure_sequence", "repeated_open", "repeated_navigation", "repeated_media_control", "repeated_viewport_navigation"]},
+        "componentId": {"type": "string", "minLength": 1},
+        "basedOnEvents": {"type": "array", "items": {"type": "string"}, "maxItems": 128},
+        "metrics": {"type": "object", "additionalProperties": {"$ref": "#/$defs/scalar"}}
+      }
+    },
+    "history": {
+      "type": "object", "additionalProperties": false,
+      "required": ["packetId", "timestamp", "window", "observations", "patterns"],
+      "properties": {
+        "packetId": {"type": "string"}, "timestamp": {"type": "string", "format": "date-time"},
+        "window": {"$ref": "#/$defs/window"},
+        "observations": {"$ref": "#/$defs/observations"},
+        "patterns": {"type": "array", "items": {"$ref": "#/$defs/pattern"}, "maxItems": 32}
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["componentId", "componentType", "originalSurfaceId", "bindingPath", "allowedValues"],
+      "properties": {
+        "componentId": {"type": "string"}, "componentType": {"type": "string"},
+        "originalSurfaceId": {"type": "string"}, "bindingPath": {"type": "string", "minLength": 1},
+        "allowedValues": {"type": "array", "minItems": 1, "items": {"anyOf": [{"$ref": "#/$defs/scalar"}, {"type": "null"}]}, "maxItems": 16},
+        "selectionMode": {"enum": ["single", "multiple"]},
+        "maxAllowedSelections": {"type": "integer", "minimum": 1}
+      },
+      "allOf": [
+        {"if": {"properties": {"selectionMode": {"const": "single"}}, "required": ["selectionMode"]}, "then": {"properties": {"maxAllowedSelections": {"const": 1}}}},
+        {"if": {"properties": {"selectionMode": {"const": "multiple"}}, "required": ["selectionMode"]}, "then": {"properties": {"maxAllowedSelections": {"minimum": 2}}}},
+        {"if": {"required": ["maxAllowedSelections"]}, "then": {"required": ["selectionMode"]}}
+      ]
+    },
+    "allowedOperations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["updateTargets"],
+      "properties": {"updateTargets": {"type": "array", "items": {"$ref": "#/$defs/target"}, "maxItems": 8}}
+    }
+  }
+}
