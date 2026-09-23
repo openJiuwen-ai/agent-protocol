@@ -1,6 +1,6 @@
 # Compatibility and security
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Supported baseline
 
@@ -26,9 +26,12 @@ custom adapter or wait for a future conformance-complete release.
 - Malformed packets and decisions fail closed before unsafe work is performed.
 - Feedback upload is disabled by default.
 
-## Accepted v0.1 limitation
+## Definition sanitization
 
-The v0.8 definition sanitizer excludes data-model contents and action-context
-values, but it does not maintain a per-component property allowlist. Generated
-packets therefore report `unknownCustomPropertiesExcluded: false`. Hosts must
-not place secrets in arbitrary A2UI definition properties.
+The v0.8 definition sanitizer retains only fields from the standard A2UI v0.8
+component catalog. It excludes data-model contents, action-context values,
+unknown component properties, and properties of unknown component types;
+generated packets therefore report `unknownCustomPropertiesExcluded: true`.
+The service also recursively rejects normalized sensitive field names and does
+not send definitions marked as retaining unknown properties to a model. Hosts
+must still never place secrets in legitimate visible static-text fields.

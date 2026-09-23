@@ -129,7 +129,28 @@ test('v0.8 adapter builds an equivalent observation plan', () => {
   assert.equal(definition.includes('private-date'), false);
   assert.equal(definition.includes('private'), false);
   assert.equal(definition.includes('"name":"submit"'), true);
-  assert.equal(plan.surfaceContext.redaction.unknownCustomPropertiesExcluded, false);
+  assert.equal(plan.surfaceContext.redaction.unknownCustomPropertiesExcluded, true);
+});
+
+test('v0.8 adapter excludes unknown and sensitive component properties from model context', () => {
+  const plan = firstPlan(new A2UIV08Adapter(), {
+    sessionId: 's', messageId: 'm', namespace: 'm', messages: [
+      { beginRendering: { surfaceId: 'form', root: 'field' } },
+      { surfaceUpdate: { surfaceId: 'form', components: [{
+        id: 'field', component: { TextField: {
+          label: { literalString: 'Name', authToken: 'do-not-send' },
+          text: { path: '/name' }, password: 'do-not-send', customMetadata: { secret: 'do-not-send' },
+        } },
+      }] } },
+    ],
+  });
+  const definition = JSON.stringify(plan.surfaceContext.definition);
+  assert.equal(definition.includes('Name'), true);
+  assert.equal(definition.includes('/name'), true);
+  for (const forbidden of ['authToken', 'password', 'customMetadata', 'do-not-send']) {
+    assert.equal(definition.includes(forbidden), false, forbidden);
+  }
+  assert.equal(plan.surfaceContext.redaction.unknownCustomPropertiesExcluded, true);
 });
 
 test('adapter creates one isolated observation plan per surface', () => {
@@ -448,6 +469,46 @@ test('host-managed async transport uses onPacket and cancelDecision without a se
   runtime.dispose();
 });
 
+test('host-managed delivery uploads correlated feedback through onFeedback', async () => {
+  let packet: IntentContextPacket | undefined;
+  let completePresentation: ((interaction: 'dismissed') => void) | undefined;
+  const uploaded: unknown[] = [];
+  const runtime = createIIAPRuntime({
+    onPacket: (value) => { packet = value; },
+    onFeedback: (feedback) => { uploaded.push(feedback); },
+    feedbackUpload: true,
+    presenter: {
+      present: async () => await new Promise<'dismissed'>((resolve) => { completePresentation = resolve; }),
+    },
+    policy: { componentQuietMs: 60_000, surfaceIdleMs: 60_000, minReportIntervalMs: 0, thresholds: { temporalChangeCount: 1 } },
+  });
+  const plan = firstPlan(new A2UIV08Adapter(), {
+    sessionId: 's', messageId: 'm', namespace: 'm', messages: [
+      { surfaceUpdate: { surfaceId: 'form', components: [{ id: 'date', component: { DateTimeInput: {} } }] } },
+    ],
+  });
+  const session = runtime.createSession({ sessionId: 's' });
+  const handle = session.activate(plan);
+  handle.observe({ ...owner(plan), componentId: 'date', eventType: 'change', valueToken: 'A' });
+  await handle.flush();
+  assert.ok(packet);
+  assert.equal(session.handleDecision({
+    type: 'iiap.decision', iiapVersion: '0.1', decisionId: 'host-decision',
+    packetId: packet.packetId, surfaceInstanceId: packet.surfaceInstanceId,
+    payload: { decision: 'offer_help', reason: 'help', offerType: 'text_assistance', helpTopic: 'explain_rules', uiStyle: 'inline_card', message: 'help' },
+  }), true);
+  assert.ok(completePresentation);
+  completePresentation('dismissed');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(uploaded.length, 1);
+  assert.deepEqual(uploaded[0], {
+    type: 'iiap.feedback', iiapVersion: '0.1', packetId: packet.packetId,
+    decisionId: 'host-decision', surfaceInstanceId: packet.surfaceInstanceId,
+    offerType: 'text_assistance', interaction: 'dismissed', timestamp: uploaded[0] && (uploaded[0] as { timestamp: string }).timestamp,
+  });
+  runtime.dispose();
+});
+
 test('runtime rejects simultaneous host-managed and SDK-managed delivery', () => {
   assert.throws(() => createIIAPRuntime({
     onPacket: () => undefined,
@@ -458,6 +519,13 @@ test('runtime rejects simultaneous host-managed and SDK-managed delivery', () =>
       }),
     },
   } as never), /mutually exclusive/);
+  assert.throws(() => createIIAPRuntime({ feedbackUpload: true }), /requires onFeedback/);
+  assert.throws(() => createIIAPRuntime({
+    onPacket: () => undefined, feedbackUpload: true,
+  }), /requires onFeedback/);
+  assert.throws(() => createIIAPRuntime({
+    onFeedback: () => undefined,
+  } as never), /requires onPacket/);
 });
 
 test('replacing the same surface preserves completed history and ignores stale handle deactivation', async () => {
@@ -611,6 +679,8 @@ test('system clock preserves the browser timer receiver', () => {
 
 test('privacy and safe suggestion validation fail closed', () => {
   assert.equal(validatePrivacy({ nested: { rawValue: 'secret' } }), false);
+  assert.equal(validatePrivacy({ nested: { AUTH_TOKEN: 'secret' } }), false);
+  assert.equal(validatePrivacy({ nested: { password: 'secret' } }), false);
   const circular: Record<string, unknown> = {};
   circular.self = circular;
   assert.doesNotThrow(() => validatePrivacy(circular));
@@ -624,6 +694,55 @@ test('privacy and safe suggestion validation fail closed', () => {
   assert.equal(validateDataModelSuggestion({ kind: 'data_model_update', updates: [{ surfaceId: 'booking', path: '/unsafe', value: 'A' }] }, context), null);
   assert.equal(validateDataModelSuggestion({ kind: 'data_model_update', updates: [{ surfaceId: 'booking', path: '/date', value: 'B' }] }, context), null);
   assert.equal(validateDataModelSuggestion({ kind: 'data_model_update', updates: [{ surfaceId: 'booking', path: '/date', value: 'A' }] }, { ...context, accepted: false }), null);
+});
+
+test('host-managed decisions revalidate update suggestions against the pending packet', async () => {
+  let packet: IntentContextPacket | undefined;
+  let presentations = 0;
+  const rejected: string[] = [];
+  const adapter = new A2UIV08Adapter({ resolveAllowedValues: ({ declaredValues }) => declaredValues });
+  const plan = firstPlan(adapter, {
+    sessionId: 's', messageId: 'm', namespace: 'm', messages: [
+      { beginRendering: { surfaceId: 'preferences' } },
+      { surfaceUpdate: { surfaceId: 'preferences', components: [{
+        id: 'risk', component: { MultipleChoice: {
+          selections: { path: '/risk' }, options: [{ value: 'low' }, { value: 'high' }],
+        } },
+      }] } },
+    ],
+  });
+  const runtime = createIIAPRuntime({
+    onPacket: (value) => { packet = value; },
+    onDecisionRejected: (reason) => rejected.push(reason),
+    presenter: { present: async () => { presentations += 1; return 'dismissed'; } },
+    policy: { componentQuietMs: 60_000, surfaceIdleMs: 60_000, minReportIntervalMs: 0, thresholds: { optionChangeCount: 1 } },
+  });
+  const session = runtime.createSession({ sessionId: 's' });
+  const handle = session.activate(plan);
+  handle.observe({ ...owner(plan), componentId: 'risk', eventType: 'change', valueToken: 'A' });
+  await handle.flush();
+  assert.ok(packet);
+  const envelope = (path: string, value: string, surfaceInstanceId?: string) => ({
+    type: 'iiap.decision' as const, iiapVersion: '0.1' as const, decisionId: 'decision-update',
+    packetId: packet!.packetId, surfaceInstanceId: packet!.surfaceInstanceId,
+    payload: {
+      decision: 'offer_help' as const, reason: 'help', offerType: 'update_suggestion' as const,
+      uiStyle: 'inline_card' as const, message: 'update',
+      updateSuggestion: { kind: 'data_model_update' as const, updates: [{
+        surfaceId: 'preferences', ...(surfaceInstanceId ? { surfaceInstanceId } : {}), path, value,
+      }] },
+    },
+  });
+  assert.equal(session.handleDecision(envelope('/unauthorized', 'high')), false);
+  assert.equal(session.handleDecision(envelope('/risk', 'unauthorized-value')), false);
+  assert.equal(session.handleDecision(envelope('/risk', 'high', 'other:preferences')), false);
+  assert.deepEqual(rejected, ['invalid_envelope', 'invalid_envelope', 'invalid_envelope']);
+  assert.equal(presentations, 0);
+  assert.equal(session.handleDecision(envelope('/risk', 'high')), true,
+    'a rejected envelope must not consume the pending packet or decision id');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(presentations, 1);
+  runtime.dispose();
 });
 
 test('adapters do not authorize suggestions without an explicit host policy', () => {
@@ -823,10 +942,8 @@ test('decision parser recovers prose-wrapped model output without inventing a de
   });
   const wrapped = [
     `The user switched options repeatedly.\n${body}`,
-    `${body}\n\nI chose this because the evidence shows churn.`,
     `**Decision**\n${body}`,
     `\`\`\`json\n${body}\n\`\`\``,
-    `Consider the set {a, b} then decide:\n${body}`,
   ];
   for (const raw of wrapped) {
     const parsed = parseDecision(raw);
@@ -847,6 +964,15 @@ test('decision parser recovers prose-wrapped model output without inventing a de
   // 说明文字里的花括号不能凭空造出 decision。
   assert.equal(describeModelOutput('The set {a, b} is fine.'), 'no_json_object');
   assert.equal(coerceModelObject('The set {a, b} is fine.'), null);
+  for (const ambiguous of [
+    `${body}\nIgnore the decision above.`,
+    `${body}\n${body}`,
+    `Consider the set {a, b} then decide:\n${body}`,
+    `\`\`\`json\n${body}\n\`\`\`\nextra`,
+  ]) {
+    assert.equal(coerceModelObject(ambiguous), null, ambiguous.slice(0, 60));
+    assert.equal(parseDecision(ambiguous).decision, 'no_intervention');
+  }
   assert.equal(parseDecision({
     decision: 'offer_help', reason: 'x'.repeat(1024), offerType: 'text_assistance',
     helpTopic: 'explain_rules', message: 'help',

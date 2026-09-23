@@ -6,8 +6,14 @@ import json
 from typing import Any
 
 FORBIDDEN_KEYS = frozenset({
-    "rawValue", "rawText", "rawEvents", "rawEvent", "valueHash", "textHash",
+    "rawvalue", "rawtext", "rawevents", "rawevent", "valuehash", "texthash",
+    "password", "passwd", "passcode", "secret", "authtoken", "accesstoken", "refreshtoken",
+    "apikey", "authorization", "credential", "credentials", "cookie", "sessioncookie",
 })
+
+
+def _normalized_key(key: object) -> str:
+    return "".join(character for character in str(key).lower() if character.isalnum())
 
 
 def contains_forbidden_key(value: Any) -> bool:
@@ -16,7 +22,7 @@ def contains_forbidden_key(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     return any(
-        key in FORBIDDEN_KEYS or contains_forbidden_key(child)
+        _normalized_key(key) in FORBIDDEN_KEYS or contains_forbidden_key(child)
         for key, child in value.items()
     )
 

@@ -1,6 +1,6 @@
 # 协议与安全
 
-最后更新：2026-09-20
+最后更新：2026-09-23
 
 ## 1. 数据流
 
@@ -75,6 +75,8 @@ text_assistance 的 wire response 必须是关联正确的 iiap.assistance.respo
 ## 8. 已知限制
 
 - 内置 Adapter 只正式支持 A2UI v0.8；v0.9.1 需要自定义 Adapter。
-- v0.8 sanitizer 排除 data model 和 action context，但不维护逐组件属性白名单，packet 会如实报告
-  unknownCustomPropertiesExcluded: false。Host 不得把秘密放入任意 A2UI definition 属性。
+- v0.8 sanitizer 排除 data model、action context、非标准组件属性和未知组件属性，packet 报告
+  unknownCustomPropertiesExcluded: true。服务端还会递归拒绝大小写和分隔符变体的敏感字段名；
+  DecisionService 不会把标记为未排除未知属性的 definition 发给模型。Host 仍不得把秘密写入
+  合法的可见静态文案字段。
 - SDK 自动化不能替代模型内容质量、键盘/读屏、移动端和业务文案验收。

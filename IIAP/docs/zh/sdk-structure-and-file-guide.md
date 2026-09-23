@@ -1,6 +1,6 @@
 # IIAP SDK 结构、设计与文件职责
 
-最后更新：2026-09-21
+最后更新：2026-09-23
 
 本文面向第一次阅读 IIAP（Implicit Intent Aware Protocol，隐式意图感知协议）源码的开发者，说明 SDK 的整体设计、模块依赖、运行时数据流，以及仓库中每个受版本控制文件的职责。
 
@@ -143,7 +143,7 @@ Core 源码位于 `implementations/typescript/packages/core/src/`，由 npm 根�
 | `suggestion.ts` | 校验 canonical data-model update 的接受状态、owner、surface/path/value、单多选形状、去重和批次数 | Decision parser 和 Executor 共用的安全规则 |
 | `executor.ts` | `ValidatedSuggestionExecutor`：执行前再次校验 suggestion，并且只调用一次 Host 原子 batch callback | update suggestion 的最终执行边界 |
 | `assistance.ts` | 校验文字帮助非空、长度不超限、不包含 A2UI tag/内部 message key | HTTP Transport 和 Host 可复用 |
-| `model-output.ts` | 从裸 JSON、fenced JSON 或带说明文字的模型输出中结构化恢复对象，并提供不含正文的诊断分类 | Decision parser 使用；不能把任意文本猜成 decision |
+| `model-output.ts` | 从裸 JSON、完整 fenced JSON 或只有前置说明且以唯一 JSON 对象结尾的输出中恢复对象，并提供不含正文的诊断分类 | Decision parser 使用；拒绝尾随内容、多对象及模糊包装 |
 | `feedback.ts` | 依据 accepted/dismissed/rejected/ignored/timed_out/execution_failed 更新退避截止时间 | 每个 Session 持有独立实例 |
 | `errors.ts` | `IIAPError` 和稳定错误码 | HTTP、suggestion executor 等公共失败路径 |
 | `clock.ts` | 系统时钟和确定性手工时钟 | Runtime timer 抽象；测试不依赖真实时间等待 |
@@ -159,7 +159,7 @@ Core 源码位于 `implementations/typescript/packages/core/src/`，由 npm 根�
 | `ObservationPlan` | Adapter 输出的单 surface 静态观察定义，不保存运行时事件 |
 | `IntentContextPacket` | 达到本地阈值后生成的一次脱敏报告 |
 
-Runtime 支持三种配置形态：Host 托管 `onPacket`、SDK 托管 `transport`、或无发送器的 packet-only 模式。`onPacket` 与 `transport` 互斥。
+Runtime 支持三种配置形态：Host 托管 `onPacket`、SDK 托管 `transport`、或无发送器的 packet-only 模式。`onPacket` 与 `transport` 互斥；Host 托管模式启用反馈上传时通过 `onFeedback` 使用同一宿主通道。
 
 ## 7. TypeScript 可选模块
 
@@ -313,7 +313,7 @@ Python 源码位于 `implementations/python/src/iiap/`，发布包名为 `openji
 7. TypeScript `/decision` 或 Runtime 校验 owner 和 stale 状态；
 8. `presenters/react/src/index.tsx` 或 Host Presenter 展示建议；
 9. 用户接受后，Host 调用 assistance；两端 `assistance.ts/.py` 检查正文；
-10. Runtime 用 `feedback.ts` 更新退避，并按配置通过 Transport 上传 feedback。
+10. Runtime 用 `feedback.ts` 更新退避，并按配置通过 Host `onFeedback` 或 Transport 上传 feedback。
 
 如果 decision 是 `update_suggestion`，第 9 步改为由 `suggestion.ts`/`executor.ts` 按原 packet 白名单复验，再交给 Host 原子应用。
 

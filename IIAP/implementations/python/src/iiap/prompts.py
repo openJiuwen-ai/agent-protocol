@@ -50,6 +50,10 @@ def decision_prompt(
     language: str = "en",
     source: str = "sdk",
 ) -> str:
+    if profile not in {"production", "test"}:
+        raise ValueError("INVALID_PROFILE")
+    if profile == "production" and "testScenario" in packet:
+        raise ValueError("TEST_SCENARIO_NOT_ALLOWED")
     chinese = language.lower() in {"zh", "cn", "zh-cn"}
     prefix = PROTOCOL_CONTRACT_ZH + "\n" + PACKET_REMINDER_ZH + "\n" if chinese else PROTOCOL_CONTRACT_EN
     if profile == "test":

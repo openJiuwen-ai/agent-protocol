@@ -31,7 +31,15 @@
   raise the `reason` hard limit from 512 to 1024 characters for realistic model
   variance, and report over-limit output with the correct fail-closed category.
 - Make Host-managed `onPacket` and SDK-managed `transport` delivery mutually
-  exclusive, and make Runtime the sole owner of feedback-upload policy.
+  exclusive, make Runtime the sole owner of feedback-upload policy, and require
+  an explicit Host `onFeedback` callback when Host-managed upload is enabled.
+- Revalidate every Host-managed update suggestion against the pending packet's
+  surface, path, value, and selection constraints before presentation.
+- Reject production packets carrying test-only scenario controls, validate
+  assistance requests against the packaged canonical Schema, and reject
+  ambiguous model output with trailing content or multiple JSON objects.
+- Restrict A2UI v0.8 model context to standard catalog properties and reject
+  normalized sensitive-key variants in both TypeScript and Python privacy checks.
 - Remove unused public parsing helpers and the unimplemented wire error
   envelope, while retaining stable local SDK error codes.
 - Reduce the public documentation to five maintained entry points and keep

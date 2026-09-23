@@ -1,6 +1,6 @@
 # Quickstart
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 This page validates the core IIAP (Implicit Intent Aware Protocol) flow with a
 deterministic local example: A2UI surface → semantic event → IntentContextPacket
@@ -64,6 +64,8 @@ import { createIIAPRuntime } from '@openjiuwen/iiap';
 
 const runtime = createIIAPRuntime({
   onPacket: async (packet) => sendThroughExistingChannel(packet),
+  onFeedback: async (feedback) => sendFeedbackThroughExistingChannel(feedback),
+  feedbackUpload: true,
   presenter: hostPresenter,
   onAccept: applyAcceptedHelp,
 });
@@ -83,8 +85,10 @@ const runtime = createIIAPRuntime({
 });
 ```
 
-`transport` and `onPacket` are mutually exclusive. Feedback upload is
-controlled only by the Runtime `feedbackUpload` option.
+`transport` and `onPacket` are mutually exclusive. Feedback upload is disabled
+by default. When enabled, Host-managed delivery requires `onFeedback`, while an
+SDK-managed Transport must implement `sendFeedback`; otherwise Runtime creation
+fails instead of silently dropping feedback.
 
 ## 5. Activate and observe
 

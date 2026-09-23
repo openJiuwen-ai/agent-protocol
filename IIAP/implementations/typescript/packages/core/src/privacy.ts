@@ -1,6 +1,10 @@
 const FORBIDDEN_KEYS = new Set([
-  'rawValue', 'rawText', 'rawEvents', 'rawEvent', 'valueHash', 'textHash',
+  'rawvalue', 'rawtext', 'rawevents', 'rawevent', 'valuehash', 'texthash',
+  'password', 'passwd', 'passcode', 'secret', 'authtoken', 'accesstoken', 'refreshtoken',
+  'apikey', 'authorization', 'credential', 'credentials', 'cookie', 'sessioncookie',
 ]);
+
+const normalizedKey = (key: string): string => key.replace(/[^a-z0-9]/giu, '').toLowerCase();
 
 export function containsForbiddenKey(value: unknown, ancestors = new Set<object>()): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -9,7 +13,7 @@ export function containsForbiddenKey(value: unknown, ancestors = new Set<object>
   try {
     if (Array.isArray(value)) return value.some((child) => containsForbiddenKey(child, ancestors));
     return Object.entries(value as Record<string, unknown>)
-      .some(([key, child]) => FORBIDDEN_KEYS.has(key) || containsForbiddenKey(child, ancestors));
+      .some(([key, child]) => FORBIDDEN_KEYS.has(normalizedKey(key)) || containsForbiddenKey(child, ancestors));
   } finally {
     ancestors.delete(value);
   }

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
-from .assistance import validate_assistance_text
+from .assistance import validate_assistance_request, validate_assistance_text
 from .models import ModelAdapter, ModelRequest
 from .packet import validate_intent_context_packet
 from .privacy import validate_privacy
@@ -21,6 +21,8 @@ class DecisionService:
         profile: Literal["production", "test"] = "production",
         decision_id_factory: Callable[[], str] | None = None,
     ) -> None:
+        if profile not in {"production", "test"}:
+            raise ValueError("INVALID_PROFILE")
         self._model = model
         self._profile = profile
         self._decision_id_factory = decision_id_factory or (lambda: f"dec_{uuid4().hex}")
@@ -28,7 +30,9 @@ class DecisionService:
     async def decide(self, packet: dict[str, Any]) -> dict[str, Any]:
         validate_intent_context_packet(packet)
         observations = packet.get("observations", {})
-        if not validate_privacy(packet) or not isinstance(observations, dict) or not observations.get("events"):
+        redaction = packet.get("surfaceContext", {}).get("redaction", {})
+        if (not validate_privacy(packet) or redaction.get("unknownCustomPropertiesExcluded") is not True
+                or not isinstance(observations, dict) or not observations.get("events")):
             output: object = default_no_intervention()
         else:
             request = ModelRequest(prompt=decision_prompt(packet, profile=self._profile), payload=packet, operation="decision")
@@ -45,12 +49,7 @@ class AssistanceService:
         self._model = model
 
     async def assist(self, request: dict[str, Any]) -> dict[str, Any]:
-        required_ids = ("requestId", "packetId", "decisionId", "surfaceInstanceId")
-        if (request.get("type") != "iiap.assistance.request" or request.get("iiapVersion") != "0.1"
-                or any(not isinstance(request.get(key), str) or not request[key] for key in required_ids)
-                or request.get("topic") not in {"compare_options", "explain_rules", "fix_block", "save_progress"}
-                or not isinstance(request.get("language"), str) or not request["language"]):
-            raise ValueError("INVALID_ASSISTANCE_REQUEST")
+        validate_assistance_request(request)
         if not validate_privacy(request, max_bytes=4096):
             raise ValueError("PRIVACY_REJECTED")
         output = await self._model.generate_assistance(ModelRequest(prompt=assistance_prompt(request), payload=request, operation="assistance"))

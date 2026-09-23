@@ -16,15 +16,69 @@ const record = (value: unknown): value is Record<string, unknown> => Boolean(val
 const refPath = (value: unknown): string | undefined => record(value) && typeof value.path === 'string' ? value.path : undefined;
 const STANDARD_DEFINITION_TYPES = new Set([
   ...Object.keys(CAPABILITIES), 'Column', 'Row', 'List', 'Card', 'Text', 'Image',
-  'Divider', 'Icon', 'Link', 'Spacer', 'Grid', 'Form', 'Switch', 'RadioGroup',
+  'Divider', 'Icon',
 ]);
 
-function sanitizeDefinitionValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeDefinitionValue);
-  if (!record(value)) return value;
-  return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => key !== 'context')
-    .map(([key, child]) => [key, sanitizeDefinitionValue(child)]));
+const COMPONENT_PROPERTY_KEYS: Record<string, readonly string[]> = {
+  Text: ['text', 'usageHint'], Image: ['url', 'usageHint', 'fit'], Icon: ['name'],
+  Video: ['url'], AudioPlayer: ['url', 'description'],
+  Row: ['children', 'distribution', 'alignment'], Column: ['children', 'distribution', 'alignment'],
+  List: ['children', 'direction', 'alignment'], Card: ['child', 'children'], Tabs: ['tabItems'],
+  Divider: ['axis', 'color', 'thickness'], Modal: ['entryPointChild', 'contentChild'],
+  Button: ['child', 'action'], CheckBox: ['label', 'value'],
+  TextField: ['text', 'label', 'type', 'validationRegexp'],
+  DateTimeInput: ['value', 'enableDate', 'enableTime', 'outputFormat'],
+  MultipleChoice: ['selections', 'options', 'maxAllowedSelections', 'type'],
+  Slider: ['value', 'minValue', 'maxValue'],
+};
+
+function pick(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!record(value)) return {};
+  return Object.fromEntries(keys.filter((key) => value[key] !== undefined).map((key) => [key, value[key]]));
+}
+
+function sanitizeReference(value: unknown): Record<string, unknown> {
+  const candidate = pick(value, ['path', 'literal', 'literalString', 'literalNumber', 'literalBoolean', 'literalArray']);
+  return Object.fromEntries(Object.entries(candidate).filter(([, item]) => item === null
+    || ['string', 'number', 'boolean'].includes(typeof item)
+    || (Array.isArray(item) && item.every((entry) => ['string', 'number', 'boolean'].includes(typeof entry)))));
+}
+
+function sanitizeDefinitionValue(key: string, value: unknown): unknown {
+  if (['text', 'label', 'value', 'url', 'name', 'description', 'title', 'selections'].includes(key)) {
+    return sanitizeReference(value);
+  }
+  if (key === 'action') return pick(value, ['name']);
+  if (key === 'children') {
+    const children = pick(value, ['explicitList', 'template']);
+    return {
+      ...(Array.isArray(children.explicitList)
+        ? { explicitList: children.explicitList.filter((item): item is string => typeof item === 'string') }
+        : {}),
+      ...(record(children.template) ? { template: pick(children.template, ['componentId', 'dataBinding']) } : {}),
+    };
+  }
+  if (key === 'options' && Array.isArray(value)) {
+    return value.filter(record).map((option) => ({
+      ...(record(option.label) ? { label: sanitizeReference(option.label) } : {}),
+      ...(option.value === null || ['string', 'number', 'boolean'].includes(typeof option.value)
+        ? { value: option.value } : {}),
+    }));
+  }
+  if (key === 'tabItems' && Array.isArray(value)) {
+    return value.filter(record).map((item) => ({
+      ...(record(item.title) ? { title: sanitizeReference(item.title) } : {}),
+      ...(typeof item.child === 'string' ? { child: item.child } : {}),
+    }));
+  }
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value) ? value : undefined;
+}
+
+function sanitizeComponentProperties(type: string, props: Record<string, unknown>): Record<string, unknown> {
+  const keys = COMPONENT_PROPERTY_KEYS[type] ?? [];
+  return Object.fromEntries(keys
+    .map((key) => [key, sanitizeDefinitionValue(key, props[key])] as const)
+    .filter((entry): entry is readonly [string, unknown] => entry[1] !== undefined));
 }
 
 function referencedComponentIds(value: unknown, ids: Set<string>, result = new Set<string>()): Set<string> {
@@ -70,7 +124,7 @@ function surfaceContext(messages: A2UIV08Message[], surfaceId: string): SurfaceC
     const [type, props] = parts;
     return {
       id: node.id,
-      component: { [type]: STANDARD_DEFINITION_TYPES.has(type) ? sanitizeDefinitionValue(props) : {} },
+      component: { [type]: STANDARD_DEFINITION_TYPES.has(type) ? sanitizeComponentProperties(type, props) : {} },
     };
   });
   let truncated = components.length > 128;
@@ -87,7 +141,7 @@ function surfaceContext(messages: A2UIV08Message[], surfaceId: string): SurfaceC
     ],
     redaction: {
       dataModelExcluded: true, actionContextValuesExcluded: true,
-      unreachableComponentsExcluded: Boolean(root), unknownCustomPropertiesExcluded: false,
+      unreachableComponentsExcluded: Boolean(root), unknownCustomPropertiesExcluded: true,
       truncated,
     },
   };

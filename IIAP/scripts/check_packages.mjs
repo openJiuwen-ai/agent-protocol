@@ -103,14 +103,16 @@ print(json.dumps(wheels[0].name))
   run(venvPython, ['-c', `
 from importlib.metadata import metadata, version
 from importlib.resources import files
-from iiap import AssistanceService, DecisionService, validate_intent_context_packet, validate_privacy
+from iiap import AssistanceService, DecisionService, validate_assistance_request, validate_intent_context_packet, validate_privacy
 
 assert version('openjiuwen-iiap') == '0.1.0rc1'
 assert metadata('openjiuwen-iiap')['Description-Content-Type'] == 'text/markdown'
 assert any(item.startswith('jsonschema') for item in metadata('openjiuwen-iiap').get_all('Requires-Dist'))
 assert AssistanceService.__name__ == 'AssistanceService'
 assert DecisionService.__name__ == 'DecisionService'
+assert files('iiap.schemas').joinpath('assistance.schema.json').is_file()
 assert files('iiap.schemas').joinpath('intent-context-packet.schema.json').is_file()
+assert callable(validate_assistance_request)
 assert validate_privacy({'safe': True})
   `], { cwd: pythonConsumer });
 

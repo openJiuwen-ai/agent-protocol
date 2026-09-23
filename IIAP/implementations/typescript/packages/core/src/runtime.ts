@@ -3,6 +3,7 @@ import { systemClock, type Clock } from './clock.js';
 import { FeedbackController } from './feedback.js';
 import { privacyStatus, validatePrivacy } from './privacy.js';
 import { resolvePolicy, type PolicyOverrides, type RuntimePolicy } from './policy.js';
+import { validateDataModelSuggestion } from './suggestion.js';
 import {
   IIAP_VERSION, type ComponentEvent, type DecisionTransport, type DeactivationReason,
   type HelpPresenter, type IIAPDecisionEnvelope, type IIAPFeedback, type IIAPRuntime,
@@ -25,9 +26,13 @@ interface RuntimeCommonOptions {
 }
 
 export type RuntimeOptions = RuntimeCommonOptions & (
-  | { transport: DecisionTransport; onPacket?: never }
-  | { onPacket: (packet: IntentContextPacket) => Promise<void> | void; transport?: never }
-  | { transport?: undefined; onPacket?: undefined }
+  | { transport: DecisionTransport; onPacket?: never; onFeedback?: never }
+  | {
+    onPacket: (packet: IntentContextPacket) => Promise<void> | void;
+    onFeedback?: (feedback: IIAPFeedback) => Promise<void> | void;
+    transport?: never;
+  }
+  | { transport?: undefined; onPacket?: undefined; onFeedback?: never }
 );
 
 export type FlushSkipReason =
@@ -206,16 +211,29 @@ class Session implements IIAPSession {
       this.options.onDecisionRejected?.('stale');
       return false;
     }
+    let acceptedDecision = decision.payload;
+    if (decision.payload.offerType === 'update_suggestion') {
+      const updateSuggestion = validateDataModelSuggestion(decision.payload.updateSuggestion, {
+        accepted: true,
+        surfaceInstanceId: packet.surfaceInstanceId,
+        allowedTargets: packet.allowedOperations.updateTargets,
+      });
+      if (!updateSuggestion) {
+        this.options.onDecisionRejected?.('invalid_envelope');
+        return false;
+      }
+      acceptedDecision = { ...decision.payload, updateSuggestion };
+    }
     this.pendingDecisions.delete(packet.packetId);
     this.rememberProcessedDecision(decision.decisionId);
     state.inFlight = false;
     const hasPresentedForSurface = [...this.presentedDecisions.values()]
       .some((presented) => presented.packet.surfaceInstanceId === packet.surfaceInstanceId);
     if (hasPresentedForSurface) this.invalidatePresentedForSurface(packet.surfaceInstanceId);
-    if (decision.payload.decision !== 'offer_help' || !this.options.presenter
-      || decision.payload.offerType === 'none') return true;
-    this.presentedDecisions.set(decision.decisionId, { packet, decision: decision.payload });
-    void this.options.presenter.present(decision.payload, { packet, decisionId: decision.decisionId })
+    if (acceptedDecision.decision !== 'offer_help' || !this.options.presenter
+      || acceptedDecision.offerType === 'none') return true;
+    this.presentedDecisions.set(decision.decisionId, { packet, decision: acceptedDecision });
+    void this.options.presenter.present(acceptedDecision, { packet, decisionId: decision.decisionId })
       .then((interaction) => this.handlePresenterInteraction(decision.decisionId, interaction))
       .catch((error: unknown) => this.options.onError?.(error instanceof Error ? error : new Error(String(error))));
     return true;
@@ -257,11 +275,22 @@ class Session implements IIAPSession {
     this.feedback.record(value.interaction, value.outcome);
     const state = this.observations.get(value.surfaceInstanceId);
     if (state) state.inFlight = false;
-    if (this.options.feedbackUpload && this.options.transport?.sendFeedback) {
-      void this.options.transport.sendFeedback(value)
-        .catch((error: unknown) => this.options.onError?.(error instanceof Error ? error : new Error(String(error))));
-    }
+    if (this.options.feedbackUpload) this.uploadFeedback(value);
     return true;
+  }
+
+  private uploadFeedback(value: IIAPFeedback): void {
+    const sender = this.options.onFeedback
+      ?? (this.options.transport?.sendFeedback
+        ? (feedback: IIAPFeedback) => this.options.transport!.sendFeedback!(feedback)
+        : undefined);
+    if (!sender) return;
+    try {
+      void Promise.resolve(sender(value))
+        .catch((error: unknown) => this.options.onError?.(error instanceof Error ? error : new Error(String(error))));
+    } catch (error) {
+      this.options.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   deactivate(_reason: DeactivationReason): void {
@@ -559,6 +588,15 @@ class Session implements IIAPSession {
 export function createIIAPRuntime(options: RuntimeOptions = {}): IIAPRuntime {
   if (options.transport && options.onPacket) {
     throw new TypeError('RuntimeOptions transport and onPacket are mutually exclusive');
+  }
+  if (options.transport && options.onFeedback) {
+    throw new TypeError('RuntimeOptions transport and onFeedback are mutually exclusive');
+  }
+  if (options.onFeedback && !options.onPacket) {
+    throw new TypeError('RuntimeOptions onFeedback requires onPacket');
+  }
+  if (options.feedbackUpload && !options.onFeedback && !options.transport?.sendFeedback) {
+    throw new TypeError('feedbackUpload requires onFeedback or transport.sendFeedback');
   }
   const clock = options.clock ?? systemClock;
   const policy = resolvePolicy(options.policy);

@@ -30,6 +30,13 @@ packaged_packet_schema = json.loads((
 assert packaged_packet_schema == packet_schema, (
     "the Python wheel packet schema must match contracts/schemas/intent-context-packet.schema.json"
 )
+assistance_schema = json.loads((ROOT / "contracts/schemas/assistance.schema.json").read_text())
+packaged_assistance_schema = json.loads((
+    ROOT / "implementations/python/src/iiap/schemas/assistance.schema.json"
+).read_text())
+assert packaged_assistance_schema == assistance_schema, (
+    "the Python wheel assistance schema must match contracts/schemas/assistance.schema.json"
+)
 schema_registry = Registry().with_resource(
     packet_schema["$id"],
     Resource.from_contents(packet_schema),
@@ -43,6 +50,15 @@ for fixture_name, schema_name in CASES.items():
         format_checker=FormatChecker(),
         registry=schema_registry,
     ).validate(fixture)
+
+assistance_fixture = json.loads((ROOT / "contracts/fixtures/assistance-request.valid.json").read_text())
+assistance_validator = Draft202012Validator(assistance_schema)
+for invalid_assistance in (
+    {**assistance_fixture, "unexpected": True},
+    {**assistance_fixture, "requestId": "x" * 129},
+    {**assistance_fixture, "language": ""},
+):
+    assert not assistance_validator.is_valid(invalid_assistance)
 
 packet_envelope = json.loads((ROOT / "contracts/fixtures/packet-envelope.valid.json").read_text())
 packet_validator = Draft202012Validator(packet_schema, format_checker=FormatChecker())

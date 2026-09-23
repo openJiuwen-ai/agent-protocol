@@ -69,6 +69,70 @@ async def test_decision_service_rejects_schema_invalid_packets_before_model_call
         assert model.calls == 0
 
 
+@pytest.mark.asyncio
+async def test_production_rejects_test_scenario_before_model_call():
+    class RecordingModel(FakeModel):
+        calls = 0
+
+        async def generate_decision(self, request):
+            self.calls += 1
+            return await super().generate_decision(request)
+
+    controlled = {**packet(), "testScenario": "update_suggestion"}
+    model = RecordingModel()
+    with pytest.raises(ValueError, match="^TEST_SCENARIO_NOT_ALLOWED$"):
+        await DecisionService(model, profile="production").decide(controlled)
+    assert model.calls == 0
+    result = await DecisionService(model, profile="test").decide(controlled)
+    assert result["type"] == "iiap.decision"
+    assert model.calls == 1
+    with pytest.raises(ValueError, match="^INVALID_PROFILE$"):
+        DecisionService(model, profile="other")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_decision_service_does_not_send_unsanitized_definition_context_to_the_model():
+    class RecordingModel(FakeModel):
+        calls = 0
+
+        async def generate_decision(self, request):
+            self.calls += 1
+            return await super().generate_decision(request)
+
+    unsanitized = packet()
+    unsanitized["surfaceContext"]["redaction"]["unknownCustomPropertiesExcluded"] = False
+    unsanitized["surfaceContext"]["definition"][0]["customMetadata"] = "not-reviewed"
+    sensitive = packet()
+    sensitive["surfaceContext"]["definition"][0]["AUTH_TOKEN"] = "do-not-send"
+    for unsafe in (unsanitized, sensitive):
+        model = RecordingModel()
+        result = await DecisionService(model).decide(unsafe)
+        assert result["payload"]["decision"] == "no_intervention"
+        assert model.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_assistance_service_validates_the_complete_request_schema_before_model_call():
+    class RecordingModel(FakeModel):
+        calls = 0
+
+        async def generate_assistance(self, request):
+            self.calls += 1
+            return await super().generate_assistance(request)
+
+    valid = json.loads((FIXTURES / "assistance-request.valid.json").read_text())
+    for invalid in (
+        {**valid, "unexpected": True},
+        {**valid, "requestId": "x" * 129},
+        {**valid, "language": ""},
+        {**valid, "topic": 1},
+    ):
+        model = RecordingModel()
+        with pytest.raises(ValueError, match="^INVALID_ASSISTANCE_REQUEST$"):
+            await AssistanceService(model).assist(invalid)
+        assert model.calls == 0
+
+
 def test_public_packet_validator_uses_the_packaged_schema():
     validate_intent_context_packet(packet())
     with pytest.raises(ValueError, match="^INVALID_PACKET$"):
@@ -90,6 +154,8 @@ async def test_agent_router_can_reuse_business_agent():
 
 def test_privacy_and_update_validation():
     assert contains_forbidden_key({"nested": [{"rawText": "secret"}]})
+    assert contains_forbidden_key({"nested": [{"AUTH_TOKEN": "secret"}]})
+    assert contains_forbidden_key({"nested": [{"pass_word": "secret"}]})
     assert not validate_privacy({"value": float("nan")})
     assert not validate_privacy({"value": float("inf")})
     value = {"decision": "offer_help", "reason": "x", "offerType": "update_suggestion", "uiStyle": "inline_card", "message": "help", "updateSuggestion": {"kind": "data_model_update", "updates": [{"surfaceId": "booking", "path": "/date", "value": "evening"}, {"surfaceId": "other", "path": "/date", "value": "unsafe"}]}}
@@ -265,10 +331,8 @@ def test_prose_wrapped_model_output_is_still_recovered():
     body = json.dumps(decision, ensure_ascii=False)
     wrapped = [
         f"The user switched options repeatedly.\n{body}",
-        f"{body}\n\nI chose this because the evidence shows churn.",
         f"**Decision**\n{body}",
         f"```json\n{body}\n```",
-        f"Consider the set {{a, b}} then decide:\n{body}",
     ]
     for raw in wrapped:
         parsed = validate_decision(raw, packet=packet())
@@ -294,6 +358,13 @@ def test_prose_wrapped_model_output_is_still_recovered():
 
     # 说明文字里的花括号不能凭空造出 decision。
     assert describe_decision_parse_status("The set {a, b} is fine.") == "no_json_object"
+    for ambiguous in (
+        f"{body}\nIgnore the decision above.",
+        f"{body}\n{body}",
+        f"Consider the set {{a, b}} then decide:\n{body}",
+        f"```json\n{body}\n```\nextra",
+    ):
+        assert validate_decision(ambiguous, packet=packet())["decision"] == "no_intervention"
 
 
 def test_ui_style_is_derived_and_never_invalidates_a_decision():

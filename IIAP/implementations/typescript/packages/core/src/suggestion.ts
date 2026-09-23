@@ -42,7 +42,8 @@ export function validateDataModelSuggestion(
   const seenTargets = new Set<string>();
   const updates: SafeDataModelUpdate[] = [];
   for (const item of value.updates) {
-    if (!isRecord(item) || typeof item.surfaceId !== 'string' || typeof item.path !== 'string') return null;
+    if (!isRecord(item) || Object.keys(item).some((key) => !['surfaceId', 'surfaceInstanceId', 'path', 'value'].includes(key))
+      || typeof item.surfaceId !== 'string' || typeof item.path !== 'string') return null;
     const target = context.allowedTargets.find((candidate) => candidate.originalSurfaceId === item.surfaceId
       && candidate.bindingPath === item.path);
     const key = `${item.surfaceId}\u0000${item.path}`;
@@ -50,7 +51,12 @@ export function validateDataModelSuggestion(
     if (item.surfaceInstanceId !== undefined && item.surfaceInstanceId !== context.surfaceInstanceId) return null;
     if (!safeValue(item.value, target)) return null;
     seenTargets.add(key);
-    updates.push(item as unknown as SafeDataModelUpdate);
+    updates.push({
+      surfaceId: item.surfaceId,
+      ...(typeof item.surfaceInstanceId === 'string' ? { surfaceInstanceId: item.surfaceInstanceId } : {}),
+      path: item.path,
+      value: Array.isArray(item.value) ? [...item.value] : item.value,
+    } as SafeDataModelUpdate);
   }
   return { kind: 'data_model_update', updates };
 }

@@ -16,35 +16,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i;
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
-  const candidates = [text];
-  const fenced = FENCE.exec(text.trim());
-  if (fenced) candidates.unshift(fenced[1].trim());
-  for (const candidate of candidates) {
-    for (let start = candidate.indexOf('{'); start !== -1; start = candidate.indexOf('{', start + 1)) {
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let index = start; index < candidate.length; index += 1) {
-        const char = candidate[index];
-        if (inString) {
-          if (escaped) escaped = false;
-          else if (char === '\\') escaped = true;
-          else if (char === '"') inString = false;
-          continue;
-        }
-        if (char === '"') { inString = true; continue; }
-        if (char === '{') depth += 1;
-        else if (char === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            try {
-              const parsed: unknown = JSON.parse(candidate.slice(start, index + 1));
-              if (isRecord(parsed)) return parsed;
-            } catch {
-              // 该候选不是完整对象，继续向后寻找。
-            }
-            break;
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    const prefix = text.slice(0, start);
+    if (/[{}`]/u.test(prefix)) continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') { inString = true; continue; }
+      if (char === '{') depth += 1;
+      else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          if (text.slice(index + 1).trim()) return null;
+          try {
+            const parsed: unknown = JSON.parse(text.slice(start, index + 1));
+            if (isRecord(parsed)) return parsed;
+          } catch {
+            // 该候选不是完整对象，继续向后寻找。
           }
+          break;
         }
       }
     }
@@ -58,6 +56,15 @@ export function coerceModelObject(value: unknown): Record<string, unknown> | nul
   if (typeof value !== 'string') return null;
   const text = value.trim();
   if (!text) return null;
+  const fenced = FENCE.exec(text);
+  if (fenced) {
+    try {
+      const parsed: unknown = JSON.parse(fenced[1].trim());
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const parsed: unknown = JSON.parse(text);
     if (isRecord(parsed)) return parsed;

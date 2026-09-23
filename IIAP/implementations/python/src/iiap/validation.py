@@ -41,11 +41,14 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     for start, char in enumerate(text):
         if char != "{":
             continue
+        prefix = text[:start]
+        if any(character in prefix for character in "{}`"):
+            continue
         try:
-            parsed, _ = decoder.raw_decode(text, start)
+            parsed, end = decoder.raw_decode(text, start)
         except (json.JSONDecodeError, ValueError):
             continue
-        if isinstance(parsed, dict):
+        if isinstance(parsed, dict) and not text[end:].strip():
             return parsed
     return None
 
@@ -62,7 +65,11 @@ def _parse(value: object) -> dict[str, Any] | None:
             return None
         fenced = _fenced_body(text)
         if fenced is not None:
-            text = fenced
+            try:
+                value = json.loads(fenced)
+            except json.JSONDecodeError:
+                return None
+            return value if isinstance(value, dict) else None
         try:
             value = json.loads(text)
         except json.JSONDecodeError:

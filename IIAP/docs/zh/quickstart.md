@@ -1,6 +1,6 @@
 # 快速开始
 
-最后更新：2026-09-20
+最后更新：2026-09-23
 
 本页用一条本地、确定性的示例链路验证 IIAP（Implicit Intent Aware Protocol，隐式意图感知协议）的核心流程：A2UI surface → 本地语义事件 → IntentContextPacket → decision → 用户反馈。示例不连接外部模型或服务。
 
@@ -61,6 +61,8 @@ import { createIIAPRuntime } from '@openjiuwen/iiap';
 
 const runtime = createIIAPRuntime({
   onPacket: async (packet) => sendThroughExistingChannel(packet),
+  onFeedback: async (feedback) => sendFeedbackThroughExistingChannel(feedback),
+  feedbackUpload: true,
   presenter: hostPresenter,
   onAccept: applyAcceptedHelp,
 });
@@ -84,7 +86,9 @@ const runtime = createIIAPRuntime({
 });
 ```
 
-`transport` 与 `onPacket` 互斥；同时配置会立即抛出配置错误。是否上传反馈只由 Runtime 的 `feedbackUpload` 控制。
+`transport` 与 `onPacket` 互斥；同时配置会立即抛出配置错误。`feedbackUpload` 默认关闭；
+启用后，Host 托管模式必须提供 `onFeedback`，SDK 托管模式的 Transport 必须实现
+`sendFeedback`，否则创建 Runtime 时立即报错。
 
 ## 5. 激活并观察
 
