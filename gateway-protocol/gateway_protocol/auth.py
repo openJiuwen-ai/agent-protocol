@@ -4,7 +4,7 @@
 背景：gateway 侧 SSH 通道（``channel_manager/protocol/ssh``）需要校验 SSH
 公钥指纹，而 KeyRegistry/认证实现属 jiuwenswarm 仓的 agentos 扩展。拆分后
 gateway 不再 import ``extensions.agentos.auth.*``，改为依赖本接口、实例由
-jiuwenswarm 组装期注入（见 separate_gateway_plan.md §5.0）。
+jiuwenswarm 组装期注入。
 
 来源参考：``jiuwenswarm/extensions/agentos/auth/ssh_authenticator.py``
 （SshPublicKeyAuthenticator.verify / lookup_entry）与 ``ssh_key_registry.py``

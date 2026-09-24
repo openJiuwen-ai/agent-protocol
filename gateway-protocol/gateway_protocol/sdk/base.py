@@ -2,8 +2,8 @@
 """扩展 SDK 基类（契约层）。
 
 来源：``jiuwenswarm/extensions/sdk/base.py``。``initialize``/``shutdown`` 为
-抽象契约；metadata/config 的 YAML 读取为自包含实现（yaml 惰性 import，
-调用时才加载，保持包顶层零第三方依赖），两仓扩展子类共用。
+抽象契约；metadata/config 的 YAML 读取为自包含实现（pyyaml 为包声明的
+依赖，函数内惰性 import 仅延迟加载），两仓扩展子类共用。
 """
 
 from __future__ import annotations

@@ -16,10 +16,14 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0,<7"
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3.5"]
+dev = [
+    "pytest>=8.3.5"
+]
 
 [tool.setuptools]
 include-package-data = false
@@ -29,4 +33,6 @@ include = ["gateway_protocol*"]
 namespaces = false
 
 [dependency-groups]
-dev = ["pytest>=8.3.5"]
+dev = [
+    "pytest>=8.3.5"
+]

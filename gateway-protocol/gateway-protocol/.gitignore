@@ -1,0 +1,11 @@
+# Python 构建产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# uv / 测试
+.pytest_cache/
+uv.lock

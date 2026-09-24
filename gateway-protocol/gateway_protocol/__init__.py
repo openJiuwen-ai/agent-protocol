@@ -2,8 +2,9 @@
 """gateway-protocol：jiuwenswarm 与 jiuwenswarm-gateway 两仓共享的协议包。
 
 只含**契约**（ABC、接口、枚举、dataclass、事件常量、纯静态函数），不含任何
-运行时实现；零第三方依赖、不 import jiuwenswarm / openjiuwen（不得产生反向
-依赖）。实现（WebSocketAgentServerClient、ChannelManager、ExtensionRegistry/
+运行时实现；不 import jiuwenswarm / openjiuwen（不得产生反向依赖）。通用基础
+库依赖仅 pyyaml（sdk.base 扩展 manifest/config 读取）。实现
+（WebSocketAgentServerClient、ChannelManager、ExtensionRegistry/
 ExtensionManager 等）由 gateway 仓持有，实例经组装期注入。
 
 模块边界：
@@ -17,12 +18,14 @@ ExtensionManager 等）由 gateway 仓持有，实例经组装期注入。
 - ``sdk``              扩展 SDK 基类与贡献类（BaseExtension、各 Extension 基类）
 - ``types``            ExtensionConfig / ExtensionMetadata 等通用数据类型
 - ``http_bridge``      AgentServer HTTP 基址解析与上传的纯静态函数
-- ``e2a``              （暂缺）E2A 协议定义暂不进包，两侧各留副本
+- ``e2a``              E2A 协议契约（wire 契约 + ACP/A2A 转换；符号量大，
+  经 ``gateway_protocol.e2a`` 子包命名空间访问，不在顶层汇总导出）
 """
 
 from __future__ import annotations
 
 from gateway_protocol.agent_client import AgentServerClient
+from gateway_protocol.auth import SshAuthPort, SshAuthResult, SshKeyEntry
 from gateway_protocol.channel_event import ChannelType
 from gateway_protocol.cron_models import CronJob, CronTarget, CronTargetChannel
 from gateway_protocol.hooks import (
@@ -33,6 +36,14 @@ from gateway_protocol.hooks import (
     HookEventBase,
     MemoryHookContext,
     SystemPromptHookContext,
+)
+from gateway_protocol.http_bridge import (
+    resolve_agent_host_port,
+    resolve_agent_http_base,
+    resolve_agent_http_base_for_token,
+    resolve_agent_upload_base,
+    set_agent_http_base_resolver,
+    upload_file_bytes,
 )
 from gateway_protocol.registry import ExtensionManager, ExtensionRegistry
 from gateway_protocol.sdk import BaseExtension
@@ -58,8 +69,17 @@ __all__ = [
     "GatewayHookEvents",
     "HookEventBase",
     "MemoryHookContext",
+    "SshAuthPort",
+    "SshAuthResult",
+    "SshKeyEntry",
     "SystemPromptHookContext",
     "ThirdAgent",
     "UnsupportedThirdAgent",
     "__version__",
+    "resolve_agent_host_port",
+    "resolve_agent_http_base",
+    "resolve_agent_http_base_for_token",
+    "resolve_agent_upload_base",
+    "set_agent_http_base_resolver",
+    "upload_file_bytes",
 ]

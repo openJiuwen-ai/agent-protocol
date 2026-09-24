@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+# 与 jiuwenswarm ``common/work_mode.py`` 的同名常量保持一致（暂不共享定义，
+# 两仓分叉期以同名同值方便追踪；gateway 仓拉起后统一收敛到本包）。
+DEFAULT_WEB_WORK_MODE: str = "work"
+
 
 class CronTargetChannel(str, Enum):
     """推送频道枚举。"""
@@ -149,11 +153,11 @@ class CronJob:
     # 飞书多应用场景：创建该定时任务的 app_id，用于推送时定位到正确的 app 配置
     app_id: str = ""
     # 创建者标识（web 端 user_id）。执行时透传给 faas 的 X-Session-Context，
-    # 否则 CreateSandbox 拉不起导致 60s 超时（见 plan-cron-user-id）。
+    # 否则 CreateSandbox 拉不起导致 60s 超时。
     # 默认空串兼容旧数据；语义=创建者，创建后不可变。
     user_id: str = ""
-    # 工作模式派生快照：由 project_id 归属推导（"code" / "work"）。
-    work_mode: str = "work"
+    # 工作模式派生快照：由 project_id 归属推导（"code" / DEFAULT_WEB_WORK_MODE）。
+    work_mode: str = DEFAULT_WEB_WORK_MODE
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -182,7 +186,7 @@ class CronJob:
         # project_id 始终输出（空串表示默认项目，与 SessionInfo.project_id 语义一致）
         d["project_id"] = self.project_id or ""
         # work_mode 始终输出（派生快照字段，由 project_id 归属推导，与 project_id 一致）
-        d["work_mode"] = self.work_mode or "work"
+        d["work_mode"] = self.work_mode or DEFAULT_WEB_WORK_MODE
         # last_session_id 仅在非空时输出（与 session_id/chat_type 可选字段策略一致）
         if self.last_session_id:
             d["last_session_id"] = self.last_session_id
