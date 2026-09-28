@@ -40,11 +40,9 @@ FRONTEND_DIR = Path(__file__).parent / "frontend"
 def _get_local_ip() -> str | None:
     """Return the machine's LAN IP address, or None if unavailable."""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
     except Exception:
         return None
 
