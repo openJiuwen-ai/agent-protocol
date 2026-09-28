@@ -16,6 +16,18 @@ from a4p.types import to_payload
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on a single request body; larger bodies are rejected with 413 so
+# a malicious client cannot exhaust server memory.
+MAX_BODY_SIZE = 1 * 1024 * 1024
+
+
+class _PayloadTooLarge(Exception):
+    """Raised when a request body exceeds :data:`MAX_BODY_SIZE`."""
+
+
+class _BadRequest(Exception):
+    """Raised when a request carries an invalid header value."""
+
 
 @dataclass(frozen=True)
 class _HTTPRequest:
@@ -90,6 +102,10 @@ class A4PHTTPServer:
                 return
             status, response = await self._dispatch(request.path, payload)
             await self._send_json(writer, status, response)
+        except _PayloadTooLarge:
+            await self._send_json(writer, 413, {"error": "payload_too_large"})
+        except _BadRequest as exc:
+            await self._send_json(writer, 400, {"error": "bad_request", "message": str(exc)})
         except Exception as exc:
             logger.exception("[A4PHTTPServer] request failed: %s", exc)
             await self._send_json(writer, 500, {"error": "internal_error", "message": str(exc)})
@@ -103,7 +119,15 @@ class A4PHTTPServer:
             return None
         method, path, _version = first_line.decode("iso-8859-1").strip().split(maxsplit=2)
         headers = await self._read_headers(reader)
-        body_size = int(headers.get("content-length", "0"))
+        raw_length = headers.get("content-length")
+        try:
+            body_size = int(raw_length) if raw_length is not None else 0
+        except ValueError:
+            raise _BadRequest("invalid Content-Length") from None
+        if body_size < 0:
+            raise _BadRequest("invalid Content-Length")
+        if body_size > MAX_BODY_SIZE:
+            raise _PayloadTooLarge
         body = await reader.readexactly(body_size) if body_size else b"{}"
         return _HTTPRequest(method=method.upper(), path=path, body=body)
 
@@ -161,6 +185,7 @@ class A4PHTTPServer:
             404: "Not Found",
             405: "Method Not Allowed",
             409: "Conflict",
+            413: "Payload Too Large",
             500: "Internal Server Error",
         }.get(status, "OK")
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
