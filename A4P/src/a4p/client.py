@@ -167,7 +167,8 @@ class A4PClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
+            with exc:
+                raw = exc.read().decode("utf-8", errors="replace")
             try:
                 error_payload = json.loads(raw)
             except json.JSONDecodeError:
