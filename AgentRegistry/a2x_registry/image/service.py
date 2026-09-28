@@ -36,13 +36,26 @@ from typing import Any, Dict, List, Optional, Tuple
 from a2x_registry.common.ids import image_sid, now_iso
 from a2x_registry.register.table_repo import TableRepo
 
-from .errors import ImageInUseError, ImageNotFoundError, ImageValidationError
+from .errors import (
+    ImageInUseError,
+    ImageNotFoundError,
+    ImagePortConflictError,
+    ImageValidationError,
+)
 from .version_key import version_key
 
 logger = logging.getLogger(__name__)
 
 IMAGE_REGISTRY = "images"
 INSTANCE_REGISTRY = "instances"
+
+# Web access-mode port allocation window: a ``web_svc_port`` entry's ``port``
+# must be an integer within [WEB_PORT_MIN, WEB_PORT_MAX]. Plain constants for
+# now — will become configurable later. (The legacy ``web`` name is NOT
+# validated — it was used for a different purpose by old clients.)
+WEB_PORT_MIN = 19101
+WEB_PORT_MAX = 19200
+_WEB_ACCESS_NAME = "web_svc_port"
 
 # Image repo deletion env var.
 _ENV_REPO_BASE = "A2X_REGISTRY_REPO_BASE"
@@ -108,6 +121,10 @@ class ImageService:
             raise ImageValidationError("name and version must not be empty")
         if not uploaded_by:
             raise ImageValidationError("uploaded_by must not be empty")
+
+        # web_svc_port access-mode validation (§: range + cross-name conflict).
+        web_ports = self._validate_web_ports(access_mode)
+        self._assert_ports_free(name, web_ports)
 
         sid = image_sid(name, version)
         existing = self._table_svc.query(
@@ -224,6 +241,12 @@ class ImageService:
         if not rows:
             raise ImageNotFoundError(f"image {name}@{version} not found")
         row = rows[0]
+
+        # web_svc_port access-mode validation when access_mode is being
+        # patched (port moved onto a value used by another name → conflict).
+        if fields.get("access_mode") is not None:
+            web_ports = self._validate_web_ports(fields["access_mode"])
+            self._assert_ports_free(name, web_ports)
 
         patch_fields: Dict[str, Any] = {}
         if fields.get("framework") is not None:
@@ -367,6 +390,67 @@ class ImageService:
     # ------------------------------------------------------------------
     # internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_web_ports(
+        access_mode: Optional[List[Dict[str, Any]]],
+    ) -> List[str]:
+        """Validate ``web_svc_port`` access-mode ports; return normalized ports.
+
+        A ``web_svc_port`` entry's ``port`` must be an integer (string or
+        number) within ``[WEB_PORT_MIN, WEB_PORT_MAX]``; otherwise raises
+        ``ImageValidationError`` (400). A missing ``port`` is already
+        rejected by the request model (pydantic requires it). Other entry
+        names (incl. legacy ``web``) are not constrained. Returns ``[]``
+        when no web_svc_port entry exists.
+        """
+        ports: List[str] = []
+        for idx, am in enumerate(access_mode or []):
+            if am.get("name") != _WEB_ACCESS_NAME:
+                continue
+            raw = am.get("port")
+            try:
+                port = int(str(raw))
+            except (TypeError, ValueError):
+                raise ImageValidationError(
+                    f"access_mode[{idx}].port must be an integer, got {raw!r}"
+                ) from None
+            if not WEB_PORT_MIN <= port <= WEB_PORT_MAX:
+                raise ImageValidationError(
+                    f"access_mode[{idx}].port {raw!r} out of range "
+                    f"[{WEB_PORT_MIN}, {WEB_PORT_MAX}]"
+                )
+            ports.append(str(port))
+        return ports
+
+    def _assert_ports_free(self, name: str, ports: List[str]) -> None:
+        """Raise ``ImagePortConflictError`` (409) when a web_svc_port port is
+        already used by an image row of a **different** ``name``.
+
+        Rows sharing the same ``name`` (other versions) may reuse the port.
+        Legacy rows with non-integer web_svc_port ports are ignored.
+        """
+        if not ports:
+            return
+        used: Dict[str, set] = {}
+        for row in self._table_svc.query(IMAGE_REGISTRY, None):
+            row_name = row.get("name")
+            if row_name == name:
+                continue  # same name, other versions: allowed
+            for am in (row.get("data") or {}).get("access_mode") or []:
+                if am.get("name") != _WEB_ACCESS_NAME:
+                    continue
+                try:
+                    port = str(int(str(am.get("port"))))
+                except (TypeError, ValueError):
+                    continue  # legacy invalid data: skip
+                used.setdefault(port, set()).add(row_name)
+        for p in ports:
+            if p in used:
+                raise ImagePortConflictError(
+                    f"web port {p} already used by image name(s): "
+                    f"{', '.join(sorted(n for n in used[p] if n))}"
+                )
 
     def _in_use_instances(
         self, framework: Optional[str], version: str, name: str

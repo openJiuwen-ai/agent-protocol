@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import zlib
+
 import pytest
 
 from a2x_registry.image.errors import (
@@ -28,9 +30,20 @@ from a2x_registry.image.service import ImageService
 from .conftest import make_runtime_spec, make_register_body, make_access_mode
 
 
+def _web_port(name: str) -> str:
+    """_reg 使用的 name 派生 web 端口（见 _reg）。"""
+    return str(19101 + (zlib.crc32(name.encode()) % 100))
+
+
 def _reg(svc, name="opencode", ver="v0.2.0", framework="opencode", **kw):
     """Helper: call register_image with body fields."""
     body = make_register_body(name=name, version=ver, framework=framework, **kw)
+    # 不同 name 分配不同 web_svc_port 端口（web_svc_port 端口跨 name 冲突会被
+    # service 拒绝，同 name 复用同一派生端口是允许的）。
+    body["access_mode"] = [
+        {**am, "port": _web_port(name)} if am.get("name") == "web_svc_port" else am
+        for am in body["access_mode"]
+    ]
     return svc.register_image(
         name=name,
         version=ver,
@@ -96,7 +109,11 @@ def test_register_new_fields_persisted(image_svc: ImageService):
     assert row["description"] == "opencode 适配镜像"
     assert row["package_path"] == "/pkg/opencode/"
     assert row["image_archive_path"] == "/archive/opencode.tar"
-    assert row["access_mode"] == make_access_mode()
+    expected_am = [
+        {**am, "port": _web_port("opencode")} if am.get("name") == "web_svc_port" else am
+        for am in make_access_mode()
+    ]
+    assert row["access_mode"] == expected_am
 
 
 def test_register_framework_is_display_only(image_svc: ImageService):
@@ -252,7 +269,7 @@ def test_update_runtime_spec_replaced_whole(image_svc: ImageService):
 
 def test_update_access_mode_and_env(image_svc: ImageService):
     _reg(image_svc)
-    new_mode = [{"name": "web", "port": "18789", "cmd": "openclaw gateway"}]
+    new_mode = [{"name": "web_svc_port", "port": "19189", "cmd": "openclaw gateway"}]
     entry = image_svc.update_image(
         "opencode", "v0.2.0",
         {"access_mode": new_mode, "env_vars": {"K": "V"}, "mounts": []},
@@ -364,7 +381,11 @@ def test_resolve_launch_spec_with_version(image_svc: ImageService):
     assert spec["env_vars"] == {"A2X_LLM_KEY": "${A2X_LLM_KEY}"}
     assert spec["workspace"] == "/app"
     assert spec["image_module_version"] == "v1.3"
-    assert spec["access_mode"] == make_access_mode()
+    expected_am = [
+        {**am, "port": _web_port("opencode")} if am.get("name") == "web_svc_port" else am
+        for am in make_access_mode()
+    ]
+    assert spec["access_mode"] == expected_am
     assert "cpu" not in spec
     assert "imageurl" not in spec
 
