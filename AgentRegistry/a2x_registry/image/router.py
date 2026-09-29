@@ -30,6 +30,7 @@ from a2x_registry.register.errors import (
 from a2x_registry.register.errors import ImageInUseError, ExternalDependencyError
 
 from .deps import get_image_service
+from .errors import ImagePortConflictError
 from .models import (
     DeregisterResponse,
     ImageEntry,
@@ -82,6 +83,8 @@ async def register_image(req: RegisterImageRequest):
         )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except ImagePortConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return result
 
 
@@ -157,6 +160,8 @@ async def update_image(name: str, version: str, req: UpdateImageRequest):
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except ImagePortConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.delete("/{name}/{version}", response_model=DeregisterResponse)

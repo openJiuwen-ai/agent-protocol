@@ -53,10 +53,10 @@ def make_runtime_spec(
 
 
 def make_access_mode() -> list[dict]:
-    """构造access_mode 数组（tui / web 两种接入方式）。"""
+    """构造access_mode 数组（tui / web_svc_port 两种接入方式）。"""
     return [
         {"name": "tui", "port": "2222", "cmd": "opencode"},
-        {"name": "web", "port": "18789", "cmd": "opencode gateway --port 18789"},
+        {"name": "web_svc_port", "port": "19189", "cmd": "opencode gateway --port 19189"},
     ]
 
 

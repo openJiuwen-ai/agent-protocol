@@ -58,7 +58,8 @@ def test_post_invalid_kind_400(client):
 
 def test_post_missing_field_400(client):
     entry = make_entry()
-    del entry["node"]
+    # node/address 已改为可选（缺省写空串）；user 仍必填
+    del entry["user"]
     r = client.post("/api/instances", json=entry)
     # pydantic 先拦（422）或 service 拦（400），都算「校验失败」
     assert r.status_code in (400, 422)
