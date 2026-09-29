@@ -68,8 +68,9 @@ def test_register_invalid_kind_rejected(instance_svc: InstanceService):
 def test_register_missing_field_rejected(instance_svc: InstanceService):
     """缺少必填字段 → ValidationError。"""
     entry = make_entry()
-    del entry["node"]
-    with pytest.raises(InstanceValidationError, match="node"):
+    # node/address 已改为可选（缺省写空串）；user 仍必填
+    del entry["user"]
+    with pytest.raises(InstanceValidationError, match="user"):
         instance_svc.register_instance(entry)
 
 

@@ -5,6 +5,7 @@ responsible for translating them into HTTP status codes:
 - ``ImageNotFoundError`` → 404
 - ``ImageValidationError`` → 400
 - ``ImageInUseError`` → 409 (deregister blocked by in-use instances)
+- ``ImagePortConflictError`` → 409 (web_svc_port already used by another image name)
 - ``RepoDeleteError`` → 502 (image repository deletion failed)
 
 ``ImageInUseError`` / ``ExternalDependencyError`` are reused from
@@ -30,9 +31,18 @@ class ImageValidationError(ValidationError):
     Router maps to 400."""
 
 
+class ImagePortConflictError(Exception):
+    """A ``web_svc_port`` access-mode port already used by another image
+    ``name``.
+
+    Same ``name`` (different versions) may reuse a port. Router maps to 409.
+    """
+
+
 __all__ = [
     "ImageNotFoundError",
     "ImageValidationError",
+    "ImagePortConflictError",
     "ImageInUseError",
     "RepoDeleteError",
 ]

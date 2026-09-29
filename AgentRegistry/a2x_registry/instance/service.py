@@ -100,7 +100,7 @@ class InstanceService:
             },
         }
         stored = self._table_svc.register(INSTANCE_REGISTRY, db_entry)
-        logger.info("register_instance %s (node=%s)", sid, entry["node"])
+        logger.info("register_instance %s (node=%s)", sid, entry.get("node") or "")
         return self._to_entry(stored)
 
     # ------------------------------------------------------------------
