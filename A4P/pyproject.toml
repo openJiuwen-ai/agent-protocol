@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 demo = [
-  "mcp[cli]>=1.0.0",
+  "mcp[cli]>=1.28.1,<2.0.0",
 ]
 
 [dependency-groups]
