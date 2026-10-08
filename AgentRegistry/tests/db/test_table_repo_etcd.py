@@ -355,6 +355,21 @@ def test_query_unknown_filter_column_raises(repo):
         repo.query("instances", {"bogus": 1})
 
 
+def test_query_data_key_filter(repo):
+    """data.<key> 过滤键匹配 JSON 内部字段（与 SQL 后端 json_extract 同约定）。"""
+    _seed_instances(repo)
+    repo.register("instances", {
+        "service_id": "i_d", "kind": "三方", "framework": "opencode",
+        "framework_version": "v0.1.0", "node": "n1", "user": "u1",
+        "data": {"image_name": "opencode"},
+    })
+    assert [r["service_id"] for r in repo.query(
+        "instances", {"data.image_name": "opencode"}
+    )] == ["i_d"]
+    assert repo.query("instances", {"data.image_name": "missing"}) == []
+    assert repo.query("instances", {"data.bogus": "x"}) == []
+
+
 def test_query_paginated_sort_and_pagination(repo):
     _seed_instances(repo)
     rows, total = repo.query_paginated(
