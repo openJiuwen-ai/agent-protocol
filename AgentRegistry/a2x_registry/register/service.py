@@ -2009,6 +2009,13 @@ class RegistryTableService(TableRepo):
         if filter:
             allowed = set(_KIND_PROMOTED[kind]) | {"service_id"}
             for col, val in filter.items():
+                # data.<key> 过滤键：匹配 JSON 内部字段（与 order_by 的
+                # data.<key> 引用同约定；键名来自固定调用点，非用户输入）。
+                if col.startswith("data.") and len(col) > len("data."):
+                    key = col[len("data."):]
+                    parts.append(f"json_extract(data, '$.{key}')=?")
+                    args.append(val)
+                    continue
                 if col not in allowed:
                     raise ValidationError(
                         f"cannot filter on unknown column: {col!r}"

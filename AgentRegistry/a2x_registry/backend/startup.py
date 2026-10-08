@@ -6,6 +6,7 @@ server can begin accepting requests (e.g. /api/warmup-status) while loading.
 
 import logging
 import time
+from typing import Optional
 
 from a2x_registry.common.paths import database_dir
 from a2x_registry.common import feature_flags
@@ -105,6 +106,56 @@ def _resolve_db_config() -> dict:
     return {"kind": "sqlite", "path": str(db_path)}
 
 
+def _build_yuanrong_client(instance_consts) -> Optional[object]:
+    """按环境变量构造元戎沙箱客户端；endpoint 空 → None（模式 B 回 501）。
+
+    环境变量与默认值见 ``a2x_registry/instance/constants.py``（可配置常量区）。
+    数值非法（非浮点）时抛 ValueError 使启动失败——配置错误应当显式暴露。
+    """
+    import os
+
+    endpoint = os.environ.get(
+        instance_consts.YUANRONG_ENDPOINT_ENV, ""
+    ).strip()
+    if not endpoint:
+        return None
+
+    def _float_env(env_name: str, default: float) -> float:
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            return float(default)
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{env_name}={raw!r} is not a number"
+            ) from exc
+
+    from a2x_registry.instance.yuanrong_client import YuanrongSandboxClient
+
+    return YuanrongSandboxClient(
+        frontend_endpoint=endpoint,
+        agent_timeout_s=_float_env(
+            instance_consts.YUANRONG_TIMEOUT_S_ENV,
+            instance_consts.YUANRONG_TIMEOUT_S_DEFAULT,
+        ),
+        agent_namespace=(
+            os.environ.get(
+                instance_consts.YUANRONG_NAMESPACE_ENV, ""
+            ).strip()
+            or instance_consts.YUANRONG_NAMESPACE_DEFAULT
+        ),
+        wait_running_timeout_s=_float_env(
+            instance_consts.YUANRONG_WAIT_RUNNING_S_ENV,
+            instance_consts.YUANRONG_WAIT_RUNNING_S_DEFAULT,
+        ),
+        wait_running_interval_s=_float_env(
+            instance_consts.YUANRONG_WAIT_INTERVAL_S_ENV,
+            instance_consts.YUANRONG_WAIT_INTERVAL_S_DEFAULT,
+        ),
+    )
+
+
 def build_table_repo(cfg: dict):
     """Build the storage repo (``TableRepo``) for the resolved config.
 
@@ -201,14 +252,27 @@ def run_warmup() -> None:
                 from a2x_registry.image.deps import set_image_service
                 from a2x_registry.instance.service import InstanceService
                 from a2x_registry.instance.deps import set_instance_service
+                from a2x_registry.instance import constants as instance_consts
+                from a2x_registry.instance.yuanrong_client import (
+                    YuanrongSandboxClient,
+                )
 
                 image_svc = ImageService(table_svc)
                 set_image_service(image_svc)
                 logger.info("  ImageService assembled (appliance mode)")
 
-                instance_svc = InstanceService(table_svc)
+                # 元戎客户端（可选）：endpoint 空 = 未配置，模式 B 请求回 501。
+                yuanrong_client = _build_yuanrong_client(instance_consts)
+                instance_svc = InstanceService(
+                    table_svc, yuanrong_client=yuanrong_client
+                )
                 set_instance_service(instance_svc)
-                logger.info("  InstanceService assembled (appliance mode)")
+                logger.info(
+                    "  InstanceService assembled (appliance mode, "
+                    "yuanrong=%s)",
+                    "configured" if yuanrong_client is not None
+                    else "not-configured",
+                )
 
                 # NOTE: per-node heartbeat assembly was removed
                 # the registry no longer receives node heartbeats or derives

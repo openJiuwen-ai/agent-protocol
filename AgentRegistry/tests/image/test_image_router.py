@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from a2x_registry.image.deps import set_image_service
 from a2x_registry.image.router import router as image_router
+from a2x_registry.image.service import ImageService
+from a2x_registry.register.etcd_client import EtcdError
 
 from .conftest import make_runtime_spec, make_register_body, make_access_mode
 
@@ -203,6 +205,52 @@ def test_patch_unknown_fields_ignored_keys_not_patchable(client):
     rows = client.get("/api/images", params={"name": "opencode"}).json()
     assert rows[0]["version"] == "v0.2.0"
     assert rows[0]["is_default"] is True
+
+
+def test_patch_framework_rename_in_use_409(client, image_svc):
+    """§3.2 止血：在用镜像 PATCH 改 framework -> 409（防孤儿实例）。"""
+    _register(client, framework="opencode")
+    image_svc._table_svc.register("instances", {
+        "service_id": "generic_abc123",
+        "kind": "三方",
+        "framework": "opencode",
+        "framework_version": "v0.2.0",
+        "node": "node-1",
+        "user": "user-01",
+        "data": {},
+    })
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"framework": "renamed-fw"}
+    )
+    assert r.status_code == 409
+    # framework 未被改动
+    rows = client.get("/api/images", params={"name": "opencode"}).json()
+    assert rows[0]["framework"] == "opencode"
+
+
+# ── etcd 基础设施故障 -> 502 ──────────────────────────────────────
+
+def test_etcd_error_maps_502_list(client, monkeypatch):
+    """EtcdError（不可达/超时）在列表端点兜底为 502，而非 500。"""
+    def boom(*args, **kwargs):
+        raise EtcdError("etcd unreachable")
+
+    # ImageService 定义了 __slots__，须在类上打补丁。
+    monkeypatch.setattr(ImageService, "query", boom)
+    r = client.get("/api/images")
+    assert r.status_code == 502
+
+
+def test_etcd_error_maps_502_patch(client, monkeypatch):
+    """EtcdError（patch CAS 冲突等）在 PATCH 端点兜底为 502。"""
+    def boom(*args, **kwargs):
+        raise EtcdError("concurrent modification (CAS aborted)")
+
+    monkeypatch.setattr(ImageService, "update_image", boom)
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"description": "x"}
+    )
+    assert r.status_code == 502
 
 
 # ── DELETE /api/images/{name}/{version} ─────────────────────────

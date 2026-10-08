@@ -82,7 +82,22 @@ def _sort_tuple(value):
 def _matches(row: dict, match_filter: Optional[dict]) -> bool:
     if not match_filter:
         return True
-    return all(row.get(k) == v for k, v in match_filter.items())
+    # 键可为提升列 / service_id / data.<key>（JSON 内部字段）。
+    return all(
+        _extract_value(row, k) == v for k, v in match_filter.items()
+    )
+
+
+def _check_filter_keys(kind: str, query_filter: Optional[dict]) -> None:
+    """Filter keys must be promoted columns / service_id / ``data.<key>``."""
+    if not query_filter:
+        return
+    allowed = set(_KIND_PROMOTED[kind]) | {"service_id"}
+    for col in query_filter:
+        if col.startswith("data.") and len(col) > len("data."):
+            continue
+        if col not in allowed:
+            raise ValidationError(f"cannot filter on unknown column: {col!r}")
 
 
 class EtcdTableRepo:
@@ -219,11 +234,7 @@ class EtcdTableRepo:
         kind = self.get_kind(name)
         if kind is None:
             return []
-        if query_filter is not None:
-            allowed = set(_KIND_PROMOTED[kind]) | {"service_id"}
-            for col in query_filter:
-                if col not in allowed:
-                    raise ValidationError(f"cannot filter on unknown column: {col!r}")
+        _check_filter_keys(kind, query_filter)
         return [row for row in self._rows(name) if _matches(row, query_filter)]
 
     def query_paginated(
@@ -240,12 +251,9 @@ class EtcdTableRepo:
             return [], 0
         rows = self._rows(name)
 
-        # filter (equality on promoted / service_id)
+        # filter (equality on promoted / service_id / data.<key>)
         if query_filter is not None:
-            allowed = set(_KIND_PROMOTED[kind]) | {"service_id"}
-            for col in query_filter:
-                if col not in allowed:
-                    raise ValidationError(f"cannot filter on unknown column: {col!r}")
+            _check_filter_keys(kind, query_filter)
             rows = [r for r in rows if _matches(r, query_filter)]
 
         # keep only rows with the given persisted data.status (missing → 运行)
