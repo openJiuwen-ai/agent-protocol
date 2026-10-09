@@ -950,7 +950,7 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 
 | HTTP | 场景 | 响应体 |
 |------|------|--------|
-| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / filter key 不在白名单 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 / 模式 B 创建入参非法（name 无 `+`、workspace 非绝对路径、缺 version、runtime_spec 缺 runtime 或 rootfs.imageurl、无法判模式） | `{"detail":"..."}` |
+| `400` | 注册镜像 spec.rootfs.imageurl 缺失 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 / 元戎客户端模式下，创建入参非法（name 无 `+`、workspace 非绝对路径、缺 version、runtime_spec 缺 runtime 或 rootfs.imageurl、无法判模式） | `{"detail":"..."}` |
 | `404` | 取不存在的 name launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
 | `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
 | `409` | 同 service_id 有在途创建 / 删除（实例模式 B，含 DELETE 单个抢锁超时；ALL 批量不整体 409、逐条记 error） | `{"detail":{"code":"in_progress","detail":"..."}}` |
