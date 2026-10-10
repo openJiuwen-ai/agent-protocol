@@ -147,6 +147,8 @@ class CronJob:
     last_session_id: str | None = None
     # 执行时使用的模型；None 表示使用 AgentServer 默认模型
     model_name: str | None = None
+    # 会话级模型选择快照（provider/model 等键值对）；None 表示未启用会话级选择。
+    model_selection: dict[str, str] | None = None
     # 执行时会话级启用的 MCP 名称列表（来自创建时 chat-session 的快照，
     # 或显式传入）；None 表示不注入（沿用既有全局默认集行为）。
     mcp: list[str] | None = None
@@ -156,6 +158,9 @@ class CronJob:
     # 否则 CreateSandbox 拉不起导致 60s 超时。
     # 默认空串兼容旧数据；语义=创建者，创建后不可变。
     user_id: str = ""
+    # 登录免费模型的凭据句柄绑定（创建连接的华为账号登录会话派生）。
+    # 空串=未绑定（自配模型/未选模型）；执行侧凭据注入只认该绑定。
+    credential_ref: str = ""
     # 工作模式派生快照：由 project_id 归属推导（"code" / DEFAULT_WEB_WORK_MODE）。
     work_mode: str = DEFAULT_WEB_WORK_MODE
 
@@ -192,12 +197,16 @@ class CronJob:
             d["last_session_id"] = self.last_session_id
         if self.model_name:
             d["model_name"] = self.model_name
+        if self.model_selection:
+            d["model_selection"] = dict(self.model_selection)
         if self.mcp:
             d["mcp"] = list(self.mcp)
         if self.app_id:
             d["app_id"] = self.app_id
         if self.user_id:
             d["user_id"] = self.user_id
+        if self.credential_ref:
+            d["credential_ref"] = self.credential_ref
         return d
 
     # NOTE(from_dict)：原实现的 from_dict 依赖 validate_cron_expression /
@@ -219,6 +228,31 @@ class CronRunState:
     pushed_final: bool = False
     started_at: float | None = None
     finished_at: float | None = None
+    result_text: str | None = None
+    error: str | None = None
+    job_name: str | None = None
+    targets: str | None = None
+    session_id: str | None = None
+    chat_type: str | None = None
+    timezone: str | None = None
+    # Canonical mode captured before execution. It remains available after a
+    # job is removed from the store, so ghost/timeout cancellation reaches the
+    # same Runtime agent that owns the in-flight request.
+    exec_mode: str | None = None
+    exec_channel_id: str | None = None
+    exec_session_id: str | None = None
+    # Tenant route captured with the executing request.  A removed persisted
+    # job must not make ghost/timeout cancellation fall back to the default user.
+    exec_user_id: str | None = None
+    # Remaining AgentManager cache identity captured by the executing request.
+    exec_work_mode: str | None = None
+    exec_project_id: str | None = None
+    exec_project_dir: str | None = None
+    # ``run_now`` allocates the single-agent session before the wake event so
+    # Web can open the real session immediately; wake must reuse it.
+    execution_session_allocated: bool = False
+    # Manual proactive checks report their outcome through a UI notification.
+    manually_triggered: bool = False
 
 
 __all__ = [
