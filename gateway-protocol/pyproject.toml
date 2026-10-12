@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gateway-protocol"
 version = "0.1.0"
-description = "Shared protocol package between jiuwenswarm and jiuwenswarm-gateway (interfaces, contracts, static functions only)"
+description = "Shared data structures (dataclasses / enums / constants) between jiuwenswarm and jiuwenswarm-gateway"
 requires-python = ">=3.11,<3.14"
 license = { text = "Apache-2.0" }
 classifiers = [
@@ -16,9 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-dependencies = [
-    "pyyaml>=6.0,<7"
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
