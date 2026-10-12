@@ -1,85 +1,78 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
 """gateway-protocol：jiuwenswarm 与 jiuwenswarm-gateway 两仓共享的协议包。
 
-只含**契约**（ABC、接口、枚举、dataclass、事件常量、纯静态函数），不含任何
-运行时实现；不 import jiuwenswarm / openjiuwen（不得产生反向依赖）。通用基础
-库依赖仅 pyyaml（sdk.base 扩展 manifest/config 读取）。实现
-（WebSocketAgentServerClient、ChannelManager、ExtensionRegistry/
-ExtensionManager 等）由 gateway 仓持有，实例经组装期注入。
+**只含纯数据结构**（dataclass / enum / 常量字面量），不含行为实现与接口 ABC；
+不 import jiuwenswarm / openjiuwen（不得产生反向依赖），零第三方运行时依赖。
+接口（AgentServerClient / ThirdAgent / ExtensionRegistry / ExtensionManager /
+SshAuthPort / CryptoProvider 等）、扩展基类（BaseExtension 及子类）、E2A 转换与
+编解码逻辑，均由各仓实现侧持有一份副本。
 
 模块边界：
-- ``agent_client``     AgentServerClient ABC
-- ``third_agent``      ThirdAgent ABC（含 UnsupportedThirdAgent）
-- ``channel_event``    通道契约（ChannelType 等；ChannelManager 实现留 gateway 仓）
-- ``cron_models``      cron 共享模型（CronTargetChannel / CronTarget / CronJob）
-- ``auth``             SshAuthPort 等 auth 契约
-- ``registry``         ExtensionRegistry / ExtensionManager 接口（两仓各自实现）
-- ``hooks``            AgentServer 侧 hook 事件常量与上下文类
-- ``sdk``              扩展 SDK 基类与贡献类（BaseExtension、各 Extension 基类）
+- ``channel_event``    通道契约（ChannelType 枚举）
+- ``cron_models``      cron 共享数据结构（CronTargetChannel / CronTarget / CronJob / CronRunState）
+- ``auth``             SSH 认证结果/条目数据类（SshKeyEntry / SshAuthResult）
+- ``hooks``            AgentServer/Gateway hook 事件名常量与上下文数据类
+- ``sdk``              扩展 SDK 共享数据类（ApplicationPluginServices / 贡献类）
 - ``types``            ExtensionConfig / ExtensionMetadata 等通用数据类型
-- ``http_bridge``      AgentServer HTTP 基址解析与上传的纯静态函数
-- ``e2a``              E2A 协议契约（wire 契约 + ACP/A2A 转换；符号量大，
-  经 ``gateway_protocol.e2a`` 子包命名空间访问，不在顶层汇总导出）
+- ``e2a``              E2A 协议数据结构（信封/响应/线协议模型/常量；经
+  ``gateway_protocol.e2a`` 子包命名空间访问，不在顶层汇总导出）
 """
 
 from __future__ import annotations
 
-from gateway_protocol.agent_client import AgentServerClient
-from gateway_protocol.auth import SshAuthPort, SshAuthResult, SshKeyEntry
+from gateway_protocol.auth import SshAuthResult, SshKeyEntry
 from gateway_protocol.channel_event import ChannelType
-from gateway_protocol.cron_models import CronJob, CronTarget, CronTargetChannel
+from gateway_protocol.cron_models import (
+    CRON_JOB_DEFAULT_MODE,
+    CRON_JOB_DESCRIPTION_MAX_LENGTH,
+    CRON_JOB_NAME_MAX_LENGTH,
+    DEFAULT_WEB_WORK_MODE,
+    CronJob,
+    CronRunState,
+    CronTarget,
+    CronTargetChannel,
+)
 from gateway_protocol.hooks import (
     AgentServerChatHookContext,
     AgentServerHookEvents,
     GatewayChatHookContext,
     GatewayHookEvents,
-    HookEventBase,
     MemoryHookContext,
     SystemPromptHookContext,
 )
-from gateway_protocol.http_bridge import (
-    resolve_agent_host_port,
-    resolve_agent_http_base,
-    resolve_agent_http_base_for_token,
-    resolve_agent_upload_base,
-    set_agent_http_base_resolver,
-    upload_file_bytes,
+from gateway_protocol.sdk import (
+    ApplicationPluginServices,
+    FrontendContribution,
+    WebSocketEndpoint,
+    WebSocketRouteContribution,
 )
-from gateway_protocol.registry import ExtensionManager, ExtensionRegistry
-from gateway_protocol.sdk import BaseExtension
-from gateway_protocol.third_agent import ThirdAgent, UnsupportedThirdAgent
 from gateway_protocol.types import ExtensionConfig, ExtensionMetadata
 
 __version__ = "0.1.0"
 
 __all__ = [
     "AgentServerChatHookContext",
-    "AgentServerClient",
     "AgentServerHookEvents",
-    "BaseExtension",
+    "ApplicationPluginServices",
+    "CRON_JOB_DEFAULT_MODE",
+    "CRON_JOB_DESCRIPTION_MAX_LENGTH",
+    "CRON_JOB_NAME_MAX_LENGTH",
     "ChannelType",
     "CronJob",
+    "CronRunState",
     "CronTarget",
     "CronTargetChannel",
+    "DEFAULT_WEB_WORK_MODE",
     "ExtensionConfig",
-    "ExtensionManager",
     "ExtensionMetadata",
-    "ExtensionRegistry",
+    "FrontendContribution",
     "GatewayChatHookContext",
     "GatewayHookEvents",
-    "HookEventBase",
     "MemoryHookContext",
-    "SshAuthPort",
     "SshAuthResult",
     "SshKeyEntry",
     "SystemPromptHookContext",
-    "ThirdAgent",
-    "UnsupportedThirdAgent",
+    "WebSocketEndpoint",
+    "WebSocketRouteContribution",
     "__version__",
-    "resolve_agent_host_port",
-    "resolve_agent_http_base",
-    "resolve_agent_http_base_for_token",
-    "resolve_agent_upload_base",
-    "set_agent_http_base_resolver",
-    "upload_file_bytes",
 ]
