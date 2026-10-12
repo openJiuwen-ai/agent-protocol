@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from a4p import A4PClient
 from a4p.user_signature.ed25519 import ed25519_public_jwk
 from a4p.http_server import A4PHTTPServer, a4p_http_port
+from tests.http_support import read_http_response
 from tests.support import ExplicitEd25519A4PServer as A4PServer
 from tests.support import sign_user_mandate
 
@@ -16,7 +17,7 @@ async def _raw_http_request(port: int, request: bytes) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(request)
     await writer.drain()
-    response = await reader.read()
+    response = await read_http_response(reader)
     writer.close()
     await writer.wait_closed()
     return response

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import socket
+import time
+
+import pytest
 
 from a4p.http_server import (
     MAX_HEADER_COUNT,
@@ -9,13 +13,14 @@ from a4p.http_server import (
     MAX_REQUEST_LINE_SIZE,
     A4PHTTPServer,
 )
+from tests.http_support import read_http_response
 
 
 async def _raw_http_request(port: int, request: bytes) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(request)
     await writer.drain()
-    response = await reader.read()
+    response = await read_http_response(reader)
     writer.close()
     await writer.wait_closed()
     return response
@@ -37,7 +42,7 @@ async def _raw_http_request_then_eof(port: int, request: bytes) -> bytes:
     await writer.drain()
     if writer.can_write_eof():
         writer.write_eof()
-    response = await reader.read()
+    response = await read_http_response(reader)
     writer.close()
     await writer.wait_closed()
     return response
@@ -175,5 +180,45 @@ def test_http_incomplete_body_returns_400() -> None:
         assert b"incomplete body" in response
         assert b"internal_error" not in response
         assert b"IncompleteReadError" not in response
+
+    asyncio.run(run())
+
+
+def test_read_http_response_times_out_instead_of_hanging() -> None:
+    """对端建立连接后一直不返回数据时，读取必须快速失败而不是挂死。
+
+    服务端「一个连接只处理一个请求」并以 ``Connection: close`` 收尾，所以
+    ``reader.read()`` 在正常情况下会立刻拿到响应后遇到 EOF。但若回归导致连接不被
+    关闭，无保护的 ``read()`` 会永久阻塞，用例只会挂起直到 CI 全局超时。这里用一条
+    真的 TCP 连接（accept 后一个字节都不写）验证超时会转化成失败。
+    """
+
+    async def run() -> None:
+        loop = asyncio.get_running_loop()
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.setblocking(False)
+        accepted: list[socket.socket] = []
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", listener.getsockname()[1]
+            )
+            try:
+                # 接受连接但保持静默：服务端「不回响应也不关连接」的回归现场。
+                conn, _ = await loop.sock_accept(listener)
+                accepted.append(conn)
+                started = time.monotonic()
+                with pytest.raises(AssertionError, match="never closed the connection"):
+                    await read_http_response(reader, timeout=0.2)
+                elapsed = time.monotonic() - started
+                assert elapsed < 5.0, f"超时未生效，读取耗时 {elapsed:.1f}s"
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            for conn in accepted:
+                conn.close()
+            listener.close()
 
     asyncio.run(run())

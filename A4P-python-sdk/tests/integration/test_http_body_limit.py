@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 
 from a4p.http_server import MAX_BODY_SIZE, A4PHTTPServer
+from tests.http_support import read_http_response
 
 
 async def _raw_http_request(port: int, request: bytes) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(request)
     await writer.drain()
-    response = await reader.read()
+    response = await read_http_response(reader)
     writer.close()
     await writer.wait_closed()
     return response
