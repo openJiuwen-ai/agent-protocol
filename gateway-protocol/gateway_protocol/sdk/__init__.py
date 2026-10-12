@@ -1,32 +1,24 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
-"""扩展 SDK 契约汇总导出."""
+"""扩展 SDK 共享数据结构汇总导出.
+
+本包只保留跨仓共享的 **dataclass 数据形状**；扩展基类
+（``BaseExtension`` / ``AgentServerClientExtension`` / ``CryptoUtility`` /
+``ApplicationPluginExtension`` / ``ThirdAgentExtension`` 等）与
+``CryptoProvider`` 协议均属接口/实现逻辑，由各仓实现侧持有一份副本。
+"""
 
 from __future__ import annotations
 
-from gateway_protocol.sdk.agent_server_client import AgentServerClientExtension
 from gateway_protocol.sdk.application_plugin import (
-    ApplicationPluginExtension,
     ApplicationPluginServices,
     FrontendContribution,
-    ManifestApplicationPlugin,
     WebSocketEndpoint,
     WebSocketRouteContribution,
 )
-from gateway_protocol.sdk.base import MANIFEST_FILENAME, BaseExtension
-from gateway_protocol.sdk.crypto_utility import CryptoProvider, CryptoUtility
-from gateway_protocol.sdk.third_agent import ThirdAgentExtension
 
 __all__ = [
-    "MANIFEST_FILENAME",
-    "AgentServerClientExtension",
-    "ApplicationPluginExtension",
     "ApplicationPluginServices",
-    "BaseExtension",
-    "CryptoProvider",
-    "CryptoUtility",
     "FrontendContribution",
-    "ManifestApplicationPlugin",
-    "ThirdAgentExtension",
     "WebSocketEndpoint",
     "WebSocketRouteContribution",
 ]
