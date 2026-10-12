@@ -35,6 +35,7 @@ from gateway_protocol.e2a.adapters import (
     envelope_to_acp_jsonrpc_call,
 )
 from gateway_protocol.e2a.agent_models import (
+    AgentRef,
     AgentRequest,
     AgentResponse,
     AgentResponseChunk,
@@ -108,6 +109,7 @@ __all__ = [
     "ACP_CLIENT_TO_AGENT_METHODS",
     "ACP_NOTIFICATION_NAMES",
     "ACP_SESSION_UPDATE_KINDS",
+    "AgentRef",
     "AgentRequest",
     "AgentResponse",
     "AgentResponseChunk",

@@ -75,6 +75,25 @@ class PermissionContext:
         )
 
 
+@dataclass(frozen=True)
+class AgentRef:
+    """后端智能体标识（V2 同人多窗路由，随 AgentRequest/AgentResponse 全链路透传）。
+
+    mode: 'agent' | 'code' | 'team'
+    id:   mode='agent'/'code' 时为 agent_id；mode='team' 时为 team_name
+    """
+
+    mode: str
+    id: str
+
+    @classmethod
+    def default(cls) -> "AgentRef":
+        return cls(mode="agent", id="default")
+
+    def __repr__(self) -> str:
+        return f"AgentRef({self.mode}:{self.id})"
+
+
 @dataclass
 class AgentRequest:
     """Agent 请求（Gateway → AgentServer）.
@@ -95,7 +114,8 @@ class AgentRequest:
     enable_memory: bool | None = None
     permission_context: PermissionContext | None = None
     # V2: AgentRef(mode, id)，全链路透传供响应侧回带（同人多窗路由依赖）。
-    agent_ref: Any = None
+    # E2A 转换路径为 dict（envelope.agent_ref），网关适配路径为本类型实例。
+    agent_ref: AgentRef | dict[str, Any] | None = None
     # 创建者/调用者标识（envelope.user_id 透传）。AgentServer 据此回写会话
     # metadata.user_id，供 gateway 列表接口按用户隔离会话历史。默认空串向后兼容。
     user_id: str = ""
@@ -138,6 +158,7 @@ class AgentResponseChunk:
 
 
 __all__ = [
+    "AgentRef",
     "AgentRequest",
     "AgentResponse",
     "AgentResponseChunk",
