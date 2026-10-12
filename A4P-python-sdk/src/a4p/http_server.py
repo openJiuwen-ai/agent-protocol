@@ -149,7 +149,19 @@ class A4PHTTPServer:
             raise _BadRequest("invalid Content-Length")
         if body_size > MAX_BODY_SIZE:
             raise _PayloadTooLarge
-        body = await reader.readexactly(body_size) if body_size else b"{}"
+        if body_size:
+            try:
+                body = await reader.readexactly(body_size)
+            except asyncio.IncompleteReadError:
+                # A peer that declares Content-Length: N and then sends fewer
+                # bytes before closing makes readexactly raise
+                # IncompleteReadError.  That is neither _PayloadTooLarge nor
+                # _BadRequest, so it used to fall through to the generic
+                # handler below: a 500 that echoed the exception text back to
+                # the peer.  Report it as a malformed request instead.
+                raise _BadRequest("incomplete body") from None
+        else:
+            body = b"{}"
         return _HTTPRequest(method=method.upper(), path=path, body=body)
 
     @staticmethod
