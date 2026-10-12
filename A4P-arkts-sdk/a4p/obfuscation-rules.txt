@@ -1,0 +1,197 @@
+# Define project specific obfuscation rules here.
+# You can include the obfuscation configuration files in the current module's build-profile.json5.
+#
+# For more details, see
+#   https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/source-obfuscation
+
+# Obfuscation options:
+# -disable-obfuscation: disable all obfuscations
+# -enable-property-obfuscation: obfuscate the property names
+# -enable-toplevel-obfuscation: obfuscate the names in the global scope
+# -compact: remove unnecessary blank spaces and all line feeds
+# -remove-log: remove all console.* statements
+# -print-namecache: print the name cache that contains the mapping from the old names to new names
+# -apply-namecache: reuse the given cache file
+
+# Keep options:
+# -keep-property-name: specifies property names that you want to keep
+# -keep-global-name: specifies names that you want to keep in the global scope
+
+-enable-property-obfuscation
+-enable-toplevel-obfuscation
+# -enable-filename-obfuscation
+-enable-export-obfuscation
+
+# The full public property surface — every member of every type exported
+# from Index.ets, plus the HTTP envelope literals. Matching is
+# case-sensitive. Three distinct reasons to keep each name:
+#   - model fields: the canonical JSON and every signature are computed
+#     over the real property names (docs/canonical-json-spec.md), so a
+#     renamed field makes this module's output unverifiable against every
+#     other A4P implementation and server;
+#   - namespace members (A4p.*/A4pCodec.*) and enum members: consumer
+#     call sites resolve against this module's pre-compiled bytecode, so
+#     the names must survive in both the shipped .abc and the shipped
+#     .d.ts;
+#   - Signer.sign / SignatureVerifier.verify: implemented by the
+#     consuming app, called from this module's bytecode.
+# Keep in sync with consumer-rules.txt (the copy shipped to consuming
+# apps) and with Index.ets / src/main/ets/models/: every new exported
+# member or wire-visible field MUST be added here in the same change.
+-keep-property-name
+version
+timestamp
+sign
+verify
+alg
+keyIdentifier
+action
+status
+code
+message
+name
+data
+valid
+id
+intentId
+intentConversation
+intentSummary
+structuredIntent
+intentL1
+intentL2
+userIdentity
+agentIdentity
+serviceProviderIdentity
+signingEnv
+authorizedIntent
+activatedTime
+executions
+executionInfo
+resource
+constraints
+singleOrderMaxAmount
+totalMaxAmount
+currency
+validFrom
+validUntil
+maxExecuteCount
+anchorTime
+periodSeconds
+maxExecutionCountPerPeriod
+itemsWhiteList
+whiteList
+quantity
+product
+seller
+spusku
+spuId
+skuId
+cartItems
+orderId
+amount
+executionContent
+execution
+executionId
+periodIndex
+reservedAt
+completedAt
+canceledAt
+leftAmount
+leftExecutionCount
+leftPeriodExecutionCount
+identityProvider
+additionalInfo
+device
+app
+model
+os
+method
+path
+headers
+body
+statusCode
+createIntent
+issueIntent
+signIntent
+activateIntent
+verifyIntentAuthenticity
+revokeIntent
+createExecution
+completeExecution
+cancelExecution
+serializeIntentL1
+deserializeIntentL1
+serializeIntentL2
+deserializeIntentL2
+serializeIntentL3
+deserializeIntentL3
+serializeIntentExecutionContext
+deserializeIntentExecutionContext
+A4P_SUCCESS
+A4P_INVALID_PARAMETER
+A4P_UNSUPPORTED_VERSION
+A4P_DUPLICATE_ID
+A4P_SIGNING_FAIL
+A4P_VERIFY_FAIL
+A4P_INVALID_STATUS
+A4P_TIMESTAMP_EXPIRED
+A4P_TIMESTAMP_TOO_EARLY
+A4P_EXECUTION_COUNT_EXCEEDED
+A4P_AMOUNT_EXCEEDED
+A4P_PERIOD_COUNT_EXCEEDED
+A4P_PERIOD_EXECUTION_COUNT_EXCEEDED
+A4P_CART_MISMATCH
+A4P_SINGLE_ORDER_AMOUNT_EXCEEDED
+A4P_PRODUCT_NOT_AUTHORIZED
+A4P_SERIALIZE_FAIL
+A4P_DESERIALIZE_FAIL
+A4P_INTERNAL_ERROR
+AI_PAY
+RSA3072
+ACTIVE
+CONSUMED
+REVOKED
+EXPIRED
+PENDING
+COMPLETED
+CANCELED
+
+# Every name exported from Index.ets (case-sensitive): with
+# -enable-export-obfuscation, renamed exports would rewrite the shipped
+# .d.ts (import { i } from "./d/f") and break every consumer's source.
+# Any new export added to Index.ets MUST be added here in the same
+# change.
+-keep-global-name
+A4p
+A4pCodec
+Signer
+SignatureVerifier
+VerificationResult
+CreateIntentRequest
+IntentIssueContext
+A4pErrorCode
+PaymentConstraints
+Product
+ItemWhiteList
+ShoppingItems
+CartItem
+SellerInfo
+SpuSkuInfo
+UserIdentity
+AgentIdentity
+ServiceProviderIdentity
+SigningEnv
+StructuredIntent
+IntentL1
+IntentL2
+IntentL3
+SignatureInfo
+IntentActionType
+AlgorithmType
+Order
+Execution
+IntentExecutionStatus
+ExecutionStatus
+ExecutionRecord
+PaymentExecutionInfo
+IntentExecutionContext
