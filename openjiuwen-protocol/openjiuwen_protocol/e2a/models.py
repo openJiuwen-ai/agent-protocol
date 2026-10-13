@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from gateway_protocol.e2a.constants import (
+from openjiuwen_protocol.e2a.constants import (
     E2A_RESPONSE_STATUS_IN_PROGRESS,
     E2A_SOURCE_PROTOCOL_A2A,
     E2A_SOURCE_PROTOCOL_ACP,

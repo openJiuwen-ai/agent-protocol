@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
-"""gateway-protocol：jiuwenswarm 与 jiuwenswarm-gateway 两仓共享的协议包。
+"""openjiuwen-protocol：jiuwenswarm 与 jiuwenswarm-gateway 两仓共享的协议包。
 
 **只含纯数据结构**（dataclass / enum / 常量字面量），不含行为实现与接口 ABC；
 不 import jiuwenswarm / openjiuwen（不得产生反向依赖），零第三方运行时依赖。
@@ -15,14 +15,14 @@ SshAuthPort / CryptoProvider 等）、扩展基类（BaseExtension 及子类）�
 - ``sdk``              扩展 SDK 共享数据类（ApplicationPluginServices / 贡献类）
 - ``types``            ExtensionConfig / ExtensionMetadata 等通用数据类型
 - ``e2a``              E2A 协议数据结构（信封/响应/线协议模型/常量；经
-  ``gateway_protocol.e2a`` 子包命名空间访问，不在顶层汇总导出）
+  ``openjiuwen_protocol.e2a`` 子包命名空间访问，不在顶层汇总导出）
 """
 
 from __future__ import annotations
 
-from gateway_protocol.auth import SshAuthResult, SshKeyEntry
-from gateway_protocol.channel_event import ChannelType
-from gateway_protocol.cron_models import (
+from openjiuwen_protocol.auth import SshAuthResult, SshKeyEntry
+from openjiuwen_protocol.channel_event import ChannelType
+from openjiuwen_protocol.cron_models import (
     CRON_JOB_DEFAULT_MODE,
     CRON_JOB_DESCRIPTION_MAX_LENGTH,
     CRON_JOB_NAME_MAX_LENGTH,
@@ -32,7 +32,7 @@ from gateway_protocol.cron_models import (
     CronTarget,
     CronTargetChannel,
 )
-from gateway_protocol.hooks import (
+from openjiuwen_protocol.hooks import (
     AgentServerChatHookContext,
     AgentServerHookEvents,
     GatewayChatHookContext,
@@ -40,13 +40,13 @@ from gateway_protocol.hooks import (
     MemoryHookContext,
     SystemPromptHookContext,
 )
-from gateway_protocol.sdk import (
+from openjiuwen_protocol.sdk import (
     ApplicationPluginServices,
     FrontendContribution,
     WebSocketEndpoint,
     WebSocketRouteContribution,
 )
-from gateway_protocol.types import ExtensionConfig, ExtensionMetadata
+from openjiuwen_protocol.types import ExtensionConfig, ExtensionMetadata
 
 __version__ = "0.1.0"
 
