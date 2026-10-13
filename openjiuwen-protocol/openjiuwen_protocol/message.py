@@ -285,6 +285,11 @@ class ReqMethod(Enum):
     SKILLS_EXPERIENCE_LIST = "skills.experience.list"
     SKILLS_EXPERIENCE_REQUEST = "skills.experience.request"
 
+    # Task (session) assets: named files referenceable with @name in the chat box.
+    SESSION_ASSETS_LIST = "session.assets.list"
+    SESSION_ASSETS_REGISTER = "session.assets.register"
+    SESSION_ASSETS_RENAME = "session.assets.rename"
+
     # 技能同步（Server / Client 分离部署）。外部入口为 HTTP /skill-sync/*
     # （Bearer token 鉴权）。WS 侧仅保留 reload：web 进程 HTTP apply 落盘后的
     # 进程间通知（参数仅 applied 名称列表，纯 JSON）；diff / package / apply
