@@ -12,6 +12,14 @@
 #include <thread>
 #include <cstdio>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 #include <nlohmann/json.hpp>
 #include "gtest/gtest.h"
 #include "mcp_client.h"
@@ -495,6 +503,100 @@ TEST_F(TlsTest, TestMutualTlsConnection)
     WaitForServerShutdown();
 
     EXPECT_TRUE(success) << "Mutual TLS client connection failed";
+}
+
+namespace {
+
+// 保证断言提前返回时也不泄漏 fd / SSL 对象
+struct FdGuard {
+    int fd{-1};
+    explicit FdGuard(int f) noexcept : fd(f) {}
+    ~FdGuard()
+    {
+        if (fd >= 0) {
+            ::close(fd);
+        }
+    }
+    int Get() const noexcept { return fd; }
+    FdGuard(const FdGuard&) = delete;
+    FdGuard& operator=(const FdGuard&) = delete;
+};
+
+using SslCtxPtr = std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)>;
+using SslPtr = std::unique_ptr<SSL, decltype(&SSL_free)>;
+using SslSessionPtr = std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)>;
+
+} // namespace
+
+// 裸 TCP 连接辅助函数
+static int ConnectTcp(const std::string& host, uint16_t port)
+{
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1 ||
+        ::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+// 会话恢复用例：用裸 OpenSSL 客户端强制走 TLS 会话恢复路径。
+// 服务端启用客户端证书校验时必须设置 session id context，否则恢复握手失败。
+TEST_F(TlsTest, TestSessionResumption)
+{
+    ASSERT_TRUE(StartServer(mutualTlsPort, true)) << "Failed to start mutual TLS server";
+    std::this_thread::sleep_for(std::chrono::milliseconds(TEST_WAIT_TIME_MS));
+
+    SslCtxPtr ctx(SSL_CTX_new(TLS_client_method()), SSL_CTX_free);
+    ASSERT_NE(ctx, nullptr);
+    // 固定 TLS1.2，走确定性的会话恢复（避开 TLS1.3 post-handshake ticket 时序）
+    SSL_CTX_set_min_proto_version(ctx.get(), TLS1_2_VERSION);
+    SSL_CTX_set_max_proto_version(ctx.get(), TLS1_2_VERSION);
+    ASSERT_EQ(SSL_CTX_load_verify_locations(ctx.get(), "./ca.cert.pem", nullptr), 1);
+    ASSERT_EQ(SSL_CTX_use_certificate_file(ctx.get(), "./client.cert.pem", SSL_FILETYPE_PEM), 1);
+    ASSERT_EQ(SSL_CTX_use_PrivateKey_file(ctx.get(), "./client.key.pem", SSL_FILETYPE_PEM), 1);
+    SSL_CTX_set_verify(ctx.get(), SSL_VERIFY_PEER, nullptr);
+
+    // 第一次握手，缓存会话
+    SslSessionPtr session(nullptr, SSL_SESSION_free);
+    {
+        FdGuard fd(ConnectTcp(host, mutualTlsPort));
+        ASSERT_GE(fd.Get(), 0) << "connect failed";
+        SslPtr ssl(SSL_new(ctx.get()), SSL_free);
+        ASSERT_NE(ssl, nullptr);
+        SSL_set_fd(ssl.get(), fd.Get());
+        ASSERT_EQ(SSL_connect(ssl.get()), 1) << "initial handshake failed";
+        session.reset(SSL_get1_session(ssl.get()));
+        SSL_shutdown(ssl.get());
+    }
+    ASSERT_NE(session, nullptr) << "no session captured";
+
+    // 新建连接，用缓存会话尝试恢复
+    FdGuard fd(ConnectTcp(host, mutualTlsPort));
+    ASSERT_GE(fd.Get(), 0) << "connect failed";
+    SslPtr ssl(SSL_new(ctx.get()), SSL_free);
+    ASSERT_NE(ssl, nullptr);
+    SSL_set_fd(ssl.get(), fd.Get());
+    ASSERT_EQ(SSL_set_session(ssl.get(), session.get()), 1);
+
+    int rc = SSL_connect(ssl.get());
+    if (rc != 1) {
+        char buf[256] = {0};
+        ERR_error_string_n(ERR_get_error(), buf, sizeof(buf));
+        ADD_FAILURE() << "resuming handshake failed: " << buf;
+    } else {
+        EXPECT_EQ(SSL_session_reused(ssl.get()), 1) << "handshake succeeded but session was not reused";
+    }
+
+    SSL_shutdown(ssl.get());
+    StopServer();
+    WaitForServerShutdown();
 }
 
 } // namespace Test

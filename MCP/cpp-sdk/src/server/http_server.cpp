@@ -766,6 +766,16 @@ void HttpServer::InitializeSslContext()
         throw std::runtime_error("SSL_CTX_set_cipher_list failed");
     }
 
+    // Required for TLS session resumption once client-certificate verification is
+    // enabled (SSL_VERIFY_PEER). Without a session id context, OpenSSL rejects a
+    // resuming handshake with "session id context uninitialized".
+    static const unsigned char sessionIdContext[] = "mcp-server-session";
+    if (SSL_CTX_set_session_id_context(context, sessionIdContext,
+                                       static_cast<unsigned int>(sizeof(sessionIdContext) - 1)) != 1) {
+        SSL_CTX_free(context);
+        throw std::runtime_error("SSL_CTX_set_session_id_context failed");
+    }
+
     if (SSL_CTX_use_certificate_file(context, tlsConfig_.certFile.c_str(), SSL_FILETYPE_PEM) != 1) {
         SSL_CTX_free(context);
         throw std::runtime_error("SSL_CTX_use_certificate_file failed");
