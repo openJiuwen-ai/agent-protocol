@@ -17,7 +17,7 @@ import time
 import uuid as uuid_module
 from typing import Any
 
-from gateway_protocol.e2a.constants import (
+from openjiuwen_protocol.e2a.constants import (
     E2A_A2A_STREAM_BRANCHES,
     E2A_RESPONSE_KIND_ACP_JSONRPC_ERROR,
     E2A_RESPONSE_KIND_ACP_PROMPT_RESULT,
@@ -26,7 +26,7 @@ from gateway_protocol.e2a.constants import (
     E2A_SOURCE_PROTOCOL_ACP,
     E2A_SOURCE_PROTOCOL_A2A,
 )
-from gateway_protocol.e2a.models import (
+from openjiuwen_protocol.e2a.models import (
     E2AEnvelope,
     E2AProvenance,
     E2AResponse,
@@ -35,8 +35,8 @@ from gateway_protocol.e2a.models import (
     utc_now_iso,
 )
 
-_CONVERTER_ACP = "gateway_protocol.e2a.adapters:envelope_from_acp_jsonrpc"
-_CONVERTER_A2A = "gateway_protocol.e2a.adapters:envelope_from_a2a_send_message"
+_CONVERTER_ACP = "openjiuwen_protocol.e2a.adapters:envelope_from_acp_jsonrpc"
+_CONVERTER_A2A = "openjiuwen_protocol.e2a.adapters:envelope_from_a2a_send_message"
 
 
 def envelope_from_acp_jsonrpc(

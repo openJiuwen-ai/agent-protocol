@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
-from gateway_protocol.e2a.acp.acp_tool_updates import (
+from openjiuwen_protocol.e2a.acp.acp_tool_updates import (
     build_acp_todo_update,
     build_acp_tool_call_update,
     build_acp_tool_result_update,
