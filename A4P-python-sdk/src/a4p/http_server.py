@@ -20,13 +20,23 @@ logger = logging.getLogger(__name__)
 # a malicious client cannot exhaust server memory.
 MAX_BODY_SIZE = 1 * 1024 * 1024
 
+# Request headers are read before the Content-Length cap can apply, so they
+# need their own budget: without it a peer can allocate an unbounded amount of
+# memory with well-formed header lines (the body cap only guards the body).
+MAX_HEADER_LINE_SIZE = 8 * 1024
+MAX_HEADER_SIZE = 64 * 1024
+MAX_HEADER_COUNT = 100
+
+# Request line: "METHOD SP TARGET SP VERSION" plus CRLF.
+MAX_REQUEST_LINE_SIZE = 8 * 1024
+
 
 class _PayloadTooLarge(Exception):
     """Raised when a request body exceeds :data:`MAX_BODY_SIZE`."""
 
 
 class _BadRequest(Exception):
-    """Raised when a request carries an invalid header value."""
+    """Raised when the peer sent a syntactically invalid or oversized request."""
 
 
 @dataclass(frozen=True)
@@ -114,10 +124,21 @@ class A4PHTTPServer:
             await writer.wait_closed()
 
     async def _read_request(self, reader: asyncio.StreamReader) -> _HTTPRequest | None:
-        first_line = await reader.readline()
+        try:
+            first_line = await reader.readline()
+        except ValueError:  # request line longer than the stream limit
+            raise _BadRequest("request line too long") from None
         if not first_line:
             return None
-        method, path, _version = first_line.decode("iso-8859-1").strip().split(maxsplit=2)
+        parts = first_line.decode("iso-8859-1").strip().split(maxsplit=2)
+        if len(parts) != 3:
+            # "GET\r\n" / "GET /" / an empty line from a proxy must be a 400,
+            # not an unpacking ValueError that surfaces as a 500 leaking the
+            # exception text back to the peer.
+            raise _BadRequest("malformed request line")
+        if len(first_line) > MAX_REQUEST_LINE_SIZE:
+            raise _BadRequest("request line too long")
+        method, path, _version = parts
         headers = await self._read_headers(reader)
         raw_length = headers.get("content-length")
         try:
@@ -128,16 +149,41 @@ class A4PHTTPServer:
             raise _BadRequest("invalid Content-Length")
         if body_size > MAX_BODY_SIZE:
             raise _PayloadTooLarge
-        body = await reader.readexactly(body_size) if body_size else b"{}"
+        if body_size:
+            try:
+                body = await reader.readexactly(body_size)
+            except asyncio.IncompleteReadError:
+                # A peer that declares Content-Length: N and then sends fewer
+                # bytes before closing makes readexactly raise
+                # IncompleteReadError.  That is neither _PayloadTooLarge nor
+                # _BadRequest, so it used to fall through to the generic
+                # handler below: a 500 that echoed the exception text back to
+                # the peer.  Report it as a malformed request instead.
+                raise _BadRequest("incomplete body") from None
+        else:
+            body = b"{}"
         return _HTTPRequest(method=method.upper(), path=path, body=body)
 
     @staticmethod
     async def _read_headers(reader: asyncio.StreamReader) -> dict[str, str]:
         headers: dict[str, str] = {}
+        total = 0
+        count = 0
         while True:
-            raw = await reader.readline()
+            try:
+                raw = await reader.readline()
+            except ValueError:  # header line longer than the stream limit
+                raise _BadRequest("request headers too long") from None
             if raw in {b"", b"\n", b"\r\n"}:
                 return headers
+            if len(raw) > MAX_HEADER_LINE_SIZE:
+                raise _BadRequest("request header line too long")
+            total += len(raw)
+            if total > MAX_HEADER_SIZE:
+                raise _BadRequest("request headers too large")
+            count += 1
+            if count > MAX_HEADER_COUNT:
+                raise _BadRequest("too many request headers")
             name, has_separator, value = raw.decode("iso-8859-1").partition(":")
             if has_separator:
                 headers[name.strip().lower()] = value.strip()
