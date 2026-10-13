@@ -156,6 +156,7 @@ class ReqMethod(Enum):
     DESIGNER_GRAPH_BOOTSTRAP = "designer.graph.bootstrap"
     DESIGNER_GRAPH_PATCH = "designer.graph.patch"
     DESIGNER_GRAPH_CHAT = "designer.graph.chat"
+    DESIGNER_MEDIA_CAPABILITIES = "designer.media.capabilities"
     DESIGNER_RUN_START = "designer.run.start"
     DESIGNER_RUN_GET = "designer.run.get"
     DESIGNER_RUN_PAUSE = "designer.run.pause"
