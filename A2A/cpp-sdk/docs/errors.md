@@ -100,6 +100,7 @@ std::variant<Message, A2AError, std::pair<Task, UpdateEvent>>
 | HTTP 连接失败 | `A2AClientHTTPError` | 检查网络与 `LD_LIBRARY_PATH` |
 | Card 解析失败 | `A2AClientJSONError` | 检查 `/.well-known/agent-card.json` |
 | 请求超时 | `A2AClientTimeoutError`（`A2A_REQUEST_TIMEOUT` -32101），消息含 `stage` 与 `elapsed` | 按阶段定位：`connect-or-waiting-response-headers` / `waiting-response-body` / `stream-idle` |
+| 连接被对端中断 | `A2AClientException`（`A2A_TRANSPORT_EXCEPTION` -32102），消息如 `Server returned nothing (no headers, no data)` | 对端在响应完成前关闭了连接（如服务端回收仍在处理的连接、网关断流）：检查服务端连接回收配置与网关空闲超时 |
 
 > **超时错误信息**：传输层超时会携带阶段与已消耗时间，例如
 > `request timed out [stage=stream-idle, idle=60023ms, elapsed=60023ms]`。

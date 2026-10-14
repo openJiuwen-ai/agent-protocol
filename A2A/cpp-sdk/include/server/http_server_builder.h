@@ -26,6 +26,24 @@ struct HttpConfig {
     unsigned int ioThreadNum = 1;
     /** @brief JSON-RPC endpoint path. */
     std::string endpoint = "/jsonrpc";
+    /**
+     * @brief Idle connection timeout in seconds, default 300.
+     *
+     * Applies only while no request is in flight: such a connection is closed once it has been
+     * silent for longer than this, so idle or hung clients cannot leak file descriptors.
+     * 0 disables idle reclamation.
+     */
+    unsigned int connectionTimeoutSeconds = 300;
+    /** @brief Interval in seconds between connection sweeps, default 30 (clamped to the timeouts). */
+    unsigned int connectionSweepIntervalSeconds = 30;
+    /**
+     * @brief In-flight request timeout in seconds, default 1800.
+     *
+     * Applies while a handler is still producing the response, where silence on the wire is
+     * normal. Measured from the last progress on the connection (request read, or last chunk
+     * written), so it only bounds handlers that never finish. 0 disables it.
+     */
+    unsigned int requestTimeoutSeconds = 1800;
 };
 
 /**

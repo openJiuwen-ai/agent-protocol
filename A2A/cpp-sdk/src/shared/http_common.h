@@ -5,6 +5,7 @@
 #ifndef A2A_HTTP_COMMON_INCLUDE_H_
 #define A2A_HTTP_COMMON_INCLUDE_H_
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -134,6 +135,12 @@ struct HttpRequestContext {
     std::string method;
 
     HttpSendFunc httpSendFunc;  // This function will be constructed in HttpServer::HandleRequest
+    // Identifies the connection connectionId referred to when the request was dispatched. The
+    // server may close and reclaim that connection while a handler is still working, after which
+    // the OS can reuse the same fd number for a different client; the sequence lets the server
+    // drop such a late response instead of writing it to whoever holds the fd now.
+    // 0 means "unknown", for contexts not created by HttpServer::HandleRequest.
+    uint64_t connectionSequence = 0;
 };
 
 // Unified callback type definition
