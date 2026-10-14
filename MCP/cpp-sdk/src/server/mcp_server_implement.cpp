@@ -491,6 +491,9 @@ void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOp
     ServerTool tool(name, fn, params.title, params.description, params.inputSchema, params.outputSchema,
                     params.structuredOutput, params.annotations, params.icons);
     toolManager_.AddTool(tool);
+    if (!config_.capabilities.tools.has_value()) {
+        config_.capabilities.tools = ToolsCapabilities{};
+    }
 }
 
 void McpServerImplement::RemoveTool(const std::string& name)
@@ -498,6 +501,9 @@ void McpServerImplement::RemoveTool(const std::string& name)
     CheckServerState();
 
     toolManager_.RemoveTool(name);
+    if (toolManager_.ListTools().tools.empty()) {
+        config_.capabilities.tools.reset();
+    }
 }
 
 void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc handler, AddPromptOptionalParams params)
@@ -520,6 +526,9 @@ void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc han
     }
 
     promptManager_.AddPrompt(prompt, handler);
+    if (!config_.capabilities.prompts.has_value()) {
+        config_.capabilities.prompts = PromptsCapabilities{};
+    }
 }
 
 void McpServerImplement::RemovePrompt(const std::string& name)
@@ -527,6 +536,9 @@ void McpServerImplement::RemovePrompt(const std::string& name)
     CheckServerState();
 
     promptManager_.RemovePrompt(name);
+    if (promptManager_.ListPrompts().prompts.empty()) {
+        config_.capabilities.prompts.reset();
+    }
 }
 
 void McpServerImplement::AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
@@ -557,6 +569,9 @@ void McpServerImplement::AddResource(const std::string& uri, const std::string& 
     }
 
     resourceManager_.AddResource(resource, readFunc);
+    if (!config_.capabilities.resources.has_value()) {
+        config_.capabilities.resources = ResourcesCapabilities{};
+    }
 }
 
 void McpServerImplement::RemoveResource(const std::string& uri)
@@ -564,6 +579,9 @@ void McpServerImplement::RemoveResource(const std::string& uri)
     CheckServerState();
 
     resourceManager_.RemoveResource(uri);
+    if (resourceManager_.ListResources().resources.empty()) {
+        config_.capabilities.resources.reset();
+    }
 }
 
 void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, const std::string& name,

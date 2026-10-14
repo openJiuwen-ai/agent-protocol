@@ -67,6 +67,12 @@ public:
         setLevelHandler_ = std::move(h);
     }
 
+    /** Advertised server capabilities (updated when tools/prompts/resources are registered). */
+    const ServerCapabilities& GetCapabilities() const
+    {
+        return config_.capabilities;
+    }
+
 private:
     void ReceiveIncomingMessages(const RequestId& requestId, const Request& request, ServerRequestContext& ctx);
     void HandleToolsList(const RequestId& requestId, const Request& request, ServerRequestContext& ctx);

@@ -280,6 +280,72 @@ TEST(McpServerImplementTest, ToolManagement_AddTool)
     EXPECT_NO_THROW(server.AddTool(tool.name, tool.func, toolParams));
 }
 
+TEST(McpServerImplementTest, CapabilitiesFollowRegistration)
+{
+    auto config = CreateValidStdioConfig();
+    ASSERT_FALSE(config.capabilities.tools.has_value());
+    ASSERT_FALSE(config.capabilities.prompts.has_value());
+    ASSERT_FALSE(config.capabilities.resources.has_value());
+
+    McpServerImplement server(config);
+    EXPECT_FALSE(server.GetCapabilities().tools.has_value());
+    EXPECT_FALSE(server.GetCapabilities().prompts.has_value());
+    EXPECT_FALSE(server.GetCapabilities().resources.has_value());
+
+    auto tool = CreateTestTool();
+    Mcp::AddToolOptionalParams toolParams;
+    toolParams.description = tool.description;
+    toolParams.inputSchema = tool.inputSchema;
+    toolParams.outputSchema = tool.outputSchema;
+    ASSERT_NO_THROW(server.AddTool(tool.name, tool.func, toolParams));
+    EXPECT_TRUE(server.GetCapabilities().tools.has_value());
+    EXPECT_FALSE(server.GetCapabilities().prompts.has_value());
+    EXPECT_FALSE(server.GetCapabilities().resources.has_value());
+
+    auto prompt = CreateTestPrompt();
+    std::string promptDescription = PROMPT_DESCRIPTION;
+    Mcp::AddPromptOptionalParams promptParams;
+    promptParams.description = std::cref(promptDescription);
+    ASSERT_NO_THROW(server.AddPrompt(
+        prompt.name,
+        [](const ServerContext &, const std::string &,
+           const std::optional<std::string> &) -> Mcp::GetPromptResult {
+            return Mcp::GetPromptResult{};
+        },
+        promptParams));
+    EXPECT_TRUE(server.GetCapabilities().tools.has_value());
+    EXPECT_TRUE(server.GetCapabilities().prompts.has_value());
+    EXPECT_FALSE(server.GetCapabilities().resources.has_value());
+
+    auto resource = CreateTestResource();
+    std::string resourceDescription = RESOURCE_DESCRIPTION;
+    std::string resourceMimeType = RESOURCE_MIME_TYPE;
+    Mcp::AddResourceOptionalParams resourceParams;
+    resourceParams.description = std::cref(resourceDescription);
+    resourceParams.mimeType = std::cref(resourceMimeType);
+    Mcp::ReadResourceFunc readResourceFunc =
+        [](const ServerContext &, const std::string &) -> Mcp::ReadResourceResult {
+        return Mcp::ReadResourceResult{};
+    };
+    ASSERT_NO_THROW(
+        server.AddResource(resource.uri, resource.name, readResourceFunc, resourceParams));
+    EXPECT_TRUE(server.GetCapabilities().tools.has_value());
+    EXPECT_TRUE(server.GetCapabilities().prompts.has_value());
+    EXPECT_TRUE(server.GetCapabilities().resources.has_value());
+
+    EXPECT_NO_THROW(server.RemoveTool(tool.name));
+    EXPECT_FALSE(server.GetCapabilities().tools.has_value());
+    EXPECT_TRUE(server.GetCapabilities().prompts.has_value());
+    EXPECT_TRUE(server.GetCapabilities().resources.has_value());
+
+    EXPECT_NO_THROW(server.RemovePrompt(prompt.name));
+    EXPECT_FALSE(server.GetCapabilities().prompts.has_value());
+    EXPECT_TRUE(server.GetCapabilities().resources.has_value());
+
+    EXPECT_NO_THROW(server.RemoveResource(resource.uri));
+    EXPECT_FALSE(server.GetCapabilities().resources.has_value());
+}
+
 TEST(McpServerImplementTest, ToolManagement_RemoveTool)
 {
     auto config = CreateValidStdioConfig();
@@ -293,7 +359,9 @@ TEST(McpServerImplementTest, ToolManagement_RemoveTool)
     toolParams.outputSchema = tool.outputSchema;
 
     EXPECT_NO_THROW(server.AddTool(tool.name, tool.func, toolParams));
+    EXPECT_TRUE(server.GetCapabilities().tools.has_value());
     EXPECT_NO_THROW(server.RemoveTool(tool.name));
+    EXPECT_FALSE(server.GetCapabilities().tools.has_value());
 }
 
 TEST(McpServerImplementTest, ToolManagement_AddMultipleTools) {
