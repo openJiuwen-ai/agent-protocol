@@ -81,6 +81,9 @@ std::shared_ptr<Server> HttpServerBuilder::Build(const HttpConfig& config,
     configWithEndpoint.port = config.port;
     configWithEndpoint.ioThreadNum = config.ioThreadNum;
     configWithEndpoint.endpoint = endpoint;
+    configWithEndpoint.connectionTimeoutSeconds = config.connectionTimeoutSeconds;
+    configWithEndpoint.connectionSweepIntervalSeconds = config.connectionSweepIntervalSeconds;
+    configWithEndpoint.requestTimeoutSeconds = config.requestTimeoutSeconds;
     
     ServerConfig serverConfig = configWithEndpoint;
     

@@ -32,9 +32,15 @@ void HttpServerManager::Start()
     servers_.clear();
     servers_.reserve(config_.ioThreadNum);
 
+    ConnectionTimeoutConfig timeoutConfig;
+    timeoutConfig.timeoutSeconds = config_.connectionTimeoutSeconds;
+    timeoutConfig.sweepIntervalSeconds = config_.connectionSweepIntervalSeconds;
+    timeoutConfig.requestTimeoutSeconds = config_.requestTimeoutSeconds;
+
     for (size_t i = 0; i < config_.ioThreadNum; ++i) {
         servers_.push_back(
-            std::make_unique<HttpServer>(config_.host, config_.port, config_.tlsConfig, config_.routeMap, i));
+            std::make_unique<HttpServer>(config_.host, config_.port, config_.tlsConfig, config_.routeMap, i,
+                                         timeoutConfig));
     }
 
     for (auto& server : servers_) {
