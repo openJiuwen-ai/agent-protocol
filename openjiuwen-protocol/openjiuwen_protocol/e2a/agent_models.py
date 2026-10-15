@@ -77,7 +77,7 @@ class PermissionContext:
 
 @dataclass(frozen=True)
 class AgentRef:
-    """后端智能体标识（V2 同人多窗路由，随 AgentRequest/AgentResponse 全链路透传）。
+    """后端智能体标识（同人多窗路由，随 AgentRequest/AgentResponse 全链路透传）。
 
     mode: 'agent' | 'code' | 'team'
     id:   mode='agent'/'code' 时为 agent_id；mode='team' 时为 team_name
@@ -98,8 +98,8 @@ class AgentRef:
 class AgentRequest:
     """Agent 请求（Gateway → AgentServer）.
 
-    ``req_method`` 类型为 ``openjiuwen_protocol.message.ReqMethod``（或线上的
-    string），与 ``Message.req_method`` 同源。
+    ``req_method`` 类型为 ``openjiuwen_protocol.message.ReqMethod``，与
+    ``Message.req_method`` 同源。
     """
 
     request_id: str
@@ -113,7 +113,7 @@ class AgentRequest:
     metadata: dict[str, Any] | None = None
     enable_memory: bool | None = None
     permission_context: PermissionContext | None = None
-    # V2: AgentRef(mode, id)，全链路透传供响应侧回带（同人多窗路由依赖）。
+    # AgentRef(mode, id)，全链路透传供响应侧回带（同人多窗路由依赖）。
     # E2A 转换路径为 dict（envelope.agent_ref），网关适配路径为本类型实例。
     agent_ref: AgentRef | dict[str, Any] | None = None
     # 创建者/调用者标识（envelope.user_id 透传）。AgentServer 据此回写会话
@@ -123,6 +123,14 @@ class AgentRequest:
     # this field; it carries mailbox lineage through an interrupt answer
     # without changing the answer's model-visible user origin.
     trusted_session_message_route: dict[str, Any] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    # AgentServer-only runtime dispatch result. The facade resolves it before
+    # MCP reconciliation so the root adapter and session child consume the
+    # same manifest-derived binding without resolving the package twice.
+    trusted_runtime_binding: dict[str, Any] | None = field(
         default=None,
         repr=False,
         compare=False,
@@ -138,7 +146,7 @@ class AgentResponse:
     ok: bool = True
     payload: dict | None = None
     metadata: dict[str, Any] | None = None
-    # V2: 回带请求侧 agent_ref，供 gateway 非流式响应 3 元组路由。
+    # 回带请求侧 agent_ref，供 gateway 非流式响应 3 元组路由。
     agent_ref: Any = None
 
 
@@ -150,7 +158,7 @@ class AgentResponseChunk:
     channel_id: str
     payload: dict | None = None
     is_complete: bool = False
-    agent_ref: Any = None       # AgentRef(mode, id), V2 新增
+    agent_ref: Any = None       # AgentRef(mode, id)
     metadata: dict = field(default_factory=dict)  # fan_out_targets (V1 wire key, list[LogicalTarget])
     # Internal execution outcome, never a wire field. EOF/empty UI flushes can
     # terminate a suspended round without completing its user's request.
