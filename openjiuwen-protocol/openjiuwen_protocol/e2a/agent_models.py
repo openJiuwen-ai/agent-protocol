@@ -3,22 +3,22 @@
 
 来源：``jiuwenswarm/common/schema/agent.py``（AgentRequest/AgentResponse/
 AgentResponseChunk 部分）。这三个 dataclass 是跨 WS 进程共享的线协议类型，
-随 e2a wire 契约进协议包；jiuwenswarm 侧 ``common/schema/agent.py`` 改为
-本模块的转发别名（过渡形态）。
+随 e2a wire 契约进协议包。
 
 ``PermissionContext`` / ``AgentRequest`` 含 AgentServer 内部语义
 （trusted_session_message_route 等进程内字段），暂随 AgentRequest 一起放
-本模块以保持 schema.agent 别名的完整性；后续 schema 大迁移时再评估拆分。
+本模块；后续 schema 大迁移时再评估拆分。
 
-注意：``AgentRequest.req_method`` 的类型 ``ReqMethod`` 仍定义在 jiuwenswarm
-侧 ``common/schema/message.py``（耦合 Mode/mode_matrix 产品逻辑），此处以
-``Any`` 传导（与 agent_client ABC 的信封处理一致），待 schema 迁移阶段定夺。
+``AgentRequest.req_method`` 的类型 ``ReqMethod`` 已随 ``message`` 模块进包
+（原 jiuwenswarm ``common/schema/message.py``），此处直接引用。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+
+from openjiuwen_protocol.message import ReqMethod
 
 
 @dataclass
@@ -98,15 +98,15 @@ class AgentRef:
 class AgentRequest:
     """Agent 请求（Gateway → AgentServer）.
 
-    ``req_method`` 类型为 jiuwenswarm 侧 ``ReqMethod`` 枚举（或线上的
-    string），跨仓以 ``Any`` 传导（见模块 docstring）。
+    ``req_method`` 类型为 ``openjiuwen_protocol.message.ReqMethod``（或线上的
+    string），与 ``Message.req_method`` 同源。
     """
 
     request_id: str
     channel_id: str = ""
     session_id: str | None = None
     chat_id: str | None = None
-    req_method: Any = None
+    req_method: ReqMethod | None = None
     params: dict = field(default_factory=dict)
     is_stream: bool = False
     timestamp: float = 0.0
