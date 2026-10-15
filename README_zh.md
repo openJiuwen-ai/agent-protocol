@@ -4,14 +4,77 @@
 
 ## 简介
 
-**Agent Protocol** 是一套智能体互操作与授权协议的软件开发工具包（SDK）集合，帮助开发者在不同运行环境中快速集成智能体与工具/智能体之间的互操作能力，并建立可验证的授权边界。
+**Agent Protocol** 是 [openJiuwen](https://github.com/openJiuwen-ai) 生态中面向智能体互操作的协议 SDK 与服务注册中心集合，帮助开发者连接智能体与工具、与远端智能体通信、发现可用服务，并在执行敏感操作前落实可验证的用户授权。
 
-当前，仓库包含四个软件开发工具包：
+智能体应用除了模型和任务逻辑，还需要解决外部能力接入、协作对象发现、消息与任务结果交换，以及代理用户执行操作时的权限边界等问题。本仓库通过 **MCP C++ SDK**、**A2A C++ SDK**、**A2X Registry** 和 **A4P Python SDK** 四个互补组件提供支持。开发者可以按需独立使用，也可以结合具体业务进行组合集成。
 
-- Model Context Protocol (MCP) CPP SDK
-- Agent2Agent Protocol (A2A) CPP SDK
-- A2X agent registry
-- A4P (Agentic Authentication, Authorization, and Audit Protocol) Python SDK
+## 核心能力
+
+### 基于 MCP 的工具与资源接入
+
+Model Context Protocol（MCP）C++ SDK 提供客户端和服务端能力，支持 **Streamable HTTP** 与 **stdio** 传输。开发者可以通过 MCP Server 暴露工具、资源和提示词，也可以构建客户端连接已有 MCP 服务。SDK 同时支持鉴权、Sampling、进度通知和 Roots 等能力。
+
+### 基于 A2A 的智能体通信
+
+Agent2Agent（A2A）C++ SDK 支持基于 **HTTP 与 JSON-RPC** 的智能体间通信。客户端可以发现 Agent Card、发送消息、查询或取消任务，以及接收流式事件；服务端可以注册 `AgentExecutor`、管理任务生命周期并暴露 JSON-RPC 端点，同时支持请求拦截器、自定义任务存储等扩展方式。
+
+### 基于 A2X 的服务注册与发现
+
+A2X Registry 管理智能体及其可调用的服务，支持注册与注销、按字段查询、服务卡片更新、online/busy/offline 状态管理、基于所有权的访问控制，以及用于 Agent Team 协同的短时预订锁。
+
+在能力发现方面，A2X 搜索结合自动构建的**层次化能力目录**与 **LLM 语义导航**，帮助智能体根据自然语言需求逐层定位服务。注册中心还提供可选的向量检索、数据集隔离、HTTP API、Python 客户端，以及用于服务管理和搜索探索的 Web UI。A2X 搜索和目录构建需要配置 LLM，基础注册管理操作则不需要。
+
+### 基于 A4P 的可验证授权
+
+Agentic Authentication, Authorization, and Audit Protocol（A4P）Python SDK 提供面向具体操作的 **Operation Mandate（操作授权）**，以及允许在指定操作类型和参数范围内多次执行的 **Intent Mandate/Token（意图授权与令牌）**。通过区分 Agent、A4P Server、本地 User Authorizer 和受保护的 Tool Server，将授权安全判断独立于智能体的决策逻辑。
+
+SDK 提供 Ed25519 签名的授权对象、Ed25519 与 WebAuthn/passkey 用户签名方式、参数范围校验，以及基于 SQLite 持久化和原子消费的执行次数限制。prepare/complete 两阶段接口支持异步完成用户确认，便于集成到现有工具服务中。
+
+## 组件选型
+
+各组件面向不同的接入需求，可独立使用，无需同时引入其他组件。
+
+| 接入需求 | 对应组件 | 在应用中的作用 |
+| --- | --- | --- |
+| 访问工具、资源和提示词 | MCP C++ SDK | 通过 MCP 客户端与服务端连接智能体和外部能力。 |
+| 委派任务给其他智能体 | A2A C++ SDK | 交换消息、跟踪任务状态并接收流式结果。 |
+| 寻找合适的服务或协作对象 | A2X Registry | 注册服务元数据、发现能力并协调服务可用状态。 |
+| 在用户批准的范围内执行操作 | A4P Python SDK | 获取可验证的授权，并在受保护操作执行前校验授权范围。 |
+
+## 仓库结构
+
+```text
+agent-protocol/
+├── MCP/cpp-sdk/          # MCP C++ 客户端/服务端 SDK 与示例
+├── A2A/cpp-sdk/          # A2A C++ 客户端/服务端 SDK 与示例
+├── AgentRegistry/       # A2X 注册中心、Python 客户端、Web UI 与文档
+└── A4P-python-sdk/       # A4P Python SDK、协议文档与示例
+```
+
+## 快速开始
+
+克隆仓库后，根据需要接入的组件阅读相应指南：
+
+```bash
+git clone https://github.com/openJiuwen-ai/agent-protocol.git
+cd agent-protocol
+```
+
+| 组件 | 环境要求 | 入门路径 |
+| --- | --- | --- |
+| [MCP C++ SDK](./MCP/cpp-sdk/README.md) | C++17、CMake ≥ 3.15 及系统依赖；Linux/macOS | 安装依赖、构建 SDK，运行工具调用的客户端与服务端示例。 |
+| [A2A C++ SDK](./A2A/cpp-sdk/README.md) | C++17、CMake ≥ 3.15 及系统依赖；Linux 为主要验证平台 | 启用示例构建，运行 Hello World 与流式通信示例。 |
+| [A2X Registry](./AgentRegistry/README.md) | Python ≥ 3.10；A2X 搜索需要配置 LLM | 安装并启动注册中心，通过 HTTP API 或 UI 注册和查询服务。 |
+| [A4P Python SDK](./A4P-python-sdk/README.md) | Python ≥ 3.10 与 uv | 安装依赖，运行无需交互的 Ed25519 授权全链路示例。 |
+
+各组件分别构建和安装，完整依赖与各平台操作步骤请参阅对应指南。
+
+## 文档导航
+
+- **MCP：** [API 参考](./MCP/cpp-sdk/docs/api/README.md) · [依赖说明](./MCP/cpp-sdk/docs/dependencies.md) · [测试说明](./MCP/cpp-sdk/docs/testing.md)
+- **A2A：** [API 参考](./A2A/cpp-sdk/docs/api/README.md) · [依赖说明](./A2A/cpp-sdk/docs/dependencies.md) · [错误处理](./A2A/cpp-sdk/docs/errors.md)
+- **A2X：** [注册中心指南](./AgentRegistry/README.md) · [Python 客户端](./AgentRegistry/client/README.md) · [Agent Team 部署](./AgentRegistry/README_forAgentTeam.md)
+- **A4P：** [协议说明](./A4P-python-sdk/A4P_PROTOCOL.md) · [SDK 设计](./A4P-python-sdk/A4P_SDK_DESIGN.md) · [MCP 集成示例](./A4P-python-sdk/examples/note_mcp_a4p/README.md)
 
 ## 参与贡献
 
