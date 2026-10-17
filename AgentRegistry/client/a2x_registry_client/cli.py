@@ -43,8 +43,22 @@ def _client_or_die(base_url: Optional[str] = None) -> A2XRegistryClient:
     )
 
 
+def _resolve_login_base_url(args: argparse.Namespace) -> str:
+    """Resolve the login URL without blocking a non-interactive caller.
+
+    ``--token`` is documented as the scripted path ("for scripts"), so a
+    closed/redirected stdin must not turn the optional base-URL prompt into
+    an EOFError traceback; fall back to DEFAULT_BASE_URL instead.
+    """
+    if args.base_url:
+        return args.base_url
+    if not sys.stdin.isatty():
+        return DEFAULT_BASE_URL
+    return input(f"Registry URL [{DEFAULT_BASE_URL}]: ").strip() or DEFAULT_BASE_URL
+
+
 def cmd_login(args: argparse.Namespace) -> int:
-    base_url = args.base_url or input(f"Registry URL [{DEFAULT_BASE_URL}]: ").strip() or DEFAULT_BASE_URL
+    base_url = _resolve_login_base_url(args)
     if args.token:
         token = args.token
     else:
