@@ -10,7 +10,7 @@ import os
 import re
 import secrets
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
@@ -92,7 +92,10 @@ def ed25519_public_key_to_base64url(public_key: Ed25519PublicKey) -> str:
 
 def _load_ed25519_private_key(value: str, *, env_name: str) -> Ed25519PrivateKey:
     if value.startswith("-----BEGIN"):
-        loaded = serialization.load_pem_private_key(value.encode("utf-8"), password=None)
+        try:
+            loaded = serialization.load_pem_private_key(value.encode("utf-8"), password=None)
+        except (TypeError, ValueError, UnsupportedAlgorithm) as exc:
+            raise _invalid_private_key_error(env_name) from exc
         if not isinstance(loaded, Ed25519PrivateKey):
             raise RuntimeError(f"{env_name} must contain an Ed25519 private key")
         return loaded
@@ -104,18 +107,22 @@ def _load_ed25519_private_key(value: str, *, env_name: str) -> Ed25519PrivateKey
 
 
 def _decode_seed(value: str, *, env_name: str) -> bytes:
-    if value.startswith("hex:"):
-        return bytes.fromhex(value[4:])
-    if value.startswith("base64:"):
-        return base64.b64decode(value[7:])
-    if value.startswith("base64url:"):
-        return _b64url_decode(value[10:])
     try:
+        if value.startswith("hex:"):
+            return bytes.fromhex(value[4:])
+        if value.startswith("base64:"):
+            return base64.b64decode(value[7:])
+        if value.startswith("base64url:"):
+            return _b64url_decode(value[10:])
         return _b64url_decode(value)
     except (ValueError, binascii.Error) as exc:
-        raise RuntimeError(
-            f"{env_name} must be an Ed25519 PEM key or a 32-byte seed encoded as base64url, base64:, or hex:"
-        ) from exc
+        raise _invalid_private_key_error(env_name) from exc
+
+
+def _invalid_private_key_error(env_name: str) -> RuntimeError:
+    return RuntimeError(
+        f"{env_name} must be an Ed25519 PEM key or a 32-byte seed encoded as base64url, base64:, or hex:"
+    )
 
 
 def _b64url_decode(value: str) -> bytes:

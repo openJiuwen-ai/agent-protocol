@@ -99,3 +99,30 @@ def test_production_rejects_configured_default_server_signing_key(
 
     with pytest.raises(RuntimeError, match="built-in development Ed25519 signing key"):
         operation_server_signing_key()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["hex:zz", "hex:abc", "base64:abc", "-----BEGIN BROKEN-----"],
+    ids=["hex-non-hex", "hex-odd-length", "base64-bad-padding", "pem-malformed"],
+)
+def test_malformed_server_signing_key_reports_the_variable_and_formats(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """密钥格式非法时统一报 RuntimeError（含变量名与可用格式），而不是底层解码异常。"""
+    monkeypatch.setenv("OPERATION_SERVER_ED25519_PRIVATE_KEY", value)
+
+    with pytest.raises(
+        RuntimeError,
+        match="OPERATION_SERVER_ED25519_PRIVATE_KEY must be an Ed25519 PEM key",
+    ):
+        operation_server_signing_key()
+
+
+def test_well_formed_hex_server_signing_key_still_loads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """合法的 32 字节 hex seed 仍应正常加载，不被新的异常包装误伤。"""
+    monkeypatch.setenv("OPERATION_SERVER_ED25519_PRIVATE_KEY", "hex:" + "ab" * 32)
+
+    assert operation_server_signing_key() is not None
