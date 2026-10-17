@@ -58,6 +58,20 @@ class Deployment:
 
     def __post_init__(self):
         """字段类型与数值校验"""
+        # id 允许缺省：dataclass 的 default_factory 只在参数省略时生效。
+        # 显式传入 None（配置里没有 id，调用方把缺省值原样透传时会这样）仍要保持
+        # “自动生成”的语义；否则多个部署共用 id=None：状态/统计按 key 合并，
+        # 且失败后 `[d for d in available if d.id != selected.id]` 会一次清空
+        # 全部候选，fallback 直接失效（AllDeploymentsFailed）。
+        if self.id is None:
+            self.id = str(uuid.uuid4())[:8]
+        elif not isinstance(self.id, str):
+            raise TypeError(
+                f"Deployment.id must be a str or None, got {type(self.id).__name__}"
+            )
+        elif not self.id.strip():
+            raise ValueError("Deployment.id must be a non-empty string or None")
+
         for name in ("model_name", "api_key", "api_base", "provider"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
