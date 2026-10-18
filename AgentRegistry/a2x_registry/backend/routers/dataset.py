@@ -455,6 +455,11 @@ async def list_services(
             status_code=400,
             detail=f"fields must be one of {sorted(_VALID_FIELDS)}, got {fields!r}",
         )
+    if size == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="size must be -1 (all) or a positive page size, got 0",
+        )
 
     filters = {
         k: v for k, v in request.query_params.items()
