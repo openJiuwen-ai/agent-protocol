@@ -192,7 +192,7 @@ def message_to_e2a(msg: "Message") -> E2AEnvelope:
     if metadata:
         d["metadata"] = metadata
 
-    # ── V2: 传递 agent_ref / app_id 到 E2A 线协议 ──
+    # ── 传递 agent_ref / app_id 到 E2A 线协议 ──
     if getattr(msg, "agent_ref", None):
         d["agent_ref"] = msg.agent_ref
     if getattr(msg, "app_id", None):
@@ -323,7 +323,7 @@ def e2a_response_from_agent_response(
         metadata=meta,
         identity_origin=IdentityOrigin.AGENT,
         is_stream=False,
-        # V2: 非流式响应回带 agent_ref，与流式 chunk 对称。
+        # 非流式响应回带 agent_ref，与流式 chunk 对称。
         agent_ref=getattr(resp, "agent_ref", None),
     )
 
@@ -357,7 +357,7 @@ def e2a_response_from_agent_chunk(
     )
     pl = dict(chunk.payload) if chunk.payload else {}
 
-    # ── 从 chunk 提取 agent_ref / metadata（V2 路由用）──
+    # ── 从 chunk 提取 agent_ref / metadata（路由用）──
     _chunk_agent_ref: dict | None = getattr(chunk, "agent_ref", None)
     _chunk_metadata: dict = getattr(chunk, "metadata", None) or {}
 
@@ -528,7 +528,7 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
     body = dict(e2a.body or {})
     kind = e2a.response_kind
 
-    # ── V2: 从 E2A 响应提取 agent_ref / metadata ──
+    # ── 从 E2A 响应提取 agent_ref / metadata ──
     _agent_ref: dict | None = getattr(e2a, "agent_ref", None) or None
     _meta: dict | None = dict(e2a.metadata) if e2a.metadata else None
 
