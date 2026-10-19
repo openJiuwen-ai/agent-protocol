@@ -391,7 +391,7 @@ def _envelope_from_dict(data: dict[str, Any]) -> E2AEnvelope:
         identity_origin=origin,
         channel=ch,
         user_id=data.get("user_id"),
-        # V2: agent_ref 全链路透传——入站反序列化须补读，否则 message_to_e2a
+        # agent_ref 全链路透传——入站反序列化须补读，否则 message_to_e2a
         # 写入 d["agent_ref"] 后被 from_dict 丢弃，AgentServer 永远收不到
         # （agent_ref 全程携带；同人多窗场景依赖它路由）。
         agent_ref=data.get("agent_ref"),
