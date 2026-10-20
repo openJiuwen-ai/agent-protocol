@@ -176,7 +176,15 @@ class A4PClient:
             raise RuntimeError(f"A4P HTTP {exc.code}: {error_payload}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"A4P HTTP request failed: {exc}") from exc
-        parsed = json.loads(raw) if raw else {}
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as exc:
+            # A 2xx response from a non-A4P peer (proxy HTML, wrong port, ...)
+            # must not surface json.JSONDecodeError from deep inside the client:
+            # callers already handle the client's RuntimeError contract.
+            raise RuntimeError(
+                f"A4P HTTP response is not valid JSON: {raw[:200]!r}"
+            ) from exc
         return parsed if isinstance(parsed, dict) else {}
 
 
