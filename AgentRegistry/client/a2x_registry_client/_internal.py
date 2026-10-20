@@ -341,6 +341,13 @@ def parse_agent_list(resp: httpx.Response) -> list[dict[str, Any]]:
     transformed one in the wrapper, giving callers the exact string they
     originally registered.
 
+    Identity/ownership fields are the exception: an AgentCard may carry
+    arbitrary extension fields (``extra="allow"``), so a card extension
+    named ``id``, ``type`` or ``owner_id`` must not shadow the registry
+    wrapper's values — ``id`` is what callers pass to get/deregister, and
+    ``owner_id`` drives the "owned by me" UI hint. Those three keys always
+    come from the wrapper; ``name``/``description`` still prefer metadata.
+
     For generic/skill, ``metadata`` has no ``name``/``description``, so
     the wrapper's values survive. ``type`` is preserved at top level so
     callers can tell cross-type results apart.
@@ -356,5 +363,9 @@ def parse_agent_list(resp: httpx.Response) -> list[dict[str, Any]]:
         metadata = flat.pop("metadata", None)
         if isinstance(metadata, dict):
             flat.update(metadata)
+            # AgentCard extensions must not shadow registry identity.
+            for key in ("id", "type", "owner_id"):
+                if key in wrapped:
+                    flat[key] = wrapped[key]
         result.append(flat)
     return result
