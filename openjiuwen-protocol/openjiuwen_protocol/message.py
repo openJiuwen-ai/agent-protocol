@@ -18,6 +18,10 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
+# ``chat.send`` 请求携带该 truthy 参数时，仅为已在运行的 Team Session 附加
+# 响应订阅，不提交新输入（gateway / runtime / server 三方共用的协议参数名）。
+TEAM_ATTACH_ONLY_PARAM = "attach_only"
+
 # ── mode 归一化：与 jiuwenswarm ``common/mode_matrix.py`` 同源的纯数据副本 ──
 _MODE_ALIASES: dict[str, str] = {
     "team.plan": "team.plan.normal",
@@ -561,6 +565,14 @@ class ReqMethod(Enum):
     RSI_HARNESS_INSTALL = "rsi.harness.install"
     RSI_HARNESS_VERSIONS_LIST = "rsi.harness.versions.list"
     RSI_HARNESS_ROLLBACK = "rsi.harness.rollback"
+
+    # Trajectory diagnosis: the Gateway proxies these to the Worker-hosted service
+    DIAGNOSIS_RUN = "diagnosis.run"
+    DIAGNOSIS_LIST = "diagnosis.list"
+    DIAGNOSIS_GET = "diagnosis.get"
+    DIAGNOSIS_CANCEL = "diagnosis.cancel"
+    DIAGNOSIS_DELETE = "diagnosis.delete"
+    DIAGNOSIS_TTSE_TRIGGER = "diagnosis.ttse.trigger"
 
     # Schedule task management
     SCHEDULE_CHECK_CONFIG = "schedule.check_config"
