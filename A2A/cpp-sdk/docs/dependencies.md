@@ -70,6 +70,20 @@ sudo yum install -y \
 sudo pacman -S --needed base-devel cmake openssl curl libevent nlohmann-json
 ```
 
+### macOS（Homebrew）
+
+```bash
+brew install cmake pkgconf openssl@3 curl libevent nlohmann-json
+```
+
+macOS 上 OpenSSL/curl 为 keg-only，CMake 会自动从 Homebrew 前缀查找它们；也可用
+`bash scripts/install_deps.sh` 自动安装。
+
+> **conda/Anaconda 环境注意**：若当前 shell 激活了 conda（`CONDA_PREFIX` 非空），其自带的
+> OpenSSL/curl/libevent/nlohmann_json/GTest 等可能被 CMake 抢先选中，导致链接错误或
+> undefined symbols。构建前请 `conda deactivate`（含 base），并删除 `build/` 后重新配置
+> （CMake 会把已找到的路径缓存进 `build/CMakeCache.txt`，不删缓存不生效）。
+
 ## 验证依赖
 
 ```bash

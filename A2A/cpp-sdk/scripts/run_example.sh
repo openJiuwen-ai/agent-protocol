@@ -17,7 +17,30 @@ OUTPUT_DIR="${A2A_OUTPUT_DIR:-${ROOT}/output}"
 EXAMPLE_BIN="${OUTPUT_DIR}/bin"
 LIB_DIR="${OUTPUT_DIR}/lib"
 
-export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH:-}"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    export DYLD_LIBRARY_PATH="${LIB_DIR}:${DYLD_LIBRARY_PATH:-}"
+else
+    export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH:-}"
+fi
+
+# macOS has no GNU `timeout` by default; use `gtimeout` (coreutils) when present.
+TIMEOUT_BIN="timeout"
+if ! command -v timeout >/dev/null 2>&1; then
+    if command -v gtimeout >/dev/null 2>&1; then
+        TIMEOUT_BIN="gtimeout"
+    else
+        TIMEOUT_BIN=""
+    fi
+fi
+
+run_with_timeout() {
+    local secs="$1"; shift
+    if [[ -n "${TIMEOUT_BIN}" ]]; then
+        "${TIMEOUT_BIN}" "${secs}" "$@"
+    else
+        "$@"
+    fi
+}
 
 PORT="${A2A_EXAMPLE_PORT:-8888}"
 JSONRPC_BASE="http://127.0.0.1:${PORT}/jsonrpc"
@@ -110,7 +133,7 @@ run_helloworld_example() {
     jsonrpc_expect_result "${hello_send_msg}" "helloworld SendMessage"
 
     echo "Running helloworld_client against 127.0.0.1:${PORT}..."
-    timeout 30 "${EXAMPLE_BIN}/helloworld_client" -i 127.0.0.1 -p "${PORT}"
+    run_with_timeout 30 "${EXAMPLE_BIN}/helloworld_client" -i 127.0.0.1 -p "${PORT}"
 
     check_example_process "helloworld_server"
     clear_example_process "helloworld_server"
@@ -131,7 +154,7 @@ run_streaming_example() {
     jsonrpc_expect_result "${streaming_send_msg}" "streaming SendMessage"
 
     echo "Running streaming_client against 127.0.0.1:${PORT}..."
-    timeout 60 "${EXAMPLE_BIN}/streaming_client" -i 127.0.0.1 -p "${PORT}"
+    run_with_timeout 60 "${EXAMPLE_BIN}/streaming_client" -i 127.0.0.1 -p "${PORT}"
 
     check_example_process "streaming_server"
     clear_example_process "streaming_server"

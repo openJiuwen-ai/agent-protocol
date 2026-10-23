@@ -10,14 +10,18 @@ set -euo pipefail
 
 echo "==> Checking system dependencies for yellow_a2a..."
 
-if [[ ! -f /etc/os-release ]]; then
-    echo "Error: Linux with /etc/os-release is required" >&2
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    OS="macos"
+    OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
+elif [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    OS="${ID:-}"
+    OS_VERSION="${VERSION_ID:-}"
+else
+    echo "Error: unsupported platform (need macOS or Linux with /etc/os-release)" >&2
     exit 1
 fi
-# shellcheck disable=SC1091
-. /etc/os-release
-OS="${ID:-}"
-OS_VERSION="${VERSION_ID:-}"
 
 if [[ "${EUID}" -ne 0 ]]; then
     echo "Warning: Not running as root. Package install may require sudo."
@@ -184,6 +188,42 @@ install_dependencies() {
                 need_build_tools=1
             fi
             ;;
+        macos)
+            if ! command_exists brew; then
+                echo "  - Homebrew: NOT FOUND (see https://brew.sh)"
+                need_build_tools=1
+            fi
+            command_exists cmake || { echo "  - cmake: NOT FOUND"; need_build_tools=1; }
+            if ! command_exists pkg-config && ! command_exists pkgconf; then
+                echo "  - pkg-config: NOT FOUND"
+                need_build_tools=1
+            fi
+            if brew list --versions openssl@3 >/dev/null 2>&1 || brew list --versions openssl >/dev/null 2>&1; then
+                echo "  - openssl: OK"
+            else
+                echo "  - openssl: NOT FOUND"
+                need_openssl=1
+            fi
+            if brew list --versions curl >/dev/null 2>&1; then
+                echo "  - curl: OK"
+            else
+                echo "  - curl: NOT FOUND"
+                need_curl=1
+            fi
+            if brew list --versions libevent >/dev/null 2>&1; then
+                echo "  - libevent: OK"
+            else
+                echo "  - libevent: NOT FOUND"
+                need_libevent=1
+            fi
+            if brew list --versions nlohmann-json >/dev/null 2>&1; then
+                echo "  - nlohmann_json: OK"
+            else
+                echo "  - nlohmann_json: NOT FOUND"
+                need_json=1
+            fi
+            # http_parser is fetched from source by CMake; no brew package needed.
+            ;;
         *)
             if command_exists curl-config; then
                 echo "  - libcurl: OK"
@@ -259,6 +299,17 @@ install_dependencies() {
             echo "Installing: ${pkgs[*]}"
             ${SUDO} pacman -S --noconfirm "${pkgs[@]}"
             ;;
+        macos)
+            if ! command_exists brew; then
+                echo "Error: Homebrew is required on macOS (see https://brew.sh)" >&2
+                exit 1
+            fi
+            local pkgs=(cmake pkgconf libevent nlohmann-json)
+            [[ ${need_curl} -eq 1 ]] && pkgs+=(curl)
+            [[ ${need_openssl} -eq 1 ]] && pkgs+=(openssl@3)
+            echo "Installing (Homebrew): ${pkgs[*]}"
+            brew install "${pkgs[@]}"
+            ;;
         *)
             echo "Error: Unsupported OS for automatic install: ${OS}" >&2
             echo "Please install manually: cmake, g++, pkg-config, libcurl-devel, openssl-devel," >&2
@@ -275,6 +326,52 @@ check_dependencies() {
     echo ""
     echo "==> Verifying installation..."
     local ok=1
+
+    if [[ "${OS}" == "macos" ]]; then
+        command_exists cmake || { echo "✗ cmake is missing" >&2; ok=0; }
+        if ! command_exists clang++ && ! command_exists g++; then
+            echo "✗ C++ compiler (clang++) is missing" >&2
+            ok=0
+        fi
+        if command_exists brew; then
+            echo "✓ Homebrew found"
+        else
+            echo "✗ Homebrew is missing" >&2
+            ok=0
+        fi
+        # Same package checks as the install step below, so a partially failed
+        # install is reported here instead of failing later at CMake configure.
+        if brew list --versions openssl@3 >/dev/null 2>&1 || brew list --versions openssl >/dev/null 2>&1; then
+            echo "  - openssl: OK"
+        else
+            echo "✗ openssl is missing (brew install openssl@3)" >&2
+            ok=0
+        fi
+        if brew list --versions curl >/dev/null 2>&1; then
+            echo "  - curl: OK"
+        else
+            echo "✗ curl is missing (brew install curl)" >&2
+            ok=0
+        fi
+        if brew list --versions libevent >/dev/null 2>&1; then
+            echo "  - libevent: OK"
+        else
+            echo "✗ libevent is missing (brew install libevent)" >&2
+            ok=0
+        fi
+        if brew list --versions nlohmann-json >/dev/null 2>&1; then
+            echo "  - nlohmann_json: OK"
+        else
+            echo "✗ nlohmann_json is missing (brew install nlohmann-json)" >&2
+            ok=0
+        fi
+        if [[ ${ok} -eq 1 ]]; then
+            echo "✓ Core dependencies verified. You can run: bash ./scripts/build.sh -e"
+            return 0
+        fi
+        echo "✗ Some required dependencies are still missing." >&2
+        exit 1
+    fi
 
     if ! command_exists cmake; then
         echo "✗ cmake is missing" >&2

@@ -2,9 +2,26 @@
 
 add_library(a2a SHARED)
 
-add_compile_options(
-    -Werror
-)
+# Keep -Werror on every platform. AppleClang additionally emits a few warnings
+# on pre-existing code; silence exactly those instead of disabling -Werror:
+#   - inconsistent-missing-override: legacy virtual overrides (client_session.h)
+#   - unused-lambda-capture: legacy capture (http_server.cpp)
+#   - unused-const-variable: legacy constants in tests/ut sources
+# TODO(cleanup): remove these three suppressions once the pre-existing sites
+# are fixed (tracked in the macOS adaptation follow-up issue); until then this
+# stays the only place where platform-specific warnings are relaxed.
+if(APPLE)
+    add_compile_options(
+        -Werror
+        -Wno-inconsistent-missing-override
+        -Wno-unused-lambda-capture
+        -Wno-unused-const-variable
+    )
+else()
+    add_compile_options(
+        -Werror
+    )
+endif()
 
 if(A2A_BUILD_CLIENT)
     add_subdirectory(client)
