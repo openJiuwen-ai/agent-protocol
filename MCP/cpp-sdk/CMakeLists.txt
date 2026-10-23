@@ -17,6 +17,30 @@ option(MCP_WITH_HTTP "Build HTTP client transport components" ON)
 
 add_compile_definitions(MCP_WITH_HTTP=$<BOOL:${MCP_WITH_HTTP}>)
 
+# On macOS, Homebrew installs some dependencies (OpenSSL, curl, ...) as keg-only,
+# so they are not on the default search path. Prepend their prefixes so that
+# find_package/find_library can locate them without manual OPENSSL_ROOT_DIR.
+if(APPLE)
+    find_program(MCP_BREW_EXECUTABLE brew)
+    if(MCP_BREW_EXECUTABLE)
+        set(_mcp_brew_prefixes "")
+        foreach(_mcp_brew_pkg openssl@3 openssl curl libevent nlohmann-json)
+            execute_process(
+                COMMAND ${MCP_BREW_EXECUTABLE} --prefix ${_mcp_brew_pkg}
+                OUTPUT_VARIABLE _mcp_brew_prefix
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+            if(_mcp_brew_prefix AND EXISTS "${_mcp_brew_prefix}")
+                list(APPEND _mcp_brew_prefixes "${_mcp_brew_prefix}")
+            endif()
+        endforeach()
+        if(_mcp_brew_prefixes)
+            list(REMOVE_DUPLICATES _mcp_brew_prefixes)
+            list(PREPEND CMAKE_PREFIX_PATH ${_mcp_brew_prefixes})
+        endif()
+    endif()
+endif()
+
 include(third_party/third_party.cmake)
 
 find_package(OpenSSL REQUIRED)
@@ -48,12 +72,35 @@ set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 set(CMAKE_FLAGS_ASAN
     -fsanitize=address
     -fsanitize-recover=address
-    -fsanitize=leak
     -fno-omit-frame-pointer
 )
 
+# LeakSanitizer is not supported by AppleClang, so enable it only elsewhere.
+if(NOT APPLE)
+    list(APPEND CMAKE_FLAGS_ASAN -fsanitize=leak)
+endif()
+
 # Common compiler flags
-add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal -Wtrampolines -fno-strict-aliasing -fstack-protector-strong)
+# Keep -Werror on every platform. AppleClang additionally emits a few warnings
+# on pre-existing code; silence exactly those instead of dropping -Werror:
+#   - inconsistent-missing-override: legacy virtual overrides in
+#     src/client/client_session.h (SendProgressNotification et al.)
+#   - unused-lambda-capture: legacy capture in src/server/http_server.cpp
+#   - unused-const-variable: legacy constants in tests/ut (jsonrpc_test.cpp,
+#     http_server_test.cpp, server_manager_test.cpp, ...) and
+#     src/server/transport/streamable_http_server_transport.cpp
+# TODO(cleanup): remove these three suppressions once the pre-existing sites
+# are fixed (tracked in the macOS adaptation follow-up issue); until then this
+# stays the only place where platform-specific warnings are relaxed.
+if(APPLE)
+    add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal
+        -Wno-inconsistent-missing-override
+        -Wno-unused-lambda-capture
+        -Wno-unused-const-variable
+        -fno-strict-aliasing -fstack-protector-strong)
+else()
+    add_compile_options(-Wall -Werror -Wno-error=unused-variable -Wfloat-equal -Wtrampolines -fno-strict-aliasing -fstack-protector-strong)
+endif()
 
 if (ASAN STREQUAL "enable")
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -65,10 +112,14 @@ if (ASAN STREQUAL "enable")
 endif()
 
 # Linker flags for security hardening
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic -pie")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic")
+if(APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-pie")
+else()
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic -pie")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack,-z,relro,-z,now -rdynamic")
+endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
+if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT APPLE)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
 endif()
