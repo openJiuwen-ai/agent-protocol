@@ -800,3 +800,78 @@ async def test_stream_request_deployment_timeout_overrides_router_timeout(
         kwargs = mock_client.stream.call_args.kwargs
         assert kwargs.get("timeout") == 5
         assert mock_cls.call_args.kwargs.get("verify") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_type"),
+    [
+        (401, DeploymentAuthError),
+        (429, DeploymentRateLimitError),
+        (502, DeploymentServerError),
+        (400, DeploymentError),
+        (302, DeploymentError),
+    ],
+)
+async def test_acompletion_stream_reads_error_body_before_status_mapping(
+    sample_deployments,
+    status_code,
+    expected_type,
+):
+    """A non-2xx stream must be read before raise_for_status maps the error.
+
+    Accessing ``.text`` on an unread streaming response raises ResponseNotRead
+    and would replace the real status. raise_for_status() rejects 3xx as well
+    as 4xx/5xx, so a redirect must be read too.
+    """
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    dep = Deployment(
+        id="dep_err",
+        model_name="gpt-4",
+        api_key="sk-test",
+        api_base="https://api.example.com",
+    )
+    body = b'{"error":"upstream rejected"}'
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+
+        class _Response:
+            def __init__(self):
+                self.status_code = status_code
+                self.headers = {}
+                self.is_success = 200 <= status_code <= 299
+                self.is_error = 400 <= status_code <= 599
+                self._content = None
+                self.request = MagicMock()
+
+            async def aread(self):
+                self._content = body
+
+            @property
+            def text(self):
+                if self._content is None:
+                    raise httpx.ResponseNotRead()
+                return self._content.decode()
+
+            def raise_for_status(self):
+                raise httpx.HTTPStatusError(
+                    str(status_code), request=self.request, response=self
+                )
+
+        class _StreamCtx:
+            async def __aenter__(self):
+                return _Response()
+
+            async def __aexit__(self, *args):
+                return False
+
+        mock_client.stream = MagicMock(return_value=_StreamCtx())
+        with pytest.raises(expected_type) as exc:
+            async for _ in router.acompletion_stream(
+                "gpt-4", [{"role": "user", "content": "hi"}], deployment=dep
+            ):
+                pass
+        assert "ResponseNotRead" not in str(exc.value)
+        if status_code in (400, 302):
+            assert "upstream rejected" in str(exc.value.details.get("response_body"))
