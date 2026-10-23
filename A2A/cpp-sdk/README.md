@@ -32,7 +32,7 @@ A2A C++ SDK 是 [Agent-to-Agent 协议 v1.0](https://a2a-protocol.org/v1.0.0/spe
 
 ## 环境要求
 
-- **操作系统**：Linux（glibc 或 musl，主要验证平台）
+- **操作系统**：Linux（glibc 或 musl，主要验证平台）；macOS（构建支持已加入，见 [docs/dependencies.md](docs/dependencies.md)）
 - **编译器**：C++17 及以上（GCC 9+ / Clang 10+）
 - **CMake**：≥ 3.15（见根目录 `CMakeLists.txt`）
 - **依赖**：见 [docs/dependencies.md](docs/dependencies.md)

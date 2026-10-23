@@ -163,7 +163,7 @@ private:
     std::unique_ptr<Impl> impl_;
     // Protects access to impl_ state that is shared across threads (primarily events map).
     // Do not hold this lock while invoking callbacks or calling event_del/close to avoid deadlocks.
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::atomic<bool> running_{false};
     struct event_base* eventBase_{nullptr};
     int eventThreadIndex_{0};
