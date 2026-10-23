@@ -2,17 +2,22 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-#include <unistd.h>
-#include <iostream>
-#include <sys/eventfd.h>
+#include <string>
+#include <utility>
 
 #include "a2a_log.h"
+#include "event/event_system.h"
 #include "a2a_timer.h"
 
-constexpr int MAX_EPOLL_CNT = 16;
+namespace {
+
+// Keeps the internal event loop from exiting while no timers are pending,
+// so timers added later (from any thread) fire as expected.
+constexpr long KEEP_ALIVE_INTERVAL_MS = 60 * 60 * 1000;
+
+} // namespace
 
 A2ATimer::A2ATimer() noexcept
-    : running_(false)
 {
 }
 
@@ -27,38 +32,6 @@ A2ATimer& A2ATimer::Instance()
     return instance;
 }
 
-int A2ATimer::Init()
-{
-    epfd_ = epoll_create1(0);
-    if (epfd_ == -1) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer epoll_create1 failed");
-        return -1;
-    }
-
-    wakeFd_ = eventfd(0, EFD_NONBLOCK);
-    if (wakeFd_ == -1) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer eventfd failed");
-        close(epfd_);
-        epfd_ = -1;
-        return -1;
-    }
-
-    epoll_event ev;
-    ev.events = EPOLLIN;
-    ev.data.fd = wakeFd_;
-    epoll_ctl(epfd_, EPOLL_CTL_ADD, wakeFd_, &ev);
-    if (epfd_ == -1) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer epoll_ctl failed");
-        close(epfd_);
-        epfd_ = -1;
-        close(wakeFd_);
-        wakeFd_ = -1;
-        return -1;
-    }
-
-    return 0;
-}
-
 int A2ATimer::Start()
 {
     bool expected = false;
@@ -67,12 +40,27 @@ int A2ATimer::Start()
         return 0;
     }
 
-    if (this->Init() != 0) {
+    if (eventSystem_ == nullptr) {
+        eventSystem_ = std::make_unique<A2A::EventSystem>();
+    }
+    if (!eventSystem_->Init()) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer init event system failed");
         running_.store(false);
         return -1;
     }
 
-    loopThread_ = std::thread(&A2ATimer::RunLoop, this);
+    if (keepAliveEventId_ == -1) {
+        const int id = eventSystem_->AddTimer(
+            KEEP_ALIVE_INTERVAL_MS, [](int, short, void*) {}, nullptr, true);
+        if (id < 0) {
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer create keep-alive event failed");
+            running_.store(false);
+            return -1;
+        }
+        keepAliveEventId_ = id;
+    }
+
+    eventSystem_->Start(true);
     A2A_LOG(A2A_LOG_LEVEL::INFO, "start a2a timer succeed");
     return 0;
 }
@@ -85,50 +73,44 @@ void A2ATimer::Stop()
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        uint64_t one = 1;
-        if (write(wakeFd_, &one, sizeof(one)) < 0) {
-            A2A_LOG(A2A_LOG_LEVEL::WARN, "write failed");
-        }
-    }
-
-    if (loopThread_.joinable()) {
-        loopThread_.join();
-    }
-
-    if (epfd_ > 0) {
-        close(epfd_);
-        epfd_ = -1;
-    }
-    if (wakeFd_ > 0) {
-        close(wakeFd_);
-        wakeFd_ = -1;
+    if (eventSystem_ != nullptr) {
+        eventSystem_->Stop();
     }
     A2A_LOG(A2A_LOG_LEVEL::INFO, "stop a2a timer succeed");
 }
 
 int A2ATimer::AddTimer(int ms, TimerCallback cb, void *arg)
 {
-    if (!running_.load() && this->Start() != 0) {
+    if (!this->EnsureStarted()) {
         A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer not started");
+        return -1;
+    }
+    if (ms <= 0) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "invalid timer timeout: " + std::to_string(ms));
         return -1;
     }
 
     std::lock_guard<std::mutex> lock(mtx_);
-    TimerTask t;
-    t.id = nextId_++;
-    t.expire = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
-    t.callback = cb;
-    t.arg = arg;
-    tasks_[t.id] = t;
-
-    // 写一个字节唤醒epoll
-    uint64_t one = 1;
-    if (write(wakeFd_, &one, sizeof(one)) < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::WARN, "write failed");
+    auto task = std::make_unique<TimerTask>();
+    task->id = nextId_++;
+    task->callback = std::move(cb);
+    task->arg = arg;
+    const int id = task->id;
+    const uint64_t generation = task->generation;
+    task->eventId = eventSystem_->AddTimer(
+        static_cast<long>(ms),
+        [this, id, generation](int, short, void*) {
+            this->OnTimerFired(id, generation);
+        },
+        nullptr, false);
+    if (task->eventId < 0) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer add task failed, id: " + std::to_string(task->id));
+        return -1;
     }
-    return t.id;
+    tasks_.emplace(id, std::move(task));
+
+    A2A_LOG(A2A_LOG_LEVEL::DEBUG, "timer added, id: " + std::to_string(id) + ", timeout: " + std::to_string(ms));
+    return id;
 }
 
 void A2ATimer::CancelTimer(int id)
@@ -138,8 +120,27 @@ void A2ATimer::CancelTimer(int id)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mtx_);
-    tasks_.erase(id);
+    std::unique_ptr<TimerTask> task;
+    int eventId = -1;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        auto it = tasks_.find(id);
+        if (it == tasks_.end()) {
+            return;
+        }
+        eventId = it->second->eventId;
+        task = std::move(it->second);
+        tasks_.erase(it);
+    }
+
+    // RemoveEvent may wait for a currently running callback (libevent defers
+    // event_del while the callback executes), so it must run WITHOUT holding
+    // mtx_: the callback itself needs mtx_ and would otherwise deadlock.
+    // Callbacks carry (id, generation) by value only, so freeing the task here
+    // is safe even if a stale callback is still pending in libevent.
+    if (eventSystem_ != nullptr && eventId >= 0) {
+        eventSystem_->RemoveEvent(eventId);
+    }
 }
 
 int A2ATimer::RefreshTimer(int id, int ms)
@@ -152,90 +153,89 @@ int A2ATimer::RefreshTimer(int id, int ms)
         A2A_LOG(A2A_LOG_LEVEL::ERROR, "invalid timer timeout: " + std::to_string(ms));
         return -1;
     }
+
+    int oldEventId = -1;
+    uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        auto it = tasks_.find(id);
+        if (it == tasks_.end()) {
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "timer not found, id: " + std::to_string(id));
+            return -1;
+        }
+        oldEventId = it->second->eventId;
+        // Invalidate the old arming before the old event is removed: a stale
+        // callback that is already running will see the generation mismatch
+        // and exit without touching user code.
+        it->second->generation++;
+        generation = it->second->generation;
+    }
+
+    // Same rule as CancelTimer: RemoveEvent can block on a running callback,
+    // so it must not be called while holding mtx_.
+    if (eventSystem_ != nullptr && oldEventId >= 0) {
+        (void)eventSystem_->RemoveEvent(oldEventId);
+    }
+
+    // Re-validate and re-arm atomically: arming the new event and publishing
+    // its id happen under the same lock, so a callback cannot run in between.
     std::lock_guard<std::mutex> lock(mtx_);
     auto it = tasks_.find(id);
     if (it == tasks_.end()) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "timer not found, id: " + std::to_string(id));
+        // Cancelled or fired concurrently while we were re-arming.
         return -1;
     }
-    it->second.expire = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    if (it->second->generation != generation) {
+        // Another refresh superseded this one.
+        return -1;
+    }
+
+    const int newEventId = eventSystem_->AddTimer(
+        static_cast<long>(ms),
+        [this, id, generation](int, short, void*) {
+            this->OnTimerFired(id, generation);
+        },
+        nullptr, false);
+    if (newEventId < 0) {
+        tasks_.erase(it);
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "a2a timer refresh failed, id: " + std::to_string(id));
+        return -1;
+    }
+    it->second->eventId = newEventId;
+
     A2A_LOG(A2A_LOG_LEVEL::DEBUG,
         "timer refreshed, id: " + std::to_string(id) +
         ", timeout: " + std::to_string(ms));
-    uint64_t one = 1;
-    if (write(wakeFd_, &one, sizeof(one)) < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::WARN, "write failed");
-        return -1;
-    }
     return 0;
 }
 
-int A2ATimer::GetNextTimeout()
+bool A2ATimer::EnsureStarted()
 {
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (tasks_.empty()) {
-        return -1;
+    if (running_.load()) {
+        return true;
     }
-
-    auto now = std::chrono::steady_clock::now();
-    auto nearest = tasks_.begin()->second.expire;
-    for (const auto& item : tasks_) {
-        if (item.second.expire < nearest) {
-            nearest = item.second.expire;
-        }
-    }
-    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(nearest - now).count();
-    return diff > 0 ? static_cast<int>(diff) : 0;
+    return this->Start() == 0;
 }
 
-void A2ATimer::HandleExpired()
+void A2ATimer::OnTimerFired(int id, uint64_t generation)
 {
-    std::vector<TimerTask> expired;
+    TimerCallback cb;
+    void *userArg = nullptr;
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        auto now = std::chrono::steady_clock::now();
-
-        for (auto it = tasks_.begin(); it != tasks_.end();) {
-            if (it->second.expire < now + std::chrono::milliseconds(1)) {
-                expired.emplace_back(it->second);
-                it = tasks_.erase(it);
-            } else {
-                ++it;
-            }
+        auto it = tasks_.find(id);
+        if (it == tasks_.end() || it->second->generation != generation) {
+            // Removed, already fired or re-armed: this arming is stale.
+            return;
         }
+        cb = std::move(it->second->callback);
+        userArg = it->second->arg;
+        tasks_.erase(it);
     }
 
-    for (auto& e : expired) {
-        if (e.callback) {
-            e.callback(e.arg);
-        }
-    }
-}
-
-void A2ATimer::RunLoop()
-{
-    while (running_) {
-        int timeout = GetNextTimeout();
-        epoll_event events[MAX_EPOLL_CNT];
-        int nfds = epoll_wait(epfd_, events, MAX_EPOLL_CNT, timeout);
-        if (nfds == 0) {
-            HandleExpired();
-            continue;
-        } else if (nfds < 0) {
-            continue;
-        }
-
-        for (int i = 0; i < nfds; i++) {
-            A2A_LOG(A2A_LOG_LEVEL::INFO, "Got I/O event on fd " + std::to_string(events[i].data.fd));
-            if (events[i].data.fd != wakeFd_) {
-                continue;
-            }
-            uint64_t val;
-            if (read(wakeFd_, &val, sizeof(val)) < 0) {
-                A2A_LOG(A2A_LOG_LEVEL::WARN, "read failed");
-            }
-            HandleExpired();
-        }
+    // Run callbacks without holding the lock so other threads can add/cancel timers.
+    if (cb) {
+        cb(userArg);
     }
 }
 

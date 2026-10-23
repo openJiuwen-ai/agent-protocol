@@ -3,8 +3,8 @@
  */
 
 #include <gtest/gtest.h>
+#include <fcntl.h>
 #include <unistd.h>
-#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <cstring>
 #include <thread>
@@ -12,6 +12,10 @@
 #include <atomic>
 #include <future>
 #include <unordered_set>
+
+#if defined(__linux__)
+#include <sys/eventfd.h>
+#endif
 
 #include "event_system.h"
 #include "a2a_log.h"
@@ -27,18 +31,29 @@ using namespace A2A;
 /// Create a non-blocking socket pair for testing I/O events.
 static std::pair<int, int> CreateTestSocketPair()
 {
-    int fds[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fds) < 0) {
+    // A socket pair provides exactly two fds: the read end and the write end.
+    const int socketPairFdCount = 2;
+
+    int fds[socketPairFdCount];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
         return {-1, -1};
+    }
+    for (int i = 0; i < socketPairFdCount; ++i) {
+        int flags = fcntl(fds[i], F_GETFL, 0);
+        if (flags >= 0) {
+            (void)fcntl(fds[i], F_SETFL, flags | O_NONBLOCK);
+        }
     }
     return {fds[0], fds[1]};
 }
 
-/// Create an eventfd for testing notify events.
+#if defined(__linux__)
+/// Create an eventfd for testing notify events (eventfd is Linux-only).
 static int CreateTestEventFd()
 {
     return eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 }
+#endif
 
 /// Sleep helper for async tests.
 static void SleepMs(int ms)
@@ -308,6 +323,8 @@ TEST(EventSystemTest, NotifyEventId_InvalidId)
     EXPECT_FALSE(es.NotifyEventId(99999, 1));
 }
 
+#if defined(__linux__)
+// These tests rely on eventfd counter semantics (Linux-only).
 TEST(EventSystemTest, ReadEventFd_Valid)
 {
     EventSystem es(false, 0);
@@ -342,6 +359,7 @@ TEST(EventSystemTest, ReadEventFd_Empty)
 
     close(efd);
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // RemoveEvent Tests
@@ -806,6 +824,7 @@ TEST(EventSystemTest, NotifyEventId_WithIncrements)
     es.CloseNotifyEventId(eventId);
 }
 
+#if defined(__linux__)
 TEST(EventSystemTest, ReadEventFd_MultipleValues)
 {
     EventSystem es(false, 0);
@@ -830,6 +849,7 @@ TEST(EventSystemTest, ReadEventFd_MultipleValues)
 
     close(efd);
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // CloseNotifyEventId Tests
@@ -1164,8 +1184,11 @@ TEST(EventSystemTest, AddEvent_InvalidFd)
     es.Init();
 
     // Use a closed fd
-    int invalidFd = CreateTestEventFd();
-    close(invalidFd);
+    auto [fd1, fd2] = CreateTestSocketPair();
+    ASSERT_GE(fd1, 0);
+    close(fd1);
+    close(fd2);
+    int invalidFd = fd1;
 
     int eventId = es.AddEvent(invalidFd, EventType::READ, [](int, short, void*) {}, nullptr, 0);
 

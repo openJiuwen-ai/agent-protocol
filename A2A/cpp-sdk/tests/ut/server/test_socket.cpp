@@ -312,7 +312,9 @@ TEST_F(SocketTest, ApplyOptionsReusePort)
     int reuse = 0;
     socklen_t len = sizeof(reuse);
     EXPECT_EQ(::getsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, &len), 0);
-    EXPECT_EQ(reuse, 1);
+    // macOS reports the SO_REUSEPORT option bit value (0x200) instead of 1,
+    // both mean the option is enabled.
+    EXPECT_NE(reuse, 0);
 }
 
 // ===========================================================================
