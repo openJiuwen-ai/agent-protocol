@@ -385,6 +385,13 @@ class BaseRouter:
                 "POST", url, headers=headers, content=body_bytes,
                 timeout=request_timeout,
             ) as response:
+                # client.stream() does not buffer the body. raise_for_status()
+                # raises for every non-2xx status, including 1xx and 3xx;
+                # is_error only covers 4xx/5xx. Read the body while the
+                # connection is still open, or e.response.text later raises
+                # ResponseNotRead and hides the real status.
+                if not response.is_success:
+                    await response.aread()
                 response.raise_for_status()
                 async for chunk in adapter.iter_stream_events(response):
                     mapped = adapter.transform_stream_chunk(
