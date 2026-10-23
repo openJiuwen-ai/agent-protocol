@@ -195,3 +195,28 @@ def test_timeout_validation():
         Deployment(**_base_kwargs(), timeout=-1.0)
     with pytest.raises(TypeError, match="timeout"):
         Deployment(**_base_kwargs(), timeout="30")
+
+
+def test_explicit_none_id_is_auto_generated():
+    """id 缺省（调用方把缺省值原样透传为 None）时仍应自动生成。"""
+    dep = Deployment(**_base_kwargs(), id=None)
+    assert isinstance(dep.id, str)
+    assert len(dep.id) == 8
+
+
+def test_auto_generated_ids_are_unique_when_explicit_none():
+    dep1 = Deployment(**_base_kwargs(), id=None)
+    dep2 = Deployment(**_base_kwargs(), id=None)
+    assert dep1.id != dep2.id
+
+
+@pytest.mark.parametrize("bad_id", [123, 1.5, True, ["x"]])
+def test_non_string_id_is_rejected(bad_id):
+    with pytest.raises(TypeError, match="id"):
+        Deployment(**_base_kwargs(), id=bad_id)
+
+
+@pytest.mark.parametrize("bad_id", ["", "   "])
+def test_blank_id_is_rejected(bad_id):
+    with pytest.raises(ValueError, match="id"):
+        Deployment(**_base_kwargs(), id=bad_id)
