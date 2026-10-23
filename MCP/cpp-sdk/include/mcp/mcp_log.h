@@ -8,10 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "platform_compat.h"
 
 #include <iomanip>
 #include <sstream>
@@ -62,6 +63,12 @@ static inline void GetCurrentTimeStamp(std::string& timestamp)
     timestamp = oss.str();
 }
 
+// Get the current OS thread id in a platform-portable way.
+static inline long long McpGetCurrentThreadId()
+{
+    return static_cast<long long>(Mcp::Platform::GetThreadId());
+}
+
 namespace Mcp::Log {
 
 // Internal helper to reduce macro lines and handle C++ string formatting
@@ -81,7 +88,7 @@ inline void LogInternal(MCP_LOG_LEVEL level, const char* file, const char* func,
     const char* filename = strrchr(file, '/');
     filename = filename ? filename + 1 : file;
 
-    std::string prefix = "[" + timestamp + "] [" + std::to_string(syscall(SYS_gettid)) + "] [" +
+    std::string prefix = "[" + timestamp + "] [" + std::to_string(McpGetCurrentThreadId()) + "] [" +
                          std::string(GetLogLevelName(level)) + "] " + std::string(filename) + "::" +
                          std::string(func) + ":[" + std::to_string(line) + "] ";
 
