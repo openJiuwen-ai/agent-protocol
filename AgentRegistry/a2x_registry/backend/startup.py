@@ -29,6 +29,12 @@ _ENV_ETCD_NAMESPACE = "A2X_REGISTRY_ETCD_NAMESPACE"
 _ENV_ETCD_TLS_CA = "A2X_REGISTRY_ETCD_TLS_CA"
 _ENV_ETCD_TLS_CERT = "A2X_REGISTRY_ETCD_TLS_CERT"
 _ENV_ETCD_TLS_KEY = "A2X_REGISTRY_ETCD_TLS_KEY"
+# How long warmup waits for etcd to accept connections before failing.
+# systemd usually starts etcd and this service together; etcd can come up
+# slower, and without the wait the first failed probe aborts warmup for
+# good (manual restart required).
+_ETCD_STARTUP_WAIT_S = 600.0
+_ETCD_RETRY_MAX_DELAY = 10.0
 # Single source of truth for valid storage kinds — ``backend.__main__``
 # (CLI pre-validation) imports this instead of redefining its own tuple.
 VALID_DB_KINDS = ("sqlite", "memory", "etcd")
@@ -156,15 +162,52 @@ def _build_yuanrong_client(instance_consts) -> Optional[object]:
     )
 
 
+def _wait_for_etcd(client, endpoint: str, wait_s: float) -> None:
+    """Probe ``client`` until etcd answers, up to ``wait_s`` seconds.
+
+    Covers the systemd race where this unit starts before etcd is ready:
+    retrying here lets warmup finish once etcd comes up, instead of leaving
+    the process permanently unassembled until an operator restarts it.
+    """
+    from a2x_registry.register.etcd_client import EtcdError
+
+    logger = logging.getLogger("uvicorn")
+    started = time.monotonic()
+    deadline = started + wait_s
+    delay = 1.0
+    attempt = 0
+    while True:
+        try:
+            client.ping()
+            if attempt:
+                logger.info(
+                    "  etcd reachable at %s after %.1fs",
+                    endpoint, time.monotonic() - started,
+                )
+            return
+        except EtcdError as exc:
+            attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            logger.warning(
+                "  etcd not reachable at %s yet - retrying in %.0fs "
+                "(%.0fs left): %s",
+                endpoint, min(delay, remaining), remaining, exc,
+            )
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, _ETCD_RETRY_MAX_DELAY)
+
+
 def build_table_repo(cfg: dict):
     """Build the storage repo (``TableRepo``) for the resolved config.
 
     - ``sqlite`` / ``memory``: connect the backend, initialise the schema, wrap
       in ``RegistryTableService``.
-    - ``etcd``: build ``EtcdTableRepo`` on an ``EtcdClient``; **fail-fast** by
-      probing connectivity at startup (unreachable/etc/misconfigured etcd
-      aborts warmup rather than starting with a broken store), matching the
-      SQL layer's fatal-on-failure behaviour.
+    - ``etcd``: build ``EtcdTableRepo`` on an ``EtcdClient``; probe
+      connectivity first, retrying for up to 600s so a slow-starting etcd
+      (systemd start ordering) does not abort startup. Still fails if etcd
+      never becomes reachable.
 
     Raises on backend connect / schema / connectivity failure; the caller
     decides how to surface it.
@@ -183,7 +226,7 @@ def build_table_repo(cfg: dict):
             cert=cfg.get("cert", ""),
             key=cfg.get("key", ""),
         )
-        client.ping()  # fail-fast: unreachable etcd aborts startup
+        _wait_for_etcd(client, cfg["endpoint"], _ETCD_STARTUP_WAIT_S)
         return EtcdTableRepo(client)
 
     from a2x_registry.common.db import connect, init_schema

@@ -212,3 +212,42 @@ def test_resolve_db_config_rejects_unknown_kind(monkeypatch, tmp_path):
     monkeypatch.setenv("A2X_REGISTRY_DB_KIND", "mongodb")
     with pytest.raises(ValueError, match="DB_KIND"):
         startup._resolve_db_config()
+
+
+# ── etcd 启动等待：etcd 比注册中心晚就绪时不中断 warmup ──────────
+
+class _FlakyEtcd:
+    """ping 前 ``failures`` 次抛 EtcdError，之后成功。"""
+
+    def __init__(self, failures: int):
+        self.failures = failures
+        self.calls = 0
+
+    def ping(self):
+        from a2x_registry.register.etcd_client import EtcdError
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise EtcdError("etcd unreachable on http://127.0.0.1:2379/v3/kv/range")
+
+
+def test_wait_for_etcd_retries_until_reachable(monkeypatch, tmp_path):
+    """etcd 稍后就绪：重试后继续，不中断启动。"""
+    startup = _reload_startup_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(startup.time, "sleep", lambda _s: None)
+
+    client = _FlakyEtcd(failures=2)
+    startup._wait_for_etcd(client, "http://127.0.0.1:2379", wait_s=30)
+    assert client.calls == 3
+
+
+def test_wait_for_etcd_gives_up_when_window_elapsed(monkeypatch, tmp_path):
+    """等待窗口耗尽后抛 EtcdError（fail-fast 语义保留）."""
+    startup = _reload_startup_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(startup.time, "sleep", lambda _s: None)
+
+    from a2x_registry.register.etcd_client import EtcdError
+    client = _FlakyEtcd(failures=10)
+    with pytest.raises(EtcdError):
+        startup._wait_for_etcd(client, "http://127.0.0.1:2379", wait_s=0)
+    assert client.calls == 1
+
