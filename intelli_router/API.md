@@ -24,12 +24,17 @@
 ### `intelli_router.__version__`
 
 当前安装的 IntelliRouter 版本号（`str`）。优先取安装元数据（发行包名
-`intelli-router`），包未安装（如源码直接引用）时回退 pyproject 声明的版本。
+`intelli-router`），包未安装（如源码直接引用）时回退包内声明的版本
+常量（当前为 "0.1.0"，随发版手动更新）。
 
 ```python
 import intelli_router
 print(intelli_router.__version__)  # e.g. "0.1.0"
 ```
+
+可选依赖通过 extras 安装：`pip install intelli-router[metrics]`
+（Prometheus）、`intelli-router[bedrock]`（AWS Bedrock）、
+`intelli-router[all]`（全部）、`intelli-router[test]`（pytest 测试栈）。
 
 ---
 
@@ -171,11 +176,21 @@ HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集
 （`avg_normalized_latency`），避免与非流式口径混杂。流被消费者提前中断
 （`break`/`aclose()`/取消）时发 `STREAM_CANCELLED` 终态事件，state 不记
 `on_success`/`on_failure`（半截数据不进延迟统计，中断也非部署的错）。
-上游流未以 `[DONE]` 哨兵或 finish 信号（`finish_reason` / Anthropic
-`stop_reason` / Gemini `finishReason` / Bedrock `messageStop`）正常终结时，
-`iter_stream_events` 抛 `DeploymentNetworkError` 触发 fallback，不会把
-半截内容当成功。首个可见输出前的头部 chunk 会被缓冲，fallback 切换部署
-时消费者不会收到重复头部块。
+
+**行为变更（fail-fast 断流检测）**：上游流未以 `[DONE]` 哨兵或 finish
+信号（`finish_reason` / Anthropic `stop_reason` / Gemini `finishReason` /
+Bedrock `messageStop`）正常终结时，`iter_stream_events` 抛
+`DeploymentNetworkError` 触发 fallback，不会把半截内容当成功——此前这类
+流会作为"成功"返回半截内容。对接不发送 `[DONE]` 也不带 finish 信号的
+非标准端点时此行为为破坏性变更（主流端点 OpenAI/Azure/vLLM/Anthropic/
+Gemini/Bedrock 均不受影响）。
+
+**流式时序变化**：首个可见输出之前的头部 chunk（如 role-only 块）会被
+缓冲，待首个可见 token 确认后一并交付（fallback 切换部署时消费者不会
+收到重复头部块）；因此消费者收到首个 chunk 的时间点从"头部块到达"
+推迟到"首个可见 token 到达"，用首个 chunk 估 TTFB 的监控应改用
+`STREAM_ROUTE_SELECTED` 事件。纯头部流（无可见输出）的 chunk 在流正常
+结束时一次性交付。
 
 **`invoke()` 参数说明**:
 
@@ -827,7 +842,8 @@ def create_strategy(
 | `REQUEST_STARTED` | 非流式请求开始 |
 | `REQUEST_SUCCEEDED` | 非流式请求成功 |
 | `REQUEST_RETRIED` | 当前 deployment 失败，即将 fallback 到其他 deployment |
-| `ALL_DEPLOYMENTS_EXHAUSTED` | 所有可尝试 deployment 均失败、无可用 deployment，或路由策略未选出 deployment |
+| `ALL_DEPLOYMENTS_EXHAUSTED` | 所有可尝试 deployment 均失败、无可用 deployment，或路由策略未选出 deployment。流式在可见输出已交付后的失败（重试不安全）与 strict 策略的 fail-fast raise 也以本事件收尾，保证口径闭合 |
+| `REQUEST_CANCELLED` | 非流式请求被取消的终态事件（与流式 `STREAM_CANCELLED` 对称），error_type 为 `CancelledError` |
 | `STREAM_STARTED` | 流式请求开始 |
 | `STREAM_ROUTE_SELECTED` | 流式请求拿到首个可见输出后、yield 给调用方前发出，表示本次回答已提交到该 route |
 | `STREAM_SUCCEEDED` | 流式请求完整结束 |
@@ -1085,10 +1101,14 @@ MetricsCollector(
 - `handle_event` 记账与 `get_stats`/`reset` 读取均为线程安全（内部锁），
   可在 HTTP 服务线程中并发调用 `get_stats`
 - `get_stats()` 返回的 `by_deployment` 中，`requests` 语义为"该部署被
-  尝试次数 = successes + failures"（只失败未成功的部署也会出现，与
-  `by_model` 同口径）；全局 `failed` 仅统计最终失败（全部部署耗尽），
-  重试不计入；顶层 `cancelled` 统计被消费者提前中断的流式请求
-  （在途口径：`total - successful - failed - cancelled`）
+  尝试次数 = successes + failures"（重试经 RETRIED 计入、最终失败尝试
+  经 EXHAUSTED 的 extra.route_id 归因计入；只失败未成功的部署也会出现，
+  与 `by_model` 同口径）；全局 `failed` 仅统计最终失败（全部部署耗尽），
+  重试不计入；顶层 `cancelled` 统计被取消的请求（流式提前中断与非流式
+  取消共用，在途口径：`total - successful - failed - cancelled`）。
+  注意：请求侧错误（4xx/本地校验异常）虽不触发 state 冷却，但在有
+  fallback 时仍计入 `by_deployment.failures` 与 `errors_by_type`——部署
+  侧配置错误（如持续的 404）的排障信号看这两个维度而非冷却状态
 - **热替换清理**：订阅 `DEPLOYMENTS_UPDATED` 事件（`extra.removed_ids`）
   自动清除已下线部署在 `by_deployment` 及内部各 `_deployment_*` 字典中
   的统计键；也可显式调用 `remove_deployment(dep_id)`（删单个）或
@@ -1568,7 +1588,7 @@ cache = LocalCache(max_size=1000, default_ttl=3600)
 cache.set_cache("my_key", {"result": "value"}, ttl=1800)
 
 result = cache.get_cache("my_key")
-remaining_ttl, expires_at = cache.get_cache_with_ttl("my_key")
+result, remaining_ttl = cache.get_cache_with_ttl("my_key")
 ```
 
 ### 健康检查

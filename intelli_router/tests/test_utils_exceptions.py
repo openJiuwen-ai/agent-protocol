@@ -124,3 +124,18 @@ def test_error_status_map_coverage():
     for exc_cls, code in ERROR_STATUS_MAP.items():
         assert isinstance(code, int), f"{exc_cls} -> {code} is not int"
         assert 100 <= code <= 599
+
+
+def test_network_error_empty_deployment_id_omits_prefix():
+    """provider 层断流检测拿不到部署上下文（deployment_id=""）时，
+    消息不渲染 "Deployment ''" 前缀，由 reason 自足表达。"""
+    err = DeploymentNetworkError("", "stream ended without [DONE] sentinel")
+    assert "Deployment ''" not in str(err)
+    assert "stream ended without [DONE] sentinel" in str(err)
+    assert str(err).startswith("network error:")
+
+
+def test_network_error_with_deployment_id_keeps_prefix():
+    err = DeploymentNetworkError("dep-1", "connection reset")
+    assert "Deployment 'dep-1'" in str(err)
+    assert "connection reset" in str(err)

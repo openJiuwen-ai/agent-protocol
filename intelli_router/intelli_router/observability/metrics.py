@@ -281,6 +281,8 @@ class MetricsCollector(EventHandler):
                 self._on_stream_succeeded(event)
             elif et == RoutingEventType.STREAM_CANCELLED:
                 self._on_stream_cancelled(event)
+            elif et == RoutingEventType.REQUEST_CANCELLED:
+                self._on_request_cancelled(event)
             elif et == RoutingEventType.DEPLOYMENTS_UPDATED:
                 self._on_deployments_updated(event)
 
@@ -363,6 +365,16 @@ class MetricsCollector(EventHandler):
         # exhausted 即请求最终失败（重试后仍无可用部署），计入 failed
         self._failure_count += 1
         self._model_failures[event.model] += 1
+        # 最终失败尝试的部署归因：EXHAUSTED 的 deployment_id 字段为空，
+        # 但 router 发出时 extra 带 last_failure_metadata（含 route_id =
+        # 最后失败的部署 id）。最后一次失败尝试后面没有 RETRIED，不在
+        # _on_request_retried 里记账——不在此归因，该部署的
+        # requests/failures 会整条丢失，by_deployment 的
+        # "requests = successes + failures" 等式对它不成立
+        route_id = event.extra.get("route_id")
+        if isinstance(route_id, str) and route_id:
+            self._deployment_requests[route_id] += 1
+            self._deployment_failures[route_id] += 1
         if self._prom:
             self._prom["requests_total"].labels(model=event.model, status="exhausted").inc()
 
@@ -446,6 +458,21 @@ class MetricsCollector(EventHandler):
         if reason is not None:
             entry["reason"] = reason
         self._timeline.append(entry)
+
+    def _on_request_cancelled(self, event: RoutingEvent) -> None:
+        """非流式请求被取消（与 _on_stream_cancelled 对称）：终态之一。
+
+        只计 cancelled 计数器，不加 successful/failed、不动 total
+        （STARTED 时已计）；时间线记一条 request_cancelled 供追溯。
+        """
+        self._cancelled_count += 1
+        self._timeline.append({
+            "ts": event.timestamp,
+            "type": "request_cancelled",
+            "model": event.model,
+            "deployment": event.deployment_id,
+            "latency": event.latency,
+        })
 
     def _on_deployments_updated(self, event: RoutingEvent) -> None:
         """热替换部署：清理已下线部署的统计键（意见：热替换后 metrics

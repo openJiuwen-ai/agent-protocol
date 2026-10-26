@@ -897,3 +897,57 @@ class TestPrometheusRegistry:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+# -------- 复核修复：EXHAUSTED 的最终失败尝试归因 --------
+
+
+class TestExhaustedFinalAttemptAttribution:
+    """最终失败尝试（其后无 RETRIED）此前在 by_deployment 整条丢失；
+    EXHAUSTED 事件 extra.route_id（last_failure_metadata）归因补齐，
+    维持 requests = successes + failures 等式。"""
+
+    @pytest.mark.asyncio
+    async def test_exhausted_attributes_final_attempt_to_route_id(self, collector):
+        # d1 失败一次有 RETRIED；d2 最终失败只有 EXHAUSTED（extra.route_id）
+        await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_RETRIED, deployment_id="d1", error_type="ValueError",
+        ))
+        await collector.handle_event(_event(
+            RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            extra={"route_id": "d2"},
+        ))
+        stats = collector.get_stats()
+        by_dep = stats["by_deployment"]
+        assert by_dep["d1"]["requests"] == 1
+        assert by_dep["d1"]["failures"] == 1
+        # 最终失败尝试经 route_id 归因到 d2，不再丢失
+        assert by_dep["d2"]["requests"] == 1
+        assert by_dep["d2"]["failures"] == 1
+        assert stats["failed"] == 1  # 全局 failed 仅 EXHAUSTED 累加
+
+    @pytest.mark.asyncio
+    async def test_exhausted_without_route_id_no_attribution(self, collector):
+        """extra 无 route_id（防御旧版本事件流）：不归因、不抛异常。"""
+        await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+        await collector.handle_event(_event(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED))
+        stats = collector.get_stats()
+        assert stats["by_deployment"] == {}
+        assert stats["failed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_request_cancelled_counts_cancelled(self, collector):
+        """非流式取消计入 cancelled（与 STREAM_CANCELLED 共用计数器），
+        不加 successful/failed、不动 total。"""
+        await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+        await collector.handle_event(_event(RoutingEventType.REQUEST_CANCELLED))
+        stats = collector.get_stats()
+        assert stats["cancelled"] == 1
+        assert stats["successful"] == 0
+        assert stats["failed"] == 0
+        assert stats["total_requests"] == 1
+        # 四终态口径：successful + failed + cancelled == total（在途 0）
+        assert stats["successful"] + stats["failed"] + stats["cancelled"] == stats["total_requests"]
+        # 时间线可追溯
+        assert any(e["type"] == "request_cancelled" for e in stats["timeline"])

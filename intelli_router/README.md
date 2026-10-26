@@ -210,8 +210,13 @@ asyncio.run(main())
 Streaming 用法：
 
 ```python
-async for chunk in router.stream("gpt-4o-mini", messages):
+# 原始 OpenAI 格式 chunk（dict）
+async for chunk in router.stream_completion("gpt-4o-mini", messages):
     print(chunk["choices"][0]["delta"].get("content", ""), end="")
+
+# 或类型化 chunk（AssistantMessageChunk 属性访问）
+async for chunk in router.stream(messages, model="gpt-4o-mini"):
+    print(chunk.content or "", end="")
 ```
 
 多 Provider failover：
@@ -244,7 +249,7 @@ IntelliRouter 以 OpenAI 格式为内部标准格式，通过 Provider Adapter �
 | SiliconFlow (硅基流动) | `siliconflow` | OpenAI 兼容 + tool_calls 字段清洗 |
 | Zhipu (智谱) | `zhipu` | OpenAI 兼容，端点路径不同 |
 | InferenceAffinity (vLLM) | `inference-affinity` | OpenAI 兼容 + KV cache 共享 |
-| AWS Bedrock | `aws-bedrock` | 待实现（需 SigV4 签名） |
+| AWS Bedrock | `aws-bedrock` | Converse API（botocore SigV4 签名；`api_key` 可空，回退默认凭证链） |
 
 各 Provider 适配器的差异详见 [API.md](API.md) 的「Provider 适配器」一节。
 

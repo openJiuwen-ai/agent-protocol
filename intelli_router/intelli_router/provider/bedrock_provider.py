@@ -213,6 +213,11 @@ class BedrockProviderAdapter(BaseProviderAdapter):
                     event_type = headers.get(":event-type", "")
                 else:
                     event_type = dict(headers).get(":event-type", "")
+                # messageStop 的判定不依赖 payload 非空：即使事件不带
+                # 可解析 payload，它也是流的正常终结标志，跳过会导致
+                # 整条流被误判断流
+                if event_type == "messageStop":
+                    saw_message_stop = True
                 if event_type and event.payload:
                     try:
                         payload = json.loads(event.payload)
@@ -227,7 +232,7 @@ class BedrockProviderAdapter(BaseProviderAdapter):
                         )
                         continue
                     payload["__event_type"] = event_type
-                    if event_type == "messageStop" or self._chunk_has_finish_signal(payload):
+                    if self._chunk_has_finish_signal(payload):
                         saw_message_stop = True
                     yield payload
         if not saw_message_stop:

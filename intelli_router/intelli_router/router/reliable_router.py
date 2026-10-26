@@ -268,7 +268,7 @@ class ReliableRouter(BaseRouter):
         实现上用 create_task 把 emit 投递到当前 running loop：
         create_task 本身是同步调用，任务在调用方（如正在退出中的
         async generator）结束后由 loop 执行。取不到 running loop
-        （同步上下文 / 非 loop 线程）时跳过并记 debug 日志——订阅方
+        （同步上下文 / 非 loop 线程）时跳过并记 warning 日志——订阅方
         （metrics）另有公开的 prune API 兜底。
 
         保存任务强引用直至完成，避免 asyncio 的弱引用导致任务被 GC。
@@ -276,8 +276,9 @@ class ReliableRouter(BaseRouter):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            logger.debug(
-                "事件 %s 未投递：当前无运行中的 event loop（request_id=%s）",
+            logger.warning(
+                "事件 %s 未投递：当前无运行中的 event loop，"
+                "订阅方（如 MetricsCollector）不会收到（request_id=%s）",
                 event.event_type.value,
                 event.request_id,
             )
@@ -289,6 +290,38 @@ class ReliableRouter(BaseRouter):
     @staticmethod
     def _fallback_reason_from_error(error: Exception) -> str:
         return type(error).__name__
+
+    async def _emit_terminal_exhausted(
+        self,
+        request_id: str,
+        model: str,
+        overall_start: float,
+        attempt: int,
+        total_attempts: int,
+        error: Optional[BaseException],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """在"无法继续 fallback、直接 raise"的路径上补发 EXHAUSTED 终态。
+
+        覆盖三个此前不发终态的出口（STARTED 已发，不补则
+        successful + failed + cancelled + 在途 == total_requests
+        的四终态不变式永久虚高一）：
+        - 流式在可见输出已交付后的失败 raise（重试不安全，直接抛）；
+        - strict 策略（ordered-failover / tag-filtered）的
+          non-fallbackable 错误 fail-fast raise；
+        error_type 保持异常类名口径。
+        """
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=attempt,
+            total_attempts=total_attempts,
+            error_type=type(error).__name__ if error is not None else None,
+            error_message=str(error) if error is not None else None,
+            extra=extra or {},
+        ))
 
     @staticmethod
     def _usage_from_response(response: Any) -> Dict[str, Any]:
@@ -515,6 +548,22 @@ class ReliableRouter(BaseRouter):
                     extra=route_metadata,
                 ))
                 return response
+            except asyncio.CancelledError:
+                # 非流式请求被取消：STARTED 已发，补 REQUEST_CANCELLED 终态
+                # （与流式 STREAM_CANCELLED 对称）。取消处理里 await 可能被
+                # 再次投递的取消打断，事件经 create_task 投递后透传取消。
+                self._emit_event_without_await(RoutingEvent(
+                    event_type=RoutingEventType.REQUEST_CANCELLED,
+                    request_id=request_id,
+                    model=model,
+                    latency=time.time() - overall_start,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    error_type="CancelledError",
+                    error_message="request cancelled",
+                    extra=request_extra,
+                ))
+                raise
             except Exception as e:
                 # router 层是 state 的唯一写入方：失败计数与 cooldown 退避
                 # 统一在此更新（含 cooldown_time 透传）。不再调用
@@ -532,6 +581,16 @@ class ReliableRouter(BaseRouter):
                 )
 
                 if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    # strict fail-fast：STARTED 已发，raise 前补终态口径
+                    await self._emit_terminal_exhausted(
+                        request_id=request_id,
+                        model=model,
+                        overall_start=overall_start,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error=e,
+                        extra=last_failure_metadata or request_extra,
+                    )
                     raise
 
                 available = [d for d in available if d.id != selected.id]
@@ -605,16 +664,32 @@ class ReliableRouter(BaseRouter):
         start_time = time.time()
         actual_model = deployment.model_name if model == MODEL_WILDCARD else model
         try:
+            # 与重试循环路径同一构建口径：合并 deployment.request_defaults、
+            # 过滤 None 值、剔除路由专用键并做保留键校验——否则同一部署
+            # 被"路由到"与被"显式点名"会收到不同的请求体
+            request_kwargs = self._request_kwargs_for_deployment(deployment, kwargs)
             response = await super().completion(
                 model=actual_model,
                 messages=messages,
                 deployment=deployment,
-                **{
-                    key: value
-                    for key, value in kwargs.items()
-                    if key not in self._ROUTING_INTERNAL_KEYS
-                },
+                **request_kwargs,
             )
+        except asyncio.CancelledError:
+            # 非流式取消与流式 STREAM_CANCELLED 对称：STARTED 已发，
+            # 取消处理中 await 可能被再次投递的取消打断，事件经
+            # create_task 投递后透传取消
+            self._emit_event_without_await(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_CANCELLED,
+                request_id=request_id,
+                model=model,
+                latency=time.time() - start_time,
+                attempt=1,
+                total_attempts=1,
+                error_type="CancelledError",
+                error_message="request cancelled",
+                extra=request_extra,
+            ))
+            raise
         except Exception as e:
             await self.event_bus.emit(RoutingEvent(
                 event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
@@ -858,8 +933,36 @@ class ReliableRouter(BaseRouter):
                     if not self._is_request_side_error(e):
                         self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                     if visible_output_started:
+                        # 可见输出已交付，重试不安全直接抛：STARTED 已发，
+                        # raise 前补 EXHAUSTED 终态（断流检测等"内容已见
+                        # 随后报错"的场景都会走到这里，不补则口径永久泄漏）
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
                         raise
                     if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                        # strict fail-fast：STARTED 已发，raise 前补终态口径
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
                         raise
                     context.set_failure(e)
                     errors.append((selected.id, str(e)))
@@ -1289,8 +1392,36 @@ class ReliableRouter(BaseRouter):
                     if not self._is_request_side_error(e):
                         self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                     if visible_output_started:
+                        # 可见输出已交付，重试不安全直接抛：STARTED 已发，
+                        # raise 前补 EXHAUSTED 终态（断流检测等"内容已见
+                        # 随后报错"的场景都会走到这里，不补则口径永久泄漏）
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
                         raise
                     if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                        # strict fail-fast：STARTED 已发，raise 前补终态口径
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
                         raise
                     last_fallback_reason = self._fallback_reason_from_error(e)
                     # errors 统一为二元组 (deployment_id, error_message)，

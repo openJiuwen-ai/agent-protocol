@@ -13,6 +13,9 @@ class RoutingEventType(str, Enum):
     REQUEST_SUCCEEDED = "request_succeeded"
     REQUEST_RETRIED = "request_retried"
     ALL_DEPLOYMENTS_EXHAUSTED = "all_deployments_exhausted"
+    # 非流式请求被取消的终态事件（与流式的 STREAM_CANCELLED 对称），
+    # 保证 REQUEST_STARTED 后口径闭合
+    REQUEST_CANCELLED = "request_cancelled"
 
     # 流式请求
     STREAM_STARTED = "stream_started"

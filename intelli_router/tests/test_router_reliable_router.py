@@ -1129,3 +1129,169 @@ def test_update_deployments_sync_context_skips_emit(reliable_router):
     assert d1.id not in reliable_router.state.deployment_status
     # 事件未投递（无 running loop，create_task 不可用）
     assert recorder.events == []
+
+
+# -------- 复核修复：无终态 raise 路径的口径闭合 --------
+# 可见输出后的失败 raise、strict fail-fast raise、非流式取消此前都
+# 不发终态事件（STARTED 已发，在途永久虚高）；复核轮补齐。
+
+
+@pytest.mark.asyncio
+async def test_stream_failure_after_visible_output_emits_exhausted(
+    sample_deployments,
+):
+    """可见输出已交付后流失败（重试不安全直接抛）：raise 前补发
+    EXHAUSTED 终态——断流检测等"内容已见随后报错"场景的口径闭合。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    async def failing_after_visible(model, messages, deployment, **kwargs):
+        yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+        raise ValueError("boom after visible output")
+
+    with patch.object(router, "acompletion_stream", new=failing_after_visible):
+        with pytest.raises(ValueError, match="boom after visible output"):
+            async for _ in router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    # EXHAUSTED 经 await emit（普通异常路径），无需 drain
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(started) == 1
+    assert len(exhausted) == 1
+    assert started[0].request_id == exhausted[0].request_id
+    # 第四终态互斥：无 SUCCEEDED / CANCELLED
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert recorder.events_of_type(RoutingEventType.STREAM_CANCELLED) == []
+    # error_type 保持异常类名口径
+    assert exhausted[0].error_type == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_failure_after_visible_output_emits_exhausted(
+    sample_deployments,
+):
+    """stream_completion（raw chunk 路径）同型：可见输出后失败补 EXHAUSTED。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    async def failing_after_visible(model, messages, deployment, **kwargs):
+        yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+        raise ValueError("boom after visible output")
+
+    with patch.object(router, "acompletion_stream", new=failing_after_visible):
+        with pytest.raises(ValueError, match="boom after visible output"):
+            async for _ in router.stream_completion(
+                "gpt-4", [{"role": "user", "content": "hi"}]
+            ):
+                pass
+
+    assert len(recorder.events_of_type(RoutingEventType.STREAM_STARTED)) == 1
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_type == "ValueError"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+
+
+@pytest.mark.asyncio
+async def test_strict_non_fallbackable_raise_emits_exhausted(
+    deployment_gpt4_1, deployment_gpt4_2
+):
+    """strict 策略（ordered-failover）non-fallbackable 错误 fail-fast
+    raise：raise 前补发 EXHAUSTED，口径闭合（此前只有 STARTED）。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(ValueError):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert len(recorder.events_of_type(RoutingEventType.REQUEST_STARTED)) == 1
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_type == "ValueError"
+    assert recorder.events_of_type(RoutingEventType.REQUEST_SUCCEEDED) == []
+
+
+@pytest.mark.asyncio
+async def test_completion_cancelled_emits_request_cancelled(sample_deployments):
+    """非流式请求被取消：REQUEST_STARTED 后补 REQUEST_CANCELLED 终态
+    （与流式 STREAM_CANCELLED 对称），口径闭合。"""
+    from intelli_router.router.base_router import BaseRouter
+
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    release = asyncio.Event()
+
+    async def hanging_completion(self, model, messages, deployment=None, **kwargs):
+        await release.wait()
+        return {"choices": [{"message": {"content": "never"}}]}
+
+    with patch.object(BaseRouter, "completion", new=hanging_completion):
+        task = asyncio.create_task(
+            router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        )
+        await asyncio.sleep(0.05)  # 让请求进入挂起的 provider 调用
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    release.set()
+
+    assert await _drain_until(recorder, RoutingEventType.REQUEST_CANCELLED)
+    started = recorder.events_of_type(RoutingEventType.REQUEST_STARTED)
+    cancelled = recorder.events_of_type(RoutingEventType.REQUEST_CANCELLED)
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert started[0].request_id == cancelled[0].request_id
+    assert recorder.events_of_type(RoutingEventType.REQUEST_SUCCEEDED) == []
+    assert recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED) == []
+
+
+@pytest.mark.asyncio
+async def test_completion_with_explicit_deployment_merges_request_defaults(
+    deployment_gpt4_1,
+):
+    """直通路径与重试循环路径同一请求体构建口径：合并
+    request_defaults、过滤 None 值 kwargs、剔除路由专用键。"""
+    from intelli_router.router.base_router import BaseRouter
+    from intelli_router.core.deployment import Deployment as Dep
+
+    dep = Dep(
+        id=deployment_gpt4_1.id,
+        model_name="gpt-4",
+        api_key="sk-test-1",
+        api_base="https://api1.example.com",
+        request_defaults={"temperature": 0.7},
+    )
+    router = ReliableRouter(deployments=[dep], num_retries=0)
+    captured = {}
+
+    async def fake_completion(self, model, messages, deployment=None, **kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    with patch.object(BaseRouter, "completion", new=fake_completion):
+        await router.completion(
+            "gpt-4",
+            [{"role": "user", "content": "hi"}],
+            deployment=dep,
+            temperature=None,       # None 过滤：不覆盖 request_defaults
+            max_tokens=100,         # 显式参数透传
+            session_id="sess-1",    # 路由专用键剔除
+        )
+
+    assert captured["temperature"] == 0.7
+    assert captured["max_tokens"] == 100
+    assert "session_id" not in captured
+    assert "temperature" not in captured or captured["temperature"] == 0.7

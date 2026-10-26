@@ -934,9 +934,10 @@ class TestBedrockProviderAdapter:
     #     （PR #358 二轮意见 D） ---
 
     @staticmethod
-    def _encode_bedrock_event(event_type: str, payload: dict) -> bytes:
+    def _encode_bedrock_event(event_type: str, payload: dict = None) -> bytes:
         """按 application/vnd.amazon.eventstream 规范编码一帧（CRC32 齐全），
-        供真实 botocore EventStreamBuffer 解析。"""
+        供真实 botocore EventStreamBuffer 解析。payload=None 编码空 payload
+        （falsy），用于覆盖"messageStop 不带可解析 payload"的边角。"""
         name = b":event-type"
         value = event_type.encode("utf-8")
         headers = (
@@ -944,7 +945,9 @@ class TestBedrockProviderAdapter:
             + b"\x07"  # value type 7 = string
             + struct.pack(">H", len(value)) + value
         )
-        payload_bytes = json.dumps(payload).encode("utf-8")
+        payload_bytes = (
+            b"" if payload is None else json.dumps(payload).encode("utf-8")
+        )
         total_len = 12 + len(headers) + len(payload_bytes) + 4
         prelude = struct.pack(">II", total_len, len(headers))
         prelude_crc = zlib.crc32(prelude) & 0xFFFFFFFF
@@ -992,6 +995,27 @@ class TestBedrockProviderAdapter:
             "messageStop",
         ]
         assert result[0]["role"] == "assistant"
+
+    def test_bedrock_message_stop_with_empty_payload_not_truncated(self):
+        """messageStop 事件的判定不依赖 payload 非空：空 payload 的
+        messageStop 也是正常终结标志，不应整条流被误判断流。"""
+        pytest.importorskip("botocore")
+        data = (
+            self._encode_bedrock_event("messageStart", {"role": "assistant"})
+            + self._encode_bedrock_event("messageStop", payload=None)
+        )
+
+        async def collect():
+            return [
+                event
+                async for event in self.adapter.iter_stream_events(
+                    self._FakeBytesResponse(data)
+                )
+            ]
+
+        # 不抛 DeploymentNetworkError 即为通过（messageStart 仍被 yield）
+        events = asyncio.run(collect())
+        assert events, "messageStart 事件应被产出"
 
     def test_bedrock_iter_stream_events_raises_without_message_stop(self):
         """事件流耗尽但未收到 messageStop → 判为断流，

@@ -156,8 +156,12 @@ class DeploymentNetworkError(DeploymentError):
     """网络连接错误"""
 
     def __init__(self, deployment_id: str, reason: str):
+        # provider 层的流解析（如断流检测）拿不到部署上下文，
+        # deployment_id 传空串——此时消息不渲染 "Deployment ''" 前缀，
+        # 由 reason 自足表达；部署上下文由 router 层的 errors/事件补全
+        prefix = f"Deployment '{deployment_id}' " if deployment_id else ""
         super().__init__(
-            message=f"Deployment '{deployment_id}' network error: {reason}",
+            message=f"{prefix}network error: {reason}",
             details={"deployment_id": deployment_id, "reason": reason}
         )
 
