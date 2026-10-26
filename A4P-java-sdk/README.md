@@ -48,17 +48,18 @@ caller's working directory.
 ### UT script with CI reports
 
 To run unit tests and generate CI reports, execute the following from the repository
-root. Set `WORKSPACE` to the absolute repository root: without it, the script defaults
-to its own directory and cannot find the SDK in the current layout.
+root. The script locates the repository root relative to itself, independently of
+the caller's working directory. Optionally set `WORKSPACE` to an absolute repository
+root to override this default.
 
 ```sh
-WORKSPACE="$(pwd)" bash A4P-java-sdk/scripts/ut.sh
+bash A4P-java-sdk/scripts/ut.sh
 ```
 
 This script requires Git, Maven and standard shell utilities, including `grep` with
 `-P` support (for example, GNU grep). It runs `mvn clean test` and returns Maven's
 exit code (`0` for `PASS`, nonzero for `FAILED`). Reports are written under
-`$WORKSPACE/outputs/`:
+`outputs/` under the resolved repository root (`$WORKSPACE/outputs/` when overridden):
 
 | File | Contents |
 | --- | --- |
