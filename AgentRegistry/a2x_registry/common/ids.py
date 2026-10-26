@@ -34,6 +34,10 @@ def image_sid(name: str, version: str) -> str:
     Legacy rows keyed by (framework, framework_version) keep their ids
     valid after the §6 migration because name=framework / version=
     framework_version were backfilled with the same two strings.
+
+    ``name`` must not contain ``|`` (enforced at the API boundary) so the
+    encoding stays injective: ("a|b", "c") and ("a", "b|c") would otherwise
+    hash to the same id and silently overwrite each other.
     """
     raw = f"{name}|{version}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()

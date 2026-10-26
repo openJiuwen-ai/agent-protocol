@@ -101,7 +101,10 @@ curl -X POST http://127.0.0.1:8000/api/images \
 ```
 
 **效果**：按 `name + version` 幂等 upsert；该 name 首次注册时自动置为默认版本。`runtime_spec` 为不透明 JSON 透传，注册中心不解析其内部字段。`framework` 为纯展示字段（非主键）；`description` / `package_path` / `image_archive_path` / `access_mode` 为 §6 新增字段，落 `data` JSON。
-**错误**：`runtime_spec` 缺失 -> `422`（pydantic 校验错误）；`version` 与过渡期 `framework_version` 均缺失 -> `400`。
+
+> **name / version 校验（宽松）**：两者仍按不透明字符串透传，但会被用作 URL path 段（`DELETE /api/images/{name}/{version}`、`/launch-spec` 等）。为保证创建出来的记录后续一定能被寻址/删除，创建时只做最小校验：单项长度 ≤ 1024 字符；不得含 `/` 或控制字符（`\x00-\x1f`、`\x7f`）；不得为 `.` 或 `..`（HTTP 客户端会归一化）；`name` 额外不得含 `|`——它是 `image_sid` 中 name/version 的分隔符，出现在 name 里会让 `("a|b","c")` 与 `("a","b|c")` 撞同一主键（`version` 里的 `|` 不受限）；`name` + `version` 按最坏情况百分号编码后需能放进常见 8 KB 请求行（约 7 KB 预算，避免长中文名组合把 DELETE URL 撑爆）。其余字符（`:`、中文、空格等）原样接受，不做语义校验。约束为代码内常量，不提供对外配置。
+
+**错误**：`runtime_spec` 缺失 -> `422`（pydantic 校验错误）；`version` 与过渡期 `framework_version` 均缺失 -> `400`；`name` / `version` / `framework_version` 超过 1024 字符、含 `/` 或控制字符、取值为 `.` / `..`，`name` 含 `|`，或 `name` + `version` 编码后超出路径预算 -> `422`。
 
 **数据库验证**：
 ```bash

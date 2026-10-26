@@ -68,6 +68,61 @@ def test_post_framework_version_transition_fallback(client):
     assert r.json()["version"] == "v0.2.0"
 
 
+def test_post_rejects_oversized_name(client):
+    """超长 name 在建库前就被拒（否则 DELETE 的 URL 永远装不下）。"""
+    r = _register(client, name="a" * (256 * 1024))
+    assert r.status_code == 422
+
+
+def test_post_rejects_path_separator_in_name(client):
+    """name 作为 URL path 段使用，含 '/' 的记录无法被寻址，创建时拒绝。"""
+    r = _register(client, name="foo/bar")
+    assert r.status_code == 422
+
+
+def test_post_rejects_control_char_in_version(client):
+    r = _register(client, ver="v1.0\n0")
+    assert r.status_code == 422
+
+
+def test_post_allows_colon_and_unicode_identifiers(client):
+    """校验保持宽松：':' / 中文等透传字符不受影响。"""
+    r = _register(client, name="镜像:测试", ver="v1.0.0-rc1:beta")
+    assert r.status_code == 200
+    assert r.json()["name"] == "镜像:测试"
+
+
+def test_post_allows_long_ascii_name(client):
+    """单项阈值放宽到 1024 字符，长 name 的正常场景不受影响。"""
+    long_name = "a" * 1000
+    r = _register(client, name=long_name)
+    assert r.status_code == 200
+    assert r.json()["name"] == long_name
+
+
+def test_post_rejects_name_over_identifier_cap(client):
+    r = _register(client, name="a" * 1025)
+    assert r.status_code == 422
+
+
+def test_post_rejects_encoded_path_over_budget(client):
+    """单项未超 1024，但 name+version 编码后放不进请求行，仍需拒绝。"""
+    r = _register(client, name="镜" * 400, ver="镜" * 400)
+    assert r.status_code == 422
+
+
+def test_post_rejects_pipe_in_name(client):
+    """'|' 是 image_sid 的 name/version 分隔符，出现在 name 里会造成主键撞车。"""
+    r = _register(client, name="a|b", ver="c")
+    assert r.status_code == 422
+
+
+def test_post_allows_pipe_in_version(client):
+    """name 不含 '|' 时编码仍有唯一性，version 里的 '|' 保持透传。"""
+    r = _register(client, name="a", ver="b|c")
+    assert r.status_code == 200
+
+
 # ── GET /api/images (flat) ──────────────────────────────────────
 
 def test_get_list_flat(client):
