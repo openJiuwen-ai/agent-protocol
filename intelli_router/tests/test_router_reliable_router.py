@@ -1,0 +1,1297 @@
+"""Tests for intelli_router.router.reliable_router."""
+import asyncio
+import time
+import threading
+import pytest
+from unittest.mock import patch, AsyncMock, MagicMock
+from intelli_router.router.reliable_router import ReliableRouter
+from intelli_router.strategy.simple_shuffle import SimpleShuffleStrategy
+from intelli_router.strategy.adaptive import AdaptiveStrategy
+from intelli_router.core.deployment import Deployment, DeploymentStatus
+from intelli_router.observability.events import RoutingEventType
+from intelli_router.utils.exceptions import (
+    AllDeploymentsFailed,
+    DeploymentAuthError,
+    DeploymentError,
+    DeploymentNetworkError,
+    DeploymentServerError,
+    NoDeploymentAvailable,
+    RouterError,
+)
+
+
+@pytest.fixture
+def reliable_router(sample_deployments):
+    """ReliableRouter with simple-shuffle strategy, 3 retries."""
+    return ReliableRouter(
+        deployments=sample_deployments,
+        strategy="simple-shuffle",
+        num_retries=3,
+        timeout=30.0,
+        cooldown_time=60.0,
+        enable_health_check=False,
+    )
+
+
+@pytest.fixture
+def reliable_router_with_health(sample_deployments):
+    return ReliableRouter(
+        deployments=sample_deployments,
+        strategy="simple-shuffle",
+        num_retries=0,
+        timeout=30.0,
+        enable_health_check=True,
+        health_check_interval=300,
+    )
+
+
+def test_constructor_with_strategy_type(sample_deployments):
+    """String strategy type -> created via factory."""
+    router = ReliableRouter(deployments=sample_deployments, strategy="simple-shuffle")
+    assert router.strategy is not None
+
+
+def test_constructor_with_strategy_instance(sample_deployments):
+    """RoutingStrategy instance -> used directly."""
+    strategy = SimpleShuffleStrategy()
+    router = ReliableRouter(deployments=sample_deployments, strategy=strategy)
+    assert router.strategy is strategy
+
+
+def test_constructor_adaptive_with_kwargs(sample_deployments):
+    """strategy_kwargs passed through to strategy constructor."""
+    router = ReliableRouter(
+        deployments=sample_deployments,
+        strategy="adaptive",
+        w_health=2.0,
+        w_token=1.0,
+    )
+    assert isinstance(router.strategy, AdaptiveStrategy)
+    assert router.strategy.w_health == 2.0
+    assert router.strategy.w_token == 1.0
+
+
+def test_constructor_enable_health_check(sample_deployments):
+    router = ReliableRouter(
+        deployments=sample_deployments,
+        enable_health_check=True,
+        health_check_interval=300,
+    )
+    assert router.health_checker is not None
+    assert router.health_checker.check_interval == 300
+
+
+def test_constructor_disable_health_check(sample_deployments):
+    router = ReliableRouter(deployments=sample_deployments, enable_health_check=False)
+    assert router.health_checker is None
+
+
+# -------- __aenter__ / __aexit__ --------
+
+@pytest.mark.asyncio
+async def test_aenter_starts_health_checker(reliable_router_with_health):
+    router = reliable_router_with_health
+    with patch.object(router.health_checker, 'start_background_check', new=AsyncMock()) as mock_start:
+        await router.__aenter__()
+        mock_start.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_aenter_no_health_checker(reliable_router):
+    """__aenter__ without health checker should not raise."""
+    await reliable_router.__aenter__()
+
+
+@pytest.mark.asyncio
+async def test_aexit_stops_health_checker(reliable_router_with_health):
+    router = reliable_router_with_health
+    with patch.object(router.health_checker, 'stop_background_check', new=AsyncMock()) as mock_stop:
+        await router.__aexit__(None, None, None)
+        mock_stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_aexit_no_health_checker(reliable_router):
+    await reliable_router.__aexit__(None, None, None)
+
+
+# -------- _get_available_deployments --------
+
+def test_get_available_healthy(reliable_router):
+    """_get_available_deployments checks state.deployment_status.
+
+    fixture 中 dep_cooldown 自带 COOLDOWN 状态，构造 router 时会被同步
+    进 state 作为初始状态（避免两套状态并存），因此被正确排除。
+    """
+    deps = reliable_router._get_available_deployments("gpt-4")
+    # dep_gpt4_1, dep_gpt4_2 healthy; dep_cooldown 初始 COOLDOWN 被排除
+    assert len(deps) == 2
+    dep_ids = {d.id for d in deps}
+    assert "dep_cooldown" not in dep_ids
+
+
+def test_deployment_initial_cooldown_synced_to_state(reliable_router):
+    """deployment 自带的 COOLDOWN 初始状态应同步进 state（附带修复）。"""
+    assert reliable_router.state.deployment_status.get("dep_cooldown") == DeploymentStatus.COOLDOWN
+    assert reliable_router.state.cooldown_until.get("dep_cooldown", 0) > time.time()
+
+
+def test_get_available_cooldown_expired(reliable_router, deployment_gpt4_cooldown):
+    """COOLDOWN past cooldown_until -> auto-recovered."""
+    reliable_router.state.deployment_status[deployment_gpt4_cooldown.id] = DeploymentStatus.COOLDOWN
+    reliable_router.state.cooldown_until[deployment_gpt4_cooldown.id] = time.time() - 10
+    deps = reliable_router._get_available_deployments("gpt-4")
+    assert deployment_gpt4_cooldown in deps
+    assert reliable_router.state.deployment_status[deployment_gpt4_cooldown.id] == DeploymentStatus.HEALTHY
+
+
+def test_get_available_cooldown_expired_restores_health_state(reliable_router, deployment_gpt4_cooldown):
+    """issue #49: 软恢复时 health_state 必须一并恢复为 True。
+
+    否则 COOLDOWN 到期后 health_state 残留 False，策略打分永远为 0，
+    部署永远不会再被调度，也就永远不会再次进入 COOLDOWN。
+    """
+    dep_id = deployment_gpt4_cooldown.id
+    reliable_router.state.deployment_status[dep_id] = DeploymentStatus.COOLDOWN
+    reliable_router.state.cooldown_until[dep_id] = time.time() - 10
+    reliable_router.state.health_state[dep_id] = False
+
+    deps = reliable_router._get_available_deployments("gpt-4")
+    assert deployment_gpt4_cooldown in deps
+    assert reliable_router.state.deployment_status[dep_id] == DeploymentStatus.HEALTHY
+    assert reliable_router.state.health_state[dep_id] is True
+
+
+@pytest.mark.asyncio
+async def test_soft_recovered_dead_deployment_can_reenter_cooldown(sample_deployments):
+    """issue #49 端到端场景：dead 服务软恢复后，后续调用失败应能重新进入 COOLDOWN。
+
+    注：mock 异常用部署侧的 DeploymentNetworkError（PR #358 意见 7 起，
+    本地 ValueError 属请求侧错误，不再触发 on_failure/冷却）。
+    """
+    # 用单部署 + 固定选择，模拟 openai-dead
+    dead = Deployment(model_name="dead-model", api_key="k", api_base="b")
+    router = ReliableRouter(deployments=[dead], strategy="simple-shuffle", num_retries=0)
+
+    # 第1轮：请求失败 → COOLDOWN
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=DeploymentNetworkError(dead.id, "dead"))):
+        with pytest.raises(RouterError):
+            await router.completion("dead-model", [{"role": "user", "content": "hi"}])
+    assert router.state.deployment_status[dead.id] == DeploymentStatus.COOLDOWN
+    assert router.state.health_state[dead.id] is False
+
+    # 模拟 cooldown 到期
+    router.state.cooldown_until[dead.id] = time.time() - 1
+
+    # 第2轮：软恢复后再次调用，失败 → 应重新进入 COOLDOWN 而非停留在 healthy
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=DeploymentNetworkError(dead.id, "still dead"))):
+        with pytest.raises(RouterError):
+            await router.completion("dead-model", [{"role": "user", "content": "hi"}])
+    assert router.state.deployment_status[dead.id] == DeploymentStatus.COOLDOWN
+    assert router.state.health_state[dead.id] is False
+    # 退避递增：第2次失败 cooldown = 60 * 2
+    assert router.state.cooldown_until[dead.id] >= time.time() + 60 * 2 - 1
+
+
+def test_get_available_no_model(reliable_router):
+    deps = reliable_router._get_available_deployments("nonexistent")
+    assert deps == []
+
+
+# -------- completion --------
+
+@pytest.mark.asyncio
+async def test_completion_success(reliable_router):
+    mock_response = {
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"completion_tokens": 10, "total_tokens": 20},
+    }
+    with patch.object(reliable_router, '_make_request', new=AsyncMock(return_value=mock_response)) as mock_req:
+        result = await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        assert result == mock_response
+        mock_req.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_completion_failure_then_retry(reliable_router):
+    """First transient attempt fails, second succeeds."""
+    mock_response = {"choices": [], "usage": {"completion_tokens": 5}}
+    _call_count = 0
+
+    async def mock_make_request(deployment, request_body):
+        nonlocal _call_count
+        _call_count += 1
+        if _call_count == 1:
+            raise DeploymentNetworkError(deployment.id, "first attempt failed")
+        return mock_response
+
+    with patch.object(reliable_router, '_make_request', new=mock_make_request):
+        result = await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        assert result == mock_response
+        assert _call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_completion_all_fail(reliable_router):
+    with patch.object(
+        reliable_router,
+        '_make_request',
+        new=AsyncMock(side_effect=DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed):
+            await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_completion_ordered_failover_fails_over_to_second_deployment(
+    deployment_gpt4_1,
+    deployment_gpt4_2,
+):
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    mock_response = {"choices": [], "usage": {"completion_tokens": 5}}
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        if deployment.id == deployment_gpt4_1.id:
+            raise DeploymentNetworkError(deployment.id, "transient")
+        return mock_response
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result == mock_response
+    assert calls == [deployment_gpt4_1.id, deployment_gpt4_2.id]
+
+
+@pytest.mark.asyncio
+async def test_completion_plain_error_uses_legacy_fallback_for_existing_strategy(reliable_router):
+    with patch.object(reliable_router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(AllDeploymentsFailed):
+            await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_completion_non_fallbackable_error_raises_original_for_ordered_failover(
+    deployment_gpt4_1,
+    deployment_gpt4_2,
+):
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(ValueError):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_completion_no_available_deployments(reliable_router):
+    """No deployments for model -> immediate NoDeploymentAvailable."""
+    with pytest.raises(NoDeploymentAvailable):
+        await reliable_router.completion("nonexistent", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_completion_strategy_returns_none(reliable_router):
+    """strategy returns None -> falls back to first available."""
+    mock_response = {"choices": [], "usage": {"completion_tokens": 5}}
+
+    class ReturnsNoneStrategy:
+        async def select_deployment(self, deployments, context):
+            return None
+        def on_success(self, dep, latency, tokens):
+            pass
+        def on_failure(self, dep, error):
+            pass
+
+    reliable_router.strategy = ReturnsNoneStrategy()
+    with patch.object(reliable_router, '_make_request', new=AsyncMock(return_value=mock_response)):
+        result = await reliable_router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        assert result == mock_response
+
+
+@pytest.mark.asyncio
+async def test_completion_tag_filtered_none_does_not_fallback_to_first(deployment_gpt4_1, deployment_gpt4_2):
+    """tag-filtered no-match should not call the first available deployment."""
+    deployment_gpt4_1.fallback_tag = "primary"
+    deployment_gpt4_2.fallback_tag = "backup"
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="tag-filtered",
+        fallback_tag="missing",
+    )
+
+    with patch.object(router, '_make_request', new=AsyncMock()) as mock_req:
+        with pytest.raises(NoDeploymentAvailable):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        mock_req.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_completion_zero_retries(reliable_router):
+    """num_retries=0: existing strategies keep legacy aggregation behavior."""
+    router = ReliableRouter(
+        deployments=[reliable_router.deployments[0]],
+        strategy="simple-shuffle",
+        num_retries=0,
+    )
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(AllDeploymentsFailed):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_fallback_after_visible_output(reliable_router):
+    dep1, dep2 = reliable_router.deployments[0], reliable_router.deployments[1]
+    router = ReliableRouter(
+        deployments=[dep1, dep2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    attempts = []
+
+    async def mock_stream(model, messages, deployment, **kwargs):
+        attempts.append(deployment.id)
+        if deployment.id == dep1.id:
+            yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+            raise DeploymentNetworkError(deployment.id, "stream interrupted")
+        yield {"choices": [{"delta": {"content": "fallback"}, "finish_reason": "stop"}]}
+
+    with patch.object(router, 'acompletion_stream', new=mock_stream):
+        chunks = []
+        with pytest.raises(DeploymentNetworkError):
+            async for chunk in router.stream([{"role": "user", "content": "hi"}], model="gpt-4"):
+                chunks.append(chunk.content)
+
+    assert chunks == ["partial"]
+    assert attempts == [dep1.id]
+
+
+def _failing_stream(error: Exception):
+    """返回总是抛出指定异常的 async generator（模拟 acompletion_stream
+    连接失败）。AsyncMock 不实现 __aiter__，不能用于 patch async
+    generator 方法（会抛 TypeError 且产生 coroutine never awaited 警告）。"""
+    async def failing(*args, **kwargs):
+        raise error
+        yield  # pragma: no cover
+    return failing
+
+
+@pytest.mark.asyncio
+async def test_stream_all_fail_raises_all_deployments_failed(reliable_router):
+    """意见10: stream() 全部部署失败应抛 AllDeploymentsFailed（而非裸 RouterError）。"""
+    with patch.object(
+        reliable_router,
+        'acompletion_stream',
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            async for _ in reliable_router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    # 精确类型断言：不是父类 RouterError 的其他子类
+    assert type(exc_info.value) is AllDeploymentsFailed
+    assert exc_info.value.details["model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_stream_all_fail_errors_are_two_tuples(reliable_router):
+    """意见10: stream() errors 与 completion()/stream_completion() 统一为二元组。"""
+    with patch.object(
+        reliable_router,
+        'acompletion_stream',
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            async for _ in reliable_router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    errors = exc_info.value.details["errors"]
+    assert len(errors) >= 1
+    for entry in errors:
+        # 二元组 (deployment_id, error_message)——不含 fallback_reason
+        assert isinstance(entry, tuple)
+        assert len(entry) == 2
+        deployment_id, error_message = entry
+        assert isinstance(deployment_id, str)
+        assert isinstance(error_message, str)
+        assert error_message  # 非空错误消息
+        # 模拟的是 DeploymentNetworkError，消息应含其文本而非 TypeError 之类
+        assert "fail" in error_message
+
+
+@pytest.mark.asyncio
+async def test_stream_all_fail_maps_to_503(reliable_router):
+    """意见10: stream() 全失败的 AllDeploymentsFailed 应映射 HTTP 503。"""
+    from intelli_router.utils.exceptions import get_status_code
+
+    with patch.object(
+        reliable_router,
+        'acompletion_stream',
+        new=_failing_stream(DeploymentNetworkError("dep", "fail")),
+    ):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            async for _ in reliable_router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    assert get_status_code(exc_info.value) == 503
+
+
+# -------- request-side vs deployment-side error classification (PR #358 review 7) --------
+
+@pytest.mark.asyncio
+async def test_4xx_error_no_failure_no_cooldown_but_falls_back(
+    deployment_gpt4_1, deployment_gpt4_2,
+):
+    """PR #358 意见 7: 400 类请求侧错误（上下文超长/参数非法/content
+    filter）不归因于部署——不调 state.on_failure（不计失败、不冷却），
+    但仍记录 errors 并继续 fallback 循环（换部署可能救回来）。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="simple-shuffle",
+        num_retries=1,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        if len(calls) == 1:
+            # _make_request 对其他 4xx 的映射形态：DeploymentError + status_code
+            raise DeploymentError(
+                message=f"Deployment '{deployment.id}' returned HTTP 400",
+                details={
+                    "deployment_id": deployment.id,
+                    "status_code": 400,
+                    "response_body": "maximum context length exceeded",
+                },
+            )
+        return {"choices": [], "usage": {"completion_tokens": 5}}
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result == {"choices": [], "usage": {"completion_tokens": 5}}
+    # 仍尝试了下一个部署（请求侧错误不中断 fallback 循环）
+    assert len(calls) == 2
+    assert calls[0] != calls[1]
+    # 不计失败、不冷却（两个部署均无失败记录）
+    for dep_id in (deployment_gpt4_1.id, deployment_gpt4_2.id):
+        assert router.state.consecutive_failures.get(dep_id, 0) == 0
+        assert router.state.deployment_status.get(dep_id, DeploymentStatus.HEALTHY) != DeploymentStatus.COOLDOWN
+        assert router.state.cooldown_until.get(dep_id) is None
+
+
+@pytest.mark.asyncio
+async def test_5xx_error_still_counts_failure_and_cooldown(
+    deployment_gpt4_1, deployment_gpt4_2,
+):
+    """PR #358 意见 7: 5xx 部署侧错误保持原有行为——计数失败并冷却。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="simple-shuffle",
+        num_retries=1,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        if len(calls) == 1:
+            raise DeploymentServerError(
+                deployment.id, status_code=502, response_body="bad gateway"
+            )
+        return {"choices": [], "usage": {"completion_tokens": 5}}
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result is not None
+    failed_dep = calls[0]
+    assert router.state.consecutive_failures.get(failed_dep) == 1
+    assert router.state.deployment_status.get(failed_dep) == DeploymentStatus.COOLDOWN
+    assert router.state.cooldown_until.get(failed_dep, 0) > time.time()
+    # 另一个部署成功，无失败记录
+    assert router.state.consecutive_failures.get(calls[1], 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_local_value_error_is_request_side_no_cooldown(
+    deployment_gpt4_1, deployment_gpt4_2,
+):
+    """PR #358 意见 7: 本地 ValueError（参数构造/校验问题）也算请求侧——
+    不计失败不冷却；所有部署仍被尝试，最终 AllDeploymentsFailed。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="simple-shuffle",
+        num_retries=1,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        raise ValueError("invalid request parameter")
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    # fallback 循环继续：两个部署都被尝试，errors 都被记录
+    assert len(calls) == 2
+    errors = exc_info.value.details["errors"]
+    assert len(errors) == 2
+    # 但都不计失败、不冷却
+    assert router.state.consecutive_failures == {}
+    assert router.state.cooldown_until == {}
+
+
+@pytest.mark.asyncio
+async def test_auth_and_rate_limit_errors_are_deployment_side():
+    """PR #358 意见 7 边界: 401/403（认证）与 429（限流）是部署侧问题
+    （换部署可恢复），保持原有的计数冷却行为。"""
+    dep = Deployment(id="dep_auth", model_name="m", api_key="k", api_base="b")
+    router = ReliableRouter(deployments=[dep], strategy="simple-shuffle", num_retries=0)
+
+    with patch.object(
+        router, '_make_request',
+        new=AsyncMock(side_effect=DeploymentAuthError(dep.id, status_code=401)),
+    ):
+        with pytest.raises(AllDeploymentsFailed):
+            await router.completion("m", [{"role": "user", "content": "hi"}])
+
+    assert router.state.consecutive_failures.get(dep.id) == 1
+    assert router.state.deployment_status.get(dep.id) == DeploymentStatus.COOLDOWN
+
+
+def test_available_deployments_for_model_matches_get_available(reliable_router):
+    """PR #358 意见 16: ReliableRouter 覆写 _available_deployments_for_model
+    钩子，与 _get_available_deployments 同口径（冷却中的部署被剔除）。"""
+    assert (
+        reliable_router._available_deployments_for_model("gpt-4")
+        == reliable_router._get_available_deployments("gpt-4")
+    )
+    # dep_cooldown 初始 COOLDOWN 被排除，只剩两个健康部署
+    assert len(reliable_router._available_deployments_for_model("gpt-4")) == 2
+
+
+# -------- batch_completion --------
+
+@pytest.mark.asyncio
+async def test_batch_completion(reliable_router):
+    mock_response = {"choices": [], "usage": {"completion_tokens": 5}}
+
+    with patch.object(reliable_router, 'completion',
+                      new=AsyncMock(return_value=mock_response)) as mock_comp:
+        requests = [
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "a"}]},
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "b"}]},
+        ]
+        results = await reliable_router.batch_completion(requests, max_concurrent=10)
+        assert len(results) == 2
+        assert mock_comp.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_completion_partial_failures(reliable_router):
+    _call_count = 0
+
+    async def mock_completion(**kwargs):
+        nonlocal _call_count
+        _call_count += 1
+        if _call_count == 1:
+            return {"ok": True}
+        raise ValueError("fail")
+
+    with patch.object(reliable_router, 'completion', new=mock_completion):
+        requests = [
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "a"}]},
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "b"}]},
+        ]
+        results = await reliable_router.batch_completion(requests, max_concurrent=10)
+        assert len(results) == 2
+        # gather with return_exceptions=True returns exceptions as values
+        assert results[0] == {"ok": True}
+        assert isinstance(results[1], ValueError)
+
+
+# -------- update_deployments --------
+
+def test_update_deployments(reliable_router, deployment_gpt3):
+    new_deps = [deployment_gpt3]
+    reliable_router.update_deployments(new_deps)
+    assert len(reliable_router.deployments) == 1
+    assert reliable_router.get_model_list() == ["gpt-3.5-turbo"]
+
+
+def test_update_deployments_with_health_checker(reliable_router_with_health, deployment_gpt3):
+    router = reliable_router_with_health
+    router.update_deployments([deployment_gpt3])
+    assert len(router.health_checker.deployments) == 1
+
+
+# -------- get_stats --------
+
+def test_get_stats(reliable_router):
+    stats = reliable_router.get_stats()
+    assert "total_deployments" in stats
+    assert "model_list" in stats
+    assert "deployment_status" in stats
+    assert "consecutive_failures" in stats
+    assert "latency_stats" in stats
+    assert stats["total_deployments"] == 4
+
+
+# -------- get_stats latency (issue #41/#42) --------
+
+def test_get_stats_avg_latency_no_records_is_none(reliable_router):
+    """issue #41: 无延迟记录时 avg_latency 应为 None 而非 inf。"""
+    stats = reliable_router.get_stats()
+    for dep_stats in stats["latency_stats"].values():
+        assert dep_stats["avg_latency"] is None
+        assert dep_stats["avg_normalized_latency"] is None
+
+
+def test_get_stats_avg_latency_is_real_latency_rounded(reliable_router, deployment_gpt4_1):
+    """issue #42: avg_latency 应为真实延迟（秒）且4位小数舍入，而非归一化延迟。"""
+    # latency=0.5s, tokens=100 → normalized=0.005
+    reliable_router.state.on_success(deployment_gpt4_1.id, latency=0.5, tokens=100)
+    stats = reliable_router.get_stats()
+    dep_stats = stats["latency_stats"][deployment_gpt4_1.id]
+    assert dep_stats["avg_latency"] == 0.5
+    assert dep_stats["avg_normalized_latency"] == 0.005
+
+
+def test_get_stats_avg_latency_float_precision(reliable_router, deployment_gpt4_1):
+    """issue #41: 浮点除法产生的长尾小数应被舍入到4位。"""
+    # 1/3 会产生 0.3333333333333333 这样的长浮点
+    reliable_router.state.on_success(deployment_gpt4_1.id, latency=1.0, tokens=1)
+    reliable_router.state.on_success(deployment_gpt4_1.id, latency=0.5, tokens=1)
+    reliable_router.state.on_success(deployment_gpt4_1.id, latency=0.25, tokens=1)
+    stats = reliable_router.get_stats()
+    avg = stats["latency_stats"][deployment_gpt4_1.id]["avg_latency"]
+    assert avg == round(1.75 / 3, 4)
+    # 不应出现 19 位小数
+    assert len(str(avg).split(".")[-1]) <= 4
+
+
+# -------- update_deployments 热替换并发 (issue #50) --------
+
+def test_update_deployments_cleans_stale_state(reliable_router, deployment_gpt3):
+    """热替换后已移除部署的 state 残留应被清理。"""
+    old_dep = reliable_router.deployments[0]
+    reliable_router.state.on_failure(old_dep.id, RuntimeError("x"))
+
+    reliable_router.update_deployments([deployment_gpt3])
+
+    assert old_dep.id not in reliable_router.state.deployment_status
+    assert old_dep.id not in reliable_router.state.consecutive_failures
+    assert old_dep.id not in reliable_router.state.cooldown_until
+
+
+def test_build_model_indices_atomic(reliable_router, deployment_gpt3):
+    """_build_model_indices 应一次性原子替换索引（issue #50 竞态根因）。"""
+    original = reliable_router.model_indices
+    reliable_router._build_model_indices()
+    # 重建过程中不会出现"已清空"的中间态：构建前旧索引始终完整可读
+    assert original is not reliable_router.model_indices
+
+
+@pytest.mark.asyncio
+async def test_hot_swap_concurrent_with_requests(sample_deployments):
+    """issue #50 回归：请求循环执行期间热替换，不应出现间歇性失败。
+
+    模拟：请求协程持续发起 completion，另一线程反复 update_deployments。
+    修复前 _build_model_indices 先清空再填充，并发读会命中空索引窗口。
+    """
+    router = ReliableRouter(
+        deployments=sample_deployments, strategy="simple-shuffle", num_retries=0,
+    )
+    mock_response = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+    nodep_count = {"count": 0}
+
+    async def mock_make_request(deployment, request_body):
+        return mock_response
+
+    router._make_request = mock_make_request
+
+    stop = threading.Event()
+    swap_errors = []
+
+    def swapper():
+        new_deps = [Deployment(model_name="gpt-4", api_key="k", api_base="b") for _ in range(4)]
+        while not stop.is_set():
+            try:
+                router.update_deployments(new_deps)
+            except Exception as e:  # pragma: no cover
+                swap_errors.append(e)
+                stop.set()
+
+    t = threading.Thread(target=swapper, daemon=True)
+    t.start()
+
+    try:
+        for _ in range(500):
+            try:
+                await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+            except Exception as e:
+                # 热替换窗口内 NoDeploymentAvailable 不应发生：
+                # 新旧部署列表都包含 gpt-4
+                if "No available deployment" in str(e):
+                    nodep_count["count"] += 1
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+    assert not swap_errors
+    assert nodep_count["count"] == 0, (
+        f"热替换期间出现 {nodep_count['count']} 次 NoDeploymentAvailable"
+    )
+
+
+# -------- PR review fixes --------
+
+def test_constructor_cooldown_without_until_no_crash():
+    """P2-1 回归：COOLDOWN 且 cooldown_until=None 的 Deployment 构造 router
+    不应抛 AttributeError（cooldown_time 须在同步循环前赋值）。"""
+    from intelli_router.core.state import LocalRouterState
+    dead = Deployment(
+        model_name="m", api_key="k", api_base="b",
+        status=DeploymentStatus.COOLDOWN, cooldown_until=None,
+    )
+    router = ReliableRouter(deployments=[dead])
+    # 应使用 router 的 cooldown_time 计算默认冷却截止
+    assert router.state.deployment_status[dead.id] == DeploymentStatus.COOLDOWN
+    assert router.state.cooldown_until[dead.id] > time.time()
+
+
+@pytest.mark.asyncio
+async def test_legacy_strategy_no_double_counting():
+    """P2-2 回归：按旧契约在回调内转发 state 更新的自定义策略，
+    注入后不应造成 consecutive_failures 双重计数。"""
+    from intelli_router.core.state import LocalRouterState
+    from intelli_router.strategy.base_strategy import RoutingStrategy
+
+    class LegacyStrategy(RoutingStrategy):
+        def __init__(self, state):
+            self.state = state
+        async def select_deployment(self, deployments, context):
+            return deployments[0] if deployments else None
+        def on_success(self, deployment, latency, tokens):
+            self.state.on_success(deployment.id, latency, tokens)
+        def on_failure(self, deployment, error):
+            self.state.on_failure(deployment.id, error)
+
+    state = LocalRouterState()
+    deps = [Deployment(model_name="m", api_key="k", api_base="b", id=f"d{i}") for i in range(2)]
+    router = ReliableRouter(deployments=deps, strategy=LegacyStrategy(state))
+
+    async def mock_make_request(deployment, request_body):
+        # 部署侧异常（PR #358 意见 7 起，本地 ValueError 属请求侧错误、
+        # 不再进 on_failure，无法覆盖本测试关心的双重计数路径）
+        raise DeploymentNetworkError(deployment.id, "boom")
+    router._make_request = mock_make_request
+
+    with pytest.raises(RouterError):
+        await router.completion("m", [{"role": "user", "content": "hi"}])
+
+    # 每个部署只失败 1 次（4 次尝试里每部署被选 1 次后剔除）
+    assert state.consecutive_failures == {"d0": 1, "d1": 1}
+
+
+def test_update_deployments_shared_state_no_clobber():
+    """P3 回归：多 router 共享同一 state 时，一方热替换不应清除
+    另一方管理部署的运行时状态。"""
+    from intelli_router.core.state import LocalRouterState
+    from intelli_router.strategy.adaptive import AdaptiveStrategy
+
+    shared_state = LocalRouterState()
+    strategy = AdaptiveStrategy(state=shared_state)
+
+    router_a = ReliableRouter(
+        deployments=[Deployment(model_name="model-a", api_key="k", api_base="b", id="a1")],
+        strategy=strategy,
+    )
+    router_b = ReliableRouter(
+        deployments=[Deployment(model_name="model-b", api_key="k", api_base="b", id="b1")],
+        strategy=strategy,
+    )
+
+    shared_state.on_failure("b1", RuntimeError("x"))
+    assert shared_state.deployment_status["b1"] == DeploymentStatus.COOLDOWN
+
+    # router_a 热替换自己的部署（不含 b1）
+    router_a.update_deployments(
+        [Deployment(model_name="model-a2", api_key="k", api_base="b", id="a2")]
+    )
+
+    # b1 的状态不应被误删
+    assert shared_state.deployment_status.get("b1") == DeploymentStatus.COOLDOWN
+    assert shared_state.consecutive_failures.get("b1") == 1
+    # 旧部署 a1 的状态应被清理
+    assert "a1" not in shared_state.deployment_status
+    assert router_b.get_model_list() == ["model-b"]
+
+
+# =====================================================================
+# PR #358 二轮意见 A：流式被消费者提前中断时的监控口径闭合
+# =====================================================================
+
+class _RecordingEventHandler:
+    """收集所有路由事件的测试用 EventHandler。"""
+
+    def __init__(self):
+        self.events = []
+
+    async def handle_event(self, event):
+        self.events.append(event)
+
+    def events_of_type(self, event_type):
+        return [e for e in self.events if e.event_type == event_type]
+
+
+def _endless_mock_stream():
+    """无限产出内容 chunk 的 acompletion_stream mock（消费端 break 才停）。"""
+    async def mock_stream(model, messages, deployment, **kwargs):
+        i = 0
+        while True:
+            yield {"choices": [{"delta": {"content": f"chunk{i}"}, "finish_reason": None}]}
+            i += 1
+    return mock_stream
+
+
+async def _drain_until(recorder, event_type, timeout_s: float = 2.0) -> bool:
+    """轮询等待 recorder 收到指定类型事件（STREAM_CANCELLED 等经
+    create_task 后台投递，需要 loop 转一圈才会送达）。"""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if recorder.events_of_type(event_type):
+            return True
+        await asyncio.sleep(0.01)
+    return bool(recorder.events_of_type(event_type))
+
+
+@pytest.mark.asyncio
+async def test_stream_consumer_break_emits_stream_cancelled(sample_deployments):
+    """消费 1 个 chunk 后 break：事件序列含 stream_started +
+    stream_cancelled、无 stream_succeeded；state 无 on_success/on_failure。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    received = []
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        async for chunk in router.stream(
+            [{"role": "user", "content": "hi"}], model="gpt-4"
+        ):
+            received.append(chunk)
+            break  # 消费者提前中断
+
+    assert len(received) == 1
+    # 后台 create_task 投递的终态事件需要 loop 执行
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    succeeded = recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED)
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert succeeded == []
+    # 同一 request_id，且是第四种终态（无 EXHAUSTED）
+    assert started[0].request_id == cancelled[0].request_id
+    assert recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED) == []
+    # reason 标记消费者中断
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert cancelled[0].deployment_id is not None
+    # state 不记成功（无延迟样本）也不记失败（无失败计数/冷却）。
+    # fixture 自带一个初始 COOLDOWN 的部署，只检查实际服务的部署。
+    selected_id = cancelled[0].deployment_id
+    assert selected_id not in router.state.latencies
+    assert router.state.consecutive_failures.get(selected_id, 0) == 0
+    assert router.state.deployment_status.get(selected_id) != DeploymentStatus.COOLDOWN
+
+
+@pytest.mark.asyncio
+async def test_stream_consumer_aclose_emits_stream_cancelled(sample_deployments):
+    """显式 aclose() 场景同理：STREAM_CANCELLED 闭合口径，无成功终态。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        gen = router.stream([{"role": "user", "content": "hi"}], model="gpt-4")
+        first = await gen.__anext__()
+        assert first.content == "chunk0"
+        await gen.aclose()
+
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(cancelled) == 1
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert router.state.latencies == {}
+    assert not router.state.consecutive_failures
+
+
+def _slow_after_first_mock_stream():
+    """首个 chunk 立即产出、之后在生产端内部长时间 await 的 mock——
+    取消发生时 router 生成器正挂在其内部 await 上，CancelledError 会
+    落进生成器帧（而非仅在消费者侧），覆盖 reason=cancelled 分支。"""
+    async def mock_stream(model, messages, deployment, **kwargs):
+        yield {"choices": [{"delta": {"content": "chunk0"}, "finish_reason": None}]}
+        await asyncio.sleep(30)
+    return mock_stream
+
+
+@pytest.mark.asyncio
+async def test_stream_task_cancellation_emits_stream_cancelled(sample_deployments):
+    """任务取消（CancelledError）同样发 STREAM_CANCELLED（reason=cancelled）。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    async def consume():
+        async for chunk in router.stream(
+            [{"role": "user", "content": "hi"}], model="gpt-4"
+        ):
+            pass  # 持续消费；生成器阻塞在内部 await 时被取消
+
+    with patch.object(router, "acompletion_stream", new=_slow_after_first_mock_stream()):
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(cancelled) == 1
+    assert cancelled[0].extra["reason"] == "cancelled"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    selected_id = cancelled[0].deployment_id
+    assert selected_id not in router.state.latencies
+    assert router.state.consecutive_failures.get(selected_id, 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_consumer_break_emits_stream_cancelled(sample_deployments):
+    """raw chunk 路径（stream_completion）：消费 1 个 chunk 后 break，
+    同样发 STREAM_CANCELLED 闭合口径。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    received = []
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        async for chunk in router.stream_completion(
+            "gpt-4", [{"role": "user", "content": "hi"}]
+        ):
+            received.append(chunk)
+            break
+
+    assert len(received) == 1
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert started[0].request_id == cancelled[0].request_id
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert router.state.latencies == {}
+    assert not router.state.consecutive_failures
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_consumer_aclose_emits_stream_cancelled(sample_deployments):
+    """raw chunk 路径的 aclose() 场景。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        gen = router.stream_completion("gpt-4", [{"role": "user", "content": "hi"}])
+        first = await gen.__anext__()
+        assert first["choices"][0]["delta"]["content"] == "chunk0"
+        await gen.aclose()
+
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(cancelled) == 1
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert router.state.latencies == {}
+    assert not router.state.consecutive_failures
+
+
+# =====================================================================
+# PR #358 二轮意见 E：热替换部署后广播 DEPLOYMENTS_UPDATED
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_update_deployments_emits_deployments_updated(reliable_router):
+    """换掉 d1 → 捕获到 DEPLOYMENTS_UPDATED 事件且 removed_ids==["dep_gpt4_1"]。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    d1, d2, d3, d4 = reliable_router.deployments
+    reliable_router.update_deployments([d2, d3, d4])  # 移除 dep_gpt4_1
+
+    # create_task 投递的事件需要 loop 执行
+    assert await _drain_until(recorder, RoutingEventType.DEPLOYMENTS_UPDATED)
+
+    events = recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED)
+    assert len(events) == 1
+    event = events[0]
+    assert event.extra["removed_ids"] == ["dep_gpt4_1"]
+    # RoutingEvent 必填字段：request_id 存在；model 传空串（路由器级管理事件）
+    assert event.request_id
+    assert event.model == ""
+
+
+@pytest.mark.asyncio
+async def test_update_deployments_multiple_removals_sorted(reliable_router):
+    """同时移除多个部署：removed_ids 排序输出。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    d1, d2, d3, d4 = reliable_router.deployments
+    reliable_router.update_deployments([d3, d4])  # 移除 dep_gpt4_1、dep_gpt4_2
+
+    assert await _drain_until(recorder, RoutingEventType.DEPLOYMENTS_UPDATED)
+    events = recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED)
+    assert len(events) == 1
+    assert events[0].extra["removed_ids"] == ["dep_gpt4_1", "dep_gpt4_2"]
+
+
+@pytest.mark.asyncio
+async def test_update_deployments_without_removal_emits_nothing(reliable_router):
+    """无移除（同集合/只新增）时不发射 DEPLOYMENTS_UPDATED。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    reliable_router.update_deployments(list(reliable_router.deployments))
+    await asyncio.sleep(0.05)
+    assert recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED) == []
+
+    # 只新增部署同样无 removed_ids，不发射
+    extra = Deployment(
+        id="dep_new", model_name="gpt-4", api_key="sk", api_base="https://new"
+    )
+    reliable_router.update_deployments(list(reliable_router.deployments) + [extra])
+    await asyncio.sleep(0.05)
+    assert recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED) == []
+
+
+@pytest.mark.asyncio
+async def test_update_deployments_state_cleanup_still_works(reliable_router):
+    """事件广播不影响既有的 state 清理（remove_deployment）。"""
+    d1 = reliable_router.deployments[0]
+    reliable_router.state.on_failure(d1.id, RuntimeError("boom"), cooldown_time=60)
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    reliable_router.update_deployments(
+        [d for d in reliable_router.deployments if d.id != d1.id]
+    )
+    assert await _drain_until(recorder, RoutingEventType.DEPLOYMENTS_UPDATED)
+
+    # state 已清理
+    assert d1.id not in reliable_router.state.deployment_status
+    assert d1.id not in reliable_router.state.consecutive_failures
+    events = recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED)
+    assert events[0].extra["removed_ids"] == [d1.id]
+
+
+def test_update_deployments_sync_context_skips_emit(reliable_router):
+    """同步上下文（无 running loop）热替换：不抛异常，事件被跳过
+    （logger.debug），订阅方可通过公开 prune API 兜底。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    d1 = reliable_router.deployments[0]
+    # 同步测试函数：无事件循环在跑
+    reliable_router.update_deployments(
+        [d for d in reliable_router.deployments if d.id != d1.id]
+    )
+
+    # state 清理照常发生
+    assert d1.id not in reliable_router.state.deployment_status
+    # 事件未投递（无 running loop，create_task 不可用）
+    assert recorder.events == []
+
+
+# -------- 复核修复：无终态 raise 路径的口径闭合 --------
+# 可见输出后的失败 raise、strict fail-fast raise、非流式取消此前都
+# 不发终态事件（STARTED 已发，在途永久虚高）；复核轮补齐。
+
+
+@pytest.mark.asyncio
+async def test_stream_failure_after_visible_output_emits_exhausted(
+    sample_deployments,
+):
+    """可见输出已交付后流失败（重试不安全直接抛）：raise 前补发
+    EXHAUSTED 终态——断流检测等"内容已见随后报错"场景的口径闭合。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    async def failing_after_visible(model, messages, deployment, **kwargs):
+        yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+        raise ValueError("boom after visible output")
+
+    with patch.object(router, "acompletion_stream", new=failing_after_visible):
+        with pytest.raises(ValueError, match="boom after visible output"):
+            async for _ in router.stream(
+                [{"role": "user", "content": "hi"}], model="gpt-4"
+            ):
+                pass
+
+    # EXHAUSTED 经 await emit（普通异常路径），无需 drain
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(started) == 1
+    assert len(exhausted) == 1
+    assert started[0].request_id == exhausted[0].request_id
+    # 第四终态互斥：无 SUCCEEDED / CANCELLED
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert recorder.events_of_type(RoutingEventType.STREAM_CANCELLED) == []
+    # error_type 保持异常类名口径
+    assert exhausted[0].error_type == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_failure_after_visible_output_emits_exhausted(
+    sample_deployments,
+):
+    """stream_completion（raw chunk 路径）同型：可见输出后失败补 EXHAUSTED。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    async def failing_after_visible(model, messages, deployment, **kwargs):
+        yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+        raise ValueError("boom after visible output")
+
+    with patch.object(router, "acompletion_stream", new=failing_after_visible):
+        with pytest.raises(ValueError, match="boom after visible output"):
+            async for _ in router.stream_completion(
+                "gpt-4", [{"role": "user", "content": "hi"}]
+            ):
+                pass
+
+    assert len(recorder.events_of_type(RoutingEventType.STREAM_STARTED)) == 1
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_type == "ValueError"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+
+
+@pytest.mark.asyncio
+async def test_strict_non_fallbackable_raise_emits_exhausted(
+    deployment_gpt4_1, deployment_gpt4_2
+):
+    """strict 策略（ordered-failover）non-fallbackable 错误 fail-fast
+    raise：raise 前补发 EXHAUSTED，口径闭合（此前只有 STARTED）。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="ordered-failover",
+        num_retries=1,
+    )
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("fail"))):
+        with pytest.raises(ValueError):
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert len(recorder.events_of_type(RoutingEventType.REQUEST_STARTED)) == 1
+    exhausted = recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED)
+    assert len(exhausted) == 1
+    assert exhausted[0].error_type == "ValueError"
+    assert recorder.events_of_type(RoutingEventType.REQUEST_SUCCEEDED) == []
+
+
+@pytest.mark.asyncio
+async def test_completion_cancelled_emits_request_cancelled(sample_deployments):
+    """非流式请求被取消：REQUEST_STARTED 后补 REQUEST_CANCELLED 终态
+    （与流式 STREAM_CANCELLED 对称），口径闭合。"""
+    from intelli_router.router.base_router import BaseRouter
+
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    release = asyncio.Event()
+
+    async def hanging_completion(self, model, messages, deployment=None, **kwargs):
+        await release.wait()
+        return {"choices": [{"message": {"content": "never"}}]}
+
+    with patch.object(BaseRouter, "completion", new=hanging_completion):
+        task = asyncio.create_task(
+            router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+        )
+        await asyncio.sleep(0.05)  # 让请求进入挂起的 provider 调用
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    release.set()
+
+    assert await _drain_until(recorder, RoutingEventType.REQUEST_CANCELLED)
+    started = recorder.events_of_type(RoutingEventType.REQUEST_STARTED)
+    cancelled = recorder.events_of_type(RoutingEventType.REQUEST_CANCELLED)
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert started[0].request_id == cancelled[0].request_id
+    assert recorder.events_of_type(RoutingEventType.REQUEST_SUCCEEDED) == []
+    assert recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED) == []
+
+
+@pytest.mark.asyncio
+async def test_completion_with_explicit_deployment_merges_request_defaults(
+    deployment_gpt4_1,
+):
+    """直通路径与重试循环路径同一请求体构建口径：合并
+    request_defaults、过滤 None 值 kwargs、剔除路由专用键。"""
+    from intelli_router.router.base_router import BaseRouter
+    from intelli_router.core.deployment import Deployment as Dep
+
+    dep = Dep(
+        id=deployment_gpt4_1.id,
+        model_name="gpt-4",
+        api_key="sk-test-1",
+        api_base="https://api1.example.com",
+        request_defaults={"temperature": 0.7},
+    )
+    router = ReliableRouter(deployments=[dep], num_retries=0)
+    captured = {}
+
+    async def fake_completion(self, model, messages, deployment=None, **kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    with patch.object(BaseRouter, "completion", new=fake_completion):
+        await router.completion(
+            "gpt-4",
+            [{"role": "user", "content": "hi"}],
+            deployment=dep,
+            temperature=None,       # None 过滤：不覆盖 request_defaults
+            max_tokens=100,         # 显式参数透传
+            session_id="sess-1",    # 路由专用键剔除
+        )
+
+    assert captured["temperature"] == 0.7
+    assert captured["max_tokens"] == 100
+    assert "session_id" not in captured
+    assert "temperature" not in captured or captured["temperature"] == 0.7

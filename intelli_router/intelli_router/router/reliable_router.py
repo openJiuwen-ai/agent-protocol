@@ -1,0 +1,1731 @@
+"""
+SDK LLM Router - 可靠性路由
+
+ReliableRouter: 集成状态管理、策略选择、健康检查
+"""
+from typing import Dict, List, Optional, Any, Union, Literal, AsyncIterator
+from dataclasses import dataclass, field
+import asyncio
+import logging
+import time
+import json
+import httpx
+
+from .base_router import BaseRouter
+from ..core.deployment import Deployment, DeploymentStatus
+from ..core.context import RoutingContext
+from ..core.state import LocalRouterState, TokenUsage, RPMTracker
+from ..strategy.base_strategy import RoutingStrategy
+from ..strategy import create_strategy, StrategyType
+from ..health.checker import SDKHealthChecker
+from ..cache.local_cache import LocalCache
+from ..utils.exceptions import (
+    NoDeploymentAvailable,
+    AllDeploymentsFailed,
+    DeploymentError,
+    DeploymentAuthError,
+    DeploymentNetworkError,
+    DeploymentRateLimitError,
+    DeploymentServerError,
+    DeploymentTimeoutError,
+)
+from ..types import (
+    AssistantMessage,
+    AssistantMessageChunk,
+    ToolCall,
+    UsageMetadata,
+)
+from ..parser.base import BaseOutputParser
+from ..observability.bus import EventBus
+from ..observability.events import RoutingEvent, RoutingEventType
+
+MODEL_WILDCARD = "*"
+
+logger = logging.getLogger(__name__)
+
+
+class ReliableRouter(BaseRouter):
+    """
+    可靠性路由器 - 集成状态管理，策略选择，健康检查
+
+    特性:
+    - API池化: 一个模型名 → 多个部署
+    - 策略插拔: 随机/延迟/标签策略
+    - 状态管理: 失败计数、冷却机制
+    - 健康检查: 后台健康检查
+    - 重试机制: 自动重试
+    - 流式支持: 支持流式响应
+    """
+
+    _RESERVED_REQUEST_DEFAULT_KEYS = {"model", "messages", "deployment", "stream"}
+
+    # 路由专用参数（review 9）：由 RoutingContext 承载、供策略消费
+    # （adaptive 的 session 亲和、tag 系列的标签匹配），不属于 provider
+    # 请求体。合并 request_defaults 与 request_kwargs 时统一剔除，
+    # 避免随请求发给上游（严格网关会对未知字段返回 400）。
+    _ROUTING_INTERNAL_KEYS = frozenset({"session_id", "tags"})
+
+    def __init__(
+        self,
+        deployments: List[Deployment],
+        strategy: Union[StrategyType, RoutingStrategy] = "simple-shuffle",
+        num_retries: int = 3,
+        timeout: float = 30.0,
+        cooldown_time: float = 60.0,
+        enable_health_check: bool = False,
+        health_check_interval: float = 300,
+        cache: Optional[LocalCache] = None,
+        event_bus: Optional[EventBus] = None,
+        model_group_id: Optional[str] = None,
+        **strategy_kwargs
+    ):
+        super().__init__(
+            deployments=deployments,
+            num_retries=num_retries,
+            timeout=timeout,
+            cache=cache,
+        )
+        # 状态管理
+        self.state = LocalRouterState()
+        # 策略
+        if isinstance(strategy, str):
+            self.strategy = create_strategy(strategy, state=self.state, **strategy_kwargs)
+        else:
+            self.strategy = strategy
+            # 策略实例可能自带 state（如 AdaptiveStrategy(state=...)）。
+            # 统一采用策略的 state 作为唯一事实源，避免 router 与策略
+            # 各持一套状态导致 cooldown/统计互不可见。
+            strategy_state = getattr(self.strategy, "state", None)
+            if strategy_state is not None:
+                self.state = strategy_state
+        # cooldown 参数（须在下方 COOLDOWN 初始状态同步循环之前赋值，
+        # 循环中 cooldown_until=None 时会用它计算默认冷却截止时间）
+        self.cooldown_time = cooldown_time
+        # 同步 deployment 自带的初始状态（如配置中声明的 COOLDOWN）到 state，
+        # 避免 deployment 对象与 state 两套状态并存且互不可见。
+        for dep in deployments:
+            if dep.status == DeploymentStatus.COOLDOWN:
+                self.state.deployment_status[dep.id] = DeploymentStatus.COOLDOWN
+                self.state.cooldown_until[dep.id] = (
+                    dep.cooldown_until if dep.cooldown_until is not None
+                    else time.time() + self.cooldown_time
+                )
+        # 把部署声明的 tpm/rpm 配额接入 state（token_usage/rpm_tracker），
+        # 否则 TokenUsage()/RPMTracker() 的 limit 恒 0，remaining 恒 0，
+        # TokenAware/RateLimitAware/Adaptive 的配额评分完全失效
+        # （未预热部署的 inf 反而优于已预热部署的 0，排序反向）。
+        self._sync_quota_state(deployments)
+        # 可观测性
+        self.event_bus = event_bus or EventBus()
+        self.model_group_id = model_group_id
+        # 经 create_task 后台投递的事件任务（意见 A/E）。asyncio 只对
+        # 任务持弱引用，不保存强引用的话任务可能在执行前被 GC。
+        self._background_emit_tasks: set = set()
+        # 健康检查（可选，用于加速恢复）
+        self.health_checker: Optional[SDKHealthChecker] = None
+        if enable_health_check:
+            self.health_checker = SDKHealthChecker(
+                deployments=deployments,
+                state=self.state,
+                check_interval=health_check_interval
+            )
+
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        if self.health_checker:
+            await self.health_checker.start_background_check()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器出口"""
+        if self.health_checker:
+            await self.health_checker.stop_background_check()
+        await self.close()
+        return False
+
+    def _sync_quota_state(self, deployments: List[Deployment]) -> None:
+        """把部署声明的 tpm/rpm 配额接入/同步到 state（review 4，P0）。
+
+        - tpm/rpm 已配置且无条目：创建（首次注册）。
+        - tpm/rpm 已配置且已有条目：热替换变更配额值时更新 limit
+          （保留累计 used/requests，不重置计数）。
+        - tpm/rpm 变为 None：移除既有条目，remaining 回到 inf
+          （"未配置即不设限"）。
+        - 已从列表移除的部署：条目由调用方（update_deployments）负责清理。
+        """
+        with self.state.lock:
+            for dep in deployments:
+                # Token (tpm)
+                if dep.tpm is not None:
+                    usage = self.state.token_usage.get(dep.id)
+                    if usage is None:
+                        self.state.token_usage[dep.id] = TokenUsage(limit=dep.tpm)
+                    elif usage.limit != dep.tpm:
+                        # 热更新配额值：只改 limit，保留累计 used
+                        usage.limit = dep.tpm
+                elif dep.id in self.state.token_usage:
+                    # 配额被移除（变 None）：回到 inf 语义
+                    del self.state.token_usage[dep.id]
+
+                # RPM (rpm)
+                if dep.rpm is not None:
+                    tracker = self.state.rpm_tracker.get(dep.id)
+                    if tracker is None:
+                        self.state.rpm_tracker[dep.id] = RPMTracker(rpm_limit=dep.rpm)
+                    elif tracker.rpm_limit != dep.rpm:
+                        # 热更新配额值：只改 limit，保留请求记录
+                        tracker.rpm_limit = dep.rpm
+                elif dep.id in self.state.rpm_tracker:
+                    del self.state.rpm_tracker[dep.id]
+
+    def _get_available_deployments(self, model: str) -> List[Deployment]:
+        """获取可用部署
+
+        model="*" 时从所有 deployment 中选（统一调度）。
+        COOLDOWN 超时后自动恢复为 HEALTHY。
+        没有 FAILED 状态——所有失败都是可自愈的。
+        """
+        now = time.time()
+        with self._deployments_lock:
+            if model == MODEL_WILDCARD:
+                all_deployments = list(self.deployments)
+            else:
+                all_deployments = self.get_deployments_for_model(model)
+        with self.state.lock:
+            available = []
+            for dep in all_deployments:
+                status = self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY)
+                if status == DeploymentStatus.COOLDOWN:
+                    cooldown_until = self.state.cooldown_until.get(dep.id, 0)
+                    if now < cooldown_until:
+                        continue
+                    # 软恢复：状态与 health_state 一并恢复（reset_deployment 统一处理），
+                    # 否则 health_state 残留 False，部署永远不会被再次调度。
+                    self.state.reset_deployment(dep.id)
+                available.append(dep)
+        return available
+
+    def _available_deployments_for_model(self, model: str) -> List[Deployment]:
+        """按 state 可用性过滤模型的候选部署（review 16）。
+
+        completion_with_fallback（BaseRouter）通过本钩子获取候选部署：
+        与 _get_available_deployments 同口径（冷却中的部署被剔除，
+        冷却到期的部署软恢复），避免 fallback 循环继续尝试冷却中的部署。
+        """
+        return self._get_available_deployments(model)
+
+    def _request_kwargs_for_deployment(
+        self,
+        deployment: Deployment,
+        request_kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        # request_defaults 与 request_kwargs 都剔除路由专用参数：
+        # 它们由 RoutingContext 承载（策略消费），不进 provider body。
+        merged = {
+            key: value
+            for key, value in (deployment.request_defaults or {}).items()
+            if key not in self._ROUTING_INTERNAL_KEYS
+        }
+        invalid_keys = self._RESERVED_REQUEST_DEFAULT_KEYS & set(merged)
+        if invalid_keys:
+            raise ValueError(
+                "deployment.request_defaults cannot contain reserved keys: "
+                f"{sorted(invalid_keys)}"
+            )
+        merged.update({
+            key: value
+            for key, value in request_kwargs.items()
+            if value is not None and key not in self._ROUTING_INTERNAL_KEYS
+        })
+        return merged
+
+    def _fallback_to_first_on_empty_selection(self) -> bool:
+        return bool(getattr(self.strategy, "fallback_to_first_on_empty_selection", True))
+
+    def _uses_strict_fallback_errors(self) -> bool:
+        return bool(getattr(self.strategy, "strict_fallback_errors", False))
+
+    def _route_metadata(self, deployment: Deployment, **extra: Any) -> Dict[str, Any]:
+        metadata = {
+            "model_group_id": self.model_group_id,
+            "route_id": deployment.id,
+            "model_id": deployment.model_id,
+            "model_name": deployment.model_name,
+            "provider": deployment.provider,
+        }
+        metadata.update(extra)
+        return {key: value for key, value in metadata.items() if value is not None}
+
+    def _emit_event_without_await(self, event: RoutingEvent) -> None:
+        """在不能 await 的上下文投递事件（意见 A / 意见 E）。
+
+        两个调用场景：
+        - async generator 的 GeneratorExit/CancelledError 处理中（意见 A）：
+          此时一旦让出控制权（await event_bus.emit）会抛
+          RuntimeError("async generator ignored GeneratorExit")；
+        - 同步方法 update_deployments（意见 E）。
+
+        实现上用 create_task 把 emit 投递到当前 running loop：
+        create_task 本身是同步调用，任务在调用方（如正在退出中的
+        async generator）结束后由 loop 执行。取不到 running loop
+        （同步上下文 / 非 loop 线程）时跳过并记 warning 日志——订阅方
+        （metrics）另有公开的 prune API 兜底。
+
+        保存任务强引用直至完成，避免 asyncio 的弱引用导致任务被 GC。
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "事件 %s 未投递：当前无运行中的 event loop，"
+                "订阅方（如 MetricsCollector）不会收到（request_id=%s）",
+                event.event_type.value,
+                event.request_id,
+            )
+            return
+        task = loop.create_task(self.event_bus.emit(event))
+        self._background_emit_tasks.add(task)
+        task.add_done_callback(self._background_emit_tasks.discard)
+
+    @staticmethod
+    def _fallback_reason_from_error(error: Exception) -> str:
+        return type(error).__name__
+
+    async def _emit_terminal_exhausted(
+        self,
+        request_id: str,
+        model: str,
+        overall_start: float,
+        attempt: int,
+        total_attempts: int,
+        error: Optional[BaseException],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """在"无法继续 fallback、直接 raise"的路径上补发 EXHAUSTED 终态。
+
+        覆盖三个此前不发终态的出口（STARTED 已发，不补则
+        successful + failed + cancelled + 在途 == total_requests
+        的四终态不变式永久虚高一）：
+        - 流式在可见输出已交付后的失败 raise（重试不安全，直接抛）；
+        - strict 策略（ordered-failover / tag-filtered）的
+          non-fallbackable 错误 fail-fast raise；
+        error_type 保持异常类名口径。
+        """
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=attempt,
+            total_attempts=total_attempts,
+            error_type=type(error).__name__ if error is not None else None,
+            error_message=str(error) if error is not None else None,
+            extra=extra or {},
+        ))
+
+    @staticmethod
+    def _usage_from_response(response: Any) -> Dict[str, Any]:
+        """提取响应中的 usage 字段（review 6）。
+
+        自定义 provider 的 transform_response 可能返回非 dict 响应
+        （如纯字符串）；此时 usage 按 0 处理，而不是让
+        response.get('usage') 的 AttributeError 被 except 当成部署失败
+        触发冷却重试——本地解析问题不应记成远端故障。
+        """
+        if not isinstance(response, dict):
+            return {}
+        usage = response.get("usage")
+        return usage if isinstance(usage, dict) else {}
+
+    @staticmethod
+    def _is_request_side_error(error: Exception) -> bool:
+        """判断异常是否源于请求本身而非部署（review 7）。
+
+        请求侧错误（上下文超长、参数非法、content filter 等 4xx，以及
+        本地构造/校验抛出的 ValueError/TypeError）换部署大概率同样
+        失败：不调 state.on_failure（不计失败、不冷却），避免一个坏
+        请求把整个模型池打空；但仍记录 errors 并继续 fallback 循环
+        （个别部署/网关的校验口径不同，换部署可能救回来）。
+
+        分类规则：
+        - ValueError / TypeError：本地参数构造或校验问题 → 请求侧。
+          例外：json.JSONDecodeError 虽是 ValueError 子类，但由远端
+          返回的非法 JSON（200 但 body 不是 JSON）触发，归部署侧。
+        - DeploymentError 携带 4xx status_code（details["status_code"]，
+          如 400/404/413/422）→ 请求侧。401/403（认证）与 429（限流）
+          是部署侧问题（换部署可恢复），由专属异常类型表达，不算请求侧。
+        - 其余（5xx / 超时 / 网络 / 未知异常）→ 部署侧，保持原有
+          计数冷却行为。
+        """
+        if isinstance(error, json.JSONDecodeError):
+            return False
+        if isinstance(error, (ValueError, TypeError)):
+            return True
+        if isinstance(
+            error, DeploymentError
+        ) and not isinstance(error, (DeploymentAuthError, DeploymentRateLimitError)):
+            status_code = error.details.get("status_code")
+            if isinstance(status_code, int) and 400 <= status_code < 500:
+                return True
+        return False
+
+    async def _select_deployment(
+        self,
+        available: List[Deployment],
+        context: RoutingContext,
+    ) -> Optional[Deployment]:
+        selected = await self.strategy.select_deployment(available, context)
+        if selected is not None:
+            return selected
+        if self._fallback_to_first_on_empty_selection() and available:
+            return available[0]
+        return None
+
+    @staticmethod
+    def _is_fallbackable_error(error: Exception, visible_output_started: bool = False) -> bool:
+        if visible_output_started or isinstance(error, asyncio.CancelledError):
+            return False
+        return isinstance(
+            error,
+            (
+                DeploymentNetworkError,
+                DeploymentRateLimitError,
+                DeploymentServerError,
+                DeploymentTimeoutError,
+            ),
+        )
+
+    @staticmethod
+    def _has_visible_stream_output(chunk: Dict[str, Any]) -> bool:
+        choices = chunk.get("choices") or []
+        if not choices:
+            return False
+        choice = choices[0] or {}
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        return bool(
+            delta.get("content")
+            or delta.get("reasoning_content")
+            or delta.get("tool_calls")
+            or message.get("content")
+            or message.get("reasoning_content")
+            or message.get("tool_calls")
+        )
+
+    async def completion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        deployment: Optional[Deployment] = None,
+        **kwargs
+    ) -> Any:
+        """
+        可靠性completion - 自动路由选择和重试
+
+        Args:
+            deployment: 显式指定部署（可选）。指定时跳过选路与重试循环，
+                直接转发给 BaseRouter.completion（不参与 state 记账，
+                但保留事件配对，见 _completion_on_deployment）。
+        """
+        if deployment is not None:
+            return await self._completion_on_deployment(
+                model, messages, deployment, **kwargs
+            )
+        request_id = RoutingEvent.new_request_id()
+        available = self._get_available_deployments(model)
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        if not available:
+            # 计数口径配对：请求已进入 router，先发 REQUEST_STARTED 使
+            # total_requests +1，再发 EXHAUSTED（最终失败，failed +1）。
+            # 否则只有 failed +1 而 total 不变，会出现 failed > total_requests。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model,
+                extra=request_extra,
+            ))
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
+            raise NoDeploymentAvailable(model, "No available deployments")
+
+        total_attempts = min(self.num_retries + 1, len(available))
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+
+        context = RoutingContext(
+            model=model,
+            messages=messages,
+            kwargs=kwargs
+        )
+        errors = []
+        overall_start = time.time()
+        last_failure_metadata = None
+
+        for attempt in range(total_attempts):
+            selected = await self._select_deployment(available, context)
+            if selected is None:
+                if errors:
+                    break
+                # 计数口径配对：REQUEST_STARTED 已发但尚无终态事件，
+                # raise 前补发 EXHAUSTED（failed +1），避免 total+1 而
+                # failed 不变（successful + failed + 在途 != total_requests）。
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                    request_id=request_id,
+                    model=model,
+                    error_message="No deployment matched routing strategy",
+                    extra=request_extra,
+                ))
+                raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
+            context.mark_attempt(selected)
+            try:
+                # request_defaults 校验（含保留键时抛 ValueError）放在 try
+                # 内（意见 C）：此前在 try 外抛出会绕过下方 except——
+                # REQUEST_STARTED 已发但无终态事件（在途永久虚高），且裸
+                # ValueError 逃逸（调用方按契约捕获 RouterError 接不住）。
+                # 挪入后 ValueError 走既有 except Exception 分支：
+                # _is_request_side_error 判为请求侧（不 on_failure 不冷却），
+                # 记 errors 并继续 fallback 其他部署；全部失败后抛
+                # AllDeploymentsFailed（RouterError 子类），raise 前发
+                # EXHAUSTED 终态，口径闭合。
+                # 副作用（有意为之）：d1 的 request_defaults 含保留键时
+                # 不再立即失败，而是跳过 d1 由其他部署服务。
+                request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
+                start_time = time.time()
+                actual_model = selected.model_name if model == MODEL_WILDCARD else model
+                response = await super().completion(
+                    model=actual_model,
+                    messages=messages,
+                    deployment=selected,
+                    **request_kwargs
+                )
+                end_time = time.time()
+                latency = end_time - start_time
+                # 自定义 provider 可能返回非 dict 响应：usage 按 0 处理，
+                # 而不是让 AttributeError 被当成部署失败触发冷却重试（review 6）。
+                usage = self._usage_from_response(response)
+                tokens = usage.get("completion_tokens") or 0
+                prompt_tokens = usage.get("prompt_tokens") or 0
+                # router 层是 state 的唯一写入方：延迟/token 统计统一在此更新。
+                # 不再调用 strategy.on_success——避免按旧契约在回调内转发
+                # state 更新的自定义策略造成双重计数。自定义策略需要路由
+                # 状态时直接读共享的 router.state。
+                self.state.on_success(selected.id, latency, tokens)
+                context.set_success(selected, response)
+                route_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    **(
+                        {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                        if context.error
+                        else {}
+                    ),
+                )
+
+                await self.event_bus.emit(RoutingEvent(
+                    event_type=RoutingEventType.REQUEST_SUCCEEDED,
+                    request_id=request_id,
+                    model=model,
+                    deployment_id=selected.id,
+                    provider=selected.provider,
+                    latency=latency,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=tokens,
+                    total_tokens=prompt_tokens + tokens,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    extra=route_metadata,
+                ))
+                return response
+            except asyncio.CancelledError:
+                # 非流式请求被取消：STARTED 已发，补 REQUEST_CANCELLED 终态
+                # （与流式 STREAM_CANCELLED 对称）。取消处理里 await 可能被
+                # 再次投递的取消打断，事件经 create_task 投递后透传取消。
+                self._emit_event_without_await(RoutingEvent(
+                    event_type=RoutingEventType.REQUEST_CANCELLED,
+                    request_id=request_id,
+                    model=model,
+                    latency=time.time() - overall_start,
+                    attempt=attempt + 1,
+                    total_attempts=total_attempts,
+                    error_type="CancelledError",
+                    error_message="request cancelled",
+                    extra=request_extra,
+                ))
+                raise
+            except Exception as e:
+                # router 层是 state 的唯一写入方：失败计数与 cooldown 退避
+                # 统一在此更新（含 cooldown_time 透传）。不再调用
+                # strategy.on_failure——避免旧契约自定义策略双重计数。
+                # 请求侧错误（4xx / 本地 ValueError 等）不归因于部署：
+                # 不计失败、不冷却，但仍记录 errors 并继续 fallback（review 7）。
+                if not self._is_request_side_error(e):
+                    self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                context.set_failure(e)
+                errors.append((selected.id, str(e)))
+                last_failure_metadata = self._route_metadata(
+                    selected,
+                    attempt=attempt + 1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                )
+
+                if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                    # strict fail-fast：STARTED 已发，raise 前补终态口径
+                    await self._emit_terminal_exhausted(
+                        request_id=request_id,
+                        model=model,
+                        overall_start=overall_start,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error=e,
+                        extra=last_failure_metadata or request_extra,
+                    )
+                    raise
+
+                available = [d for d in available if d.id != selected.id]
+                can_retry = attempt < total_attempts - 1 and bool(available)
+                if can_retry:
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_RETRIED,
+                        request_id=request_id,
+                        model=model,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        error_type=self._fallback_reason_from_error(e),
+                        error_message=str(e),
+                        extra=self._route_metadata(
+                            selected,
+                            fallback_reason=self._fallback_reason_from_error(e),
+                        ),
+                    ))
+
+                if not available:
+                    break
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            error_type=type(context.error).__name__ if context.error else None,
+            error_message=str(context.error) if context.error else None,
+            extra=last_failure_metadata or request_extra,
+        ))
+        raise AllDeploymentsFailed(model=model, errors=errors)
+
+    async def _completion_on_deployment(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        deployment: Deployment,
+        **kwargs
+    ) -> Any:
+        """显式指定部署的直通路径（review 11/16）。
+
+        - 跳过选路与重试循环，直接转发给 BaseRouter.completion
+          （此前 ReliableRouter.completion 覆写丢掉了 deployment 形参，
+          外部 router.completion(..., deployment=dep) 会因
+          "got multiple values for keyword argument 'deployment'" 报
+          TypeError，completion_with_fallback 在 ReliableRouter 上无法工作）；
+        - 不参与 state 记账：调用方显式点名部署（或由
+          completion_with_fallback 自行迭代部署列表），成败不应影响
+          策略打分与冷却；
+        - 事件口径保留：REQUEST_STARTED 与终态事件
+          （REQUEST_SUCCEEDED / ALL_DEPLOYMENTS_EXHAUSTED）成对发出，
+          维持 successful + failed + 在途 == total_requests 的配对不变式
+          （直通路径无重试，异常即最终失败，EXHAUSTED 的 error_type
+          保持异常类名口径）；
+        - 路由专用参数（session_id/tags）同样剔除，不进 provider body。
+        """
+        request_id = RoutingEvent.new_request_id()
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=1,
+            extra=request_extra,
+        ))
+        start_time = time.time()
+        actual_model = deployment.model_name if model == MODEL_WILDCARD else model
+        try:
+            # 与重试循环路径同一构建口径：合并 deployment.request_defaults、
+            # 过滤 None 值、剔除路由专用键并做保留键校验——否则同一部署
+            # 被"路由到"与被"显式点名"会收到不同的请求体
+            request_kwargs = self._request_kwargs_for_deployment(deployment, kwargs)
+            response = await super().completion(
+                model=actual_model,
+                messages=messages,
+                deployment=deployment,
+                **request_kwargs,
+            )
+        except asyncio.CancelledError:
+            # 非流式取消与流式 STREAM_CANCELLED 对称：STARTED 已发，
+            # 取消处理中 await 可能被再次投递的取消打断，事件经
+            # create_task 投递后透传取消
+            self._emit_event_without_await(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_CANCELLED,
+                request_id=request_id,
+                model=model,
+                latency=time.time() - start_time,
+                attempt=1,
+                total_attempts=1,
+                error_type="CancelledError",
+                error_message="request cancelled",
+                extra=request_extra,
+            ))
+            raise
+        except Exception as e:
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                latency=time.time() - start_time,
+                attempt=1,
+                total_attempts=1,
+                error_type=self._fallback_reason_from_error(e),
+                error_message=str(e),
+                extra=self._route_metadata(
+                    deployment,
+                    attempt=1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                ),
+            ))
+            raise
+        latency = time.time() - start_time
+        usage = self._usage_from_response(response)
+        tokens = usage.get("completion_tokens") or 0
+        prompt_tokens = usage.get("prompt_tokens") or 0
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_SUCCEEDED,
+            request_id=request_id,
+            model=model,
+            deployment_id=deployment.id,
+            provider=deployment.provider,
+            latency=latency,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=tokens,
+            total_tokens=prompt_tokens + tokens,
+            attempt=1,
+            total_attempts=1,
+            extra=self._route_metadata(deployment, attempt=1),
+        ))
+        return response
+
+    async def stream_completion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        **kwargs
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        可靠性流式completion - 自动路由选择和重试
+
+        Retry only happens before the first chunk is received.
+        Once streaming starts, mid-stream errors are raised directly.
+        """
+        available = self._get_available_deployments(model)
+        if not available:
+            # 与 completion() 对齐：无可用部署也发 ALL_DEPLOYMENTS_EXHAUSTED
+            # （否则监控侧 stream 请求的最终失败不可见），再抛 NoDeploymentAvailable。
+            request_id = RoutingEvent.new_request_id()
+            request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+            # 计数口径配对：先发 REQUEST_STARTED 使 total_requests +1，
+            # 与随后的 EXHAUSTED（failed +1）配对，避免 failed > total_requests。
+            # 注意这里用 REQUEST_STARTED 而非 STREAM_STARTED——此路径连
+            # 可用性检查都未通过，不应计入 streams（streams 统计进入流式
+            # 入口的请求，STREAM_STARTED 在部署选择前发出）。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model,
+                extra=request_extra,
+            ))
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
+            raise NoDeploymentAvailable(model, "No available deployments")
+
+        context = RoutingContext(
+            model=model,
+            messages=messages,
+            kwargs=kwargs
+        )
+
+        errors = []
+        total_attempts = min(self.num_retries + 1, len(available))
+        request_id = RoutingEvent.new_request_id()
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.STREAM_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+        overall_start = time.time()
+        last_failure_metadata = None
+        # 意见 A：消费者中断可能发生在首个 chunk 之前（此时还没选定部署），
+        # 中断分支需要引用当前尝试的部署与 chunk 计数，提前初始化。
+        selected: Optional[Deployment] = None
+        chunk_count = 0
+        try:
+            for attempt in range(total_attempts):
+                selected = await self._select_deployment(available, context)
+                if selected is None:
+                    if errors:
+                        break
+                    # 计数口径配对：STREAM_STARTED 已发但尚无终态事件，raise 前
+                    # 补发 EXHAUSTED（failed +1），避免 total+1 而 failed 不变。
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                        request_id=request_id,
+                        model=model,
+                        error_message="No deployment matched routing strategy",
+                        extra=request_extra,
+                    ))
+                    raise NoDeploymentAvailable(model, "No deployment matched routing strategy")
+
+                context.mark_attempt(selected)
+                visible_output_started = False
+                route_selected_emitted = False
+                ttfb = 0.0
+
+                try:
+                    # request_defaults 校验放在 try 内（意见 C）：在 try 外
+                    # 抛 ValueError 会绕过 except——STREAM_STARTED 已发但无
+                    # 终态事件，且裸 ValueError 逃逸（调用方捕获 RouterError
+                    # 接不住）。挪入后走既有 except Exception：请求侧错误
+                    # 不 on_failure 不冷却，记 errors 并继续 fallback，
+                    # 全部失败后抛 AllDeploymentsFailed，口径闭合。
+                    # 副作用（有意为之）：d1 的 request_defaults 含保留键时
+                    # 不再立即失败，而是跳过 d1 由其他部署服务。
+                    request_kwargs = self._request_kwargs_for_deployment(selected, kwargs)
+                    start_time = time.time()
+                    actual_model = selected.model_name if model == MODEL_WILDCARD else model
+                    chunk_count = 0
+                    stream_usage: Optional[Dict[str, Any]] = None
+                    # 意见 B：首个可见 chunk 之前的 chunk（如 role-only 头部
+                    # 块）先进缓冲、不 yield——首个可见 token 前失败切部署时，
+                    # 新部署重发头部 chunk 会让消费者收到重复的 role 块，
+                    # 严格拼接的客户端会坏。
+                    pending_chunks: List[Dict[str, Any]] = []
+                    async for chunk in self.acompletion_stream(
+                        model=actual_model,
+                        messages=messages,
+                        deployment=selected,
+                        **request_kwargs,
+                    ):
+                        chunk_count += 1
+                        if isinstance(chunk, dict):
+                            usage = chunk.get("usage")
+                            if isinstance(usage, dict) and usage:
+                                # OpenAI 统一口径下 usage 通常只在最后一个
+                                # chunk 携带（或为累计值），取最后一份非空 usage
+                                # 作为整条流的用量。收集发生在 yield/缓冲决策
+                                # 之前的循环体里，与意见 B 的缓冲不冲突。
+                                stream_usage = usage
+                        if not visible_output_started and self._has_visible_stream_output(chunk):
+                            visible_output_started = True
+                            ttfb = time.time() - start_time
+                            await self.event_bus.emit(RoutingEvent(
+                                event_type=RoutingEventType.STREAM_ROUTE_SELECTED,
+                                request_id=request_id,
+                                model=model,
+                                deployment_id=selected.id,
+                                provider=selected.provider,
+                                latency=ttfb,
+                                attempt=attempt + 1,
+                                total_attempts=total_attempts,
+                                extra=self._route_metadata(
+                                    selected,
+                                    attempt=attempt + 1,
+                                    **(
+                                        {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                                        if context.error
+                                        else {}
+                                    ),
+                                    ttft=ttfb,
+                                ),
+                            ))
+                            route_selected_emitted = True
+                            # 意见 B：见到首个可见 chunk，STREAM_ROUTE_SELECTED
+                            # 保持既有时机（首个可见 chunk 时发，携带 ttft）；
+                            # 先放行缓冲的头部 chunk，再放行当前 chunk；
+                            # 此后直通不再缓冲。
+                            for buffered in pending_chunks:
+                                yield buffered
+                            pending_chunks = []
+                            yield chunk
+                        elif visible_output_started:
+                            yield chunk
+                        else:
+                            pending_chunks.append(chunk)
+
+                    # 意见 B：流正常结束但从未出现可见 chunk（空流 / 仅头部
+                    # 块，如只有 role chunk 或 usage-only chunk）：flush 缓冲
+                    # 再走成功收尾，保持消费者能收到 role chunk 的既有行为
+                    # （现有空流测试依赖）。失败发生在 flush 之前时（缓冲
+                    # 非空、无可见输出）缓冲直接被丢弃——消费者对新部署无感，
+                    # 这正是缓冲的目的。
+                    for buffered in pending_chunks:
+                        yield buffered
+                    pending_chunks = []
+
+                    # 流结束后用真实数据更新 state（review 8）：latency 为整条
+                    # 流的完整耗时（而非 ttfb——此前 ttfb 被当 latency、tokens
+                    # 恒 0，LatencyRecord.normalized 会被放大成秒级，污染
+                    # lowest_latency/adaptive 评分）；tokens 取流式累积的 usage
+                    # （chunk 未携带 usage 时为 0，该记录不参与 normalized 统计）。
+                    latency = time.time() - start_time
+                    tokens = (stream_usage or {}).get("completion_tokens") or 0
+                    prompt_tokens = (stream_usage or {}).get("prompt_tokens") or 0
+                    self.state.on_success(selected.id, latency, tokens)
+                    context.set_success(selected, None)
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.STREAM_SUCCEEDED,
+                        request_id=request_id,
+                        model=model,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        latency=time.time() - overall_start,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=tokens,
+                        total_tokens=prompt_tokens + tokens,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        chunk_count=chunk_count,
+                        extra=self._route_metadata(
+                            selected,
+                            attempt=attempt + 1,
+                            **(
+                                {"fallback_reason": self._fallback_reason_from_error(context.error)}
+                                if context.error
+                                else {}
+                            ),
+                            **({"ttft": ttfb} if route_selected_emitted else {}),
+                        ),
+                    ))
+                    return
+
+                except Exception as e:
+                    # 请求侧错误不计失败、不冷却（review 7，分类规则同
+                    # completion()）；其余异常保持原有的计数冷却行为。
+                    if not self._is_request_side_error(e):
+                        self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                    if visible_output_started:
+                        # 可见输出已交付，重试不安全直接抛：STARTED 已发，
+                        # raise 前补 EXHAUSTED 终态（断流检测等"内容已见
+                        # 随后报错"的场景都会走到这里，不补则口径永久泄漏）
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
+                        raise
+                    if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                        # strict fail-fast：STARTED 已发，raise 前补终态口径
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
+                        raise
+                    context.set_failure(e)
+                    errors.append((selected.id, str(e)))
+                    last_failure_metadata = self._route_metadata(
+                        selected,
+                        attempt=attempt + 1,
+                        fallback_reason=self._fallback_reason_from_error(e),
+                    )
+                    available = [d for d in available if d.id != selected.id]
+                    if attempt < total_attempts - 1 and available:
+                        await self.event_bus.emit(RoutingEvent(
+                            event_type=RoutingEventType.REQUEST_RETRIED,
+                            request_id=request_id,
+                            model=model,
+                            deployment_id=selected.id,
+                            provider=selected.provider,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error_type=self._fallback_reason_from_error(e),
+                            error_message=str(e),
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        ))
+
+                    if not available:
+                        break
+        except (GeneratorExit, asyncio.CancelledError) as interrupt:
+            # 意见 A：消费者提前中断（async for 循环 break / aclose() →
+            # GeneratorExit；任务取消 → CancelledError）。两者都是
+            # BaseException，不会被上面的 except Exception 捕获——此前
+            # STREAM_STARTED 已发（total+1）却永无终态事件，在途永久虚高，
+            # 看板成功率被客户端断开持续污染。不论中断发生在可见输出之前
+            # 还是之后（不管断开时机），都发 STREAM_CANCELLED 终态事件
+            # 闭合口径（cancelled 为第四种终态，与 SUCCEEDED/EXHAUSTED
+            # 互斥）。
+            # 技术约束：async generator 的 GeneratorExit 处理里不能
+            # await——event_bus.emit 链一旦让出控制权会抛
+            # RuntimeError("async generator ignored GeneratorExit")——
+            # 因此事件经 _emit_event_without_await 用 create_task 投递
+            # （同步调用，任务在生成器退出后由 loop 执行）。
+            # state 收尾：取消的流既不 on_success（半截数据不进延迟统计）
+            # 也不 on_failure（消费者主动断开不是部署的错）。LocalRouterState
+            # 没有请求级在途/total 计数（state.total_requests 仅在
+            # on_success 中累加；"在途"是 metrics 侧的派生口径，由本事件
+            # 闭合），取消路径在 state 侧无需额外清理。
+            self._emit_event_without_await(RoutingEvent(
+                event_type=RoutingEventType.STREAM_CANCELLED,
+                request_id=request_id,
+                model=model,
+                deployment_id=selected.id if selected is not None else None,
+                provider=selected.provider if selected is not None else None,
+                latency=time.time() - overall_start,
+                chunk_count=chunk_count,
+                extra={
+                    "reason": (
+                        "consumer_break"
+                        if isinstance(interrupt, GeneratorExit)
+                        else "cancelled"
+                    ),
+                },
+            ))
+            raise
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            error_type=self._fallback_reason_from_error(context.error) if context.error else None,
+            error_message=str(context.error) if context.error else None,
+            extra=last_failure_metadata or request_extra,
+        ))
+        raise AllDeploymentsFailed(model=model, errors=errors)
+
+    async def batch_completion(
+        self,
+        requests: List[Dict[str, Any]],
+        max_concurrent: int = 10
+    ) -> List[Any]:
+        """
+        批量completion
+
+        Args:
+            requests: 请求列表，每个包含 model, messages, **kwargs
+            max_concurrent: 最大并发数
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+        async def process_one(req):
+            async with semaphore:
+                return await self.completion(**req)
+        tasks = [process_one(req) for req in requests]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    def update_deployments(self, new_deployments: List[Deployment]) -> None:
+        """更新部署列表（热替换）
+
+        加锁保证并发请求期间不会读到半更新的索引/部署列表，
+        并清理已移除部署在 state 中的残留状态；随后（锁外）广播
+        DEPLOYMENTS_UPDATED 事件，让 EventBus 订阅方（如
+        MetricsCollector）同步清理已下线部署的统计键（意见 E）。
+        """
+        with self._deployments_lock:
+            old_ids = {dep.id for dep in self.deployments}
+            new_ids = {dep.id for dep in new_deployments}
+            removed_ids = old_ids - new_ids
+
+            self.deployments = new_deployments
+            self._build_model_indices()
+            if self.health_checker:
+                self.health_checker.deployments = new_deployments
+
+            # 仅清理本 router 之前管理、且已从新列表移除的部署状态
+            # （cooldown/延迟统计等）。不能按新列表全集反向清理——
+            # 多个 router 可能共享同一 state，全集清理会误删其他
+            # router 管理的部署状态。
+            if removed_ids:
+                for dep_id in removed_ids:
+                    self.state.remove_deployment(dep_id)
+
+            # 为新列表中的部署初始化 tpm/rpm 配额条目（含新增部署；
+            # 已有条目保留累计值）。移除部署的配额条目已随上面的
+            # remove_deployment 一并清理。
+            self._sync_quota_state(new_deployments)
+
+        if removed_ids:
+            # 意见 E：state 之上的订阅方（metrics 等）由事件驱动清理。
+            # 本方法是同步的、不能 await，用 create_task 把事件投递到
+            # running loop（见 _emit_event_without_await）；无 running loop
+            # 时（同步上下文热替换）跳过并记 debug——订阅方另有公开的
+            # prune API 兜底。仅在有移除时发射。
+            # RoutingEvent.model 为必填字段，此事件不针对单一模型，
+            # 传空串表示"路由器级/管理事件"。
+            self._emit_event_without_await(RoutingEvent(
+                event_type=RoutingEventType.DEPLOYMENTS_UPDATED,
+                request_id=RoutingEvent.new_request_id(),
+                model="",
+                extra={"removed_ids": sorted(removed_ids)},
+            ))
+
+    # ------------------------------------------------------------------
+    # Typed invoke / stream (高层 SDK 接口)
+    # ------------------------------------------------------------------
+
+    def _build_params(self, **kwargs) -> Dict[str, Any]:
+        """从 kwargs 中滤除 None 值，构建传递给 completion 的参数 dict。"""
+        return {k: v for k, v in kwargs.items() if v is not None}
+
+    def _resolve_model_name(self, model: Optional[str] = None) -> str:
+        if model:
+            return model
+        if not self.deployments:
+            raise ValueError(
+                "No model specified and no deployments configured. "
+                "Use model='*' for unified routing across all deployments."
+            )
+        return self.deployments[0].model_name
+
+    async def invoke(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        output_parser: Optional[BaseOutputParser] = None,
+        **kwargs,
+    ) -> AssistantMessage:
+        """发送 chat completion 请求，返回类型化响应。
+
+        Args:
+            messages: 消息列表 [{"role": "user", "content": "..."}]
+            tools: 工具定义列表
+            temperature: 采样温度
+            top_p: 核采样参数
+            model: 模型名（覆盖 deployment 配置）
+            max_tokens: 最大生成 token 数
+            stop: 停止序列
+            output_parser: 可选输出解析器，用于解析 content
+            **kwargs: 透传给底层 completion 的额外参数
+
+        Returns:
+            AssistantMessage: 类型化响应
+        """
+        params = self._build_params(
+            tools=tools, temperature=temperature, top_p=top_p,
+            max_tokens=max_tokens, stop=stop, **kwargs,
+        )
+        model_name = self._resolve_model_name(model)
+
+        raw = await self.completion(
+            model=model_name,
+            messages=messages,
+            **params,
+        )
+        msg = self._response_to_message(raw)
+        deployment_id = raw.get("deployment_id") if isinstance(raw, dict) else None
+
+        if output_parser is not None and msg.content:
+            try:
+                parsed = await output_parser.parse(msg)
+                if parsed is not None:
+                    msg.content = json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, dict) else str(parsed)
+            except Exception:
+                # 降级行为保留：解析失败时调用方仍拿到原始 content，
+                # 但不再静默——记录 warning（含解析器类型与异常栈）便于排查。
+                logger.warning(
+                    "output_parser %s failed for deployment %s, returning raw content",
+                    type(output_parser).__name__,
+                    deployment_id,
+                    exc_info=True,
+                )
+
+        return msg
+
+    async def stream(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        **kwargs,
+    ) -> AsyncIterator[AssistantMessageChunk]:
+        """流式 chat completion，逐 chunk 返回 AssistantMessageChunk。
+
+        参数同 invoke()。支持连接阶段的 retry/failover。
+        """
+        params = self._build_params(
+            tools=tools, temperature=temperature, top_p=top_p,
+            max_tokens=max_tokens, stop=stop, **kwargs,
+        )
+        model_name = self._resolve_model_name(model)
+
+        request_id = RoutingEvent.new_request_id()
+        available = self._get_available_deployments(model_name)
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        if not available:
+            # 计数口径配对：先发 REQUEST_STARTED 使 total_requests +1，
+            # 与随后的 EXHAUSTED（failed +1）配对，避免 failed > total_requests。
+            # 注意这里用 REQUEST_STARTED 而非 STREAM_STARTED——此路径连
+            # 可用性检查都未通过，不应计入 streams（streams 统计进入流式
+            # 入口的请求，STREAM_STARTED 在部署选择前发出）。
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.REQUEST_STARTED,
+                request_id=request_id,
+                model=model_name,
+                extra=request_extra,
+            ))
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model_name,
+                error_message="No available deployments",
+                extra=request_extra,
+            ))
+            raise NoDeploymentAvailable(model_name, "No available deployments")
+
+        total_attempts = min(self.num_retries + 1, len(available))
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.STREAM_STARTED,
+            request_id=request_id,
+            model=model_name,
+            total_attempts=total_attempts,
+            extra=request_extra,
+        ))
+
+        overall_start = time.time()
+        errors = []
+        last_failure_metadata = None
+        last_fallback_reason = None
+        # 意见 A：消费者中断可能发生在首个 chunk 之前（此时还没选定部署），
+        # 中断分支需要引用当前尝试的部署与 chunk 计数，提前初始化。
+        selected: Optional[Deployment] = None
+        chunk_count = 0
+
+        try:
+            for attempt in range(total_attempts):
+                selected = await self._select_deployment(available, RoutingContext(
+                    model=model_name, messages=messages, kwargs=params,
+                ))
+                if selected is None:
+                    if errors:
+                        break
+                    # 计数口径配对：STREAM_STARTED 已发但尚无终态事件，raise 前
+                    # 补发 EXHAUSTED（failed +1），避免 total+1 而 failed 不变。
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                        request_id=request_id,
+                        model=model_name,
+                        error_message="No deployment matched routing strategy",
+                        extra=request_extra,
+                    ))
+                    raise NoDeploymentAvailable(model_name, "No deployment matched routing strategy")
+                # 在 try 外初始化：request_defaults 校验（try 内首行）抛
+                # ValueError 时 except 分支也要引用 visible_output_started。
+                visible_output_started = False
+                route_selected_emitted = False
+                ttft = None
+                try:
+                    # request_defaults 校验放在 try 内（意见 C）：在 try 外
+                    # 抛 ValueError 会绕过 except——STREAM_STARTED 已发但无
+                    # 终态事件，且裸 ValueError 逃逸（调用方捕获 RouterError
+                    # 接不住）。挪入后走既有 except Exception：请求侧错误
+                    # 不 on_failure 不冷却，记 errors 并继续 fallback，
+                    # 全部失败后抛 AllDeploymentsFailed，口径闭合。
+                    # 副作用（有意为之）：d1 的 request_defaults 含保留键时
+                    # 不再立即失败，而是跳过 d1 由其他部署服务。
+                    request_kwargs = self._request_kwargs_for_deployment(selected, params)
+                    actual_model = selected.model_name if model_name == MODEL_WILDCARD else model_name
+                    chunk_count = 0
+                    stream_start = time.time()
+                    stream_usage_metadata: Optional[UsageMetadata] = None
+                    # 意见 B：首个可见 chunk 之前的 chunk（如 role-only 头部
+                    # 块）先进缓冲、不 yield——首个可见 token 前失败切部署时，
+                    # 新部署重发头部 chunk 会让消费者收到重复的 role 块，
+                    # 严格拼接的客户端会坏。
+                    pending_chunks: List[AssistantMessageChunk] = []
+                    async for chunk in self.acompletion_stream(
+                        model=actual_model,
+                        messages=messages,
+                        deployment=selected,
+                        **request_kwargs,
+                    ):
+                        parsed = self._chunk_to_assistant_message_chunk(chunk)
+                        if parsed is not None:
+                            chunk_count += 1
+                            if parsed.usage_metadata is not None:
+                                # usage 通常只出现在最后一个 chunk（或为累计值），
+                                # 取最后一份非空 usage_metadata 作为整条流的用量。
+                                # 收集发生在 yield/缓冲决策之前的循环体里，
+                                # 与意见 B 的缓冲不冲突。
+                                stream_usage_metadata = parsed.usage_metadata
+                            if parsed.content or parsed.reasoning_content or parsed.tool_calls:
+                                if not route_selected_emitted:
+                                    ttft = time.time() - stream_start
+                                    await self.event_bus.emit(RoutingEvent(
+                                        event_type=RoutingEventType.STREAM_ROUTE_SELECTED,
+                                        request_id=request_id,
+                                        model=model_name,
+                                        deployment_id=selected.id,
+                                        provider=selected.provider,
+                                        latency=ttft,
+                                        attempt=attempt + 1,
+                                        total_attempts=total_attempts,
+                                        extra=self._route_metadata(
+                                            selected,
+                                            attempt=attempt + 1,
+                                            **({"fallback_reason": last_fallback_reason} if last_fallback_reason else {}),
+                                            ttft=ttft,
+                                        ),
+                                    ))
+                                    route_selected_emitted = True
+                                visible_output_started = True
+                                # 意见 B：见到首个可见 chunk，STREAM_ROUTE_SELECTED
+                                # 保持既有时机（首个可见 chunk 时发，携带 ttft）；
+                                # 先放行缓冲的头部 chunk，再放行当前 chunk；
+                                # 此后直通不再缓冲。
+                                for buffered in pending_chunks:
+                                    yield buffered
+                                pending_chunks = []
+                                yield parsed
+                            elif visible_output_started:
+                                yield parsed
+                            else:
+                                pending_chunks.append(parsed)
+
+                    # 意见 B：流正常结束但从未出现可见 chunk（空流 / 仅头部
+                    # 块，如只有 role chunk 或 usage-only chunk）：flush 缓冲
+                    # 再走成功收尾，保持消费者能收到 role chunk 的既有行为
+                    # （现有空流测试依赖）。失败发生在 flush 之前时（缓冲
+                    # 非空、无可见输出）缓冲直接被丢弃——消费者对新部署无感，
+                    # 这正是缓冲的目的。
+                    for buffered in pending_chunks:
+                        yield buffered
+                    pending_chunks = []
+
+                    # 成功后用真实数据更新 state（review 8）：latency 为整条流的
+                    # 完整耗时（而非 ttft），tokens 取流式累积的 usage_metadata
+                    # （未携带时为 0，该记录不参与 normalized 统计）。
+                    latency = time.time() - stream_start
+                    tokens = (
+                        stream_usage_metadata.output_tokens
+                        if stream_usage_metadata is not None
+                        else 0
+                    )
+                    prompt_tokens = (
+                        stream_usage_metadata.input_tokens
+                        if stream_usage_metadata is not None
+                        else 0
+                    )
+                    self.state.on_success(selected.id, latency, tokens)
+                    await self.event_bus.emit(RoutingEvent(
+                        event_type=RoutingEventType.STREAM_SUCCEEDED,
+                        request_id=request_id,
+                        model=model_name,
+                        deployment_id=selected.id,
+                        provider=selected.provider,
+                        latency=time.time() - overall_start,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=tokens,
+                        total_tokens=prompt_tokens + tokens,
+                        attempt=attempt + 1,
+                        total_attempts=total_attempts,
+                        chunk_count=chunk_count,
+                        extra=self._route_metadata(
+                            selected,
+                            attempt=attempt + 1,
+                            **({"fallback_reason": last_fallback_reason} if last_fallback_reason else {}),
+                            **({"ttft": ttft} if ttft is not None else {}),
+                        ),
+                    ))
+                    return
+                except Exception as e:
+                    # 请求侧错误不计失败、不冷却（review 7，分类规则同
+                    # completion()）；其余异常保持原有的计数冷却行为。
+                    if not self._is_request_side_error(e):
+                        self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                    if visible_output_started:
+                        # 可见输出已交付，重试不安全直接抛：STARTED 已发，
+                        # raise 前补 EXHAUSTED 终态（断流检测等"内容已见
+                        # 随后报错"的场景都会走到这里，不补则口径永久泄漏）
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
+                        raise
+                    if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
+                        # strict fail-fast：STARTED 已发，raise 前补终态口径
+                        await self._emit_terminal_exhausted(
+                            request_id=request_id,
+                            model=model,
+                            overall_start=overall_start,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error=e,
+                            extra=self._route_metadata(
+                                selected,
+                                fallback_reason=self._fallback_reason_from_error(e),
+                            ),
+                        )
+                        raise
+                    last_fallback_reason = self._fallback_reason_from_error(e)
+                    # errors 统一为二元组 (deployment_id, error_message)，
+                    # 与 completion()/stream_completion() 一致；fallback_reason
+                    # 已记录在事件的 extra 中，不进 errors。
+                    errors.append((selected.id, str(e)))
+                    last_failure_metadata = self._route_metadata(
+                        selected,
+                        attempt=attempt + 1,
+                        fallback_reason=last_fallback_reason,
+                    )
+
+                    available = [d for d in available if d.id != selected.id]
+                    if attempt < total_attempts - 1 and available:
+                        await self.event_bus.emit(RoutingEvent(
+                            event_type=RoutingEventType.REQUEST_RETRIED,
+                            request_id=request_id,
+                            model=model_name,
+                            deployment_id=selected.id,
+                            provider=selected.provider,
+                            attempt=attempt + 1,
+                            total_attempts=total_attempts,
+                            error_type=last_fallback_reason,
+                            error_message=str(e),
+                            extra=self._route_metadata(selected, fallback_reason=last_fallback_reason),
+                        ))
+
+                    if not available:
+                        break
+        except (GeneratorExit, asyncio.CancelledError) as interrupt:
+            # 意见 A：消费者提前中断（async for 循环 break / aclose() →
+            # GeneratorExit；任务取消 → CancelledError）。两者都是
+            # BaseException，不会被上面的 except Exception 捕获——此前
+            # STREAM_STARTED 已发（total+1）却永无终态事件，在途永久虚高，
+            # 看板成功率被客户端断开持续污染。不论中断发生在可见输出之前
+            # 还是之后（不管断开时机），都发 STREAM_CANCELLED 终态事件
+            # 闭合口径（cancelled 为第四种终态，与 SUCCEEDED/EXHAUSTED
+            # 互斥）。
+            # 技术约束：async generator 的 GeneratorExit 处理里不能
+            # await——event_bus.emit 链一旦让出控制权会抛
+            # RuntimeError("async generator ignored GeneratorExit")——
+            # 因此事件经 _emit_event_without_await 用 create_task 投递
+            # （同步调用，任务在生成器退出后由 loop 执行）。
+            # state 收尾：取消的流既不 on_success（半截数据不进延迟统计）
+            # 也不 on_failure（消费者主动断开不是部署的错）。LocalRouterState
+            # 没有请求级在途/total 计数（state.total_requests 仅在
+            # on_success 中累加；"在途"是 metrics 侧的派生口径，由本事件
+            # 闭合），取消路径在 state 侧无需额外清理。
+            self._emit_event_without_await(RoutingEvent(
+                event_type=RoutingEventType.STREAM_CANCELLED,
+                request_id=request_id,
+                model=model_name,
+                deployment_id=selected.id if selected is not None else None,
+                provider=selected.provider if selected is not None else None,
+                latency=time.time() - overall_start,
+                chunk_count=chunk_count,
+                extra={
+                    "reason": (
+                        "consumer_break"
+                        if isinstance(interrupt, GeneratorExit)
+                        else "cancelled"
+                    ),
+                },
+            ))
+            raise
+
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+            request_id=request_id,
+            model=model_name,
+            latency=time.time() - overall_start,
+            attempt=len(errors),
+            total_attempts=total_attempts,
+            # error_type 保持异常类名口径（与 completion()/stream_completion()
+            # 的同类事件一致），不随 errors 二元组化取 str(e)——那会让
+            # error_type 与 error_message 完全相同。
+            error_type=last_fallback_reason if errors else None,
+            error_message=errors[-1][1] if errors else None,
+            extra=last_failure_metadata or request_extra,
+        ))
+        raise AllDeploymentsFailed(model=model_name, errors=errors)
+
+    # ------------------------------------------------------------------
+    # Internal: type conversion helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _provider_metadata_from_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+        allowed = (
+            "system_fingerprint",
+            "service_tier",
+            "status",
+            "stop_reason",
+            "stop_sequence",
+            "incomplete_details",
+        )
+        return {key: raw[key] for key in allowed if key in raw}
+
+    @staticmethod
+    def _usage_to_metadata(
+        usage: Optional[Dict[str, Any]],
+        model_name: Optional[str] = None,
+    ) -> Optional[UsageMetadata]:
+        if not usage:
+            return None
+
+        def _int_value(value: Any) -> int:
+            if value is None or isinstance(value, bool):
+                return 0
+            try:
+                return max(int(float(value)), 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _optional_int(value: Any) -> Optional[int]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return max(int(float(value)), 0)
+            except (TypeError, ValueError):
+                return None
+
+        def _float_value(value: Any) -> float:
+            if value is None or isinstance(value, bool):
+                return 0.0
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+        completion_tokens_details = usage.get("completion_tokens_details") or {}
+        cache_status = usage.get("cache_status")
+        cache_source = usage.get("cache_source")
+        cache_authoritative = usage.get("cache_authoritative")
+        return UsageMetadata(
+            model_name=model_name,
+            input_tokens=_int_value(usage.get("prompt_tokens")),
+            output_tokens=_int_value(usage.get("completion_tokens")),
+            total_tokens=_int_value(usage.get("total_tokens")),
+            cache_tokens=_int_value(prompt_tokens_details.get("cached_tokens") or usage.get("cache_tokens")),
+            cache_read_tokens=_optional_int(usage.get("cache_read_tokens")),
+            cache_miss_tokens=_optional_int(usage.get("cache_miss_tokens")),
+            cache_write_tokens=_optional_int(usage.get("cache_write_tokens")),
+            cache_status=cache_status if isinstance(cache_status, str) else None,
+            cache_source=cache_source if isinstance(cache_source, str) else None,
+            cache_authoritative=cache_authoritative is True,
+            cache_creation_input_tokens=_optional_int(
+                usage.get("cache_creation_input_tokens")
+                or prompt_tokens_details.get("cache_creation_input_tokens")
+            ),
+            reasoning_tokens=_int_value(
+                completion_tokens_details.get("reasoning_tokens")
+                or usage.get("reasoning_tokens")
+            ),
+            input_cost=_float_value(usage.get("input_cost")),
+            output_cost=_float_value(usage.get("output_cost")),
+            total_cost=_float_value(usage.get("total_cost")),
+        )
+
+    @staticmethod
+    def _response_to_message(raw: Dict[str, Any]) -> AssistantMessage:
+        """将 OpenAI 格式的 dict 响应转换为 AssistantMessage。"""
+        choices = raw.get("choices", [])
+        if not choices:
+            return AssistantMessage(content="")
+
+        choice = choices[0]
+        message = choice.get("message", {})
+
+        content = message.get("content") or ""
+        finish_reason = choice.get("finish_reason") or "stop"
+        reasoning_content = message.get("reasoning_content")
+
+        # Parse tool_calls
+        tool_calls = None
+        raw_tool_calls = message.get("tool_calls")
+        if raw_tool_calls:
+            tool_calls = []
+            for idx, tc in enumerate(raw_tool_calls):
+                func = tc.get("function", {})
+                tool_calls.append(ToolCall(
+                    id=tc.get("id", ""),
+                    type=tc.get("type", "function"),
+                    name=func.get("name", ""),
+                    arguments=func.get("arguments", ""),
+                    index=tc.get("index", idx),
+                ))
+
+        usage_metadata = ReliableRouter._usage_to_metadata(raw.get("usage"), raw.get("model"))
+        choice_provider_metadata = ReliableRouter._provider_metadata_from_response(choice)
+
+        return AssistantMessage(
+            content=content,
+            tool_calls=tool_calls,
+            usage_metadata=usage_metadata,
+            finish_reason=finish_reason,
+            reasoning_content=reasoning_content,
+            logprobs=choice.get("logprobs"),
+            response_id=raw.get("id"),
+            response_model=raw.get("model"),
+            provider_metadata={
+                **ReliableRouter._provider_metadata_from_response(raw),
+                **choice_provider_metadata,
+            },
+            provider_content=raw.get("provider_content", raw),
+        )
+
+    @staticmethod
+    def _chunk_to_assistant_message_chunk(
+        chunk: Dict[str, Any],
+    ) -> Optional[AssistantMessageChunk]:
+        """将 OpenAI 格式的 streaming chunk dict 转换为 AssistantMessageChunk。"""
+        choices = chunk.get("choices")
+        if not choices:
+            usage_metadata = ReliableRouter._usage_to_metadata(
+                chunk.get("usage"),
+                chunk.get("model"),
+            )
+            if usage_metadata is None:
+                return None
+            return AssistantMessageChunk(
+                usage_metadata=usage_metadata,
+                response_id=chunk.get("id"),
+                response_model=chunk.get("model"),
+                provider_metadata=ReliableRouter._provider_metadata_from_response(chunk),
+                provider_content=chunk.get("provider_content", chunk),
+            )
+
+        choice = choices[0]
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason")
+
+        content = delta.get("content") or ""
+        reasoning_content = delta.get("reasoning_content")
+        raw_tool_calls = delta.get("tool_calls")
+        usage_metadata = ReliableRouter._usage_to_metadata(chunk.get("usage"), chunk.get("model"))
+
+        if (
+            not content
+            and not finish_reason
+            and not raw_tool_calls
+            and not reasoning_content
+            and usage_metadata is None
+        ):
+            return None
+
+        tool_calls = None
+        if raw_tool_calls:
+            tool_calls = []
+            for tc in raw_tool_calls:
+                func = tc.get("function", {})
+                tool_calls.append(ToolCall(
+                    id=tc.get("id", ""),
+                    type=tc.get("type", "function"),
+                    name=func.get("name", ""),
+                    arguments=func.get("arguments", ""),
+                    index=tc.get("index"),
+                ))
+
+        return AssistantMessageChunk(
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage_metadata=usage_metadata,
+            logprobs=choice.get("logprobs"),
+            response_id=chunk.get("id"),
+            response_model=chunk.get("model"),
+            provider_metadata={
+                **ReliableRouter._provider_metadata_from_response(chunk),
+                **ReliableRouter._provider_metadata_from_response(choice),
+            },
+            provider_content=chunk.get("provider_content", chunk),
+        )
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取统计信息"""
+        return {
+            "total_deployments": len(self.deployments),
+            "model_list": self.get_model_list(),
+            "deployment_status": {
+                dep.id: self.state.deployment_status.get(dep.id, DeploymentStatus.HEALTHY).value
+                for dep in self.deployments
+            },
+            "consecutive_failures": dict(self.state.consecutive_failures),
+            "latency_stats": {
+                dep.id: {
+                    # 真实延迟（秒），无记录为 None；保留4位小数避免浮点精度噪声
+                    # （各值只取一次，避免重复 O(n) 求均值及两次调用间的读数偏差）
+                    "avg_latency": (
+                        round(raw_latency, 4)
+                        if (raw_latency := self.state.get_average_latency_raw(dep.id)) is not None
+                        else None
+                    ),
+                    # 归一化延迟（latency/tokens），供策略参考
+                    "avg_normalized_latency": (
+                        round(norm_latency, 4)
+                        if (norm_latency := self.state.get_average_latency(dep.id)) != float('inf')
+                        else None
+                    ),
+                    "total_tokens": self.state.total_tokens.get(dep.id, 0),
+                    "total_requests": self.state.total_requests.get(dep.id, 0),
+                }
+                for dep in self.deployments
+            }
+        }
