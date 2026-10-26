@@ -12,7 +12,10 @@ set -euo pipefail
 echo "==> Checking system dependencies for mcp_cpp..."
 
 # Detect OS type
-if [ -f /etc/os-release ]; then
+if [ "$(uname -s)" = "Darwin" ]; then
+    OS="macos"
+    OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
+elif [ -f /etc/os-release ]; then
     . /etc/os-release
     OS=$ID
     OS_VERSION=$VERSION_ID
@@ -48,6 +51,8 @@ check_yum_package() {
 install_dependencies() {
     local need_curl=0
     local need_openssl=0
+    local need_libevent=0
+    local need_json=0
 
     # Check dependencies (both runtime lib and development packages)
     case "$OS" in
@@ -136,6 +141,39 @@ install_dependencies() {
             fi
             ;;
 
+        macos)
+            if ! command_exists brew; then
+                echo "  - Homebrew: NOT FOUND (see https://brew.sh)"
+                need_curl=1
+                need_openssl=1
+            else
+                if brew list --versions curl >/dev/null 2>&1; then
+                    echo "  - curl: OK"
+                else
+                    echo "  - curl: NOT FOUND"
+                    need_curl=1
+                fi
+                if brew list --versions openssl@3 >/dev/null 2>&1 || brew list --versions openssl >/dev/null 2>&1; then
+                    echo "  - openssl: OK"
+                else
+                    echo "  - openssl: NOT FOUND"
+                    need_openssl=1
+                fi
+                if brew list --versions libevent >/dev/null 2>&1; then
+                    echo "  - libevent: OK"
+                else
+                    echo "  - libevent: NOT FOUND"
+                    need_libevent=1
+                fi
+                if brew list --versions nlohmann-json >/dev/null 2>&1; then
+                    echo "  - nlohmann_json: OK"
+                else
+                    echo "  - nlohmann_json: NOT FOUND"
+                    need_json=1
+                fi
+            fi
+            ;;
+
         *)
             # Fallback: check for header files
             if command_exists curl-config; then
@@ -155,7 +193,7 @@ install_dependencies() {
     esac
 
     # If all dependencies are present, exit
-    if [ $need_curl -eq 0 ] && [ $need_openssl -eq 0 ]; then
+    if [ $need_curl -eq 0 ] && [ $need_openssl -eq 0 ] && [ $need_libevent -eq 0 ] && [ $need_json -eq 0 ]; then
         echo "==> All dependencies are already installed!"
         return 0
     fi
@@ -215,6 +253,25 @@ install_dependencies() {
             fi
             ;;
 
+        macos)
+            echo "Detected macOS system"
+
+            if ! command_exists brew; then
+                echo "Error: Homebrew is required on macOS (see https://brew.sh)" >&2
+                exit 1
+            fi
+
+            local pkgs=()
+            [ $need_curl -eq 1 ] && pkgs+=(curl)
+            [ $need_openssl -eq 1 ] && pkgs+=(openssl@3)
+            [ $need_libevent -eq 1 ] && pkgs+=(libevent)
+            [ $need_json -eq 1 ] && pkgs+=(nlohmann-json)
+            if [ ${#pkgs[@]} -gt 0 ]; then
+                echo "Installing (Homebrew): ${pkgs[*]}"
+                brew install "${pkgs[@]}"
+            fi
+            ;;
+
         *)
             echo "Error: Unsupported OS: $OS"
             echo "Please install libcurl-devel and openssl manually"
@@ -232,6 +289,45 @@ install_dependencies
 # Verify installation
 echo ""
 echo "==> Verifying installation..."
+if [ "$OS" = "macos" ]; then
+    ok=1
+    if ! command_exists brew; then
+        echo "✗ Homebrew is missing." >&2
+        ok=0
+    fi
+    # Same package checks as the install step above, so a partially failed
+    # install is reported here instead of failing later at CMake configure.
+    if brew list --versions openssl@3 >/dev/null 2>&1 || brew list --versions openssl >/dev/null 2>&1; then
+        echo "  - openssl: OK"
+    else
+        echo "✗ openssl is missing (brew install openssl@3)" >&2
+        ok=0
+    fi
+    if brew list --versions curl >/dev/null 2>&1; then
+        echo "  - curl: OK"
+    else
+        echo "✗ curl is missing (brew install curl)" >&2
+        ok=0
+    fi
+    if brew list --versions libevent >/dev/null 2>&1; then
+        echo "  - libevent: OK"
+    else
+        echo "✗ libevent is missing (brew install libevent)" >&2
+        ok=0
+    fi
+    if brew list --versions nlohmann-json >/dev/null 2>&1; then
+        echo "  - nlohmann_json: OK"
+    else
+        echo "✗ nlohmann_json is missing (brew install nlohmann-json)" >&2
+        ok=0
+    fi
+    if [ "${ok}" -eq 1 ]; then
+        echo "✓ Dependencies verified (Homebrew)."
+        exit 0
+    fi
+    echo "✗ Some dependencies are still missing. Please check the errors above." >&2
+    exit 1
+fi
 if command_exists curl-config && command_exists openssl; then
     echo "✓ All dependencies verified successfully!"
     exit 0

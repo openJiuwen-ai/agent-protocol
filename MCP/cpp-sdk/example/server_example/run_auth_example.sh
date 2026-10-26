@@ -35,7 +35,12 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 cd "$SCRIPT_DIR"
 
-LIB_PATH="${SCRIPT_DIR}/../../output/lib/libmcp.so"
+if [ "$(uname -s)" = "Darwin" ]; then
+  LIB_EXT="dylib"
+else
+  LIB_EXT="so"
+fi
+LIB_PATH="${SCRIPT_DIR}/../../output/lib/libmcp.${LIB_EXT}"
 if [ ! -f "$LIB_PATH" ]; then
   echo "Error: MCP library not found at $LIB_PATH"
   echo "Please build the main project first using: cd ../../ && bash scripts/build.sh"
