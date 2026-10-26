@@ -13,6 +13,7 @@ from intelli_router import (
     AssistantMessageChunk,
     Deployment,
 )
+from intelli_router.core.deployment import DeploymentStatus
 from intelli_router.observability.events import RoutingEventType
 
 
@@ -461,6 +462,194 @@ class TestReliableRouterInvoke:
         assert capture.requests == []
 
 
+    def test_completion_with_explicit_deployment(self):
+        """PR #358 意见 11: ReliableRouter.completion 恢复 deployment 形参。
+        显式指定部署不再 TypeError（got multiple values for keyword
+        argument 'deployment'），请求直接打到指定部署（直通路径，
+        不参与 state 记账）。"""
+        capture = RequestCapture()
+        events = EventCapture()
+        dep1 = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+        dep2 = Deployment(
+            id="openai-2", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test2", provider="openai",
+        )
+        async def runner():
+            router = ReliableRouter(deployments=[dep1, dep2])
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            r = await router.completion(
+                "gpt-4o-mini",
+                [{"role": "user", "content": "hi"}],
+                deployment=dep2,
+            )
+            await router.close()
+            return r, router
+        result, router = asyncio.run(runner())
+
+        assert isinstance(result, dict)
+        # 请求打到了指定部署（而非经选路落到 openai-1）
+        assert result["deployment_id"] == "openai-2"
+        assert len(capture.requests) == 1
+        # 直通路径保留事件配对：REQUEST_STARTED 与 REQUEST_SUCCEEDED 成对
+        started = [
+            e for e in events.events
+            if e.event_type == RoutingEventType.REQUEST_STARTED
+        ]
+        succeeded = [
+            e for e in events.events
+            if e.event_type == RoutingEventType.REQUEST_SUCCEEDED
+        ]
+        assert len(started) == 1
+        assert len(succeeded) == 1
+        assert started[0].request_id == succeeded[0].request_id
+        assert succeeded[0].deployment_id == "openai-2"
+        # 直通路径不参与 state 记账
+        assert router.state.total_requests == {}
+
+    def test_completion_with_explicit_deployment_failure_pairs_events(self):
+        """PR #358 意见 11: 直通路径失败时 raise 前补发 EXHAUSTED
+        （failed +1），维持 successful + failed + 在途 == total_requests
+        的配对不变式；error_type 保持异常类名口径。"""
+        capture = RequestCapture()
+        events = EventCapture()
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class ServerErrorCapture(RequestCapture):
+            def _respond(self, request):
+                return Response(502, text="Bad Gateway")
+
+        capture = ServerErrorCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            try:
+                await router.completion(
+                    "gpt-4o-mini",
+                    [{"role": "user", "content": "hi"}],
+                    deployment=dep,
+                )
+            except Exception as e:
+                await router.close()
+                return e, router
+            await router.close()
+            return None, router
+        error, router = asyncio.run(runner())
+
+        from intelli_router.utils.exceptions import DeploymentServerError
+        assert isinstance(error, DeploymentServerError)
+        started = [
+            e for e in events.events
+            if e.event_type == RoutingEventType.REQUEST_STARTED
+        ]
+        exhausted = [
+            e for e in events.events
+            if e.event_type == RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED
+        ]
+        assert len(started) == 1
+        assert len(exhausted) == 1
+        assert started[0].request_id == exhausted[0].request_id
+        assert exhausted[0].error_type == "DeploymentServerError"
+        # 直通路径不参与 state 记账（无失败计数、无冷却）
+        assert router.state.consecutive_failures == {}
+        assert router.state.cooldown_until == {}
+
+    def test_provider_non_dict_response_succeeds_without_failure(self):
+        """PR #358 意见 6: 自定义 provider 返回非 dict 响应时，
+        usage 解析按 0 处理而非 AttributeError——本地解析问题不再被
+        except 当成部署失败触发冷却重试。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class RawStringCapture(RequestCapture):
+            def _respond(self, request):
+                # 200 + 合法 JSON 字符串（非 dict）：transform_response
+                # 透传后 completion 拿到的是 str
+                return Response(200, text=json.dumps("raw string response"))
+
+        capture = RawStringCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep], num_retries=3)
+            attach_mock_transport(router, capture)
+            r = await router.completion(
+                "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+            )
+            await router.close()
+            return r, router
+        result, router = asyncio.run(runner())
+
+        # 请求成功：非 dict 响应原样返回给调用方
+        assert result == "raw string response"
+        # 不再被当作部署失败：没有重试（仅 1 个请求）、无失败计数、无冷却
+        assert len(capture.requests) == 1
+        assert router.state.consecutive_failures.get("openai-1", 0) == 0
+        assert router.state.cooldown_until.get("openai-1") is None
+        assert router.state.deployment_status.get(
+            "openai-1", DeploymentStatus.HEALTHY
+        ) != DeploymentStatus.COOLDOWN
+        # 成功口径正常记录（tokens=0）
+        assert router.state.total_requests.get("openai-1") == 1
+
+    def test_completion_strips_routing_internal_keys(self):
+        """PR #358 意见 9: 路由专用参数（session_id/tags）由
+        RoutingContext 承载、供策略消费，不随请求发给上游 provider
+        （严格网关会对未知字段返回 400）。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+        capture = RequestCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            await router.completion(
+                "gpt-4o-mini",
+                [{"role": "user", "content": "hi"}],
+                session_id="sess-abc",
+                tags=["blue", "prod"],
+                temperature=0.5,
+            )
+            await router.close()
+        asyncio.run(runner())
+
+        body = json.loads(capture.requests[0].content)
+        assert "session_id" not in body
+        assert "tags" not in body
+        # 业务参数正常透传
+        assert body["temperature"] == 0.5
+
+    def test_request_defaults_routing_internal_keys_stripped(self):
+        """PR #358 意见 9: deployment.request_defaults 中的路由专用参数
+        同样被剔除，不进 provider body。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+            request_defaults={"session_id": "default-sess", "top_p": 0.9},
+        )
+        capture = RequestCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            await router.completion(
+                "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+            )
+            await router.close()
+        asyncio.run(runner())
+
+        body = json.loads(capture.requests[0].content)
+        assert "session_id" not in body
+        assert body["top_p"] == 0.9
+
+
 class TestReliableRouterStream:
     """ReliableRouter.stream() basic functionality."""
 
@@ -544,8 +733,11 @@ class TestReliableRouterStream:
         assert result[-1].provider_content["usage"]["total_tokens"] == 5
         assert result[-1].response_model == "gpt-4o-mini"
 
-    def test_stream_records_ttft_not_total_duration(self):
-        """stream() 成功回调记录 ttft（首 chunk 耗时），而非整条流总时长（与 stream_completion 口径一致）。"""
+    def test_stream_records_full_stream_duration_not_ttft(self):
+        """PR #358 意见 8: stream() 成功后 state 记录的延迟应为整条流的
+        完整耗时（time.time() - stream_start），而非 ttft——此前 ttfb 被当
+        latency、tokens 恒 0，LatencyRecord.normalized 被放大成秒级，
+        污染 lowest_latency/adaptive 评分。"""
         dep = Deployment(
             id="openai-1", model_name="gpt-4o-mini",
             api_key="sk-test", api_base="http://test", provider="openai",
@@ -569,20 +761,117 @@ class TestReliableRouterStream:
             chunks = []
             async for ch in router.stream(messages=[{"role": "user", "content": "hi"}]):
                 chunks.append(ch)
-                # 消费端放慢节奏：拉长流的总时长，但不影响 ttft（首个 chunk 到达时间）
+                # 消费端放慢节奏：拉长流的总时长，但不影响 ttft
+                # （首个 chunk 由 MockTransport 即时返回）
                 await asyncio.sleep(0.05)
             await router.close()
             return chunks, router
         result, router = asyncio.run(runner())
 
         assert len(result) >= 1
-        # 两个 chunk × 0.05s sleep，若误记总时长会 >= 0.1；ttft 应显著小于总时长
         recorded = router.state.get_average_latency_raw("openai-1")
         assert recorded is not None
-        assert recorded < 0.05, f"expected ttft, got total duration: {recorded}"
+        # 两个 chunk × 0.05s sleep：完整耗时 >= 0.09；若误记 ttft 则 << 0.05
+        assert recorded >= 0.09, f"expected full duration, got ttft: {recorded}"
+        # 该流未携带 usage：tokens 记 0（不参与 normalized 统计）
+        assert router.state.latencies["openai-1"][-1].tokens == 0
 
-    def test_stream_empty_response_records_zero_latency(self):
-        """空流（无可解析 chunk）成功时延迟兜底为 0.0 而非 None。"""
+    def test_stream_records_tokens_from_usage_chunk(self):
+        """PR #358 意见 8: 流式成功后 tokens 取流式累积的 usage（最后一份
+        非空 usage，通常是 usage-only 的最后一个 chunk），而非恒 0。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class StreamCapture(RequestCapture):
+            def _respond(self, request):
+                content = "data: " + json.dumps({
+                    "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
+                }) + "\n\n"
+                content += "data: " + json.dumps({
+                    "choices": [],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                }) + "\n\n"
+                content += "data: [DONE]\n\n"
+                return Response(200, text=content)
+
+        capture = StreamCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            chunks = []
+            async for ch in router.stream(messages=[{"role": "user", "content": "hi"}]):
+                chunks.append(ch)
+            await router.close()
+            return chunks, router
+        result, router = asyncio.run(runner())
+
+        assert len(result) >= 1
+        records = router.state.latencies["openai-1"]
+        assert records[-1].tokens == 2
+        assert router.state.total_tokens.get("openai-1") == 2
+
+    def test_stream_without_usage_does_not_dominate_normalized_average(self):
+        """PR #358 意见 8: 同一部署流式（无 usage，tokens=0）+ 非流式
+        （有 usage）混合后，avg_normalized 只由 tokens>0 的非流式记录
+        决定，不被流式记录主导（tokens=0 的记录不参与归一化统计，
+        但 raw latency 照记）。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class MixedCapture(RequestCapture):
+            def _respond(self, request):
+                body = json.loads(request.content)
+                if body.get("stream"):
+                    content = "data: " + json.dumps({
+                        "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
+                    }) + "\n\n"
+                    content += "data: " + json.dumps({
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    }) + "\n\n"
+                    content += "data: [DONE]\n\n"
+                    return Response(200, text=content)
+                return Response(200, json={
+                    "id": "chatcmpl-mixed",
+                    "choices": [{"index": 0, "message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                })
+
+        capture = MixedCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            # 流式请求：慢消费拉长整条流时长（无 usage → tokens=0）
+            async for _ in router.stream(messages=[{"role": "user", "content": "hi"}]):
+                await asyncio.sleep(0.05)
+            # 非流式请求：带 usage（completion_tokens=20）
+            await router.completion(
+                "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+            )
+            await router.close()
+            return router
+        router = asyncio.run(runner())
+
+        records = router.state.latencies["openai-1"]
+        assert len(records) == 2
+        stream_record, nonstream_record = records
+        assert stream_record.tokens == 0
+        assert nonstream_record.tokens == 20
+        # 流式记录的 raw latency（完整耗时，含消费端 sleep）
+        assert stream_record.latency >= 0.09
+        # avg_normalized 只由 tokens>0 的非流式记录决定
+        avg_normalized = router.state.get_average_latency("openai-1")
+        assert avg_normalized == pytest.approx(nonstream_record.normalized)
+        # 若流式记录（normalized 退化为 latency/1 ≈ 0.1s 量级）被计入，
+        # 均值会被拉高至少一个数量级
+        assert avg_normalized < stream_record.latency / 2
+
+    def test_stream_empty_response_records_full_duration(self):
+        """空流（无可解析 chunk）成功时记录整条流的完整耗时（毫秒级
+        正值；此前的 ttft 兜底 0.0 口径已随意见 8 废弃）。"""
         dep = Deployment(
             id="openai-1", model_name="gpt-4o-mini",
             api_key="sk-test", api_base="http://test", provider="openai",
@@ -604,7 +893,9 @@ class TestReliableRouterStream:
         result, router = asyncio.run(runner())
 
         assert len(result) == 0
-        assert router.state.get_average_latency_raw("openai-1") == 0.0
+        recorded = router.state.get_average_latency_raw("openai-1")
+        assert recorded is not None
+        assert 0.0 <= recorded < 1.0
 
     def test_stream_empty_response(self):
         dep = Deployment(
@@ -627,6 +918,53 @@ class TestReliableRouterStream:
             return chunks
         result = asyncio.run(runner())
         assert len(result) == 0
+
+
+class TestReliableRouterStreamCompletion:
+    """ReliableRouter.stream_completion()（原始 chunk 路径）。"""
+
+    def test_stream_completion_records_full_duration_and_tokens(self):
+        """PR #358 意见 8: stream_completion() 成功后 latency 为整条流的
+        完整耗时（而非 ttfb），tokens 取流式累积的 usage（最后一份非空
+        usage，而非恒 0）。"""
+        dep = Deployment(
+            id="openai-1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test", provider="openai",
+        )
+
+        class StreamCapture(RequestCapture):
+            def _respond(self, request):
+                content = "data: " + json.dumps({
+                    "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
+                }) + "\n\n"
+                content += "data: " + json.dumps({
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                }) + "\n\n"
+                content += "data: [DONE]\n\n"
+                return Response(200, text=content)
+
+        capture = StreamCapture()
+        async def runner():
+            router = ReliableRouter(deployments=[dep])
+            attach_mock_transport(router, capture)
+            chunks = []
+            async for ch in router.stream_completion(
+                "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+            ):
+                chunks.append(ch)
+                await asyncio.sleep(0.05)
+            await router.close()
+            return chunks, router
+        result, router = asyncio.run(runner())
+
+        assert len(result) >= 1
+        records = router.state.latencies["openai-1"]
+        # tokens 取自最后一份非空 usage
+        assert records[-1].tokens == 2
+        assert router.state.total_tokens.get("openai-1") == 2
+        # latency 为整条流完整耗时（两个 chunk × 0.05s 消费），而非 ttfb
+        assert records[-1].latency >= 0.09
 
 
 class TestReliableRouterDeepSeek:

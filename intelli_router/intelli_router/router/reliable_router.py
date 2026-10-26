@@ -22,6 +22,8 @@ from ..cache.local_cache import LocalCache
 from ..utils.exceptions import (
     NoDeploymentAvailable,
     AllDeploymentsFailed,
+    DeploymentError,
+    DeploymentAuthError,
     DeploymentNetworkError,
     DeploymentRateLimitError,
     DeploymentServerError,
@@ -56,6 +58,12 @@ class ReliableRouter(BaseRouter):
     """
 
     _RESERVED_REQUEST_DEFAULT_KEYS = {"model", "messages", "deployment", "stream"}
+
+    # 路由专用参数（review 9）：由 RoutingContext 承载、供策略消费
+    # （adaptive 的 session 亲和、tag 系列的标签匹配），不属于 provider
+    # 请求体。合并 request_defaults 与 request_kwargs 时统一剔除，
+    # 避免随请求发给上游（严格网关会对未知字段返回 400）。
+    _ROUTING_INTERNAL_KEYS = frozenset({"session_id", "tags"})
 
     def __init__(
         self,
@@ -194,19 +202,38 @@ class ReliableRouter(BaseRouter):
                 available.append(dep)
         return available
 
+    def _available_deployments_for_model(self, model: str) -> List[Deployment]:
+        """按 state 可用性过滤模型的候选部署（review 16）。
+
+        completion_with_fallback（BaseRouter）通过本钩子获取候选部署：
+        与 _get_available_deployments 同口径（冷却中的部署被剔除，
+        冷却到期的部署软恢复），避免 fallback 循环继续尝试冷却中的部署。
+        """
+        return self._get_available_deployments(model)
+
     def _request_kwargs_for_deployment(
         self,
         deployment: Deployment,
         request_kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
-        merged = dict(deployment.request_defaults or {})
+        # request_defaults 与 request_kwargs 都剔除路由专用参数：
+        # 它们由 RoutingContext 承载（策略消费），不进 provider body。
+        merged = {
+            key: value
+            for key, value in (deployment.request_defaults or {}).items()
+            if key not in self._ROUTING_INTERNAL_KEYS
+        }
         invalid_keys = self._RESERVED_REQUEST_DEFAULT_KEYS & set(merged)
         if invalid_keys:
             raise ValueError(
                 "deployment.request_defaults cannot contain reserved keys: "
                 f"{sorted(invalid_keys)}"
             )
-        merged.update({key: value for key, value in request_kwargs.items() if value is not None})
+        merged.update({
+            key: value
+            for key, value in request_kwargs.items()
+            if value is not None and key not in self._ROUTING_INTERNAL_KEYS
+        })
         return merged
 
     def _fallback_to_first_on_empty_selection(self) -> bool:
@@ -229,6 +256,52 @@ class ReliableRouter(BaseRouter):
     @staticmethod
     def _fallback_reason_from_error(error: Exception) -> str:
         return type(error).__name__
+
+    @staticmethod
+    def _usage_from_response(response: Any) -> Dict[str, Any]:
+        """提取响应中的 usage 字段（review 6）。
+
+        自定义 provider 的 transform_response 可能返回非 dict 响应
+        （如纯字符串）；此时 usage 按 0 处理，而不是让
+        response.get('usage') 的 AttributeError 被 except 当成部署失败
+        触发冷却重试——本地解析问题不应记成远端故障。
+        """
+        if not isinstance(response, dict):
+            return {}
+        usage = response.get("usage")
+        return usage if isinstance(usage, dict) else {}
+
+    @staticmethod
+    def _is_request_side_error(error: Exception) -> bool:
+        """判断异常是否源于请求本身而非部署（review 7）。
+
+        请求侧错误（上下文超长、参数非法、content filter 等 4xx，以及
+        本地构造/校验抛出的 ValueError/TypeError）换部署大概率同样
+        失败：不调 state.on_failure（不计失败、不冷却），避免一个坏
+        请求把整个模型池打空；但仍记录 errors 并继续 fallback 循环
+        （个别部署/网关的校验口径不同，换部署可能救回来）。
+
+        分类规则：
+        - ValueError / TypeError：本地参数构造或校验问题 → 请求侧。
+          例外：json.JSONDecodeError 虽是 ValueError 子类，但由远端
+          返回的非法 JSON（200 但 body 不是 JSON）触发，归部署侧。
+        - DeploymentError 携带 4xx status_code（details["status_code"]，
+          如 400/404/413/422）→ 请求侧。401/403（认证）与 429（限流）
+          是部署侧问题（换部署可恢复），由专属异常类型表达，不算请求侧。
+        - 其余（5xx / 超时 / 网络 / 未知异常）→ 部署侧，保持原有
+          计数冷却行为。
+        """
+        if isinstance(error, json.JSONDecodeError):
+            return False
+        if isinstance(error, (ValueError, TypeError)):
+            return True
+        if isinstance(
+            error, DeploymentError
+        ) and not isinstance(error, (DeploymentAuthError, DeploymentRateLimitError)):
+            status_code = error.details.get("status_code")
+            if isinstance(status_code, int) and 400 <= status_code < 500:
+                return True
+        return False
 
     async def _select_deployment(
         self,
@@ -277,11 +350,21 @@ class ReliableRouter(BaseRouter):
         self,
         model: str,
         messages: List[Dict[str, str]],
+        deployment: Optional[Deployment] = None,
         **kwargs
     ) -> Any:
         """
         可靠性completion - 自动路由选择和重试
+
+        Args:
+            deployment: 显式指定部署（可选）。指定时跳过选路与重试循环，
+                直接转发给 BaseRouter.completion（不参与 state 记账，
+                但保留事件配对，见 _completion_on_deployment）。
         """
+        if deployment is not None:
+            return await self._completion_on_deployment(
+                model, messages, deployment, **kwargs
+            )
         request_id = RoutingEvent.new_request_id()
         available = self._get_available_deployments(model)
         request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
@@ -352,9 +435,11 @@ class ReliableRouter(BaseRouter):
                 )
                 end_time = time.time()
                 latency = end_time - start_time
-                usage = response.get('usage') or {}
-                tokens = usage.get('completion_tokens', 0)
-                prompt_tokens = usage.get('prompt_tokens', 0)
+                # 自定义 provider 可能返回非 dict 响应：usage 按 0 处理，
+                # 而不是让 AttributeError 被当成部署失败触发冷却重试（review 6）。
+                usage = self._usage_from_response(response)
+                tokens = usage.get("completion_tokens") or 0
+                prompt_tokens = usage.get("prompt_tokens") or 0
                 # router 层是 state 的唯一写入方：延迟/token 统计统一在此更新。
                 # 不再调用 strategy.on_success——避免按旧契约在回调内转发
                 # state 更新的自定义策略造成双重计数。自定义策略需要路由
@@ -390,7 +475,10 @@ class ReliableRouter(BaseRouter):
                 # router 层是 state 的唯一写入方：失败计数与 cooldown 退避
                 # 统一在此更新（含 cooldown_time 透传）。不再调用
                 # strategy.on_failure——避免旧契约自定义策略双重计数。
-                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                # 请求侧错误（4xx / 本地 ValueError 等）不归因于部署：
+                # 不计失败、不冷却，但仍记录 errors 并继续 fallback（review 7）。
+                if not self._is_request_side_error(e):
+                    self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 context.set_failure(e)
                 errors.append((selected.id, str(e)))
                 last_failure_metadata = self._route_metadata(
@@ -436,6 +524,89 @@ class ReliableRouter(BaseRouter):
             extra=last_failure_metadata or request_extra,
         ))
         raise AllDeploymentsFailed(model=model, errors=errors)
+
+    async def _completion_on_deployment(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        deployment: Deployment,
+        **kwargs
+    ) -> Any:
+        """显式指定部署的直通路径（review 11/16）。
+
+        - 跳过选路与重试循环，直接转发给 BaseRouter.completion
+          （此前 ReliableRouter.completion 覆写丢掉了 deployment 形参，
+          外部 router.completion(..., deployment=dep) 会因
+          "got multiple values for keyword argument 'deployment'" 报
+          TypeError，completion_with_fallback 在 ReliableRouter 上无法工作）；
+        - 不参与 state 记账：调用方显式点名部署（或由
+          completion_with_fallback 自行迭代部署列表），成败不应影响
+          策略打分与冷却；
+        - 事件口径保留：REQUEST_STARTED 与终态事件
+          （REQUEST_SUCCEEDED / ALL_DEPLOYMENTS_EXHAUSTED）成对发出，
+          维持 successful + failed + 在途 == total_requests 的配对不变式
+          （直通路径无重试，异常即最终失败，EXHAUSTED 的 error_type
+          保持异常类名口径）；
+        - 路由专用参数（session_id/tags）同样剔除，不进 provider body。
+        """
+        request_id = RoutingEvent.new_request_id()
+        request_extra = {"model_group_id": self.model_group_id} if self.model_group_id else {}
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_STARTED,
+            request_id=request_id,
+            model=model,
+            total_attempts=1,
+            extra=request_extra,
+        ))
+        start_time = time.time()
+        actual_model = deployment.model_name if model == MODEL_WILDCARD else model
+        try:
+            response = await super().completion(
+                model=actual_model,
+                messages=messages,
+                deployment=deployment,
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if key not in self._ROUTING_INTERNAL_KEYS
+                },
+            )
+        except Exception as e:
+            await self.event_bus.emit(RoutingEvent(
+                event_type=RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+                request_id=request_id,
+                model=model,
+                latency=time.time() - start_time,
+                attempt=1,
+                total_attempts=1,
+                error_type=self._fallback_reason_from_error(e),
+                error_message=str(e),
+                extra=self._route_metadata(
+                    deployment,
+                    attempt=1,
+                    fallback_reason=self._fallback_reason_from_error(e),
+                ),
+            ))
+            raise
+        latency = time.time() - start_time
+        usage = self._usage_from_response(response)
+        tokens = usage.get("completion_tokens") or 0
+        prompt_tokens = usage.get("prompt_tokens") or 0
+        await self.event_bus.emit(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_SUCCEEDED,
+            request_id=request_id,
+            model=model,
+            deployment_id=deployment.id,
+            provider=deployment.provider,
+            latency=latency,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=tokens,
+            total_tokens=prompt_tokens + tokens,
+            attempt=1,
+            total_attempts=1,
+            extra=self._route_metadata(deployment, attempt=1),
+        ))
+        return response
 
     async def stream_completion(
         self,
@@ -520,6 +691,7 @@ class ReliableRouter(BaseRouter):
                 start_time = time.time()
                 actual_model = selected.model_name if model == MODEL_WILDCARD else model
                 chunk_count = 0
+                stream_usage: Optional[Dict[str, Any]] = None
                 async for chunk in self.acompletion_stream(
                     model=actual_model,
                     messages=messages,
@@ -527,6 +699,13 @@ class ReliableRouter(BaseRouter):
                     **request_kwargs,
                 ):
                     chunk_count += 1
+                    if isinstance(chunk, dict):
+                        usage = chunk.get("usage")
+                        if isinstance(usage, dict) and usage:
+                            # OpenAI 统一口径下 usage 通常只在最后一个
+                            # chunk 携带（或为累计值），取最后一份非空 usage
+                            # 作为整条流的用量。
+                            stream_usage = usage
                     if not visible_output_started and self._has_visible_stream_output(chunk):
                         visible_output_started = True
                         ttfb = time.time() - start_time
@@ -553,7 +732,15 @@ class ReliableRouter(BaseRouter):
                         route_selected_emitted = True
                     yield chunk
 
-                self.state.on_success(selected.id, ttfb, 0)
+                # 流结束后用真实数据更新 state（review 8）：latency 为整条
+                # 流的完整耗时（而非 ttfb——此前 ttfb 被当 latency、tokens
+                # 恒 0，LatencyRecord.normalized 会被放大成秒级，污染
+                # lowest_latency/adaptive 评分）；tokens 取流式累积的 usage
+                # （chunk 未携带 usage 时为 0，该记录不参与 normalized 统计）。
+                latency = time.time() - start_time
+                tokens = (stream_usage or {}).get("completion_tokens") or 0
+                prompt_tokens = (stream_usage or {}).get("prompt_tokens") or 0
+                self.state.on_success(selected.id, latency, tokens)
                 context.set_success(selected, None)
                 await self.event_bus.emit(RoutingEvent(
                     event_type=RoutingEventType.STREAM_SUCCEEDED,
@@ -562,6 +749,9 @@ class ReliableRouter(BaseRouter):
                     deployment_id=selected.id,
                     provider=selected.provider,
                     latency=time.time() - overall_start,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=tokens,
+                    total_tokens=prompt_tokens + tokens,
                     attempt=attempt + 1,
                     total_attempts=total_attempts,
                     chunk_count=chunk_count,
@@ -579,7 +769,10 @@ class ReliableRouter(BaseRouter):
                 return
 
             except Exception as e:
-                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                # 请求侧错误不计失败、不冷却（review 7，分类规则同
+                # completion()）；其余异常保持原有的计数冷却行为。
+                if not self._is_request_side_error(e):
+                    self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 if visible_output_started:
                     raise
                 if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):
@@ -837,6 +1030,7 @@ class ReliableRouter(BaseRouter):
                 visible_output_started = False
                 route_selected_emitted = False
                 stream_start = time.time()
+                stream_usage_metadata: Optional[UsageMetadata] = None
                 async for chunk in self.acompletion_stream(
                     model=actual_model,
                     messages=messages,
@@ -846,6 +1040,10 @@ class ReliableRouter(BaseRouter):
                     parsed = self._chunk_to_assistant_message_chunk(chunk)
                     if parsed is not None:
                         chunk_count += 1
+                        if parsed.usage_metadata is not None:
+                            # usage 通常只出现在最后一个 chunk（或为累计值），
+                            # 取最后一份非空 usage_metadata 作为整条流的用量。
+                            stream_usage_metadata = parsed.usage_metadata
                         if parsed.content or parsed.reasoning_content or parsed.tool_calls:
                             if not route_selected_emitted:
                                 ttft = time.time() - stream_start
@@ -868,9 +1066,21 @@ class ReliableRouter(BaseRouter):
                                 route_selected_emitted = True
                             visible_output_started = True
                         yield parsed
-                # 成功后统一更新状态（延迟统计口径与 stream_completion 一致：ttft/首 chunk 耗时，
-                # 而非整条流的总时长；空流无可解析 chunk 时兜底为 0.0）
-                self.state.on_success(selected.id, ttft if ttft is not None else 0.0, 0)
+                # 成功后用真实数据更新 state（review 8）：latency 为整条流的
+                # 完整耗时（而非 ttft），tokens 取流式累积的 usage_metadata
+                # （未携带时为 0，该记录不参与 normalized 统计）。
+                latency = time.time() - stream_start
+                tokens = (
+                    stream_usage_metadata.output_tokens
+                    if stream_usage_metadata is not None
+                    else 0
+                )
+                prompt_tokens = (
+                    stream_usage_metadata.input_tokens
+                    if stream_usage_metadata is not None
+                    else 0
+                )
+                self.state.on_success(selected.id, latency, tokens)
                 await self.event_bus.emit(RoutingEvent(
                     event_type=RoutingEventType.STREAM_SUCCEEDED,
                     request_id=request_id,
@@ -878,6 +1088,9 @@ class ReliableRouter(BaseRouter):
                     deployment_id=selected.id,
                     provider=selected.provider,
                     latency=time.time() - overall_start,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=tokens,
+                    total_tokens=prompt_tokens + tokens,
                     attempt=attempt + 1,
                     total_attempts=total_attempts,
                     chunk_count=chunk_count,
@@ -890,7 +1103,10 @@ class ReliableRouter(BaseRouter):
                 ))
                 return
             except Exception as e:
-                self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
+                # 请求侧错误不计失败、不冷却（review 7，分类规则同
+                # completion()）；其余异常保持原有的计数冷却行为。
+                if not self._is_request_side_error(e):
+                    self.state.on_failure(selected.id, e, cooldown_time=self.cooldown_time)
                 if visible_output_started:
                     raise
                 if self._uses_strict_fallback_errors() and not self._is_fallbackable_error(e):

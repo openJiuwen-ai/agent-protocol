@@ -1,5 +1,8 @@
 """Tests for intelli_router.observability.metrics."""
+import asyncio
 import importlib.util
+import threading
+import time
 
 import pytest
 from intelli_router.observability.metrics import MetricsCollector, LatencyStats
@@ -138,6 +141,53 @@ class TestMetricsCollector:
         stats = collector.get_stats()
         assert stats["retries"] == 1
         assert stats["failed"] == 0
+
+    async def test_by_deployment_includes_failed_deployment(self, collector):
+        """意见13: d1 失败一次后重试成功 d2，by_deployment 应同时含
+        d1（requests>=1, failures=1）和 d2——修复前只遍历
+        _deployment_requests（仅成功回调写入），d1 整条丢失。"""
+        await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_RETRIED,
+            deployment_id="d1",
+            error_type="TimeoutError",
+        ))
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_SUCCEEDED,
+            deployment_id="d2",
+            latency=0.3,
+        ))
+        stats = collector.get_stats()
+        by_dep = stats["by_deployment"]
+        assert set(by_dep.keys()) == {"d1", "d2"}
+        # d1: 被尝试过 1 次、失败 1 次、未成功
+        assert by_dep["d1"]["requests"] == 1
+        assert by_dep["d1"]["failures"] == 1
+        assert by_dep["d1"]["successes"] == 0
+        # d2: 被尝试过 1 次、成功 1 次
+        assert by_dep["d2"]["requests"] == 1
+        assert by_dep["d2"]["successes"] == 1
+        assert by_dep["d2"]["failures"] == 0
+        # 语义约束：RETRIED 不改变全局 failed 口径（仅 EXHAUSTED 累加）
+        assert stats["failed"] == 0
+        assert stats["retries"] == 1
+
+    async def test_by_deployment_requests_equals_attempts(self, collector):
+        """意见13: by_deployment.requests = 该部署被尝试次数
+        = successes + failures。"""
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_RETRIED, deployment_id="d1",
+            error_type="TimeoutError"))
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_RETRIED, deployment_id="d1",
+            error_type="TimeoutError"))
+        await collector.handle_event(_event(
+            RoutingEventType.REQUEST_SUCCEEDED, deployment_id="d1",
+            latency=0.2))
+        by_dep = collector.get_stats()["by_deployment"]["d1"]
+        assert by_dep["requests"] == 3
+        assert by_dep["failures"] == 2
+        assert by_dep["successes"] == 1
 
     async def test_failed_accumulates_across_exhaustions(self, collector):
         """多次最终失败累计计数，reset 归零。"""
@@ -278,6 +328,34 @@ class TestMetricsCollector:
         assert stats["tokens_per_sec"]["count"] == 0
         assert stats["tokens_per_sec"]["avg"] == 0.0
 
+    async def test_stream_tokens_counted_when_usage_reported(self, collector):
+        """流式事件携带真实 usage 时，token 应被统计（意见 8 后半句）。
+
+        router 从流式 usage 中提取 token 数放入 STREAM_SUCCEEDED 事件；
+        此前流式输出完全不计入 tokens 统计。chunk 冒充 token 的场景
+        由上一个测试守护（不带 token 的事件不统计）。
+        """
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_SUCCEEDED,
+            deployment_id="dep-1",
+            latency=2.0,
+            chunk_count=80,
+            prompt_tokens=1000,
+            completion_tokens=40,
+        ))
+        stats = collector.get_stats()
+        assert stats["tokens"]["prompt"] == 1000
+        assert stats["tokens"]["completion"] == 40
+        # by_deployment 的 tokens 同步累计
+        assert stats["by_deployment"]["dep-1"]["tokens"] == 1040
+        # 真实 token 的吐字速率：40 tokens / 2s = 20 tokens/s
+        assert stats["tokens_per_sec"]["count"] == 1
+        assert stats["tokens_per_sec"]["avg"] == 20.0
+        # chunk 速率独立统计
+        assert stats["chunks_per_sec"]["count"] == 1
+        assert stats["chunks_per_sec"]["avg"] == 40.0
+
     async def test_chunks_per_sec_and_tokens_per_sec_independent(self, collector):
         """流式与非流式样本分别进入两个独立序列。"""
         # 非流式：100 tokens / 2s = 50 tokens/s
@@ -396,6 +474,213 @@ class TestExposePrometheus:
         server, thread = collector.expose_prometheus(port=0)
         try:
             assert server.server_port != 0
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
+class TestThreadSafety:
+    """意见14: MetricsCollector 是 EventBus handler（请求协程并发调用），
+    同时 ThreadingHTTPServer /api/stats 线程并发读 get_stats——统计
+    字典须有锁保护，否则 keys() | keys() 等遍历会抛
+    "dictionary changed size during iteration"。"""
+
+    def _feed_events(self, collector, n_events, tag, errors):
+        """在独立事件循环里喂 n_events 组（STARTED + RETRIED/SUCCEEDED），
+        任何异常收集到 errors。"""
+        async def run():
+            for i in range(n_events):
+                model = f"model-{tag}-{i % 7}"
+                dep = f"dep-{tag}-{i % 5}"
+                await collector.handle_event(RoutingEvent(
+                    event_type=RoutingEventType.REQUEST_STARTED,
+                    request_id=f"{tag}-{i}", model=model,
+                    timestamp=time.time(),
+                ))
+                if i % 2 == 0:
+                    await collector.handle_event(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_RETRIED,
+                        request_id=f"{tag}-{i}", model=model,
+                        deployment_id=dep, error_type="TimeoutError",
+                        timestamp=time.time(),
+                    ))
+                else:
+                    await collector.handle_event(RoutingEvent(
+                        event_type=RoutingEventType.REQUEST_SUCCEEDED,
+                        request_id=f"{tag}-{i}", model=model,
+                        deployment_id=dep, latency=0.1,
+                        timestamp=time.time(),
+                    ))
+        try:
+            asyncio.run(run())
+        except Exception as e:  # noqa: BLE001 - 收集后统一断言
+            errors.append(e)
+
+    def test_concurrent_handle_event_and_get_stats(self):
+        """多线程并发喂事件 + 并发 get_stats 不抛异常，且记账不丢不重。"""
+        collector = MetricsCollector()
+        errors = []
+        stop = threading.Event()
+
+        def reader():
+            # 模拟 ThreadingHTTPServer 的 /api/stats 线程持续读快照
+            while not stop.is_set():
+                try:
+                    stats = collector.get_stats()
+                    assert "by_deployment" in stats
+                    for dep_stats in stats["by_deployment"].values():
+                        # requests = successes + failures 的不变式
+                        # 在任意快照时刻都应成立
+                        assert (
+                            dep_stats["requests"]
+                            >= dep_stats["successes"]
+                        )
+                except Exception as e:  # noqa: BLE001
+                    errors.append(e)
+                    return
+
+        readers = [threading.Thread(target=reader) for _ in range(3)]
+        for t in readers:
+            t.start()
+        writers = [
+            threading.Thread(
+                target=self._feed_events, args=(collector, 150, f"w{i}", errors))
+            for i in range(4)
+        ]
+        for t in writers:
+            t.start()
+        for t in writers:
+            t.join(timeout=60)
+        stop.set()
+        for t in readers:
+            t.join(timeout=10)
+
+        assert not errors, f"concurrent access raised: {errors!r}"
+        # 写入全部完成：total = STARTED 数；终态（RETRIED/SUCCEEDED）与
+        # STARTED 一一配对
+        stats = collector.get_stats()
+        assert stats["total_requests"] == 4 * 150
+        assert stats["retries"] + stats["successful"] == 4 * 150
+        # by_deployment 的 requests 同样守恒（每对事件恰好一次尝试）
+        total_dep_requests = sum(
+            d["requests"] for d in stats["by_deployment"].values())
+        assert total_dep_requests == 4 * 150
+
+    def test_concurrent_reset_and_get_stats(self):
+        """reset 与 get_stats/记账并发不抛异常。"""
+        collector = MetricsCollector()
+        self._feed_events(collector, 50, "seed", [])
+        errors = []
+        stop = threading.Event()
+
+        def churn():
+            while not stop.is_set():
+                try:
+                    collector.reset()
+                    collector.get_stats()
+                except Exception as e:  # noqa: BLE001
+                    errors.append(e)
+                    return
+
+        threads = [threading.Thread(target=churn) for _ in range(3)]
+        for t in threads:
+            t.start()
+        self._feed_events(collector, 100, "w", errors)
+        stop.set()
+        for t in threads:
+            t.join(timeout=10)
+        assert not errors, errors
+
+
+class TestPrometheusRegistry:
+    """意见12: MetricsCollector 支持自定义 prometheus registry，
+    同进程多个 collector 可并存（指标名只由 prefix 决定，全部注册
+    全局默认 registry 时同 prefix 第二个实例抛 DuplicateTimeseries）。"""
+
+    def _prom_available(self):
+        if importlib.util.find_spec("prometheus_client") is None:
+            pytest.skip("prometheus-client is not installed")
+
+    def _succeed(self, collector):
+        asyncio.run(collector.handle_event(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_SUCCEEDED,
+            request_id="r1", model="gpt-4",
+            deployment_id="d1", latency=0.1, timestamp=1000.0,
+        )))
+
+    def test_two_collectors_custom_registries_no_conflict(self):
+        """同 prefix 的两个 collector 用不同自定义 registry 不冲突，
+        且计数相互隔离。"""
+        self._prom_available()
+        from prometheus_client import CollectorRegistry, generate_latest
+
+        c1 = MetricsCollector(
+            enable_prometheus=True, prometheus_prefix="multi_coll",
+            prometheus_registry=CollectorRegistry())
+        c2 = MetricsCollector(
+            enable_prometheus=True, prometheus_prefix="multi_coll",
+            prometheus_registry=CollectorRegistry())
+        assert c1._registry is not c2._registry
+
+        # 事件只计入 c1 的 registry（c2 的同名指标存在但值为 0）
+        self._succeed(c1)
+        out1 = generate_latest(c1._registry).decode()
+        assert (
+            'multi_coll_requests_total{model="gpt-4",status="success"} 1.0'
+            in out1
+        )
+        assert c1._registry.get_sample_value(
+            "multi_coll_requests_total",
+            {"model": "gpt-4", "status": "success"}) == 1.0
+        assert c2._registry.get_sample_value(
+            "multi_coll_requests_total",
+            {"model": "gpt-4", "status": "success"}) is None
+
+    def test_custom_registry_not_registered_globally(self):
+        """自定义 registry 的指标不进全局默认 registry（隔离）。"""
+        self._prom_available()
+        from prometheus_client import REGISTRY, CollectorRegistry
+
+        c = MetricsCollector(
+            enable_prometheus=True, prometheus_prefix="iso_check",
+            prometheus_registry=CollectorRegistry())
+        self._succeed(c)
+        assert c._registry.get_sample_value(
+            "iso_check_requests_total",
+            {"model": "gpt-4", "status": "success"}) == 1.0
+        assert REGISTRY.get_sample_value(
+            "iso_check_requests_total",
+            {"model": "gpt-4", "status": "success"}) is None
+
+    def test_default_registry_backward_compatible(self):
+        """不传 prometheus_registry 时保持旧行为：注册到全局默认 registry。"""
+        self._prom_available()
+        from prometheus_client import REGISTRY
+
+        c = MetricsCollector(
+            enable_prometheus=True, prometheus_prefix="compat_def_reg")
+        assert c._registry is None
+        self._succeed(c)
+        assert REGISTRY.get_sample_value(
+            "compat_def_reg_requests_total",
+            {"model": "gpt-4", "status": "success"}) == 1.0
+
+    def test_expose_prometheus_serves_custom_registry(self):
+        """expose_prometheus 也挂在 collector 自己的 registry 上。"""
+        self._prom_available()
+        import urllib.request
+        from prometheus_client import CollectorRegistry
+
+        c = MetricsCollector(
+            enable_prometheus=True, prometheus_prefix="expose_custom",
+            prometheus_registry=CollectorRegistry())
+        self._succeed(c)
+        server, thread = c.expose_prometheus(port=0)
+        try:
+            body = urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/metrics").read()
+            assert b"expose_custom_requests_total" in body
         finally:
             server.shutdown()
             server.server_close()

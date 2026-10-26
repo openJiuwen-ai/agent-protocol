@@ -9,7 +9,10 @@ from intelli_router.strategy.adaptive import AdaptiveStrategy
 from intelli_router.core.deployment import Deployment, DeploymentStatus
 from intelli_router.utils.exceptions import (
     AllDeploymentsFailed,
+    DeploymentAuthError,
+    DeploymentError,
     DeploymentNetworkError,
+    DeploymentServerError,
     NoDeploymentAvailable,
     RouterError,
 )
@@ -159,13 +162,17 @@ def test_get_available_cooldown_expired_restores_health_state(reliable_router, d
 
 @pytest.mark.asyncio
 async def test_soft_recovered_dead_deployment_can_reenter_cooldown(sample_deployments):
-    """issue #49 端到端场景：dead 服务软恢复后，后续调用失败应能重新进入 COOLDOWN。"""
+    """issue #49 端到端场景：dead 服务软恢复后，后续调用失败应能重新进入 COOLDOWN。
+
+    注：mock 异常用部署侧的 DeploymentNetworkError（PR #358 意见 7 起，
+    本地 ValueError 属请求侧错误，不再触发 on_failure/冷却）。
+    """
     # 用单部署 + 固定选择，模拟 openai-dead
     dead = Deployment(model_name="dead-model", api_key="k", api_base="b")
     router = ReliableRouter(deployments=[dead], strategy="simple-shuffle", num_retries=0)
 
     # 第1轮：请求失败 → COOLDOWN
-    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("dead"))):
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=DeploymentNetworkError(dead.id, "dead"))):
         with pytest.raises(RouterError):
             await router.completion("dead-model", [{"role": "user", "content": "hi"}])
     assert router.state.deployment_status[dead.id] == DeploymentStatus.COOLDOWN
@@ -175,7 +182,7 @@ async def test_soft_recovered_dead_deployment_can_reenter_cooldown(sample_deploy
     router.state.cooldown_until[dead.id] = time.time() - 1
 
     # 第2轮：软恢复后再次调用，失败 → 应重新进入 COOLDOWN 而非停留在 healthy
-    with patch.object(router, '_make_request', new=AsyncMock(side_effect=ValueError("still dead"))):
+    with patch.object(router, '_make_request', new=AsyncMock(side_effect=DeploymentNetworkError(dead.id, "still dead"))):
         with pytest.raises(RouterError):
             await router.completion("dead-model", [{"role": "user", "content": "hi"}])
     assert router.state.deployment_status[dead.id] == DeploymentStatus.COOLDOWN
@@ -440,6 +447,141 @@ async def test_stream_all_fail_maps_to_503(reliable_router):
     assert get_status_code(exc_info.value) == 503
 
 
+# -------- request-side vs deployment-side error classification (PR #358 review 7) --------
+
+@pytest.mark.asyncio
+async def test_4xx_error_no_failure_no_cooldown_but_falls_back(
+    deployment_gpt4_1, deployment_gpt4_2,
+):
+    """PR #358 意见 7: 400 类请求侧错误（上下文超长/参数非法/content
+    filter）不归因于部署——不调 state.on_failure（不计失败、不冷却），
+    但仍记录 errors 并继续 fallback 循环（换部署可能救回来）。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="simple-shuffle",
+        num_retries=1,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        if len(calls) == 1:
+            # _make_request 对其他 4xx 的映射形态：DeploymentError + status_code
+            raise DeploymentError(
+                message=f"Deployment '{deployment.id}' returned HTTP 400",
+                details={
+                    "deployment_id": deployment.id,
+                    "status_code": 400,
+                    "response_body": "maximum context length exceeded",
+                },
+            )
+        return {"choices": [], "usage": {"completion_tokens": 5}}
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result == {"choices": [], "usage": {"completion_tokens": 5}}
+    # 仍尝试了下一个部署（请求侧错误不中断 fallback 循环）
+    assert len(calls) == 2
+    assert calls[0] != calls[1]
+    # 不计失败、不冷却（两个部署均无失败记录）
+    for dep_id in (deployment_gpt4_1.id, deployment_gpt4_2.id):
+        assert router.state.consecutive_failures.get(dep_id, 0) == 0
+        assert router.state.deployment_status.get(dep_id, DeploymentStatus.HEALTHY) != DeploymentStatus.COOLDOWN
+        assert router.state.cooldown_until.get(dep_id) is None
+
+
+@pytest.mark.asyncio
+async def test_5xx_error_still_counts_failure_and_cooldown(
+    deployment_gpt4_1, deployment_gpt4_2,
+):
+    """PR #358 意见 7: 5xx 部署侧错误保持原有行为——计数失败并冷却。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="simple-shuffle",
+        num_retries=1,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        if len(calls) == 1:
+            raise DeploymentServerError(
+                deployment.id, status_code=502, response_body="bad gateway"
+            )
+        return {"choices": [], "usage": {"completion_tokens": 5}}
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        result = await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    assert result is not None
+    failed_dep = calls[0]
+    assert router.state.consecutive_failures.get(failed_dep) == 1
+    assert router.state.deployment_status.get(failed_dep) == DeploymentStatus.COOLDOWN
+    assert router.state.cooldown_until.get(failed_dep, 0) > time.time()
+    # 另一个部署成功，无失败记录
+    assert router.state.consecutive_failures.get(calls[1], 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_local_value_error_is_request_side_no_cooldown(
+    deployment_gpt4_1, deployment_gpt4_2,
+):
+    """PR #358 意见 7: 本地 ValueError（参数构造/校验问题）也算请求侧——
+    不计失败不冷却；所有部署仍被尝试，最终 AllDeploymentsFailed。"""
+    router = ReliableRouter(
+        deployments=[deployment_gpt4_1, deployment_gpt4_2],
+        strategy="simple-shuffle",
+        num_retries=1,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.id)
+        raise ValueError("invalid request parameter")
+
+    with patch.object(router, '_make_request', new=mock_make_request):
+        with pytest.raises(AllDeploymentsFailed) as exc_info:
+            await router.completion("gpt-4", [{"role": "user", "content": "hi"}])
+
+    # fallback 循环继续：两个部署都被尝试，errors 都被记录
+    assert len(calls) == 2
+    errors = exc_info.value.details["errors"]
+    assert len(errors) == 2
+    # 但都不计失败、不冷却
+    assert router.state.consecutive_failures == {}
+    assert router.state.cooldown_until == {}
+
+
+@pytest.mark.asyncio
+async def test_auth_and_rate_limit_errors_are_deployment_side():
+    """PR #358 意见 7 边界: 401/403（认证）与 429（限流）是部署侧问题
+    （换部署可恢复），保持原有的计数冷却行为。"""
+    dep = Deployment(id="dep_auth", model_name="m", api_key="k", api_base="b")
+    router = ReliableRouter(deployments=[dep], strategy="simple-shuffle", num_retries=0)
+
+    with patch.object(
+        router, '_make_request',
+        new=AsyncMock(side_effect=DeploymentAuthError(dep.id, status_code=401)),
+    ):
+        with pytest.raises(AllDeploymentsFailed):
+            await router.completion("m", [{"role": "user", "content": "hi"}])
+
+    assert router.state.consecutive_failures.get(dep.id) == 1
+    assert router.state.deployment_status.get(dep.id) == DeploymentStatus.COOLDOWN
+
+
+def test_available_deployments_for_model_matches_get_available(reliable_router):
+    """PR #358 意见 16: ReliableRouter 覆写 _available_deployments_for_model
+    钩子，与 _get_available_deployments 同口径（冷却中的部署被剔除）。"""
+    assert (
+        reliable_router._available_deployments_for_model("gpt-4")
+        == reliable_router._get_available_deployments("gpt-4")
+    )
+    # dep_cooldown 初始 COOLDOWN 被排除，只剩两个健康部署
+    assert len(reliable_router._available_deployments_for_model("gpt-4")) == 2
+
+
 # -------- batch_completion --------
 
 @pytest.mark.asyncio
@@ -652,7 +794,9 @@ async def test_legacy_strategy_no_double_counting():
     router = ReliableRouter(deployments=deps, strategy=LegacyStrategy(state))
 
     async def mock_make_request(deployment, request_body):
-        raise ValueError("boom")
+        # 部署侧异常（PR #358 意见 7 起，本地 ValueError 属请求侧错误、
+        # 不再进 on_failure，无法覆盖本测试关心的双重计数路径）
+        raise DeploymentNetworkError(deployment.id, "boom")
     router._make_request = mock_make_request
 
     with pytest.raises(RouterError):

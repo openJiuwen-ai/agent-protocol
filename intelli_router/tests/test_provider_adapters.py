@@ -740,6 +740,43 @@ class TestBedrockProviderAdapter:
         )
         assert result["toolConfig"]["toolChoice"] == {"tool": {"name": "my_func"}}
 
+    def test_transform_request_tool_choice_none_omits_tool_config(self):
+        """Bedrock Converse 不支持 tool_choice='none'：整个 toolConfig（含工具声明）都不发送。"""
+        messages = [{"role": "user", "content": "Hi"}]
+        tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+        result = self.adapter.transform_request(
+            model="m", messages=messages, deployment=self.dep,
+            tools=tools, tool_choice="none",
+        )
+        assert "toolConfig" not in result
+        assert "messages" in result
+
+    def test_transform_request_tool_choice_none_dict_omits_tool_config(self):
+        """{"type": "none"} 与字符串 "none" 同样处理。"""
+        messages = [{"role": "user", "content": "Hi"}]
+        tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+        result = self.adapter.transform_request(
+            model="m", messages=messages, deployment=self.dep,
+            tools=tools, tool_choice={"type": "none"},
+        )
+        assert "toolConfig" not in result
+
+    def test_transform_request_tool_choice_none_without_tools(self):
+        """无 tools 时 none 同样不产生 toolConfig。"""
+        messages = [{"role": "user", "content": "Hi"}]
+        result = self.adapter.transform_request(
+            model="m", messages=messages, deployment=self.dep,
+            tool_choice="none",
+        )
+        assert "toolConfig" not in result
+
+    def test_convert_tool_choice_none_raises(self):
+        """_convert_tool_choice 不再把 'none' 静默映射成 auto（语义反转）。"""
+        with pytest.raises(ValueError, match="omitting toolConfig"):
+            BedrockProviderAdapter._convert_tool_choice("none")
+        with pytest.raises(ValueError, match="omitting toolConfig"):
+            BedrockProviderAdapter._convert_tool_choice({"type": "none"})
+
     def test_transform_request_multi_turn_with_tool_calls(self):
         messages = [
             {"role": "user", "content": "What's the weather in Tokyo?"},
@@ -1109,6 +1146,62 @@ class TestAnthropicConvertMessages:
         tool_result = result[1]["content"][0]
         assert tool_result["type"] == "tool_result"
         assert json.loads(tool_result["content"]) == {"result": 42}
+
+    def test_parallel_tool_results_merged_into_single_user_message(self):
+        """并行 tool_calls 的多条 tool 结果必须合并在同一条 user 消息里（Anthropic 要求 user/assistant 严格交替）。"""
+        messages = [
+            {"role": "user", "content": "What's the weather in Tokyo and Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "tc_1", "type": "function",
+                     "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}},
+                    {"id": "tc_2", "type": "function",
+                     "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "tc_1", "content": "Sunny, 25C"},
+            {"role": "tool", "tool_call_id": "tc_2", "content": "Rainy, 12C"},
+        ]
+        result = AnthropicProviderAdapter._convert_messages(messages)
+        assert [m["role"] for m in result] == ["user", "assistant", "user"]
+        tool_results = result[2]["content"]
+        assert len(tool_results) == 2
+        assert all(b["type"] == "tool_result" for b in tool_results)
+        assert [b["tool_use_id"] for b in tool_results] == ["tc_1", "tc_2"]
+        assert tool_results[0]["content"] == "Sunny, 25C"
+        assert tool_results[1]["content"] == "Rainy, 12C"
+
+    def test_tool_result_after_normal_user_not_merged(self):
+        """普通 user 文本消息后紧跟的 tool 结果不并入该消息（只有紧邻 tool 消息才合并）。"""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "tc_1", "content": "42"},
+        ]
+        result = AnthropicProviderAdapter._convert_messages(messages)
+        assert len(result) == 2
+        assert result[0]["content"] == [{"type": "text", "text": "hi"}]
+        assert result[1]["role"] == "user"
+        assert result[1]["content"] == [{
+            "type": "tool_result", "tool_use_id": "tc_1", "content": "42",
+        }]
+
+    def test_normal_user_after_tool_results_kept_separate(self):
+        """tool 结果之后的普通 user 消息保持独立，不并入 tool_result 消息。"""
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "tc_1", "function": {"name": "fn1", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "tc_1", "content": "42"},
+            {"role": "user", "content": "thanks"},
+        ]
+        result = AnthropicProviderAdapter._convert_messages(messages)
+        assert [m["role"] for m in result] == ["assistant", "user", "user"]
+        assert result[1]["content"][0]["type"] == "tool_result"
+        assert result[2]["content"] == [{"type": "text", "text": "thanks"}]
 
 
 # =========================================================================
@@ -1510,6 +1603,70 @@ class TestGeminiMessageConversion:
         tool_result = result["contents"][-1]["parts"][0]
         assert tool_result["functionResponse"]["name"] == "fn1"
 
+    def test_tool_result_name_resolved_from_tool_call_id_mapping(self):
+        """OpenAI 规范 tool 消息不带 name；functionResponse.name 从 assistant tool_calls 的映射解析。"""
+        result = self.adapter.transform_request(
+            model="gemini-1.5-pro",
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "t1", "type": "function",
+                        "function": {"name": "weather", "arguments": '{"city": "SF"}'},
+                    }],
+                },
+                {"role": "tool", "tool_call_id": "t1", "content": "Sunny"},
+            ],
+            deployment=self.dep,
+        )
+        tool_result = result["contents"][-1]["parts"][0]
+        assert tool_result["functionResponse"]["name"] == "weather"
+        assert tool_result["functionResponse"]["response"]["name"] == "weather"
+        assert tool_result["functionResponse"]["response"]["content"] == "Sunny"
+
+    def test_tool_result_with_unknown_tool_call_id_raises(self):
+        """tool_call_id 无法映射到任何 assistant tool_call 时抛错，不静默写 unknown_tool。"""
+        with pytest.raises(ValueError, match="no matching assistant tool_call"):
+            self.adapter.transform_request(
+                model="gemini-1.5-pro",
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "t1", "type": "function",
+                            "function": {"name": "weather", "arguments": "{}"},
+                        }],
+                    },
+                    {"role": "tool", "tool_call_id": "unknown_id", "content": "Sunny"},
+                ],
+                deployment=self.dep,
+            )
+
+    def test_assistant_none_content_produces_no_text_part(self):
+        """content=None 的纯 tool_calls 消息不产生 {'text': 'None'} part。"""
+        result = self.adapter.transform_request(
+            model="gemini-1.5-pro",
+            messages=[
+                {"role": "user", "content": "Weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "tc_1", "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"loc": "Beijing"}'},
+                    }],
+                },
+            ],
+            deployment=self.dep,
+        )
+        parts = result["contents"][1]["parts"]
+        assert {"text": "None"} not in parts
+        assert all("text" not in p for p in parts)
+        assert len(parts) == 1
+        assert parts[0]["functionCall"]["name"] == "get_weather"
+
     def test_assistant_with_tool_calls(self):
         result = self.adapter.transform_request(
             model="gemini-1.5-pro",
@@ -1714,3 +1871,61 @@ class TestAnthropicMultimodal:
         ]}]
         content = self._get_user_content(messages)
         assert content[0] == {"type": "text", "text": "Hello world"}
+
+
+# ============================================================
+# Gemini 多模态 parts 转换（proto JSON camelCase 命名）
+# ============================================================
+
+class TestGeminiMultimodal:
+    """测试 Gemini adapter 的 OpenAI → Gemini 多模态 parts 转换。
+
+    Gemini REST 请求体使用 proto JSON 命名（camelCase）：
+    inlineData/mimeType、fileData/fileUri。snake_case 字段会被 Gemini 忽略或拒绝。
+    """
+
+    def setup_method(self):
+        self.adapter = GeminiProviderAdapter()
+        self.dep = Deployment(
+            id="test-gemini",
+            model_name="gemini-1.5-pro",
+            api_key="google-test-key",
+            api_base="https://generativelanguage.googleapis.com",
+            provider="google-gemini",
+        )
+
+    def _get_parts(self, messages):
+        result = self.adapter.transform_request(
+            model="gemini-1.5-pro",
+            messages=messages,
+            deployment=self.dep,
+        )
+        return result["contents"][0]["parts"]
+
+    def test_image_url_base64_uses_camelcase_inline_data(self):
+        """data URI 图片 → parts 含 inlineData/mimeType 键。"""
+        parts = self._get_parts([{"role": "user", "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {
+                "url": "data:image/png;base64,iVBORw0KGgo=",
+            }},
+        ]}])
+        assert parts[0] == {"text": "What's in this image?"}
+        assert parts[1] == {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}
+
+    def test_image_url_http_uses_camelcase_file_data(self):
+        """http(s) URL 图片 → parts 含 fileData/fileUri 键。"""
+        parts = self._get_parts([{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
+        ]}])
+        assert parts[0] == {"fileData": {"mimeType": "image/jpeg", "fileUri": "https://example.com/photo.jpg"}}
+
+    def test_no_snake_case_multimodal_keys_emitted(self):
+        """不应再出现 snake_case 的 inline_data/file_data/mime_type/file_uri 键。"""
+        parts = self._get_parts([{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
+        ]}])
+        dumped = json.dumps(parts)
+        for snake_key in ("inline_data", "file_data", "mime_type", "file_uri"):
+            assert snake_key not in dumped

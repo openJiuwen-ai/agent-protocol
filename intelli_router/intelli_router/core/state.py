@@ -225,8 +225,17 @@ class LocalRouterState:
 
         无延迟记录时返回 float('inf')（未预热部署），策略据此
         将其延迟得分记为最低优先级，而非报错。
+
+        tokens<=0 的记录（如未携带 usage 的流式请求）不参与归一化
+        统计：其 normalized 退化为 latency/1（秒级），混入会放大
+        lowest_latency/adaptive 的评分；这些记录仍保留 raw latency
+        （get_average_latency_raw 可见）。若不存在任何 tokens>0 的
+        样本，同样返回 inf（归一化口径未预热）。
         """
-        records = self.latencies.get(deployment_id, [])
+        records = [
+            r for r in self.latencies.get(deployment_id, [])
+            if r.tokens > 0
+        ]
         if not records:
             return float('inf')
         return sum(r.normalized for r in records) / len(records)

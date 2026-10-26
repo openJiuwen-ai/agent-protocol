@@ -104,6 +104,61 @@ def test_ttl_expiry(short_ttl_cache):
     assert short_ttl_cache.get_cache("key") is None
 
 
+# -------- TTL 语义 (意见 20) --------
+
+def test_set_cache_ttl_zero_means_immediately_expired(empty_cache):
+    """ttl=0 是合法值（立即过期），不得被静默替换成默认 TTL。"""
+    empty_cache.set_cache("key", "value", ttl=0)
+    assert empty_cache.get_cache("key") is None
+
+
+def test_set_cache_ttl_zero_expired_for_get_cache_with_ttl(empty_cache):
+    empty_cache.set_cache("key", "value", ttl=0)
+    val, remaining = empty_cache.get_cache_with_ttl("key")
+    assert val is None
+    assert remaining is None
+
+
+def test_set_cache_negative_ttl_means_immediately_expired(empty_cache):
+    empty_cache.set_cache("key", "value", ttl=-1)
+    assert empty_cache.get_cache("key") is None
+
+
+def test_set_cache_ttl_zero_entry_removed_by_cleanup(empty_cache):
+    empty_cache.set_cache("zero", "v", ttl=0)
+    assert empty_cache.cleanup_expired() == 1
+    assert empty_cache.size() == 0
+
+
+def test_set_cache_ttl_none_falls_back_to_default_ttl():
+    """ttl=None（未提供）仍使用 default_ttl，行为不变。"""
+    cache = LocalCache(max_size=10, default_ttl=0.01)
+    cache.set_cache("key", "value")  # 未传 ttl
+    assert cache.get_cache("key") == "value"  # 默认 TTL 内可命中
+    time.sleep(0.02)
+    assert cache.get_cache("key") is None  # 默认 TTL 到期后过期
+
+
+def test_set_cache_explicit_ttl_overrides_default():
+    """显式 ttl（含 0 之外的任意值）优先于 default_ttl。"""
+    cache = LocalCache(max_size=10, default_ttl=0.01)
+    cache.set_cache("key", "value", ttl=3600)
+    time.sleep(0.02)
+    assert cache.get_cache("key") == "value"
+
+
+def test_set_cache_ttl_zero_async_path_too():
+    import asyncio
+
+    cache = LocalCache(max_size=10, default_ttl=3600)
+
+    async def run():
+        await cache.async_set_cache("key", "value", ttl=0)
+        return await cache.async_get_cache("key")
+
+    assert asyncio.run(run()) is None
+
+
 def test_get_cache_with_ttl_valid(empty_cache):
     empty_cache.set_cache("key", "value", ttl=3600)
     val, ttl = empty_cache.get_cache_with_ttl("key")

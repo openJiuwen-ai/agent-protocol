@@ -307,6 +307,8 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
         关键点：
         - content 字段必须为 list（不能是纯字符串）
         - tool 结果消息映射为 tool_result content block
+        - 并行 tool_calls 的多条紧邻 tool 结果合并进同一条 user 消息
+          （Anthropic 要求 user/assistant 严格交替）
         """
         result: List[Dict[str, Any]] = []
         for msg in messages:
@@ -314,14 +316,25 @@ class AnthropicProviderAdapter(BaseProviderAdapter):
             content = msg.get("content", "")
 
             if role == "tool":
-                result.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": msg.get("tool_call_id", ""),
-                        "content": content if isinstance(content, str) else json.dumps(content),
-                    }],
-                })
+                tool_result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": content if isinstance(content, str) else json.dumps(content),
+                }
+                # 只有紧邻的 tool 消息才合并：若 result 最后一条已是 user 且
+                # 其 content 全部由 tool_result block 组成（即上一条也是 tool
+                # 消息），把新的 tool_result block 追加进去；普通 user 文本
+                # 消息不与 tool 结果混排。
+                last = result[-1] if result else None
+                if (
+                    last is not None
+                    and last["role"] == "user"
+                    and last["content"]
+                    and all(b.get("type") == "tool_result" for b in last["content"])
+                ):
+                    last["content"].append(tool_result_block)
+                else:
+                    result.append({"role": "user", "content": [tool_result_block]})
             elif role == "assistant":
                 blocks: List[Dict[str, Any]] = []
                 if content:

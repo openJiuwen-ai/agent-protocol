@@ -7,7 +7,7 @@ import asyncio
 import json
 import time
 import httpx
-from ..core.deployment import Deployment
+from ..core.deployment import Deployment, DeploymentStatus
 from ..core.state import LocalRouterState
 from ..provider.registry import get_provider_adapter
 
@@ -157,13 +157,52 @@ class SDKHealthChecker:
         return results
 
     def get_healthy_deployments(self, now: float) -> List[Deployment]:
-        """获取健康部署列表"""
+        """获取健康部署列表
+
+        两重条件（缺一不可）：
+        1. 健康检查通过：state.health_state 为 True（默认 True）；
+        2. 运行期状态可用：RouterState 里非"未过期的 COOLDOWN"。
+
+        运行期可用性以 RouterState 为准（base_strategy 契约明示
+        "state 是运行期状态的唯一事实源"）：真实请求失败触发的冷却
+        只写进 state（on_failure），不会写回 Deployment 对象。此前
+        用 dep.is_available(now) 判定读不到运行期冷却——router 认为
+        冷却中而 checker 报健康，与 _get_available_deployments 口径
+        不一致。
+
+        Deployment.is_available 只反映构造期静态配置（Deployment
+        自带的 status/cooldown_until 字段），保留给构造期静态检查
+        （如配置装载时校验）使用，不用于运行期判定。
+        """
         healthy = []
         for dep in self.deployments:
-            if self.state.health_state.get(dep.id, True):
-                if dep.is_available(now):
-                    healthy.append(dep)
+            if not self.state.health_state.get(dep.id, True):
+                continue
+            if not self._is_state_available(dep.id, now):
+                continue
+            healthy.append(dep)
         return healthy
+
+    def _is_state_available(self, deployment_id: str, now: float) -> bool:
+        """按 RouterState 判定部署运行期是否可用
+
+        与 ReliableRouter._get_available_deployments 同口径：
+        state.deployment_status 非 COOLDOWN 即可用；COOLDOWN 但
+        cooldown_until 已过期也视为可用（DeploymentStatus 枚举只有
+        HEALTHY/COOLDOWN，不存在 UNHEALTHY 成员）。
+
+        这里只做判定、不做 reset_deployment 软恢复——软恢复是 router
+        调度路径的职责，查询方法不应有写副作用。
+        """
+        with self.state.lock:
+            status = self.state.deployment_status.get(
+                deployment_id, DeploymentStatus.HEALTHY
+            )
+            if status == DeploymentStatus.COOLDOWN:
+                cooldown_until = self.state.cooldown_until.get(deployment_id, 0)
+                if now < cooldown_until:
+                    return False
+            return True
 
     def get_unhealthy_ids(self) -> Set[str]:
         """获取不健康部署ID集合"""

@@ -60,7 +60,13 @@ class Deployment:
         """字段类型与数值校验"""
         for name in ("model_name", "api_key", "api_base", "provider"):
             value = getattr(self, name)
-            if not isinstance(value, str) or not value:
+            # aws-bedrock 允许空 api_key：为空时由
+            # BedrockProviderAdapter._parse_credentials 回退到
+            # botocore 默认凭证链；其余 provider 仍强制非空。
+            empty_allowed = (
+                name == "api_key" and self.provider == "aws-bedrock"
+            )
+            if not isinstance(value, str) or (not value and not empty_allowed):
                 raise ValueError(
                     f"Deployment.{name} must be a non-empty string, got {value!r}"
                 )
@@ -127,7 +133,8 @@ class Deployment:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Deployment":
-        """从字典反序列化"""
+        """从字典反序列化（不修改调用方传入的字典）"""
+        data = dict(data)
         data["status"] = DeploymentStatus(data.get("status", "healthy"))
         return cls(**data)
 

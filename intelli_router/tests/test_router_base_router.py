@@ -559,6 +559,19 @@ async def test_fallback_no_fallback_specified(base_router):
         assert result == {"ok": True}
 
 
+# -------- _available_deployments_for_model hook (PR #358 review 16) --------
+
+def test_available_deployments_for_model_default_returns_all(base_router):
+    """PR #358 意见 16: BaseRouter 默认钩子返回模型全部部署（不过滤，
+    历史行为）；带状态管理的子类（ReliableRouter）覆写为 state 过滤版，
+    completion_with_fallback 据此跳过冷却中的部署。"""
+    assert (
+        base_router._available_deployments_for_model("gpt-4")
+        == base_router.get_deployments_for_model("gpt-4")
+    )
+    assert len(base_router._available_deployments_for_model("gpt-4")) == 3
+
+
 # -------- close / context manager --------
 
 @pytest.mark.asyncio

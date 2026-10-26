@@ -446,6 +446,15 @@ class BaseRouter:
                 details={"deployment_id": deployment.id, "original_error": str(e)},
             ) from e
 
+    def _available_deployments_for_model(self, model: str) -> List[Deployment]:
+        """获取模型的候选部署（可覆写钩子，review 16）。
+
+        默认返回该模型的全部部署（历史行为）；带状态管理的子类
+        （ReliableRouter）覆写为按 state 过滤后的可用部署，
+        completion_with_fallback 据此跳过冷却中的部署。
+        """
+        return self.get_deployments_for_model(model)
+
     async def completion_with_fallback(
         self,
         model: str,
@@ -464,7 +473,10 @@ class BaseRouter:
             models_to_try.append(fallback[model])
         errors = []
         for m in models_to_try:
-            deployments = self.get_deployments_for_model(m)
+            # 候选部署经钩子获取：ReliableRouter 覆写为 state 过滤版
+            # （与 _get_available_deployments 同口径），冷却中的部署
+            # 不再被 fallback 循环尝试（review 16）。
+            deployments = self._available_deployments_for_model(m)
             for dep in deployments:
                 try:
                     return await self.completion(m, messages, deployment=dep, **kwargs)

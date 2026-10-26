@@ -392,30 +392,55 @@ class MetricsWebServer:
                 self.wfile.write(data.encode("utf-8"))
 
             def _serve_metrics(self):
-                try:
-                    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-                    output = generate_latest()
-                    self.send_response(200)
-                    self.send_header("Content-Type", CONTENT_TYPE_LATEST)
-                    self.end_headers()
-                    self.wfile.write(output)
-                except ImportError:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.end_headers()
-                    # 简单文本格式输出
-                    stats = metrics.get_stats()
-                    lines = [
-                        f"# IntelliRouter Metrics (plain text, install prometheus-client for Prometheus format)",
-                        f"total_requests {stats['total_requests']}",
-                        f"successful {stats['successful']}",
-                        f"failed {stats['failed']}",
-                        f"retries {stats['retries']}",
-                        f"exhausted {stats['exhausted']}",
-                        f"avg_latency {stats['latency']['avg']}",
-                        f"tokens_total {stats['tokens']['total']}",
-                    ]
-                    self.wfile.write("\n".join(lines).encode("utf-8"))
+                # 输出所属 collector 的指标，而不是无参 generate_latest()
+                # 输出的全局默认 registry——后者会暴露进程内任何组件
+                # 注册到全局 registry 的无关指标，未开启 prometheus 的
+                # collector 打开 /metrics 看到的将不是自己的数据
+                prom = getattr(metrics, "_prom", None)
+                if prom is not None:
+                    # collector 已开启 Prometheus：用它注册时所用的
+                    # registry（显式传入的独立 registry，或全局默认）
+                    # 生成输出
+                    try:
+                        from prometheus_client import (
+                            CONTENT_TYPE_LATEST,
+                            REGISTRY,
+                            generate_latest,
+                        )
+                    except ImportError:
+                        # _prom 非 None 时 prometheus_client 必已安装
+                        # （_init_prometheus 已成功过），防御性兜底：
+                        # 落到下方内存文本分支
+                        pass
+                    else:
+                        registry = getattr(metrics, "_registry", None)
+                        if registry is None:
+                            registry = REGISTRY
+                        output = generate_latest(registry)
+                        self.send_response(200)
+                        self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+                        self.end_headers()
+                        self.wfile.write(output)
+                        return
+                # collector 未开启 Prometheus（或 prometheus_client 不可用）：
+                # 从内存统计生成简单文本输出——保证 /metrics 始终是
+                # 本 collector 自己的数据
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                # 简单文本格式输出
+                stats = metrics.get_stats()
+                lines = [
+                    f"# IntelliRouter Metrics (plain text, enable prometheus on the collector for Prometheus format)",
+                    f"total_requests {stats['total_requests']}",
+                    f"successful {stats['successful']}",
+                    f"failed {stats['failed']}",
+                    f"retries {stats['retries']}",
+                    f"exhausted {stats['exhausted']}",
+                    f"avg_latency {stats['latency']['avg']}",
+                    f"tokens_total {stats['tokens']['total']}",
+                ]
+                self.wfile.write("\n".join(lines).encode("utf-8"))
 
             def log_message(self, format, *args):
                 pass  # 静默，不输出到 stderr

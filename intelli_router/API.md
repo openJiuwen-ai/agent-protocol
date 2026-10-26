@@ -12,6 +12,7 @@
 - [状态管理](#状态管理)
 - [缓存](#缓存)
 - [健康检查](#健康检查)
+- [可观测性](#可观测性)
 - [异常](#异常)
 - [使用示例](#使用示例)
 
@@ -51,6 +52,9 @@ Deployment(
 **字段校验**（构造期强制，违规抛 `ValueError`/`TypeError`）：
 
 - `model_name`、`api_key`、`api_base`、`provider` 必须为非空字符串
+  （例外：`provider="aws-bedrock"` 时允许 `api_key` 为空字符串，为空时
+  适配器回退到 botocore 默认凭证链——环境变量 / `~/.aws/credentials` /
+  IAM role）
 - 走免认证本地端点（如 Ollama、vLLM）或统一认证代理时，请显式传入占位值
   （如 `"ollama"`、`"no-key"`）；本库不做环境变量等隐式注入，请求层注入
   场景由调用方自行封装
@@ -70,7 +74,7 @@ Deployment(
 |------|------|------|
 | `is_available` | `is_available(now: float) -> bool` | 检查部署是否可用（非冷却中） |
 | `to_dict` | `to_dict() -> Dict[str, Any]` | 序列化为字典 |
-| `from_dict` | `(data: Dict[str, Any]) -> Deployment` | 从字典反序列化 (类方法) |
+| `from_dict` | `(data: Dict[str, Any]) -> Deployment` | 从字典反序列化 (类方法；不修改传入的字典) |
 
 ---
 
@@ -115,7 +119,7 @@ HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `completion` | `async completion(model: str, messages: List[Dict], **kwargs) -> Dict` | 发送 completion 请求，返回 OpenAI 格式原始字典（附带 `deployment_id` 标识实际服务的部署） |
+| `completion` | `async completion(model: str, messages: List[Dict], deployment: Optional[Deployment] = None, **kwargs) -> Dict` | 发送 completion 请求，返回 OpenAI 格式原始字典（附带 `deployment_id` 标识实际服务的部署）。显式传 `deployment` 时跳过选路与重试直通该部署（不参与 state 记账，但保留请求事件配对） |
 | `stream_completion` | `async stream_completion(model: str, messages: List[Dict], **kwargs) -> AsyncIterator[Dict]` | 发送流式 completion 请求，返回 OpenAI 格式原始 chunk |
 | `invoke` | `async invoke(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, output_parser=None, **kwargs) -> AssistantMessage` | 类型化 completion 请求，返回 `AssistantMessage` |
 | `stream` | `async stream(messages, *, tools=None, temperature=None, top_p=None, model=None, max_tokens=None, stop=None, **kwargs) -> AsyncIterator[AssistantMessageChunk]` | 流式 completion，逐 chunk 返回 `AssistantMessageChunk` |
@@ -125,6 +129,25 @@ HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集
 | `update_deployments` | `update_deployments(new_deployments: List[Deployment]) -> None` | 动态更新部署列表 |
 | `get_stats` | `get_stats() -> Dict[str, Any]` | 获取路由器统计信息 |
 | `close` | `async close() -> None` | 关闭底层 HTTP 客户端，释放连接池 |
+
+**错误分类与故障归因**（completion / stream_completion / stream 共用）：
+
+- **请求侧错误**：本地参数构造/校验抛出的 `ValueError`/`TypeError`，以及
+  `DeploymentError` 携带的 4xx 状态码（400 上下文超长、404/413/422 参数
+  非法等）。这类错误换部署大概率同样失败，**不计入失败计数、不触发冷却**，
+  但仍会记录错误并继续 fallback 循环（个别网关校验口径不同，换部署可能
+  成功）。例外：`json.JSONDecodeError`（远端 200 但返回非法 JSON）与
+  401/403 认证、429 限流均视为部署侧错误——换部署可恢复。
+- **部署侧错误**：5xx、超时、网络错误等，照旧累加 `consecutive_failures`
+  并进入冷却。
+- **路由专用参数**：`session_id`、`tags` 由 RoutingContext 承载、供策略
+  消费（adaptive 会话亲和、tag 系列匹配），不会进入 provider 请求体；
+  `deployment.request_defaults` 中的同名键同样被剔除。
+
+**流式统计口径**：流式成功后 state 的延迟记录为整条流的完整耗时（TTFT
+见 `STREAM_ROUTE_SELECTED` 事件的 extra）；token 取流式 usage 中提取的
+真实值，未携带 usage 的流式样本（tokens=0）不参与归一化延迟统计
+（`avg_normalized_latency`），避免与非流式口径混杂。
 
 **`invoke()` 参数说明**:
 
@@ -167,7 +190,7 @@ BaseRouter(
 |------|------|------|
 | `completion` | `async completion(model: str, messages: List[Dict], deployment: Optional[Deployment] = None, **kwargs) -> Dict` | 发送 completion 请求（可指定部署） |
 | `acompletion_stream` | `async acompletion_stream(model: str, messages: List[Dict], deployment: Optional[Deployment] = None, **kwargs) -> AsyncIterator[Dict]` | 流式 SSE completion，yield OpenAI 格式 chunk |
-| `completion_with_fallback` | `async completion_with_fallback(model: str, messages: List[Dict], fallback: Optional[Dict[str, str]] = None, **kwargs) -> Any` | 带降级模型的 completion |
+| `completion_with_fallback` | `async completion_with_fallback(model: str, messages: List[Dict], fallback: Optional[Dict[str, str]] = None, **kwargs) -> Any` | 带降级模型的 completion。候选部署经 `_available_deployments_for_model` 钩子获取——ReliableRouter 上冷却中的部署会被跳过（与选路口径一致） |
 | `get_deployments_for_model` | `get_deployments_for_model(model: str) -> List[Deployment]` | 获取模型部署列表 |
 | `get_model_list` | `get_model_list() -> List[str]` | 获取模型名列表 |
 | `get_deployment_configs` | `get_deployment_configs() -> List[Dict[str, Any]]` | 获取所有部署配置 |
@@ -246,12 +269,26 @@ get_provider_adapter(provider: str) -> BaseProviderAdapter
 | `"openai"` | `OpenAIProviderAdapter` | OpenAI 及兼容端点 (默认) |
 | `"anthropic"` | `AnthropicProviderAdapter` | Anthropic Claude Messages API |
 | `"google-gemini"` | `GeminiProviderAdapter` | Google Gemini API |
-| `"aws-bedrock"` | `BedrockProviderAdapter` | AWS Bedrock (需 SigV4，暂未实现) |
+| `"aws-bedrock"` | `BedrockProviderAdapter` | AWS Bedrock Converse API (需 SigV4/botocore；`api_key` 可为空，为空时回退 botocore 默认凭证链) |
 | `"deepseek"` | `DeepSeekProviderAdapter` | DeepSeek API (继承 OpenAI，自动补 reasoning_content) |
 | `"siliconflow"` | `SiliconFlowProviderAdapter` | SiliconFlow (继承 OpenAI，清理 tool_calls) |
 | `"inference-affinity"` | `InferenceAffinityProviderAdapter` | InferenceAffinity (支持 cache_sharing / session_id) |
 | `"dashscope"` | `OpenAIProviderAdapter` | 阿里云 DashScope / OpenAI-compatible endpoint alias |
 | `"zhipu"` | `OpenAIProviderAdapter` | 智谱 GLM / OpenAI-compatible endpoint alias |
+
+**各 Provider 的工具调用语义差异**：
+
+- `anthropic`：并行 tool_calls 的多条 tool 结果合并为单条 user 消息
+  （多个 `tool_result` block），满足 Messages API 的 user/assistant
+  严格交替要求。
+- `google-gemini`：tool 结果消息的 `functionResponse.name` 依据
+  assistant `tool_calls` 的 `tool_call_id` 解析（OpenAI 规范的 tool
+  消息不带 name），id 无匹配时构建请求抛 `ValueError`。多模态 parts
+  使用 proto JSON 命名（`inlineData`/`mimeType`、`fileData`/`fileUri`），
+  URL 图片的 mime 默认 `image/jpeg`。
+- `aws-bedrock`：Converse 的 ToolChoice 仅支持 `auto`/`any`/`tool`；
+  `tool_choice="none"`（含 `{"type": "none"}`）时适配器整体省略
+  `toolConfig`（含工具声明），等价于禁用工具调用。
 
 ---
 
@@ -326,6 +363,13 @@ async for chunk in router.stream(messages=[...]):
     accumulated = chunk if accumulated is None else accumulated + chunk
 # accumulated 包含完整的 content, tool_calls, finish_reason
 ```
+
+`+` 运算不修改任何操作数（`tool_calls` 返回新实例列表，操作数的
+ToolCall 对象不被改写，重复累加安全）；`usage_metadata` 按字段合并
+而非整体覆盖——流式场景下不同阶段上报不同字段（如 Anthropic
+message_start 携带 input/cache 统计、message_delta 只携带最终
+output_tokens），数值字段取较新的非零快照，`total_tokens` 按
+input+output 重算，两侧的统计都会保留。
 
 ---
 
@@ -459,7 +503,9 @@ class JsonOutputParser(BaseOutputParser):
 
 **解析规则**:
 - 支持裸 JSON：`{"key": "value"}`
-- 支持代码块：`` ```json\n{...}\n``` ``
+- 支持代码块：`` ```json\n{...}\n``` ``（标记大小写不敏感、标记后可不
+  换行，如 `` ```json {...}``` ``），亦支持无语言标记的裸 `` ``` `` 块；
+  其他语言标记（如 `` ```python ``）的块不会被解析为 JSON
 - 解析失败返回 `None`
 
 ---
@@ -486,7 +532,8 @@ class MarkdownContent:
     raw_content: str = ""                              # 原始文本
     elements: List[MarkdownElement] = []               # 所有元素列表
     headers: List[Dict[str, str]] = []                 # 标题列表
-    code_blocks: List[Dict[str, str]] = []             # 代码块列表
+    code_blocks: List[Dict[str, str]] = []             # 围栏代码块列表（不含行内代码）
+    inline_codes: List[Dict[str, str]] = []            # 行内代码列表（围栏块内部的反引号不计入）
     links: List[Dict[str, str]] = []                   # 链接列表
     images: List[Dict[str, str]] = []                  # 图片列表
     tables: List[str] = []                             # 表格列表
@@ -892,7 +939,7 @@ LocalCache(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `set_cache` | `set_cache(key: str, value: Any, ttl: Optional[float] = None) -> None` | 设置缓存 |
+| `set_cache` | `set_cache(key: str, value: Any, ttl: Optional[float] = None) -> None` | 设置缓存（`ttl=None` 用 `default_ttl`；`ttl<=0` 视为立即过期，get 时必然 miss） |
 | `get_cache` | `get_cache(key: str, default: Any = None) -> Any` | 获取缓存 |
 | `delete_cache` | `delete_cache(key: str) -> bool` | 删除缓存 |
 | `clear_cache` | `clear_cache() -> None` | 清空缓存 |
@@ -922,7 +969,7 @@ class CacheEntry:
     ttl: float             # 过期时间戳
     created_at: float      # 创建时间戳
 
-    def is_expired(now: float) -> bool  # 检查是否过期
+    def is_expired(now: float) -> bool  # 检查是否过期（elapsed >= ttl 即过期，ttl <= 0 恒为过期）
 ```
 
 ---
@@ -959,7 +1006,7 @@ SDKHealthChecker(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `get_healthy_deployments` | `get_healthy_deployments(now: float) -> List[Deployment]` | 获取健康部署列表 |
+| `get_healthy_deployments` | `get_healthy_deployments(now: float) -> List[Deployment]` | 获取健康部署列表（健康检查通过 且 RouterState 运行期可用——非未过期 COOLDOWN，与 router 调度同口径；`Deployment.is_available` 仅用于构造期静态检查） |
 | `get_unhealthy_ids` | `get_unhealthy_ids() -> Set[str]` | 获取不健康部署ID集合 |
 
 ---
@@ -977,6 +1024,52 @@ class HealthCheckResult:
     error: Optional[str] = None           # 错误信息
     timestamp: float = field(default_factory=time.time)  # 检查时间戳
 ```
+
+---
+
+## 可观测性
+
+### `MetricsCollector`
+
+指标采集事件处理器 - 订阅 EventBus 的路由事件，维护内存统计并可选暴露
+Prometheus 指标。
+
+**构造函数**:
+```python
+MetricsCollector(
+    enable_prometheus: bool = False,                  # 是否开启 Prometheus 指标
+    prometheus_prefix: str = "intelli_router",        # 指标名前缀
+    prometheus_registry: Optional[CollectorRegistry] = None,  # Prometheus registry
+)
+```
+
+- `prometheus_registry=None`（默认）时使用全局默认 registry（向后兼容）；
+  同进程创建多个 `enable_prometheus=True` 的 collector 时，请各自传入
+  独立的 `prometheus_client.CollectorRegistry()`，否则同指标名重复注册
+  会抛 `DuplicateTimeseries`
+- `handle_event` 记账与 `get_stats`/`reset` 读取均为线程安全（内部锁），
+  可在 HTTP 服务线程中并发调用 `get_stats`
+- `get_stats()` 返回的 `by_deployment` 中，`requests` 语义为"该部署被
+  尝试次数 = successes + failures"（只失败未成功的部署也会出现，与
+  `by_model` 同口径）；全局 `failed` 仅统计最终失败（全部部署耗尽），
+  重试不计入
+
+### `MetricsWebServer`
+
+指标 Web 服务 - 提供看板页面与统计 API。
+
+```python
+MetricsWebServer(
+    metrics: MetricsCollector,      # 指标采集器
+    host: str = "0.0.0.0",          # 监听地址
+    port: int = 8080,               # 监听端口
+)
+```
+
+- `/` 看板页面，`/api/stats` JSON 统计
+- `/metrics`：collector 开启 Prometheus 时输出其所属 registry 的
+  Prometheus 文本；未开启时输出基于 `get_stats()` 的简单文本——
+  始终是该 collector 自己的数据
 
 ---
 

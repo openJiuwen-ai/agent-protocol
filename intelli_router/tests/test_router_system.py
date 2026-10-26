@@ -443,6 +443,48 @@ class TestFallback:
                 fallback={"gpt-4": "gpt-3.5-turbo"},
             )
 
+    @pytest.mark.asyncio
+    async def test_fallback_skips_cooldown_deployment_on_reliable_router(self):
+        """PR #358 意见 16: ReliableRouter 上 completion_with_fallback 的
+        候选部署经 _available_deployments_for_model 钩子获取（state 过滤，
+        与 _get_available_deployments 同口径）——d1 冷却时只打 d2。
+
+        修复前：直接 get_deployments_for_model 拿全部部署，冷却中的 d1
+        仍被尝试；且 self.completion(m, messages, deployment=dep) 在
+        ReliableRouter 上会 TypeError（意见 11）。
+        """
+        dep1 = Deployment(
+            id="d1",
+            model_name="gpt-4",
+            api_key="sk-1",
+            api_base="https://d1.example.com",
+            provider="openai",
+        )
+        dep2 = Deployment(
+            id="d2",
+            model_name="gpt-4",
+            api_key="sk-2",
+            api_base="https://d2.example.com",
+            provider="openai",
+        )
+        router = ReliableRouter(deployments=[dep1, dep2], num_retries=0)
+        # d1 运行期冷却（只写 state，对象 status 仍是 HEALTHY）
+        router.state.deployment_status["d1"] = DeploymentStatus.COOLDOWN
+        router.state.cooldown_until["d1"] = time.time() + 3600
+
+        capture = make_handler(openai_response("fallback ok"))
+        attach_mock_transport(router, capture)
+
+        result = await router.completion_with_fallback(
+            "gpt-4",
+            [{"role": "user", "content": "hi"}],
+        )
+
+        assert result["choices"][0]["message"]["content"] == "fallback ok"
+        # 只发了一个请求，且打到 d2（d1 冷却被跳过）
+        assert len(capture.requests) == 1
+        assert result["deployment_id"] == "d2"
+
 
 class TestReliableRouterRetry:
     """ReliableRouter retry logic — end-to-end."""

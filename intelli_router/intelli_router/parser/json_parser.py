@@ -13,8 +13,14 @@ from .base import BaseOutputParser
 from ..types import AssistantMessage, AssistantMessageChunk
 
 
-# Regex to extract content from ```json ... ``` code blocks
-_JSON_CODE_BLOCK_RE = re.compile(r"```json\n(.*?)```", re.DOTALL)
+# Regex to extract content from ```json ... ``` code blocks.
+# 兼容常见变体：```json 后不换行（同行）、大写 ```JSON、无语言标记的裸 ``` 块；
+# [ \t]*\r?\n? 允许标记后跟空格 / CRLF / LF / 无换行。
+# 注意：```python 等其他语言标记的块虽可能被当作"裸块"匹配到，
+# 但其内容不是合法 JSON，json.loads 失败后会返回 None，不会被误解析。
+_JSON_CODE_BLOCK_RE = re.compile(
+    r"```(?:json)?[ \t]*\r?\n?(.*?)```", re.DOTALL | re.IGNORECASE
+)
 
 
 class JsonOutputParser(BaseOutputParser):

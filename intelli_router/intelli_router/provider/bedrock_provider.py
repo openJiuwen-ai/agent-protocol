@@ -116,7 +116,10 @@ class BedrockProviderAdapter(BaseProviderAdapter):
         # Tools
         tools = kwargs.pop("tools", None)
         tool_choice = kwargs.pop("tool_choice", None)
-        if tools:
+        # Bedrock Converse 的 ToolChoice 只有 auto/any/tool，不支持 "none"。
+        # 遇到 none 时整个 toolConfig 都不发送（工具声明也不传），模型无工具
+        # 可调用，语义上等价于禁用工具调用。
+        if tools and not BedrockProviderAdapter._is_tool_choice_none(tool_choice):
             body["toolConfig"] = self._convert_tool_config(tools, tool_choice)
 
         return body
@@ -461,17 +464,41 @@ class BedrockProviderAdapter(BaseProviderAdapter):
         return config
 
     @staticmethod
+    def _is_tool_choice_none(tool_choice: Any) -> bool:
+        """判断 tool_choice 是否表示禁用工具调用（"none" 或 {"type": "none"}）。"""
+        if isinstance(tool_choice, str):
+            return tool_choice == "none"
+        if isinstance(tool_choice, dict):
+            return tool_choice.get("type") == "none"
+        return False
+
+    @staticmethod
     def _convert_tool_choice(tool_choice: Any) -> Dict[str, Any]:
-        """将 OpenAI tool_choice 转换为 Bedrock toolChoice。"""
+        """将 OpenAI tool_choice 转换为 Bedrock toolChoice。
+
+        Bedrock Converse 的 ToolChoice 只有 auto/any/tool，不支持 "none"；
+        "none" 由 transform_request 通过整体省略 toolConfig 实现。此处对
+        "none" 直接抛错，避免静默映射成 {"auto": {}} 造成语义反转。
+        """
         if isinstance(tool_choice, str):
             if tool_choice == "none":
-                return {"auto": {}}
+                raise ValueError(
+                    "Bedrock Converse toolChoice does not support 'none'; "
+                    "tool_choice='none' is implemented by omitting toolConfig "
+                    "entirely in transform_request."
+                )
             elif tool_choice in ("required", "any"):
                 return {"any": {}}
             else:
                 return {"auto": {}}
         elif isinstance(tool_choice, dict):
             tc_type = tool_choice.get("type", "")
+            if tc_type == "none":
+                raise ValueError(
+                    "Bedrock Converse toolChoice does not support 'none'; "
+                    "tool_choice={'type': 'none'} is implemented by omitting "
+                    "toolConfig entirely in transform_request."
+                )
             if tc_type == "function":
                 func = tool_choice.get("function", {})
                 return {"tool": {"name": func.get("name", "")}}

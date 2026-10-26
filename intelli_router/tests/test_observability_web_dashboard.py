@@ -1,5 +1,6 @@
 """Tests for intelli_router.observability.web_dashboard."""
 import asyncio
+import importlib.util
 import json
 import os
 import re
@@ -92,6 +93,73 @@ class TestMetricsWebServer:
         body = resp.read().decode()
         # 不管有没有 prometheus_client，都应该有输出
         assert len(body) > 0
+
+    # -------- /metrics serves the collector's own data (review 意见12) --------
+
+    def test_metrics_endpoint_uses_collector_custom_registry(self):
+        """开启 prometheus + 自定义 registry 的 collector：
+        /metrics 输出该 registry 的内容（自己的 prefix 指标），
+        而非无参 generate_latest() 的全局 registry。"""
+        if importlib.util.find_spec("prometheus_client") is None:
+            pytest.skip("prometheus-client is not installed")
+        from prometheus_client import CollectorRegistry
+
+        collector = MetricsCollector(
+            enable_prometheus=True,
+            prometheus_prefix="web_custom_reg",
+            prometheus_registry=CollectorRegistry(),
+        )
+        asyncio.run(collector.handle_event(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_SUCCEEDED,
+            request_id="w1", model="gpt-4",
+            deployment_id="d1", latency=0.1,
+        )))
+        srv = MetricsWebServer(collector, port=0)
+        srv.start()
+        try:
+            resp = urllib.request.urlopen(f"{srv.url}/metrics")
+            assert resp.status == 200
+            # prometheus 文本格式（CONTENT_TYPE_LATEST）
+            assert "text/plain" in resp.headers.get("Content-Type", "")
+            body = resp.read().decode()
+            assert "web_custom_reg_requests_total" in body
+            assert 'status="success"' in body
+        finally:
+            srv.stop()
+
+    def test_metrics_endpoint_without_prometheus_returns_own_stats(self):
+        """未开启 prometheus 的 collector：/metrics 走内存文本分支，
+        返回它自己的统计——即使 prometheus_client 已安装，
+        也不得无参 generate_latest() 输出全局 registry 的无关指标。"""
+        if importlib.util.find_spec("prometheus_client") is None:
+            pytest.skip("prometheus-client is not installed")
+        collector = MetricsCollector()
+        asyncio.run(collector.handle_event(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_STARTED,
+            request_id="w1", model="gpt-4",
+        )))
+        asyncio.run(collector.handle_event(RoutingEvent(
+            event_type=RoutingEventType.REQUEST_SUCCEEDED,
+            request_id="w1", model="gpt-4",
+            deployment_id="d1", latency=0.5,
+        )))
+        srv = MetricsWebServer(collector, port=0)
+        srv.start()
+        try:
+            resp = urllib.request.urlopen(f"{srv.url}/metrics")
+            assert resp.status == 200
+            content_type = resp.headers.get("Content-Type")
+            assert "text/plain" in content_type
+            body = resp.read().decode()
+            # 输出的是该 collector 自己的内存统计
+            assert "total_requests 1" in body
+            assert "successful 1" in body
+            assert "failed 0" in body
+            # 不是 prometheus 格式（全局 registry 的无关指标）
+            assert "# TYPE" not in body
+            assert "test_expose_requests_total" not in body
+        finally:
+            srv.stop()
 
     def test_404_unknown_path(self, server):
         """未知路径返回 404"""

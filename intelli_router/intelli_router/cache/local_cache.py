@@ -23,8 +23,8 @@ class CacheEntry:
     created_at: float = field(default_factory=time.time)
 
     def is_expired(self, now: float) -> bool:
-        """检查是否过期"""
-        return now - self.created_at > self.ttl
+        """检查是否过期（elapsed >= ttl 即过期，ttl <= 0 视为立即过期）"""
+        return now - self.created_at >= self.ttl
 
 class LocalCache:
     """
@@ -60,7 +60,7 @@ class LocalCache:
 
             entry = CacheEntry(
                 value=value,
-                ttl=ttl or self.default_ttl
+                ttl=ttl if ttl is not None else self.default_ttl
             )
             self._cache[key] = entry
             # 移至末尾 (最近使用)

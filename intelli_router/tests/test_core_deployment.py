@@ -195,3 +195,75 @@ def test_timeout_validation():
         Deployment(**_base_kwargs(), timeout=-1.0)
     with pytest.raises(TypeError, match="timeout"):
         Deployment(**_base_kwargs(), timeout="30")
+
+
+# -------- PR #358 review fixes --------
+
+def test_bedrock_empty_api_key_allowed():
+    """aws-bedrock 允许空 api_key（回退 botocore 默认凭证链）。"""
+    dep = Deployment(
+        model_name="anthropic.claude-sonnet-4",
+        api_key="",
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        provider="aws-bedrock",
+    )
+    assert dep.api_key == ""
+    # to_dict / from_dict 序列化路径对空 api_key 无副作用
+    d = dep.to_dict()
+    assert d["api_key"] == ""
+    restored = Deployment.from_dict(d)
+    assert restored.api_key == ""
+    assert restored.provider == "aws-bedrock"
+
+
+def test_openai_empty_api_key_still_raises():
+    """非 aws-bedrock provider 空 api_key 仍抛 ValueError。"""
+    with pytest.raises(ValueError, match="api_key"):
+        Deployment(model_name="m", api_key="", api_base="b", provider="openai")
+    with pytest.raises(ValueError, match="api_key"):
+        Deployment(model_name="m", api_key="", api_base="b")  # 默认 provider
+
+
+def test_bedrock_other_field_validation_unchanged():
+    """aws-bedrock 放开仅限 api_key 空字符串，其余字段校验不变。"""
+    # 其他字段为空仍抛 ValueError
+    with pytest.raises(ValueError, match="model_name"):
+        Deployment(
+            model_name="", api_key="", api_base="b", provider="aws-bedrock"
+        )
+    with pytest.raises(ValueError, match="api_base"):
+        Deployment(
+            model_name="m", api_key="", api_base="", provider="aws-bedrock"
+        )
+    with pytest.raises(ValueError, match="provider"):
+        Deployment(model_name="m", api_key="k", api_base="b", provider="")
+    # api_key 类型校验保持不变（必须是 str）
+    with pytest.raises(ValueError, match="api_key"):
+        Deployment(
+            model_name="m", api_key=None, api_base="b", provider="aws-bedrock"
+        )
+
+
+def test_from_dict_does_not_mutate_input():
+    """from_dict 不得原地修改调用方传入的字典。"""
+    import json
+
+    data = {
+        "model_name": "m",
+        "api_key": "k",
+        "api_base": "b",
+        "status": "healthy",
+        "tags": ["t"],
+    }
+    snapshot = dict(data)
+    dep = Deployment.from_dict(data)
+    assert dep.status == DeploymentStatus.HEALTHY
+    # 原字典完全未被修改，status 仍是字符串
+    assert data == snapshot
+    assert data["status"] == "healthy"
+    # 仍可 JSON 序列化
+    json.dumps(data)
+    # 复用同一份配置字典再次传入，行为不变
+    dep2 = Deployment.from_dict(data)
+    assert dep2.status == DeploymentStatus.HEALTHY
+    assert data == snapshot

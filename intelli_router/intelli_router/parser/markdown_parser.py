@@ -1,7 +1,7 @@
 """Markdown 输出解析器。
 
 将 LLM 输出的 Markdown 文本解析为结构化 MarkdownContent，
-包含 headers、code_blocks、links、images、tables、lists 等元素。
+包含 headers、code_blocks、inline_codes、links、images、tables、lists 等元素。
 """
 import re
 from dataclasses import dataclass, field
@@ -40,6 +40,7 @@ class MarkdownContent:
     elements: List[MarkdownElement] = field(default_factory=list)
     headers: List[Dict[str, str]] = field(default_factory=list)
     code_blocks: List[Dict[str, str]] = field(default_factory=list)
+    inline_codes: List[Dict[str, str]] = field(default_factory=list)
     links: List[Dict[str, str]] = field(default_factory=list)
     images: List[Dict[str, str]] = field(default_factory=list)
     tables: List[str] = field(default_factory=list)
@@ -131,16 +132,22 @@ class MarkdownOutputParser(BaseOutputParser):
                 start_pos=m.start(), end_pos=m.end(), raw=m.group(0),
             ))
 
-        # Code blocks
+        # Code blocks（记录区间，供行内 code 扫描时剔除）
+        code_spans = []
         for m in re.finditer(r'```(\w*)\n(.*?)\n```', text, re.DOTALL):
             elements.append(MarkdownElement(
                 type=MarkdownElementType.CODE_BLOCK,
                 content={"language": m.group(1) or "text", "code": m.group(2)},
                 start_pos=m.start(), end_pos=m.end(), raw=m.group(0),
             ))
+            code_spans.append((m.start(), m.end()))
 
-        # Inline code
+        # Inline code（跳过围栏代码块区间内的反引号，
+        # 等价于先剔除围栏块、再在剩余文本上扫描，同时保持位置信息准确）
         for m in re.finditer(r'`([^`\n]+)`', text):
+            if any(start <= m.start() and m.end() <= end
+                   for start, end in code_spans):
+                continue
             elements.append(MarkdownElement(
                 type=MarkdownElementType.INLINE_CODE,
                 content={"code": m.group(1)},
@@ -242,7 +249,7 @@ class MarkdownOutputParser(BaseOutputParser):
             elif el.type == MarkdownElementType.CODE_BLOCK:
                 md.code_blocks.append({"language": el.content["language"], "code": el.content["code"], "raw": el.raw})
             elif el.type == MarkdownElementType.INLINE_CODE:
-                md.code_blocks.append({"language": "inline", "code": el.content["code"], "raw": el.raw})
+                md.inline_codes.append({"code": el.content["code"], "raw": el.raw})
             elif el.type == MarkdownElementType.LINK:
                 md.links.append({"text": el.content["text"], "url": el.content["url"], "raw": el.raw})
             elif el.type == MarkdownElementType.IMAGE:

@@ -135,6 +135,74 @@ def test_get_healthy_deployments(health_checker, health_deployments):
     assert healthy[0].id == health_deployments[0].id
 
 
+# -------- get_healthy_deployments judges by RouterState (review 意见15) --------
+# 运行期冷却只写在 state（on_failure），Deployment 对象的静态
+# status/cooldown_until 读不到它——此前用 dep.is_available 判定，
+# router 认为冷却中而 checker 报健康。
+
+
+def test_get_healthy_deployments_respects_state_cooldown(
+        health_checker, health_deployments):
+    """state 里 COOLDOWN 未过期的部署不应返回，
+    即使 Deployment 对象静态 is_available 为 True。"""
+    d1, d2 = health_deployments
+    now = time.time()
+    # 运行期冷却只写进 state（与 router on_failure 同路径）
+    health_checker.state.deployment_status[d1.id] = DeploymentStatus.COOLDOWN
+    health_checker.state.cooldown_until[d1.id] = now + 3600
+    # 健康检查对两者都通过
+    health_checker.state.health_state[d1.id] = True
+    health_checker.state.health_state[d2.id] = True
+    # 复现缺陷形态：静态检查认为 d1 可用
+    assert d1.is_available(now) is True
+
+    healthy = health_checker.get_healthy_deployments(now)
+    assert [d.id for d in healthy] == [d2.id]
+
+
+def test_get_healthy_deployments_cooldown_expired_is_included(
+        health_checker, health_deployments):
+    """state 的 cooldown 已过期 → 视为可用（与 router 同口径）。"""
+    d1, d2 = health_deployments
+    now = time.time()
+    health_checker.state.deployment_status[d1.id] = DeploymentStatus.COOLDOWN
+    health_checker.state.cooldown_until[d1.id] = now - 10
+
+    healthy = health_checker.get_healthy_deployments(now)
+    assert {d.id for d in healthy} == {d1.id, d2.id}
+
+
+def test_get_healthy_deployments_ignores_static_deployment_cooldown(
+        health_checker, health_deployments):
+    """仅写在 Deployment 对象上的静态 COOLDOWN（未同步进 state）不再
+    决定运行期可用性——state 是运行期唯一事实源；router 构造时会把
+    静态 COOLDOWN 同步进 state，独立使用 checker 时以 state 为准。"""
+    d1, d2 = health_deployments
+    now = time.time()
+    d1.status = DeploymentStatus.COOLDOWN
+    d1.cooldown_until = now + 3600
+    assert d1.is_available(now) is False  # 静态口径确实不可用
+
+    healthy = health_checker.get_healthy_deployments(now)
+    assert {d.id for d in healthy} == {d1.id, d2.id}
+
+
+def test_get_healthy_deployments_double_filter(
+        health_checker, health_deployments):
+    """两重条件独立生效：健康检查未通过（health_state=False）或
+    state 冷却中（COOLDOWN 未过期）任一不满足即被过滤。"""
+    d1, d2 = health_deployments
+    now = time.time()
+    # d1: 健康检查通过，但 state 冷却中
+    health_checker.state.health_state[d1.id] = True
+    health_checker.state.deployment_status[d1.id] = DeploymentStatus.COOLDOWN
+    health_checker.state.cooldown_until[d1.id] = now + 3600
+    # d2: state 可用，但健康检查未通过
+    health_checker.state.health_state[d2.id] = False
+
+    assert health_checker.get_healthy_deployments(now) == []
+
+
 def test_get_unhealthy_ids(health_checker, health_deployments):
     health_checker.state.health_state[health_deployments[0].id] = True
     health_checker.state.health_state[health_deployments[1].id] = False

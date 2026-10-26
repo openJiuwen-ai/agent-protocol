@@ -192,6 +192,19 @@ class GeminiProviderAdapter(BaseProviderAdapter):
         messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         """转换消息为 Gemini contents[] 格式。"""
+        # 先收集 tool_call_id -> function.name 映射（来自 assistant 消息的
+        # tool_calls）。OpenAI 规范的 tool 消息只带 role/tool_call_id/content、
+        # 不带 name，而 Gemini 要求 functionResponse.name 与对应 functionCall
+        # 的名称一致，否则 400。
+        tool_call_names: Dict[str, str] = {}
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            for tc_id, tc_name, _tc_args in GeminiProviderAdapter._iter_tool_call_inputs(
+                msg.get("tool_calls", [])
+            ):
+                tool_call_names[tc_id] = tc_name
+
         contents: List[Dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -199,12 +212,21 @@ class GeminiProviderAdapter(BaseProviderAdapter):
             content = msg.get("content", "")
 
             if role == "tool":
-                # 工具结果 → functionResponse
+                # 工具结果 → functionResponse（name 从 tool_call_id 映射解析，
+                # 不能静默写 unknown_tool——Gemini 会因名称不匹配返回 400）
+                tool_call_id = msg.get("tool_call_id", "")
+                if tool_call_id not in tool_call_names:
+                    raise ValueError(
+                        f"Tool result message references tool_call_id "
+                        f"{tool_call_id!r} with no matching assistant tool_call; "
+                        f"cannot resolve the functionResponse.name required by Gemini."
+                    )
+                fn_name = tool_call_names[tool_call_id]
                 parts = [{
                     "functionResponse": {
-                        "name": msg.get("name", "unknown_tool"),
+                        "name": fn_name,
                         "response": {
-                            "name": msg.get("name", "unknown_tool"),
+                            "name": fn_name,
                             "content": content if isinstance(content, str) else json.dumps(content),
                         },
                     },
@@ -212,7 +234,11 @@ class GeminiProviderAdapter(BaseProviderAdapter):
                 contents.append({"role": "user", "parts": parts})
                 continue
 
-            if isinstance(content, str):
+            if content is None:
+                # 纯 tool_calls 的 assistant 消息（content=None 典型形态）不产生
+                # text part，避免出现 {"text": "None"}
+                parts = []
+            elif isinstance(content, str):
                 parts = [{"text": content}]
             elif isinstance(content, list):
                 # Convert OpenAI multipart format to Gemini parts format
@@ -226,9 +252,11 @@ class GeminiProviderAdapter(BaseProviderAdapter):
                             url = image_url.get("url", "") if isinstance(image_url, dict) else ""
                             if is_data_uri(url):
                                 mime_type, data = parse_data_uri(url)
-                                parts.append({"inline_data": {"mime_type": mime_type, "data": data}})
+                                # Gemini REST 请求体使用 proto JSON 命名（camelCase）
+                                parts.append({"inlineData": {"mimeType": mime_type, "data": data}})
                             else:
-                                parts.append({"file_data": {"mime_type": "image/jpeg", "file_uri": url}})
+                                # URL 形式无法从 OpenAI 格式推断 mime，默认 image/jpeg
+                                parts.append({"fileData": {"mimeType": "image/jpeg", "fileUri": url}})
                         else:
                             # Unknown type, pass text representation
                             parts.append({"text": str(item)})
