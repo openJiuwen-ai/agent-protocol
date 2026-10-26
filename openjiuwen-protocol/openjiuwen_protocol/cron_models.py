@@ -15,7 +15,7 @@ from jiuwenswarm.common.mode_matrix import (
     deprecate_mode,
     is_team_mode,
 )
-from jiuwenswarm.runtime.cron.cron_expr import validate_cron_expression
+from gateway.runtime.cron.cron_expr import validate_cron_expression
 
 logger = logging.getLogger(__name__)
 
