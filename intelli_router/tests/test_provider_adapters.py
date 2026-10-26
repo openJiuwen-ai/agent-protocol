@@ -2,6 +2,8 @@
 import asyncio
 import json
 import logging
+import struct
+import zlib
 import pytest
 from intelli_router.core.deployment import Deployment, DeploymentStatus
 from intelli_router.provider.base_provider import BaseProviderAdapter
@@ -10,6 +12,7 @@ from intelli_router.provider.anthropic_provider import AnthropicProviderAdapter
 from intelli_router.provider.gemini_provider import GeminiProviderAdapter
 from intelli_router.provider.bedrock_provider import BedrockProviderAdapter
 from intelli_router.provider.registry import get_provider_adapter, register_provider
+from intelli_router.utils.exceptions import DeploymentNetworkError
 
 
 # =========================================================================
@@ -927,6 +930,116 @@ class TestBedrockProviderAdapter:
         result = self.adapter.transform_stream_chunk(chunk, "m", self.dep)
         assert result is None
 
+    # --- iter_stream_events：二进制 Event Stream 解析 + 断流检测
+    #     （PR #358 二轮意见 D） ---
+
+    @staticmethod
+    def _encode_bedrock_event(event_type: str, payload: dict) -> bytes:
+        """按 application/vnd.amazon.eventstream 规范编码一帧（CRC32 齐全），
+        供真实 botocore EventStreamBuffer 解析。"""
+        name = b":event-type"
+        value = event_type.encode("utf-8")
+        headers = (
+            bytes([len(name)]) + name
+            + b"\x07"  # value type 7 = string
+            + struct.pack(">H", len(value)) + value
+        )
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        total_len = 12 + len(headers) + len(payload_bytes) + 4
+        prelude = struct.pack(">II", total_len, len(headers))
+        prelude_crc = zlib.crc32(prelude) & 0xFFFFFFFF
+        message = prelude + struct.pack(">I", prelude_crc) + headers + payload_bytes
+        # botocore 校验口径：从 prelude_crc 字段起、以 prelude_crc 为初值
+        message_crc = zlib.crc32(message[8:], prelude_crc) & 0xFFFFFFFF
+        return message + struct.pack(">I", message_crc)
+
+    class _FakeBytesResponse:
+        """带 aiter_bytes 的假 httpx.Response。"""
+
+        def __init__(self, data: bytes):
+            self._data = data
+
+        async def aiter_bytes(self):
+            yield self._data
+
+    def test_bedrock_iter_stream_events_parses_events_with_message_stop(self):
+        """正常流（含 messageStop 事件）：产出各事件 payload（附
+        __event_type），流结束不抛。真实 botocore EventStreamBuffer 解析
+        （headers 为 dict，event-type 提取须走 dict 口径）。"""
+        pytest.importorskip("botocore")
+        data = (
+            self._encode_bedrock_event("messageStart", {"role": "assistant"})
+            + self._encode_bedrock_event(
+                "contentBlockDelta", {"delta": {"text": "hi"}}
+            )
+            + self._encode_bedrock_event(
+                "messageStop", {"stopReason": "end_turn"}
+            )
+        )
+
+        async def collect():
+            return [
+                event
+                async for event in self.adapter.iter_stream_events(
+                    self._FakeBytesResponse(data)
+                )
+            ]
+
+        result = asyncio.run(collect())
+        assert [e["__event_type"] for e in result] == [
+            "messageStart",
+            "contentBlockDelta",
+            "messageStop",
+        ]
+        assert result[0]["role"] == "assistant"
+
+    def test_bedrock_iter_stream_events_raises_without_message_stop(self):
+        """事件流耗尽但未收到 messageStop → 判为断流，
+        抛 DeploymentNetworkError（等价于 SSE 的 [DONE] 检测）。"""
+        pytest.importorskip("botocore")
+        data = (
+            self._encode_bedrock_event("messageStart", {"role": "assistant"})
+            + self._encode_bedrock_event(
+                "contentBlockDelta", {"delta": {"text": "half"}}
+            )
+        )
+
+        async def collect():
+            return [
+                event
+                async for event in self.adapter.iter_stream_events(
+                    self._FakeBytesResponse(data)
+                )
+            ]
+
+        with pytest.raises(DeploymentNetworkError) as exc_info:
+            asyncio.run(collect())
+        assert "messageStop" in str(exc_info.value)
+
+    def test_bedrock_iter_stream_events_stop_reason_payload_counts(self):
+        """payload 顶层 stopReason（_chunk_has_finish_signal 的 Bedrock 形态）
+        也算终结信号：即使 event-type 异常也能识别为正常结束。"""
+        pytest.importorskip("botocore")
+        # contentBlockDelta 的 event-type + stopReason 字段（构造性验证
+        # helper 兜底路径），流结束不应抛
+        data = (
+            self._encode_bedrock_event("messageStart", {"role": "assistant"})
+            + self._encode_bedrock_event(
+                "contentBlockDelta", {"delta": {"text": "hi"}, "stopReason": "end_turn"}
+            )
+        )
+
+        async def collect():
+            return [
+                event
+                async for event in self.adapter.iter_stream_events(
+                    self._FakeBytesResponse(data)
+                )
+            ]
+
+        result = asyncio.run(collect())
+        assert len(result) == 2
+
     # --- sign_request (with mocked botocore) ---
 
     def test_sign_request(self):
@@ -1447,6 +1560,131 @@ class TestOpenAIStreamChunk:
         chunk = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
         result = self.adapter.transform_stream_chunk(chunk, "gpt-4", self.dep)
         assert result is chunk
+
+    # --- 断流检测（PR #358 二轮意见 D） ---
+
+    def test_iter_stream_events_raises_on_truncated_stream(self):
+        """SSE 流耗尽时既无 [DONE] 也无 finish_reason → 判为断流，
+        抛 DeploymentNetworkError（部署侧，router 据此 fallback）。"""
+        class FakeResponse:
+            async def aiter_lines(self):
+                for line in (
+                    'data: {"choices":[{"delta":{"content":"half"}}]}',
+                    'data: {"choices":[{"delta":{"content":" content"}}]}',
+                ):
+                    yield line
+
+        async def collect():
+            return [event async for event in self.adapter.iter_stream_events(FakeResponse())]
+
+        with pytest.raises(DeploymentNetworkError) as exc_info:
+            asyncio.run(collect())
+        assert "truncated" in str(exc_info.value)
+
+    def test_iter_stream_events_finish_reason_without_done_ok(self):
+        """有 finish_reason、无 [DONE] → 正常结束不抛。"""
+        class FakeResponse:
+            async def aiter_lines(self):
+                for line in (
+                    'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}',
+                    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+                ):
+                    yield line
+
+        async def collect():
+            return [event async for event in self.adapter.iter_stream_events(FakeResponse())]
+
+        result = asyncio.run(collect())
+        assert len(result) == 2
+
+    def test_iter_stream_events_anthropic_stop_reason_without_done_ok(self):
+        """Anthropic 形态（message_delta 的 delta.stop_reason，无 [DONE]）
+        → 正常结束不抛。"""
+        class FakeResponse:
+            async def aiter_lines(self):
+                for line in (
+                    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}',
+                    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+                ):
+                    yield line
+
+        async def collect():
+            return [event async for event in self.adapter.iter_stream_events(FakeResponse())]
+
+        result = asyncio.run(collect())
+        assert result[-1]["delta"]["stop_reason"] == "end_turn"
+
+    def test_iter_stream_events_bad_data_line_logs_debug_and_continues(self, caplog):
+        """无法解析的 data 行（如上游 HTML 错误页片段）：打 debug 日志、
+        跳过该行、不抛异常。"""
+        class FakeResponse:
+            async def aiter_lines(self):
+                for line in (
+                    'data: <html><body>gateway error</body></html>',
+                    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+                ):
+                    yield line
+
+        async def collect():
+            return [event async for event in self.adapter.iter_stream_events(FakeResponse())]
+
+        with caplog.at_level(logging.DEBUG, logger="intelli_router.provider.base_provider"):
+            result = asyncio.run(collect())
+
+        assert result == [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}]
+        debug_lines = [
+            r for r in caplog.records
+            if r.levelno == logging.DEBUG and "unparseable" in r.getMessage()
+        ]
+        assert debug_lines, "坏行应触发 debug 日志"
+
+
+class TestStreamFinishSignalHelper:
+    """_chunk_has_finish_signal：宽松终结信号判定（意见 D）。"""
+
+    def setup_method(self):
+        self.adapter = OpenAIProviderAdapter()
+
+    def test_openai_finish_reason(self):
+        assert self.adapter._chunk_has_finish_signal(
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        )
+        assert not self.adapter._chunk_has_finish_signal(
+            {"choices": [{"delta": {"content": "hi"}, "finish_reason": None}]}
+        )
+        assert not self.adapter._chunk_has_finish_signal({"choices": []})
+
+    def test_anthropic_forms(self):
+        # message_delta 携带 delta.stop_reason
+        assert self.adapter._chunk_has_finish_signal(
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}
+        )
+        # message_stop 事件
+        assert self.adapter._chunk_has_finish_signal({"type": "message_stop"})
+        # content_block_delta 不算终结
+        assert not self.adapter._chunk_has_finish_signal(
+            {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hi"}}
+        )
+
+    def test_gemini_finish_reason(self):
+        assert self.adapter._chunk_has_finish_signal(
+            {"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}]}
+        )
+        assert not self.adapter._chunk_has_finish_signal(
+            {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}
+        )
+
+    def test_bedrock_stop_reason(self):
+        assert self.adapter._chunk_has_finish_signal(
+            {"__event_type": "messageStop", "stopReason": "end_turn"}
+        )
+        assert not self.adapter._chunk_has_finish_signal(
+            {"__event_type": "contentBlockDelta", "delta": {"text": "hi"}}
+        )
+
+    def test_non_dict_chunk(self):
+        assert not self.adapter._chunk_has_finish_signal("not-a-dict")
+        assert not self.adapter._chunk_has_finish_signal(None)
 
 
 # =========================================================================

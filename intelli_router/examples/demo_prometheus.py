@@ -2,7 +2,6 @@
 IntelliRouter Prometheus 指标导出 Demo
 
 演示 Prometheus 指标暴露。使用模拟请求，无需真实 API Key。
-启动后可通过 curl http://localhost:9090/metrics 查看指标。
 
 使用方式：
   pip install prometheus-client
@@ -129,7 +128,7 @@ async def main():
     BaseRouter.completion = mock_completion
 
     print("  Prometheus HTTP server 已启动")
-    print("  验证: curl http://localhost:9090/metrics | grep intelli_router")
+    print("  验证: curl http://localhost:9091/metrics | grep intelli_router")
     print()
     print("  开始模拟请求...\n")
 

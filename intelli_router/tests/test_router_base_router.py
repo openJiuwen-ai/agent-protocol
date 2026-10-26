@@ -1,4 +1,5 @@
 """Tests for intelli_router.router.base_router."""
+import json
 import threading
 import time
 
@@ -292,6 +293,103 @@ async def test_make_request_generic_http_error(base_router, deployment_gpt4_1):
         base_router._client = None
         with pytest.raises(DeploymentError):
             await base_router._make_request(deployment_gpt4_1, {})
+
+
+# -------- request body serialization: ensure_ascii=False (PR !358 review) --------
+
+@pytest.mark.asyncio
+async def test_completion_body_keeps_utf8_without_ascii_escapes(
+    base_router, deployment_gpt4_1
+):
+    """PR !358 二轮意见 A：非流式请求体 json.dumps 使用 ensure_ascii=False，
+    中文以 UTF-8 原文出现在实际发送的字节里，不做 \\uXXXX 转义。
+
+    修复前：默认 ensure_ascii=True，'你好' 被序列化为 \\u4f60\\u597d，
+    非 ASCII 内容请求体体积近乎翻倍，直接拖累 TTFB 与带宽。
+    """
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"choices": [{"text": "hi"}]}
+        mock_client.post.return_value = mock_response
+
+        await base_router.completion(
+            "gpt-4",
+            [{"role": "user", "content": "你好，世界"}],
+            deployment=deployment_gpt4_1,
+        )
+
+        mock_client.post.assert_called_once()
+        body = mock_client.post.call_args.kwargs["content"]
+        # 中文以 UTF-8 原文发送，且未出现 \uXXXX ASCII 转义
+        assert "你好，世界".encode("utf-8") in body
+        assert b"\\u4f60" not in body
+        # 序列化结果仍是合法 JSON，内容可无损还原
+        parsed = json.loads(body)
+        assert parsed["messages"][0]["content"] == "你好，世界"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_body_keeps_utf8_without_ascii_escapes(
+    sample_deployments, deployment_gpt4_1
+):
+    """PR !358 二轮意见 A（流式路径）：acompletion_stream 的请求体同样使用
+    ensure_ascii=False 序列化，中文以 UTF-8 原文发送。
+
+    走真实 openai adapter（transform_request 透传），仅 mock httpx 客户端
+    捕获 content=body_bytes。
+    """
+    router = BaseRouter(deployments=sample_deployments, num_retries=0, timeout=30.0)
+    with patch("intelli_router.router.base_router.httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+
+        class _DoneAsyncIter:
+            """单行 "data: [DONE]" 的 SSE 流。
+
+            只发 [DONE] 终结哨兵、不产出任何数据 chunk——满足
+            iter_stream_events 的断流检测（无 [DONE] 且无 finish 信号
+            会被判为截断流抛 DeploymentNetworkError），同时保持
+            chunks == [] 断言不变。
+            """
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not getattr(self, "_done", False):
+                    self._done = True
+                    return "data: [DONE]"
+                raise StopAsyncIteration
+
+        class _StreamCtx:
+            async def __aenter__(self):
+                response = MagicMock()
+                response.raise_for_status = MagicMock()
+                response.aiter_lines = MagicMock(return_value=_DoneAsyncIter())
+                return response
+
+            async def __aexit__(self, *args):
+                return False
+
+        mock_client.stream = MagicMock(return_value=_StreamCtx())
+
+        chunks = [
+            c async for c in router.acompletion_stream(
+                "gpt-4",
+                [{"role": "user", "content": "你好，世界"}],
+                deployment=deployment_gpt4_1,
+            )
+        ]
+
+        assert chunks == []
+        body = mock_client.stream.call_args.kwargs["content"]
+        assert "你好，世界".encode("utf-8") in body
+        assert b"\\u4f60" not in body
+        parsed = json.loads(body)
+        assert parsed["messages"][0]["content"] == "你好，世界"
 
 
 # -------- completion --------

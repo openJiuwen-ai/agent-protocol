@@ -1,13 +1,17 @@
 """Provider 适配器基类定义。"""
 import json
+import logging
 import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Any, Tuple
 
 from ..core.deployment import Deployment
+from ..utils.exceptions import DeploymentNetworkError
 
 if TYPE_CHECKING:
     import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class BaseProviderAdapter(ABC):
@@ -103,6 +107,39 @@ class BaseProviderAdapter(ABC):
         """
         return headers
 
+    @staticmethod
+    def _chunk_has_finish_signal(chunk: Any) -> bool:
+        """宽松判定一个流式 chunk 是否携带"正常终结"信号。
+
+        覆盖实际流经 iter_stream_events 的各 provider 原生（转换前）形态：
+        - OpenAI 兼容：choices[*].finish_reason 非空
+        - Anthropic 原生：message_delta 的 delta.stop_reason 非空，
+          或 message_stop 事件
+        - Gemini 原生：candidates[*].finishReason 非空
+        - Bedrock Converse（事件流 payload）：顶层 stopReason
+          （messageStop 事件的 payload）
+
+        一个静态 helper 覆盖实际存在的形态即可，不做穷举式设计。
+        """
+        if not isinstance(chunk, dict):
+            return False
+        choices = chunk.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if isinstance(choice, dict) and choice.get("finish_reason"):
+                    return True
+        if chunk.get("type") == "message_stop":
+            return True
+        delta = chunk.get("delta")
+        if isinstance(delta, dict) and delta.get("stop_reason"):
+            return True
+        candidates = chunk.get("candidates")
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                if isinstance(candidate, dict) and candidate.get("finishReason"):
+                    return True
+        return bool(chunk.get("stopReason"))
+
     async def iter_stream_events(
         self,
         response: "httpx.Response",
@@ -111,7 +148,18 @@ class BaseProviderAdapter(ABC):
 
         默认实现：标准 SSE 格式解析（data: ... 行）。
         使用非 SSE 流式协议的 provider（如 Bedrock 二进制 Event Stream）应覆盖此方法。
+
+        断流检测（PR #358 意见：上游断流无检测，半截内容当成功）：流耗尽
+        时既没收到 ``[DONE]`` 哨兵、也没有任何 chunk 携带终结信号
+        （见 _chunk_has_finish_signal）→ 抛 DeploymentNetworkError
+        （网络/部署侧异常，会被 router 的 except 捕获触发 fallback）。
+
+        兼容性说明：不发送 ``[DONE]`` 也不给任何 chunk 带终结信号
+        （finish_reason / stop_reason / finishReason）就关闭连接的端点会
+        被判为断流——这是有意的 fail-fast，避免半截内容被静默当成功。
         """
+        saw_done = False
+        saw_finish = False
         async for line in response.aiter_lines():
             if not line:
                 continue
@@ -125,11 +173,29 @@ class BaseProviderAdapter(ABC):
             else:
                 continue
             if data == "[DONE]":
+                saw_done = True
                 break
             try:
-                yield json.loads(data)
+                chunk = json.loads(data)
             except json.JSONDecodeError:
+                # 无法解析的 data 行（典型场景：上游网关返回 HTML 错误页
+                # 片段）不再静默：打 debug 日志便于排查，仍跳过该行。
+                logger.debug(
+                    "iter_stream_events: skipping unparseable SSE data line: %r",
+                    data[:120],
+                )
                 continue
+            if self._chunk_has_finish_signal(chunk):
+                saw_finish = True
+            yield chunk
+        if not saw_done and not saw_finish:
+            raise DeploymentNetworkError(
+                deployment_id="",
+                reason=(
+                    "stream ended without [DONE] sentinel or finish signal; "
+                    "treating as truncated stream"
+                ),
+            )
 
     @staticmethod
     def _build_completion_response(

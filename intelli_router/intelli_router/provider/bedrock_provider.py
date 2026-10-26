@@ -5,6 +5,7 @@ import re
 from typing import AsyncIterator, Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from ..core.deployment import Deployment
+from ..utils.exceptions import DeploymentNetworkError
 from .base_provider import BaseProviderAdapter
 
 if TYPE_CHECKING:
@@ -183,6 +184,12 @@ class BedrockProviderAdapter(BaseProviderAdapter):
         """解析 Bedrock 二进制 Event Stream 格式。
 
         使用 botocore 的 EventStreamBuffer 解析 application/vnd.amazon.eventstream。
+
+        断流检测（与默认 SSE 实现的 [DONE]/finish_reason 检测等价，
+        见 BaseProviderAdapter.iter_stream_events 的兼容性说明）：
+        正常结束以 messageStop 事件（或 payload 携带终结信号，如
+        stopReason）为标志；事件流耗尽仍未见到则抛
+        DeploymentNetworkError，避免上游断流后半截内容被当成功。
         """
         try:
             from botocore.eventstream import EventStreamBuffer
@@ -193,19 +200,44 @@ class BedrockProviderAdapter(BaseProviderAdapter):
             )
 
         buffer = EventStreamBuffer()
+        saw_message_stop = False
         async for raw_bytes in response.aiter_bytes():
             buffer.add_data(raw_bytes)
             for event in buffer:
-                # event.headers 是 list of (name, value) tuples
-                headers_dict = {h[0]: h[1] for h in event.headers}
-                event_type = headers_dict.get(":event-type", "")
+                # botocore 现版的 EventStreamHeaderParser.parse 返回 dict
+                # （{':event-type': 'messageStop'}）；旧注释里 "list of
+                # (name, value) tuples" 的口径按 dict 兼容处理——按元组
+                # 迭代会得到 {':': 'e'}，event_type 恒为空，流永远不产出。
+                headers = event.headers
+                if isinstance(headers, dict):
+                    event_type = headers.get(":event-type", "")
+                else:
+                    event_type = dict(headers).get(":event-type", "")
                 if event_type and event.payload:
                     try:
                         payload = json.loads(event.payload)
                     except (json.JSONDecodeError, UnicodeDecodeError):
+                        # 无法解析的事件 payload 不再静默：打 debug 日志
+                        # 便于排查，仍跳过该事件。
+                        logger.debug(
+                            "iter_stream_events: skipping unparseable Bedrock "
+                            "event payload (type=%s): %r",
+                            event_type,
+                            event.payload[:120],
+                        )
                         continue
                     payload["__event_type"] = event_type
+                    if event_type == "messageStop" or self._chunk_has_finish_signal(payload):
+                        saw_message_stop = True
                     yield payload
+        if not saw_message_stop:
+            raise DeploymentNetworkError(
+                deployment_id="",
+                reason=(
+                    "Bedrock event stream ended without messageStop event; "
+                    "treating as truncated stream"
+                ),
+            )
 
     def transform_stream_chunk(
         self,

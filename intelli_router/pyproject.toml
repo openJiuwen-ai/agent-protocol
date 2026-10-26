@@ -37,6 +37,3 @@ packages = ["intelli_router"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
-[tool.poetry.group.dev.dependencies]
-prometheus-client = "^0.25.0"
-

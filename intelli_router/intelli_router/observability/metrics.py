@@ -1,13 +1,16 @@
 """指标采集事件处理器"""
+import logging
 import re
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, Any, List, Deque, Optional
+from typing import TYPE_CHECKING, Dict, Any, Iterable, List, Deque, Optional
 
 from .events import RoutingEvent, RoutingEventType
 from .handler import EventHandler
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from prometheus_client import CollectorRegistry
@@ -178,6 +181,11 @@ class MetricsCollector(EventHandler):
         # Stream 统计
         self._stream_count: int = 0
         self._total_chunks: int = 0
+        # 流式请求被消费者提前中断（STREAM_CANCELLED）的终态计数。
+        # 成功/失败/取消三类终态与 total（STARTED 时已计）配对：
+        # successful + failed + cancelled + 在途 == total_requests
+        # （在途为派生值，不单独存储）。
+        self._cancelled_count: int = 0
 
         # TTFT (Time To First Token) 统计
         self._ttft: LatencyStats = LatencyStats()
@@ -271,6 +279,10 @@ class MetricsCollector(EventHandler):
                 self._on_stream_started(event)
             elif et == RoutingEventType.STREAM_SUCCEEDED:
                 self._on_stream_succeeded(event)
+            elif et == RoutingEventType.STREAM_CANCELLED:
+                self._on_stream_cancelled(event)
+            elif et == RoutingEventType.DEPLOYMENTS_UPDATED:
+                self._on_deployments_updated(event)
 
     def _on_request_started(self, event: RoutingEvent) -> None:
         self._request_count += 1
@@ -411,6 +423,96 @@ class MetricsCollector(EventHandler):
             if event.latency is not None:
                 self._prom["latency"].labels(model=event.model).observe(event.latency)
 
+    def _on_stream_cancelled(self, event: RoutingEvent) -> None:
+        """流被消费者提前中断（break/aclose/取消）：终态之一。
+
+        只计 cancelled 计数器：不加 successful/failed，不动 total
+        （STARTED 时已计），也不 observe 延迟/token——中断流的
+        partial 延迟不属于完整请求延迟，混入会拉低 avg latency；
+        by_deployment 口径（requests = successes + failures）同样
+        不纳入取消。时间线记一条 stream_cancelled 供追溯（可携带
+        reason/latency/chunk_count）。
+        """
+        self._cancelled_count += 1
+        entry = {
+            "ts": event.timestamp,
+            "type": "stream_cancelled",
+            "model": event.model,
+            "deployment": event.deployment_id,
+            "latency": event.latency,
+            "chunks": event.chunk_count,
+        }
+        reason = event.extra.get("reason")
+        if reason is not None:
+            entry["reason"] = reason
+        self._timeline.append(entry)
+
+    def _on_deployments_updated(self, event: RoutingEvent) -> None:
+        """热替换部署：清理已下线部署的统计键（意见：热替换后 metrics
+        残留旧键，看板 Deployments 表格无法区分在线与历史）。
+
+        纯键清理：不影响任何计数器（total/successful/failed/streams/
+        cancelled 等都不动——历史请求的计数已发生在过去，删键只是让
+        by_deployment 不再展示下线部署）。removed_ids 缺失或非 list
+        时防御性忽略并打 debug 日志。
+        """
+        removed_ids = event.extra.get("removed_ids")
+        if not isinstance(removed_ids, list):
+            logger.debug(
+                "DEPLOYMENTS_UPDATED 事件未携带有效的 removed_ids 列表"
+                "（got %r），跳过部署统计键清理",
+                removed_ids,
+            )
+            return
+        self._drop_deployment_keys(removed_ids)
+
+    def _drop_deployment_keys(self, deployment_ids: Iterable[str]) -> None:
+        """从全部 _deployment_* 字典中删除给定部署的键（调用方须已持锁）。
+
+        LatencyStats 对象随 _deployment_latency 的键一并删除，
+        不需要单独清理。
+        """
+        for dep_id in deployment_ids:
+            self._deployment_requests.pop(dep_id, None)
+            self._deployment_successes.pop(dep_id, None)
+            self._deployment_failures.pop(dep_id, None)
+            self._deployment_latency.pop(dep_id, None)
+            self._deployment_tokens.pop(dep_id, None)
+            self._deployment_provider.pop(dep_id, None)
+
+    def remove_deployment(self, deployment_id: str) -> None:
+        """删除单个部署的全部统计键（线程安全）。
+
+        供不走 event_bus（或同步上下文）的宿主在部署下线时调用，
+        与 DEPLOYMENTS_UPDATED 事件路径等效。不存在的 id 静默忽略。
+        """
+        with self._lock:
+            self._drop_deployment_keys([deployment_id])
+
+    def prune_deployments(self, keep_ids: Iterable[str]) -> None:
+        """清理不在 keep_ids 内的全部部署统计键（线程安全）。
+
+        keep_ids 为保留集合（当前在线部署 id 的任意可迭代），
+        不在集合内的部署键从所有 _deployment_* 字典中清除。
+        适合全量同步场景：router.update_deployments 热替换后用
+        新列表全集调用，一次性清掉所有已下线部署的残留。
+        """
+        keep = set(keep_ids)
+        with self._lock:
+            stale = [
+                dep_id
+                for dep_id in (
+                    self._deployment_requests.keys()
+                    | self._deployment_successes.keys()
+                    | self._deployment_failures.keys()
+                    | self._deployment_latency.keys()
+                    | self._deployment_tokens.keys()
+                    | self._deployment_provider.keys()
+                )
+                if dep_id not in keep
+            ]
+            self._drop_deployment_keys(stale)
+
     def get_stats(self) -> Dict[str, Any]:
         """返回当前所有指标快照（线程安全）
 
@@ -431,6 +533,7 @@ class MetricsCollector(EventHandler):
                 "total_requests": self._request_count,
                 "successful": self._success_count,
                 "failed": self._failure_count,
+                "cancelled": self._cancelled_count,
                 "retries": self._retry_count,
                 "exhausted": self._exhausted_count,
                 "streams": self._stream_count,
@@ -466,6 +569,7 @@ class MetricsCollector(EventHandler):
             "total_requests": snap["total_requests"],
             "successful": snap["successful"],
             "failed": snap["failed"],
+            "cancelled": snap["cancelled"],
             "retries": snap["retries"],
             "exhausted": snap["exhausted"],
             "streams": snap["streams"],
@@ -585,6 +689,7 @@ class MetricsCollector(EventHandler):
             self._total_completion_tokens = 0
             self._stream_count = 0
             self._total_chunks = 0
+            self._cancelled_count = 0
             self._ttft = LatencyStats()
             self._ttft_by_model.clear()
             self._tokens_per_sec = LatencyStats()

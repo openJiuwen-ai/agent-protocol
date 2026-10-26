@@ -20,6 +20,49 @@ def _event(event_type, **kwargs):
     return RoutingEvent(event_type=event_type, **defaults)
 
 
+async def _seed_two_deployments(collector):
+    """喂出 d1/d2 两个部署的统计，使六个 _deployment_* 字典都含两键。
+
+    d1 走 RETRIED + SUCCEEDED（requests/failures/successes 全有，
+    SUCCEEDED 携带 provider/latency/tokens 补齐其余三个字典）；
+    d2 走 SUCCEEDED。同步上下文可用 asyncio.run() 调用本函数。
+    """
+    await collector.handle_event(_event(RoutingEventType.REQUEST_STARTED))
+    await collector.handle_event(_event(
+        RoutingEventType.REQUEST_RETRIED,
+        deployment_id="d1",
+        error_type="TimeoutError",
+    ))
+    await collector.handle_event(_event(
+        RoutingEventType.REQUEST_SUCCEEDED,
+        deployment_id="d1",
+        provider="openai",
+        latency=0.4,
+        prompt_tokens=10,
+        completion_tokens=5,
+    ))
+    await collector.handle_event(_event(
+        RoutingEventType.REQUEST_SUCCEEDED,
+        deployment_id="d2",
+        provider="anthropic",
+        latency=0.6,
+        prompt_tokens=20,
+        completion_tokens=8,
+    ))
+
+
+def _all_deployment_dicts(collector):
+    """收集 collector 的全部六个 _deployment_* 统计字典。"""
+    return [
+        collector._deployment_requests,
+        collector._deployment_successes,
+        collector._deployment_failures,
+        collector._deployment_latency,
+        collector._deployment_tokens,
+        collector._deployment_provider,
+    ]
+
+
 class TestLatencyStats:
     def test_empty(self):
         s = LatencyStats()
@@ -217,6 +260,129 @@ class TestMetricsCollector:
         assert stats["total_chunks"] == 42
         assert stats["latency"]["count"] == 1
 
+    # -------- STREAM_CANCELLED 终态计数（意见C，配合流式取消事件） --------
+
+    async def test_stream_cancelled_counter(self, collector):
+        """STARTED + CANCELLED：cancelled==1，successful/failed 均为 0，
+        total 在 STARTED 时已计（不动）。"""
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_CANCELLED,
+            extra={"reason": "consumer_break"},
+        ))
+        stats = collector.get_stats()
+        assert stats["cancelled"] == 1
+        assert stats["successful"] == 0
+        assert stats["failed"] == 0
+        assert stats["total_requests"] == 1
+        assert stats["streams"] == 1
+        # 配对不变式扩展：successful + failed + cancelled + 在途 == total
+        # （此处无在途，三者之和应恰等于 total）
+        assert (
+            stats["successful"] + stats["failed"] + stats["cancelled"]
+            == stats["total_requests"]
+        )
+
+    async def test_stream_cancelled_does_not_touch_latency_or_deployment(
+            self, collector):
+        """取消≠成功：不 observe 全局延迟、不计 by_deployment
+        （requests = successes + failures 口径不含取消）。"""
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_CANCELLED,
+            deployment_id="d1",
+            latency=0.5,
+            chunk_count=7,
+        ))
+        stats = collector.get_stats()
+        assert stats["cancelled"] == 1
+        assert stats["latency"]["count"] == 0
+        assert stats["by_deployment"] == {}
+
+    async def test_stream_cancelled_timeline_entry(self, collector):
+        """取消流在时间线留一条 stream_cancelled 记录（可携带
+        reason/latency/chunks）。"""
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_CANCELLED,
+            deployment_id="d1",
+            latency=0.5,
+            chunk_count=7,
+            extra={"reason": "consumer_break"},
+        ))
+        entries = [
+            e for e in collector.get_stats()["timeline"]
+            if e["type"] == "stream_cancelled"
+        ]
+        assert len(entries) == 1
+        assert entries[0]["deployment"] == "d1"
+        assert entries[0]["latency"] == 0.5
+        assert entries[0]["chunks"] == 7
+        assert entries[0]["reason"] == "consumer_break"
+
+    async def test_stream_cancelled_reset(self, collector):
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_CANCELLED))
+        assert collector.get_stats()["cancelled"] == 1
+        collector.reset()
+        assert collector.get_stats()["cancelled"] == 0
+
+    # -------- DEPLOYMENTS_UPDATED 热替换键清理（意见A） --------
+
+    async def test_deployments_updated_removes_stale_keys(self, collector):
+        """热替换事件 removed_ids=["d1"]：by_deployment 只剩 d2，
+        六个 _deployment_* 字典均无 d1 残留，且所有计数器不变。"""
+        await _seed_two_deployments(collector)
+        before = collector.get_stats()
+        assert set(before["by_deployment"]) == {"d1", "d2"}
+
+        await collector.handle_event(_event(
+            RoutingEventType.DEPLOYMENTS_UPDATED,
+            extra={"removed_ids": ["d1"]},
+        ))
+
+        after = collector.get_stats()
+        assert set(after["by_deployment"]) == {"d2"}
+        # d2 各字段保持不变
+        assert after["by_deployment"]["d2"] == before["by_deployment"]["d2"]
+        # 全部 _deployment_* 字典无 d1 键（LatencyStats 随字典一并删除）
+        for dep_dict in _all_deployment_dicts(collector):
+            assert "d1" not in dep_dict
+        # 纯键清理：任何计数器与其他维度统计都不动
+        for key in (
+            "total_requests", "successful", "failed", "cancelled",
+            "retries", "exhausted", "streams", "total_chunks",
+        ):
+            assert after[key] == before[key]
+        assert after["by_model"] == before["by_model"]
+        assert after["tokens"] == before["tokens"]
+        assert after["latency"] == before["latency"]
+        assert after["errors_by_type"] == before["errors_by_type"]
+
+    async def test_deployments_updated_without_valid_removed_ids_is_ignored(
+            self, collector):
+        """removed_ids 缺失 / 非 list / 含未知 id：防御性忽略，无异常，
+        统计完全不变。"""
+        await _seed_two_deployments(collector)
+        before = collector.get_stats()
+
+        # extra 缺失 removed_ids
+        await collector.handle_event(_event(
+            RoutingEventType.DEPLOYMENTS_UPDATED))
+        # removed_ids 非 list
+        await collector.handle_event(_event(
+            RoutingEventType.DEPLOYMENTS_UPDATED,
+            extra={"removed_ids": "d1"},
+        ))
+        # removed_ids 里的未知 id：静默无操作
+        await collector.handle_event(_event(
+            RoutingEventType.DEPLOYMENTS_UPDATED,
+            extra={"removed_ids": ["nope"]},
+        ))
+
+        assert collector.get_stats() == before
+
     async def test_multiple_models(self, collector):
         await collector.handle_event(_event(
             RoutingEventType.REQUEST_STARTED, model="gpt-4"))
@@ -262,6 +428,7 @@ class TestMetricsCollector:
         assert "total_requests" in stats
         assert "successful" in stats
         assert "failed" in stats
+        assert "cancelled" in stats
         assert "retries" in stats
         assert "exhausted" in stats
         assert "streams" in stats
@@ -385,6 +552,51 @@ class TestMetricsCollector:
             pytest.skip("prometheus-client is installed")
         with pytest.raises(ImportError, match="prometheus-client"):
             MetricsCollector(enable_prometheus=True)
+
+
+class TestDeploymentKeyPruning:
+    """意见A 兜底 API：remove_deployment / prune_deployments 供不走
+    event_bus 或同步上下文的宿主调用。"""
+
+    def test_remove_deployment(self):
+        collector = MetricsCollector()
+        asyncio.run(_seed_two_deployments(collector))
+        collector.remove_deployment("d1")
+        stats = collector.get_stats()
+        assert set(stats["by_deployment"]) == {"d2"}
+        for dep_dict in _all_deployment_dicts(collector):
+            assert "d1" not in dep_dict
+
+    def test_remove_deployment_nonexistent_is_noop(self):
+        """删除不存在的 id 静默忽略，不抛异常、不改统计。"""
+        collector = MetricsCollector()
+        asyncio.run(_seed_two_deployments(collector))
+        before = collector.get_stats()
+        collector.remove_deployment("nope")
+        assert collector.get_stats() == before
+
+    def test_prune_deployments(self):
+        """keep_ids 之外的部署键全部清除。"""
+        collector = MetricsCollector()
+        asyncio.run(_seed_two_deployments(collector))
+        collector.prune_deployments({"d2"})
+        stats = collector.get_stats()
+        assert set(stats["by_deployment"]) == {"d2"}
+        for dep_dict in _all_deployment_dicts(collector):
+            assert "d1" not in dep_dict
+
+    def test_prune_deployments_accepts_list_and_empty_keep(self):
+        """keep_ids 接受任意可迭代（list/set）；空保留集合 = 全部清除。"""
+        collector = MetricsCollector()
+        asyncio.run(_seed_two_deployments(collector))
+        # list 形式的保留集合同样有效
+        collector.prune_deployments(["d1", "d2"])
+        assert set(collector.get_stats()["by_deployment"]) == {"d1", "d2"}
+        # 空集合：所有部署视为下线，全部清除
+        collector.prune_deployments(set())
+        assert collector.get_stats()["by_deployment"] == {}
+        for dep_dict in _all_deployment_dicts(collector):
+            assert not dep_dict
 
 
 class TestPrometheusPrefixValidation:

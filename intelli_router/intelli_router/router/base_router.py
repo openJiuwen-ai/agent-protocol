@@ -198,7 +198,10 @@ class BaseRouter:
         adapter = self._get_adapter(deployment)
         url = adapter.get_api_url(deployment, stream=False)
         headers = adapter.get_headers(deployment)
-        body_bytes = json.dumps(request_body).encode("utf-8")
+        # ensure_ascii=False：非 ASCII 字符以 UTF-8 原文序列化，避免
+        # \uXXXX 转义使中文等内容的请求体体积近乎翻倍（review 意见）。
+        # 签名与发送共用同一份 body_bytes，天然同源。
+        body_bytes = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
         headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
         # per-request 超时覆盖 client 默认值（deployment 显式设置优先）
         request_timeout = self._request_timeout(deployment)
@@ -375,7 +378,9 @@ class BaseRouter:
         client = self._ensure_client(deployment.verify_ssl)
         url = adapter.get_api_url(deployment, stream=True)
         headers = adapter.get_headers(deployment)
-        body_bytes = json.dumps(request_body).encode("utf-8")
+        # 同 _make_request：ensure_ascii=False 避免 \uXXXX 转义膨胀请求体；
+        # 签名与发送共用同一份 body_bytes，天然同源。
+        body_bytes = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
         headers = adapter.sign_request("POST", url, headers, body_bytes, deployment)
         # per-request 超时覆盖 client 默认值（deployment 显式设置优先）
         request_timeout = self._request_timeout(deployment)

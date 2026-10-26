@@ -1,4 +1,5 @@
 """Tests for intelli_router.router.reliable_router."""
+import asyncio
 import time
 import threading
 import pytest
@@ -7,6 +8,7 @@ from intelli_router.router.reliable_router import ReliableRouter
 from intelli_router.strategy.simple_shuffle import SimpleShuffleStrategy
 from intelli_router.strategy.adaptive import AdaptiveStrategy
 from intelli_router.core.deployment import Deployment, DeploymentStatus
+from intelli_router.observability.events import RoutingEventType
 from intelli_router.utils.exceptions import (
     AllDeploymentsFailed,
     DeploymentAuthError,
@@ -838,3 +840,292 @@ def test_update_deployments_shared_state_no_clobber():
     # 旧部署 a1 的状态应被清理
     assert "a1" not in shared_state.deployment_status
     assert router_b.get_model_list() == ["model-b"]
+
+
+# =====================================================================
+# PR #358 二轮意见 A：流式被消费者提前中断时的监控口径闭合
+# =====================================================================
+
+class _RecordingEventHandler:
+    """收集所有路由事件的测试用 EventHandler。"""
+
+    def __init__(self):
+        self.events = []
+
+    async def handle_event(self, event):
+        self.events.append(event)
+
+    def events_of_type(self, event_type):
+        return [e for e in self.events if e.event_type == event_type]
+
+
+def _endless_mock_stream():
+    """无限产出内容 chunk 的 acompletion_stream mock（消费端 break 才停）。"""
+    async def mock_stream(model, messages, deployment, **kwargs):
+        i = 0
+        while True:
+            yield {"choices": [{"delta": {"content": f"chunk{i}"}, "finish_reason": None}]}
+            i += 1
+    return mock_stream
+
+
+async def _drain_until(recorder, event_type, timeout_s: float = 2.0) -> bool:
+    """轮询等待 recorder 收到指定类型事件（STREAM_CANCELLED 等经
+    create_task 后台投递，需要 loop 转一圈才会送达）。"""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if recorder.events_of_type(event_type):
+            return True
+        await asyncio.sleep(0.01)
+    return bool(recorder.events_of_type(event_type))
+
+
+@pytest.mark.asyncio
+async def test_stream_consumer_break_emits_stream_cancelled(sample_deployments):
+    """消费 1 个 chunk 后 break：事件序列含 stream_started +
+    stream_cancelled、无 stream_succeeded；state 无 on_success/on_failure。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    received = []
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        async for chunk in router.stream(
+            [{"role": "user", "content": "hi"}], model="gpt-4"
+        ):
+            received.append(chunk)
+            break  # 消费者提前中断
+
+    assert len(received) == 1
+    # 后台 create_task 投递的终态事件需要 loop 执行
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    succeeded = recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED)
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert succeeded == []
+    # 同一 request_id，且是第四种终态（无 EXHAUSTED）
+    assert started[0].request_id == cancelled[0].request_id
+    assert recorder.events_of_type(RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED) == []
+    # reason 标记消费者中断
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert cancelled[0].deployment_id is not None
+    # state 不记成功（无延迟样本）也不记失败（无失败计数/冷却）。
+    # fixture 自带一个初始 COOLDOWN 的部署，只检查实际服务的部署。
+    selected_id = cancelled[0].deployment_id
+    assert selected_id not in router.state.latencies
+    assert router.state.consecutive_failures.get(selected_id, 0) == 0
+    assert router.state.deployment_status.get(selected_id) != DeploymentStatus.COOLDOWN
+
+
+@pytest.mark.asyncio
+async def test_stream_consumer_aclose_emits_stream_cancelled(sample_deployments):
+    """显式 aclose() 场景同理：STREAM_CANCELLED 闭合口径，无成功终态。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        gen = router.stream([{"role": "user", "content": "hi"}], model="gpt-4")
+        first = await gen.__anext__()
+        assert first.content == "chunk0"
+        await gen.aclose()
+
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(cancelled) == 1
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert router.state.latencies == {}
+    assert not router.state.consecutive_failures
+
+
+def _slow_after_first_mock_stream():
+    """首个 chunk 立即产出、之后在生产端内部长时间 await 的 mock——
+    取消发生时 router 生成器正挂在其内部 await 上，CancelledError 会
+    落进生成器帧（而非仅在消费者侧），覆盖 reason=cancelled 分支。"""
+    async def mock_stream(model, messages, deployment, **kwargs):
+        yield {"choices": [{"delta": {"content": "chunk0"}, "finish_reason": None}]}
+        await asyncio.sleep(30)
+    return mock_stream
+
+
+@pytest.mark.asyncio
+async def test_stream_task_cancellation_emits_stream_cancelled(sample_deployments):
+    """任务取消（CancelledError）同样发 STREAM_CANCELLED（reason=cancelled）。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    async def consume():
+        async for chunk in router.stream(
+            [{"role": "user", "content": "hi"}], model="gpt-4"
+        ):
+            pass  # 持续消费；生成器阻塞在内部 await 时被取消
+
+    with patch.object(router, "acompletion_stream", new=_slow_after_first_mock_stream()):
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(cancelled) == 1
+    assert cancelled[0].extra["reason"] == "cancelled"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    selected_id = cancelled[0].deployment_id
+    assert selected_id not in router.state.latencies
+    assert router.state.consecutive_failures.get(selected_id, 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_consumer_break_emits_stream_cancelled(sample_deployments):
+    """raw chunk 路径（stream_completion）：消费 1 个 chunk 后 break，
+    同样发 STREAM_CANCELLED 闭合口径。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    received = []
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        async for chunk in router.stream_completion(
+            "gpt-4", [{"role": "user", "content": "hi"}]
+        ):
+            received.append(chunk)
+            break
+
+    assert len(received) == 1
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+
+    started = recorder.events_of_type(RoutingEventType.STREAM_STARTED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(started) == 1
+    assert len(cancelled) == 1
+    assert started[0].request_id == cancelled[0].request_id
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert router.state.latencies == {}
+    assert not router.state.consecutive_failures
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_consumer_aclose_emits_stream_cancelled(sample_deployments):
+    """raw chunk 路径的 aclose() 场景。"""
+    router = ReliableRouter(deployments=sample_deployments, num_retries=3)
+    recorder = _RecordingEventHandler()
+    router.event_bus.register(recorder)
+
+    with patch.object(router, "acompletion_stream", new=_endless_mock_stream()):
+        gen = router.stream_completion("gpt-4", [{"role": "user", "content": "hi"}])
+        first = await gen.__anext__()
+        assert first["choices"][0]["delta"]["content"] == "chunk0"
+        await gen.aclose()
+
+    assert await _drain_until(recorder, RoutingEventType.STREAM_CANCELLED)
+    cancelled = recorder.events_of_type(RoutingEventType.STREAM_CANCELLED)
+    assert len(cancelled) == 1
+    assert cancelled[0].extra["reason"] == "consumer_break"
+    assert recorder.events_of_type(RoutingEventType.STREAM_SUCCEEDED) == []
+    assert router.state.latencies == {}
+    assert not router.state.consecutive_failures
+
+
+# =====================================================================
+# PR #358 二轮意见 E：热替换部署后广播 DEPLOYMENTS_UPDATED
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_update_deployments_emits_deployments_updated(reliable_router):
+    """换掉 d1 → 捕获到 DEPLOYMENTS_UPDATED 事件且 removed_ids==["dep_gpt4_1"]。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    d1, d2, d3, d4 = reliable_router.deployments
+    reliable_router.update_deployments([d2, d3, d4])  # 移除 dep_gpt4_1
+
+    # create_task 投递的事件需要 loop 执行
+    assert await _drain_until(recorder, RoutingEventType.DEPLOYMENTS_UPDATED)
+
+    events = recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED)
+    assert len(events) == 1
+    event = events[0]
+    assert event.extra["removed_ids"] == ["dep_gpt4_1"]
+    # RoutingEvent 必填字段：request_id 存在；model 传空串（路由器级管理事件）
+    assert event.request_id
+    assert event.model == ""
+
+
+@pytest.mark.asyncio
+async def test_update_deployments_multiple_removals_sorted(reliable_router):
+    """同时移除多个部署：removed_ids 排序输出。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    d1, d2, d3, d4 = reliable_router.deployments
+    reliable_router.update_deployments([d3, d4])  # 移除 dep_gpt4_1、dep_gpt4_2
+
+    assert await _drain_until(recorder, RoutingEventType.DEPLOYMENTS_UPDATED)
+    events = recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED)
+    assert len(events) == 1
+    assert events[0].extra["removed_ids"] == ["dep_gpt4_1", "dep_gpt4_2"]
+
+
+@pytest.mark.asyncio
+async def test_update_deployments_without_removal_emits_nothing(reliable_router):
+    """无移除（同集合/只新增）时不发射 DEPLOYMENTS_UPDATED。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    reliable_router.update_deployments(list(reliable_router.deployments))
+    await asyncio.sleep(0.05)
+    assert recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED) == []
+
+    # 只新增部署同样无 removed_ids，不发射
+    extra = Deployment(
+        id="dep_new", model_name="gpt-4", api_key="sk", api_base="https://new"
+    )
+    reliable_router.update_deployments(list(reliable_router.deployments) + [extra])
+    await asyncio.sleep(0.05)
+    assert recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED) == []
+
+
+@pytest.mark.asyncio
+async def test_update_deployments_state_cleanup_still_works(reliable_router):
+    """事件广播不影响既有的 state 清理（remove_deployment）。"""
+    d1 = reliable_router.deployments[0]
+    reliable_router.state.on_failure(d1.id, RuntimeError("boom"), cooldown_time=60)
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    reliable_router.update_deployments(
+        [d for d in reliable_router.deployments if d.id != d1.id]
+    )
+    assert await _drain_until(recorder, RoutingEventType.DEPLOYMENTS_UPDATED)
+
+    # state 已清理
+    assert d1.id not in reliable_router.state.deployment_status
+    assert d1.id not in reliable_router.state.consecutive_failures
+    events = recorder.events_of_type(RoutingEventType.DEPLOYMENTS_UPDATED)
+    assert events[0].extra["removed_ids"] == [d1.id]
+
+
+def test_update_deployments_sync_context_skips_emit(reliable_router):
+    """同步上下文（无 running loop）热替换：不抛异常，事件被跳过
+    （logger.debug），订阅方可通过公开 prune API 兜底。"""
+    recorder = _RecordingEventHandler()
+    reliable_router.event_bus.register(recorder)
+
+    d1 = reliable_router.deployments[0]
+    # 同步测试函数：无事件循环在跑
+    reliable_router.update_deployments(
+        [d for d in reliable_router.deployments if d.id != d1.id]
+    )
+
+    # state 清理照常发生
+    assert d1.id not in reliable_router.state.deployment_status
+    # 事件未投递（无 running loop，create_task 不可用）
+    assert recorder.events == []

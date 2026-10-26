@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from unittest.mock import patch
+
 from httpx import Request, Response, AsyncClient
 from httpx._transports.mock import MockTransport
 
@@ -15,6 +17,11 @@ from intelli_router import (
 )
 from intelli_router.core.deployment import DeploymentStatus
 from intelli_router.observability.events import RoutingEventType
+from intelli_router.utils.exceptions import (
+    AllDeploymentsFailed,
+    DeploymentNetworkError,
+    RouterError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +448,14 @@ class TestReliableRouterInvoke:
         asyncio.run(runner())
 
     def test_deployment_request_defaults_reject_reserved_keys(self):
+        """PR #358 二轮意见 C：request_defaults 含保留键的校验异常不再以
+        裸 ValueError 逃逸（调用方按契约捕获 RouterError 接不住，且
+        REQUEST_STARTED 已发而无终态事件，在途虚高）。校验挪入 try 后
+        走既有 except 分支：请求侧错误不 on_failure 不冷却、记 errors
+        并继续 fallback；本例只有一个部署，无处可退 → AllDeploymentsFailed
+        （RouterError 子类），errors 里带原始 ValueError 信息，raise 前
+        发 EXHAUSTED 终态，事件配对闭合。
+        """
         dep = Deployment(
             id="openai-1",
             model_name="gpt-4o-mini",
@@ -450,16 +465,34 @@ class TestReliableRouterInvoke:
             request_defaults={"model": "bad-model"},
         )
         capture = RequestCapture()
+        events = EventCapture()
 
         async def runner():
             router = ReliableRouter(deployments=[dep])
+            router.event_bus.register(events)
             attach_mock_transport(router, capture)
-            with pytest.raises(ValueError, match="reserved keys"):
+            with pytest.raises(AllDeploymentsFailed) as exc_info:
                 await router.invoke(messages=[{"role": "user", "content": "hi"}])
             await router.close()
+            return exc_info, router
 
-        asyncio.run(runner())
+        exc_info, router = asyncio.run(runner())
+        # errors 里带原始 ValueError 信息（保留键校验消息）
+        errors = exc_info.value.details["errors"]
+        assert len(errors) == 1
+        deployment_id, error_message = errors[0]
+        assert deployment_id == "openai-1"
+        assert "reserved keys" in error_message
+        # 校验失败发生在 HTTP 请求之前：没有任何请求发出去
         assert capture.requests == []
+        # 事件配对闭合：REQUEST_STARTED + ALL_DEPLOYMENTS_EXHAUSTED
+        assert [e.event_type for e in events.events] == [
+            RoutingEventType.REQUEST_STARTED,
+            RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+        ]
+        # 请求侧错误：不 on_failure（无失败计数/冷却）
+        assert router.state.consecutive_failures.get("openai-1", 0) == 0
+        assert router.state.deployment_status.get("openai-1") != DeploymentStatus.COOLDOWN
 
 
     def test_completion_with_explicit_deployment(self):
@@ -1018,3 +1051,392 @@ class TestReliableRouterErrors:
             return router
         router = asyncio.run(runner())
         assert router._client is None, "httpx client should be None after close"
+
+
+def _first_remaining_selector():
+    async def _select(available_list, ctx):
+        return available_list[0] if available_list else None
+    return _select
+
+
+class TestRequestDefaultsFallback:
+    """PR #358 二轮意见 C：request_defaults 校验异常（ValueError）不再
+    裸逃逸——挪入 try 后按请求侧错误处理，跳过配错的部署由其他部署服务。
+    """
+
+    def _deployments(self):
+        d1 = Deployment(
+            id="d1", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test1", provider="openai",
+            # 保留键：_request_kwargs_for_deployment 会抛 ValueError
+            request_defaults={"model": "bad-model"},
+        )
+        d2 = Deployment(
+            id="d2", model_name="gpt-4o-mini",
+            api_key="sk-test", api_base="http://test2", provider="openai",
+        )
+        return d1, d2
+
+    def test_completion_request_defaults_bad_falls_back_to_d2(self):
+        """d1 配错 → 跳过 d1（不发 HTTP）由 d2 成功服务，事件配对
+        STARTED...SUCCEEDED（无 EXHAUSTED）。"""
+        d1, d2 = self._deployments()
+        capture = RequestCapture()
+        events = EventCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                result = await router.completion(
+                    "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+                )
+            await router.close()
+            return result
+
+        result = asyncio.run(runner())
+        # 由 d2 成功服务
+        assert result["deployment_id"] == "d2"
+        # d1 的校验失败发生在 HTTP 之前：唯一请求打到了 d2
+        assert len(capture.requests) == 1
+        assert capture.requests[0].url.host == "test2"
+        # 事件配对闭合：STARTED → (RETRIED) → SUCCEEDED，无 EXHAUSTED
+        types = [e.event_type for e in events.events]
+        assert types[0] == RoutingEventType.REQUEST_STARTED
+        assert types[-1] == RoutingEventType.REQUEST_SUCCEEDED
+        assert RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED not in types
+        # 请求侧错误：d1 不进失败计数/冷却（还能被后续请求选中）
+        succeeded = [e for e in events.events
+                     if e.event_type == RoutingEventType.REQUEST_SUCCEEDED][0]
+        assert succeeded.deployment_id == "d2"
+
+    def test_stream_completion_request_defaults_bad_falls_back_to_d2(self):
+        """同上，stream_completion 路径（STREAM_STARTED...STREAM_SUCCEEDED）。"""
+        d1, d2 = self._deployments()
+        capture = RequestCapture()
+        events = EventCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                chunks = [
+                    chunk async for chunk in router.stream_completion(
+                        "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+                    )
+                ]
+            await router.close()
+            return chunks
+
+        chunks = asyncio.run(runner())
+        assert len(chunks) >= 1
+        assert len(capture.requests) == 1
+        assert capture.requests[0].url.host == "test2"
+        types = [e.event_type for e in events.events]
+        assert types[0] == RoutingEventType.STREAM_STARTED
+        assert types[-1] == RoutingEventType.STREAM_SUCCEEDED
+        assert RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED not in types
+
+    def test_stream_request_defaults_bad_falls_back_to_d2(self):
+        """同上，stream()（AssistantMessageChunk）路径。"""
+        d1, d2 = self._deployments()
+        capture = RequestCapture()
+        events = EventCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                chunks = [
+                    chunk async for chunk in router.stream(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model="gpt-4o-mini",
+                    )
+                ]
+            await router.close()
+            return chunks
+
+        chunks = asyncio.run(runner())
+        assert len(chunks) >= 1
+        assert len(capture.requests) == 1
+        assert capture.requests[0].url.host == "test2"
+        types = [e.event_type for e in events.events]
+        assert types[0] == RoutingEventType.STREAM_STARTED
+        assert types[-1] == RoutingEventType.STREAM_SUCCEEDED
+        assert RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED not in types
+
+    def test_all_deployments_bad_request_defaults_raises_all_failed(self):
+        """所有部署都配错 → AllDeploymentsFailed（RouterError 子类），
+        事件 STARTED + EXHAUSTED 配对。"""
+        d1, d2 = self._deployments()
+        d2.request_defaults = {"messages": "bad"}
+        capture = RequestCapture()
+        events = EventCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            with pytest.raises(AllDeploymentsFailed) as exc_info:
+                with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                    await router.completion(
+                        "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+                    )
+            await router.close()
+            return exc_info
+
+        exc_info = asyncio.run(runner())
+        errors = exc_info.value.details["errors"]
+        assert len(errors) == 2
+        assert all("reserved keys" in msg for _, msg in errors)
+        assert capture.requests == []
+        assert [e.event_type for e in events.events] == [
+            RoutingEventType.REQUEST_STARTED,
+            RoutingEventType.REQUEST_RETRIED,
+            RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED,
+        ]
+
+    def test_d1_bad_defaults_d2_http_fail_no_success(self):
+        """d1 配错 + d2 也失败（HTTP 500）→ EXHAUSTED 存在、无 SUCCEEDED
+        （successful == 0），AllDeploymentsFailed 带两类错误。"""
+        d1, d2 = self._deployments()
+
+        class FailCapture(RequestCapture):
+            def _respond(self, request):
+                return Response(500, text="server error")
+
+        capture = FailCapture()
+        events = EventCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            router.event_bus.register(events)
+            attach_mock_transport(router, capture)
+            with pytest.raises(AllDeploymentsFailed) as exc_info:
+                with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                    await router.completion(
+                        "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+                    )
+            await router.close()
+            return exc_info, router
+
+        exc_info, router = asyncio.run(runner())
+        errors = exc_info.value.details["errors"]
+        assert len(errors) == 2
+        assert "reserved keys" in errors[0][1]
+        assert "500" in errors[1][1]
+        types = [e.event_type for e in events.events]
+        assert RoutingEventType.REQUEST_STARTED in types
+        assert RoutingEventType.ALL_DEPLOYMENTS_EXHAUSTED in types
+        assert RoutingEventType.REQUEST_SUCCEEDED not in types
+        # d1（请求侧）不进失败计数；d2（5xx 部署侧）进
+        assert router.state.consecutive_failures.get("d1", 0) == 0
+        assert router.state.consecutive_failures.get("d2", 0) == 1
+
+
+class TestStreamRetryHeadChunkBuffering:
+    """PR #358 二轮意见 B：首个可见 chunk 前的头部 chunk 进缓冲，
+    流式重试切部署时消费者不收到重复的 role chunk。"""
+
+    @staticmethod
+    def _mock_streams(d1_chunk_specs, d2_chunk_specs, error=DeploymentNetworkError("d1", "interrupted")):
+        """构造按 deployment.id 分流的 acompletion_stream mock。
+
+        chunk_specs 是 (chunk_dict,) 的序列；流结束前若 error 非 None
+        则在 yield 完所有 chunk 后抛出（模拟连接中断）。
+        """
+        async def mock_stream(model, messages, deployment, **kwargs):
+            specs = d1_chunk_specs if deployment.id == "d1" else d2_chunk_specs
+            for chunk in specs:
+                yield chunk
+            if deployment.id == "d1" and error is not None:
+                raise error
+        return mock_stream
+
+    def test_stream_d1_sends_head_chunk_then_fails_consumer_gets_only_d2(self):
+        """typed 路径（AssistantMessageChunk）：role-only chunk 在
+        _chunk_to_assistant_message_chunk 中本就返回 None（不透传），
+        typed 路径能透传的头部块是 usage-only / finish_reason-only——
+        同样进缓冲：d1 发 usage 块后失败，消费者只看到 d2 的输出，
+        不会先收到一个来自 d1 的孤儿 usage/finish 块。"""
+        d1_usage_chunk = {
+            "choices": [{"delta": {}, "finish_reason": None}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        d1_specs = [d1_usage_chunk]
+        d2_specs = [
+            {"choices": [{"delta": {"role": "assistant"}, "finish_reason": None}]},
+            {"choices": [{"delta": {"content": "hello"}, "finish_reason": None}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ]
+        d1 = Deployment(id="d1", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t1", provider="openai")
+        d2 = Deployment(id="d2", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t2", provider="openai")
+        events = EventCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            router.event_bus.register(events)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                with patch.object(router, "acompletion_stream",
+                                  new=self._mock_streams(d1_specs, d2_specs)):
+                    chunks = [
+                        ch async for ch in router.stream(
+                            messages=[{"role": "user", "content": "hi"}],
+                            model="gpt-4o-mini",
+                        )
+                    ]
+            return chunks
+
+        chunks = asyncio.run(runner())
+        # 消费者只看到 d2 的输出：先内容、后带 finish_reason 的收尾块；
+        # d1 的 usage 头部块被缓冲并在失败时丢弃（未 yield 给消费者）
+        assert [ch.content for ch in chunks] == ["hello", ""]
+        assert chunks[-1].finish_reason == "stop"
+        assert not any(ch.usage_metadata is not None for ch in chunks)
+        # 事件：STARTED → RETRIED → ROUTE_SELECTED → SUCCEEDED，request_id 一致
+        types = [e.event_type for e in events.events]
+        assert types == [
+            RoutingEventType.STREAM_STARTED,
+            RoutingEventType.REQUEST_RETRIED,
+            RoutingEventType.STREAM_ROUTE_SELECTED,
+            RoutingEventType.STREAM_SUCCEEDED,
+        ]
+        ids = {e.request_id for e in events.events}
+        assert len(ids) == 1
+
+    def test_stream_completion_d1_sends_role_then_fails_single_role(self):
+        """同上，stream_completion（raw chunk）路径。"""
+        role = {"choices": [{"delta": {"role": "assistant"}, "finish_reason": None}]}
+        d1_specs = [role]
+        d2_specs = [
+            role,
+            {"choices": [{"delta": {"content": "hello"}, "finish_reason": None}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ]
+        d1 = Deployment(id="d1", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t1", provider="openai")
+        d2 = Deployment(id="d2", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t2", provider="openai")
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                with patch.object(router, "acompletion_stream",
+                                  new=self._mock_streams(d1_specs, d2_specs)):
+                    chunks = [
+                        ch async for ch in router.stream_completion(
+                            "gpt-4o-mini", [{"role": "user", "content": "hi"}]
+                        )
+                    ]
+            return chunks
+
+        chunks = asyncio.run(runner())
+        role_chunks = [
+            ch for ch in chunks
+            if ch.get("choices")
+            and ch["choices"][0].get("delta", {}).get("role") == "assistant"
+            and not ch["choices"][0].get("delta", {}).get("content")
+        ]
+        assert len(role_chunks) == 1
+        texts = "".join(
+            ch["choices"][0].get("delta", {}).get("content", "")
+            for ch in chunks if ch.get("choices")
+        )
+        assert "hello" in texts
+
+    def test_stream_d1_fails_before_any_chunk_consumer_sees_only_d2(self):
+        """d1 在 role chunk 之前就失败 → 消费者只看到 d2 的输出。"""
+        content = {"choices": [{"delta": {"content": "world"}, "finish_reason": None}]}
+        done = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        d1_specs = []  # 一个 chunk 都没发就失败
+        d2_specs = [content, done]
+        d1 = Deployment(id="d1", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t1", provider="openai")
+        d2 = Deployment(id="d2", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t2", provider="openai")
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                with patch.object(router, "acompletion_stream",
+                                  new=self._mock_streams(d1_specs, d2_specs)):
+                    chunks = [
+                        ch async for ch in router.stream(
+                            messages=[{"role": "user", "content": "hi"}],
+                            model="gpt-4o-mini",
+                        )
+                    ]
+            return chunks
+
+        chunks = asyncio.run(runner())
+        assert [ch.content for ch in chunks] == ["world", ""]
+
+
+class TestTruncatedStreamFallback:
+    """PR #358 二轮意见 D（router 端集成）：上游断流（无 [DONE] 无
+    finish_reason 就关连接）被判为 DeploymentNetworkError，触发 fallback。
+    """
+
+    def test_truncated_stream_falls_back_to_healthy_deployment(self):
+        d1 = Deployment(id="d1", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t1", provider="openai")
+        d2 = Deployment(id="d2", model_name="gpt-4o-mini",
+                        api_key="sk", api_base="http://t2", provider="openai")
+
+        class TruncatedCapture(RequestCapture):
+            """d1 返回只带 role chunk 就关闭的流（无 [DONE]、无
+            finish_reason）；d2 返回正常流。"""
+            def _respond(self, request):
+                if request.url.host == "t1":
+                    return Response(200, text=(
+                        "data: " + json.dumps({
+                            "choices": [
+                                {"index": 0,
+                                 "delta": {"role": "assistant"},
+                                 "finish_reason": None}
+                            ]
+                        }) + "\n\n"
+                    ))
+                content = "data: " + json.dumps({
+                    "choices": [
+                        {"index": 0, "delta": {"role": "assistant"},
+                         "finish_reason": None}
+                    ]
+                }) + "\n\n"
+                content += "data: " + json.dumps({
+                    "choices": [
+                        {"index": 0, "delta": {"content": "rescued"},
+                         "finish_reason": None}
+                    ]
+                }) + "\n\n"
+                content += "data: " + json.dumps({
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                }) + "\n\n"
+                content += "data: [DONE]\n\n"
+                return Response(200, text=content)
+
+        capture = TruncatedCapture()
+
+        async def runner():
+            router = ReliableRouter(deployments=[d1, d2], num_retries=1)
+            attach_mock_transport(router, capture)
+            with patch.object(router, "_select_deployment", new=_first_remaining_selector()):
+                chunks = [
+                    ch async for ch in router.stream(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model="gpt-4o-mini",
+                    )
+                ]
+            await router.close()
+            return chunks, router
+
+        chunks, router = asyncio.run(runner())
+        texts = "".join(ch.content or "" for ch in chunks)
+        assert "rescued" in texts
+        # 断流被计入 d1 的失败（部署侧），而不是静默成功
+        assert router.state.consecutive_failures.get("d1", 0) == 1

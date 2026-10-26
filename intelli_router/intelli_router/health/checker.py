@@ -42,14 +42,17 @@ class SDKHealthChecker:
         state: LocalRouterState,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         check_timeout: float = DEFAULT_CHECK_TIMEOUT,
-        check_message: List[Dict] = DEFAULT_CHECK_MESSAGE,
+        check_message: Optional[List[Dict]] = None,
         check_max_tokens: int = DEFAULT_CHECK_MAX_TOKENS
     ):
         self.deployments = deployments
         self.state = state
         self.check_interval = check_interval
         self.check_timeout = check_timeout
-        self.check_message = check_message
+        # 拷贝存储：默认值不能是模块级可变对象（所有未传参实例会共享
+        # 同一列表），保存的也不能是调用方列表的引用（调用方后续 append
+        # 会悄悄改变健康检查请求内容）。
+        self.check_message = list(check_message or DEFAULT_CHECK_MESSAGE)
         self.check_max_tokens = check_max_tokens
         self._running = False
         self._task: Optional[asyncio.Task] = None

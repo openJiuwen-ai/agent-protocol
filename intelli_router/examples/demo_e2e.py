@@ -129,7 +129,7 @@ async def scene_failover():
       - openai-dead:  api_base 指向不存在的 localhost:19999
       - openai-real:  指向真实 OpenAI
 
-    ReliableRouter 首次选到 dead 后 AdaptiveStrategy 标记 cooldown，
+    ReliableRouter 首次选到 dead 后在 state 中记失败并置 cooldown，
     重试选到 real，验证 fallback 成功。
     """
     print("\n=== scene: Failover ===")
@@ -150,7 +150,7 @@ async def scene_failover():
     router = ReliableRouter(
         deployments=[dead, real],
         num_retries=1,
-        strategy="adaptive",  # AdaptiveStrategy 在 on_failure 时标记 cooldown
+        strategy="adaptive",  # adaptive 策略打分；失败计数/冷却由 ReliableRouter 统一写 state
     )
     t0 = time.time()
     resp = await router.completion(MODELS["openai"], MESSAGE)

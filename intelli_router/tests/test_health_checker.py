@@ -4,7 +4,11 @@ import json
 import time
 from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
-from intelli_router.health.checker import SDKHealthChecker, HealthCheckResult
+from intelli_router.health.checker import (
+    SDKHealthChecker,
+    HealthCheckResult,
+    DEFAULT_CHECK_MESSAGE,
+)
 from intelli_router.core.deployment import Deployment, DeploymentStatus
 
 
@@ -453,3 +457,61 @@ async def test_health_checker_close_closes_all_groups(health_deployments):
             c.aclose.assert_awaited_once()
         assert checker._clients == {}
         assert checker._client is None
+
+
+# -------- check_message default/copy semantics (review 意见B) --------
+# 此前 check_message: List[Dict] = DEFAULT_CHECK_MESSAGE（模块级列表作
+# 默认值，所有未传参实例共享同一对象）且 self.check_message = check_message
+# （保存调用方列表的引用，调用方后续修改会悄悄改变健康检查请求内容）。
+
+
+def _make_checker(deployments, **kwargs):
+    return SDKHealthChecker(
+        deployments=deployments,
+        state=_fresh_state(),
+        check_interval=300,
+        check_timeout=5,
+        **kwargs,
+    )
+
+
+def test_default_check_message_not_shared_between_instances(health_deployments):
+    """两个默认构造的实例不共享 check_message 列表对象，
+    向一个 append 不影响另一个，也不污染模块级默认值。"""
+    default_snapshot = list(DEFAULT_CHECK_MESSAGE)
+    c1 = _make_checker(health_deployments)
+    c2 = _make_checker(health_deployments)
+
+    # 互不共享，也不是模块级 DEFAULT_CHECK_MESSAGE 本身
+    assert c1.check_message is not c2.check_message
+    assert c1.check_message is not DEFAULT_CHECK_MESSAGE
+    assert c2.check_message is not DEFAULT_CHECK_MESSAGE
+
+    # 向一个实例 append 不影响另一个，也不污染默认值
+    c1.check_message.append({"role": "user", "content": "extra"})
+    assert c2.check_message == default_snapshot
+    assert DEFAULT_CHECK_MESSAGE == default_snapshot
+    assert len(c1.check_message) == len(default_snapshot) + 1
+
+
+def test_check_message_copies_caller_list(health_deployments):
+    """传入的列表被拷贝保存：调用方后续修改不影响健康检查请求。"""
+    messages = [{"role": "user", "content": "ping"}]
+    checker = _make_checker(health_deployments, check_message=messages)
+
+    assert checker.check_message is not messages
+    messages.append({"role": "user", "content": "sneaky"})
+    assert checker.check_message == [{"role": "user", "content": "ping"}]
+
+
+def test_default_check_message_content(health_deployments):
+    """默认构造的实例 check_message 内容等于 DEFAULT_CHECK_MESSAGE。"""
+    checker = _make_checker(health_deployments)
+    assert checker.check_message == DEFAULT_CHECK_MESSAGE
+
+
+def test_custom_check_message_preserved(health_deployments):
+    """显式传入的自定义消息按值保留（默认值不越权替换）。"""
+    custom = [{"role": "user", "content": "custom ping"}]
+    checker = _make_checker(health_deployments, check_message=custom)
+    assert checker.check_message == custom

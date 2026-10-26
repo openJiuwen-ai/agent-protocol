@@ -18,7 +18,7 @@ class TestRoutingEventType:
         assert isinstance(RoutingEventType.REQUEST_STARTED, str)
 
     def test_total_count(self):
-        assert len(RoutingEventType) == 7
+        assert len(RoutingEventType) == 9
 
 
 class TestRoutingEvent:

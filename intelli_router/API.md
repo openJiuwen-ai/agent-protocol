@@ -3,6 +3,7 @@
 ## 目录
 
 - [核心类](#核心类)
+- [包信息](#包信息)
 - [Provider 适配器](#provider-适配器)
 - [类型模块](#类型模块)
 - [输出解析器](#输出解析器)
@@ -15,6 +16,20 @@
 - [可观测性](#可观测性)
 - [异常](#异常)
 - [使用示例](#使用示例)
+
+---
+
+## 包信息
+
+### `intelli_router.__version__`
+
+当前安装的 IntelliRouter 版本号（`str`）。优先取安装元数据（发行包名
+`intelli-router`），包未安装（如源码直接引用）时回退 pyproject 声明的版本。
+
+```python
+import intelli_router
+print(intelli_router.__version__)  # e.g. "0.1.0"
+```
 
 ---
 
@@ -126,7 +141,7 @@ HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集
 | `batch_completion` | `async batch_completion(requests: List[Dict], max_concurrent: int = 10) -> List[Any]` | 批量 completion 请求（并发控制） |
 | `get_deployments_for_model` | `get_deployments_for_model(model: str) -> List[Deployment]` | 获取模型的部署列表 |
 | `get_model_list` | `get_model_list() -> List[str]` | 获取已注册模型名列表 |
-| `update_deployments` | `update_deployments(new_deployments: List[Deployment]) -> None` | 动态更新部署列表 |
+| `update_deployments` | `update_deployments(new_deployments: List[Deployment]) -> None` | 动态更新部署列表（热替换）。移除部署时清理 state 残留并广播 `DEPLOYMENTS_UPDATED` 事件（`extra.removed_ids`），订阅方（如 `MetricsCollector`）据此清理统计键；同步上下文无事件循环时跳过事件发射 |
 | `get_stats` | `get_stats() -> Dict[str, Any]` | 获取路由器统计信息 |
 | `close` | `async close() -> None` | 关闭底层 HTTP 客户端，释放连接池 |
 
@@ -143,11 +158,24 @@ HTTP 重试次数。一次请求中，失败的 deployment 会从本轮可用集
 - **路由专用参数**：`session_id`、`tags` 由 RoutingContext 承载、供策略
   消费（adaptive 会话亲和、tag 系列匹配），不会进入 provider 请求体；
   `deployment.request_defaults` 中的同名键同样被剔除。
+- **request_defaults 保留键校验异常**：含 `model`/`messages`/`deployment`/
+  `stream` 等保留键的 `request_defaults` 触发的校验错误按请求侧错误处理
+  ——该部署被跳过、继续 fallback 其他部署，全部失败时抛
+  `AllDeploymentsFailed`（errors 含原始校验消息，事件配对闭合）；
+  ordered-failover / tag-filtered 等 strict 策略仍按既有语义重抛原始
+  `ValueError`。
 
 **流式统计口径**：流式成功后 state 的延迟记录为整条流的完整耗时（TTFT
 见 `STREAM_ROUTE_SELECTED` 事件的 extra）；token 取流式 usage 中提取的
 真实值，未携带 usage 的流式样本（tokens=0）不参与归一化延迟统计
-（`avg_normalized_latency`），避免与非流式口径混杂。
+（`avg_normalized_latency`），避免与非流式口径混杂。流被消费者提前中断
+（`break`/`aclose()`/取消）时发 `STREAM_CANCELLED` 终态事件，state 不记
+`on_success`/`on_failure`（半截数据不进延迟统计，中断也非部署的错）。
+上游流未以 `[DONE]` 哨兵或 finish 信号（`finish_reason` / Anthropic
+`stop_reason` / Gemini `finishReason` / Bedrock `messageStop`）正常终结时，
+`iter_stream_events` 抛 `DeploymentNetworkError` 触发 fallback，不会把
+半截内容当成功。首个可见输出前的头部 chunk 会被缓冲，fallback 切换部署
+时消费者不会收到重复头部块。
 
 **`invoke()` 参数说明**:
 
@@ -183,6 +211,10 @@ BaseRouter(
     cache: Optional[LocalCache] = None      # 缓存实例
 )
 ```
+
+请求体以 UTF-8 原文序列化（`json.dumps(..., ensure_ascii=False)`），
+中文等非 ASCII 消息不会被 `\uXXXX` 转义膨胀；对 Bedrock 等签名 provider，
+SigV4 签名与发送使用同一份 body 字节，天然同源。
 
 **方法**:
 
@@ -799,10 +831,13 @@ def create_strategy(
 | `STREAM_STARTED` | 流式请求开始 |
 | `STREAM_ROUTE_SELECTED` | 流式请求拿到首个可见输出后、yield 给调用方前发出，表示本次回答已提交到该 route |
 | `STREAM_SUCCEEDED` | 流式请求完整结束 |
+| `STREAM_CANCELLED` | 流式请求被消费者提前中断（`break` / `aclose()` / 任务取消）的终态事件，`extra` 携带 `reason`（`"consumer_break"` / `"cancelled"`）；与 `STREAM_SUCCEEDED` / `ALL_DEPLOYMENTS_EXHAUSTED` 互斥。四终态配对不变式：`successful + failed + cancelled + 在途 == total_requests` |
+| `DEPLOYMENTS_UPDATED` | `update_deployments` 移除部署后广播（仅有移除时），`extra` 携带 `removed_ids`（排序后的 `List[str]`），`model` 为空串（路由器级管理事件）。同步上下文（无事件循环）时跳过发射，`MetricsCollector` 等订阅方据此清理已下线部署的统计键 |
 
 `STREAM_ROUTE_SELECTED` 的触发时机不是 `_select_deployment()` 刚返回时；
 只有 route 已经产出首个可见内容后才发出，这样下游展示的是最终命中的 route，
-而不是仍可能在连接阶段 fallback 的候选 route。
+而不是仍可能在连接阶段 fallback 的候选 route。首个可见输出之前的头部 chunk
+（如 role-only 块）会被缓冲，fallback 切换部署时消费者不会收到重复头部块。
 
 ---
 
@@ -987,7 +1022,7 @@ SDKHealthChecker(
     state: LocalRouterState,                      # 状态管理
     check_interval: float = 300,                  # 检查间隔（秒）
     check_timeout: float = 5,                     # 检查超时（秒）
-    check_message: List[Dict] = [{"role": "user", "content": "ping"}],  # 检查消息
+    check_message: Optional[List[Dict]] = None,    # 检查消息（None 用默认 ping；传入列表会被拷贝保存，与调用方不共享引用）
     check_max_tokens: int = 10                    # 最大token数
 )
 ```
@@ -1052,7 +1087,13 @@ MetricsCollector(
 - `get_stats()` 返回的 `by_deployment` 中，`requests` 语义为"该部署被
   尝试次数 = successes + failures"（只失败未成功的部署也会出现，与
   `by_model` 同口径）；全局 `failed` 仅统计最终失败（全部部署耗尽），
-  重试不计入
+  重试不计入；顶层 `cancelled` 统计被消费者提前中断的流式请求
+  （在途口径：`total - successful - failed - cancelled`）
+- **热替换清理**：订阅 `DEPLOYMENTS_UPDATED` 事件（`extra.removed_ids`）
+  自动清除已下线部署在 `by_deployment` 及内部各 `_deployment_*` 字典中
+  的统计键；也可显式调用 `remove_deployment(dep_id)`（删单个）或
+  `prune_deployments(keep_ids)`（只保留给定集合）——适用于不走事件总线
+  或同步上下文的宿主
 
 ### `MetricsWebServer`
 

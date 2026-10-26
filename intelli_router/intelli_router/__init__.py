@@ -1,6 +1,17 @@
 """
 IntelliRouter - 公开接口
 """
+# 运行期版本号：优先取安装元数据（发行包名 "intelli-router"），
+# 未安装（如源码直接引用）时回退到 pyproject 声明的版本。
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    try:
+        __version__ = _pkg_version("intelli-router")
+    except PackageNotFoundError:
+        __version__ = "0.1.0"
+except ImportError:  # pragma: no cover - Python <3.8 兜底（本项目要求 >=3.9，防御性保留）
+    __version__ = "0.1.0"
+
 from .router.reliable_router import ReliableRouter, MODEL_WILDCARD
 from .router.base_router import BaseRouter
 from .core.deployment import Deployment, DeploymentStatus
@@ -35,6 +46,7 @@ from .observability import (
 )
 
 __all__ = [
+    "__version__",
     "ReliableRouter",
     "MODEL_WILDCARD",
     "BaseRouter",

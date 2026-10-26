@@ -18,6 +18,13 @@ class RoutingEventType(str, Enum):
     STREAM_STARTED = "stream_started"
     STREAM_ROUTE_SELECTED = "stream_route_selected"
     STREAM_SUCCEEDED = "stream_succeeded"
+    # 流式请求被消费者提前中断（break/aclose/取消）：终态事件之一，
+    # extra 可携带 reason（"consumer_break" / "cancelled"）
+    STREAM_CANCELLED = "stream_cancelled"
+
+    # 部署管理（热替换）：extra 携带 removed_ids（List[str]），
+    # 订阅方（如 MetricsCollector）据此清理已下线部署的统计键
+    DEPLOYMENTS_UPDATED = "deployments_updated"
 
 
 @dataclass

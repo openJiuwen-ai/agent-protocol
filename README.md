@@ -34,7 +34,7 @@ The SDK provides Ed25519-signed authorization objects, Ed25519 and WebAuthn/pass
 
 IntelliRouter is a lightweight **LLM proxy SDK** that maps a single model name to multiple deployment endpoints and routes each request intelligently. It pools deployments across providers — OpenAI, Anthropic, Bedrock, DeepSeek, Gemini, and SiliconFlow, plus any OpenAI-compatible endpoint — and selects among them with pluggable strategies: SimpleShuffle, LowestLatency, TagBased, TokenAware, RateLimitAware, Adaptive, OrderedFailover, and TagFiltered.
 
-The router tracks per-deployment health and quota state (latency, failure counts, TPM/RPM usage, cooling windows), runs background health checks, retries failed requests with automatic failover, and exposes observability through an event bus, Prometheus metrics, a web dashboard, and logging hooks. Streaming responses, a local LRU response cache, and JSON/Markdown output parsers are also included.
+The router tracks per-deployment health and quota state (latency, failure counts, TPM/RPM usage, cooling windows), runs background health checks, retries failed requests with automatic failover, and exposes observability through an event bus, Prometheus metrics, a web dashboard, and logging hooks. Streaming responses and JSON/Markdown output parsers are also included.
 
 ## Choosing a Component
 

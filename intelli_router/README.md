@@ -14,57 +14,37 @@
 ## 代码结构设计
 
 ```
-intelli_router/
-├── __init__.py              公共接口
-├── core/
-│   ├── __init__.py
-│   ├── deployment.py 部署配置
-│   ├── state.py      状态管理
-│   ├── context.py 路由上下文
-│   └── deployment.py 部署状态枚举
-├── strategy/ 路由策略
-│   ├── __init__.py 策略工厂
-│   ├── base_strategy.py 抽象策略基类
-│   ├── simple_shuffle.py 随机选择策略
-│   ├── lowest_latency.py 最低延迟策略
-│   ├── tag_based.py 标签策略
-│   ├── token_aware.py Token感知策略
-│   ├── rate_limit_aware.py RPM限流策略
-│   └──── adaptive.py 自适应策略
-├── router/ 路由器
-│   ├── __init__.py
-│   ├── base_router.py 基础路由器
-│   ├── reliable_router.py 可靠性路由器
-├── cache/ 缓存
-│   ├── __init__.py
-│   └──── local_cache.py 本地缓存 (LRU)
-├── health/ 健康检查
-│   ├── __init__.py
-│   └──── checker.py SDK健康检查
-├── utils/ 工具函数
-│   └──── exceptions.py 异常层次
-├── tests/ 测试
-      └── sdk_proxy_demo/
-        ├── __init__.py
-        ├── conftest.py pytest配置
-        ├── test_api_pooling.py API池化测试
-        ├── test_routing_strategies.py 路由策略测试
-        ├── test_state_management.py 状态管理测试
-        ├── test_caching.py 缓存测试
-        ├── test_concurrent_requests.py 并发请求测试
-        ├── test_adaptive_strategy.py 自适应策略测试
-        └── utils/
-            ├── __init__.py
-            ├── helpers.py 测试辅助函数
-├── demo_agent_core.py Agent Core演示
-├── demo_real_llm.py 真实LLM测试Demo
-├── demo_adaptive_strategy.py 自适应策略演示
-├── demo_real_llm_adaptive.py 真实LLM自适应策略Demo
+intelli_router/                  # SDK 模块根目录
+├── intelli_router/              # SDK 源码包
+│   ├── core/                    # 部署配置、路由状态与路由上下文
+│   ├── strategy/                # 路由策略与策略工厂
+│   │   ├── __init__.py          # 策略工厂（create_strategy 按名称创建策略）
+│   │   ├── base_strategy.py     # 抽象策略基类
+│   │   ├── simple_shuffle.py    # 随机选择策略
+│   │   ├── lowest_latency.py    # 最低延迟策略
+│   │   ├── tag_based.py         # 标签策略
+│   │   ├── tag_filtered.py      # 标签过滤策略
+│   │   ├── token_aware.py       # Token 感知策略
+│   │   ├── rate_limit_aware.py  # RPM 限流策略
+│   │   ├── ordered_failover.py  # 顺序故障转移策略
+│   │   └── adaptive.py          # 自适应策略
+│   ├── router/                  # 基础路由器与可靠性路由器
+│   ├── cache/                   # LocalCache（LRU 本地缓存）
+│   ├── health/                  # 后台健康检查
+│   ├── observability/           # 事件总线、指标、Web 看板与日志钩子
+│   ├── parser/                  # JSON / Markdown 输出解析器
+│   ├── provider/                # 多厂商 Provider 适配器与注册表
+│   └── utils/                   # 异常层次与媒体工具
+├── examples/                    # 可运行示例（见下文"示例与测试"）
+├── demo_adaptive_strategy.py    # 三种路由策略对比演示（直接可跑）
+├── tests/                       # 单元测试（pytest）
+├── API.md                       # API 参考
+└── pyproject.toml               # 构建与依赖配置
 ```
 
 ## 路由策略介绍
 
-本SDK实现了三种路由策略:
+本SDK实现了多种路由策略，以下介绍其中三种代表性的策略:
 
 ### 1. Token感知策略 (TokenAwareStrategy)
 
@@ -119,93 +99,83 @@ score = w_health * health_score
 - `w_rpm`: RPM权重 (默认0.3)
 - `w_latency`: 延迟权重 (默认0.2)
 
-## 测试Demo使用方法
+## 示例与测试
 
-### 基础Demo (demo_adaptive_strategy.py)
+所有示例脚本都位于 `examples/` 目录下，请在模块根目录（`intelli_router/`）中运行。
 
-**运行**:
-```bash
-python3 intelli_router/demo_adaptive_strategy.py
-```
+### 端到端示例 (examples/demo_e2e.py)
 
-**输出**:
-```
-=== Token感知策略演示 ===
-选择的部署: dep3
-  - Token剩余: inf
-  - Token使用率: 0.00%
-
-=== 自适应策略演示 ===
-部署评分:
-  dep1: 得分=1.999 (健康, Token剩余5000, RPM剩余30, 延迟0.005s)
-  dep2: 得分=2.000 (健康, Token剩余2000, RPM剩余50, 延迟0.002s) ← 最高
-  dep3: 得分=0.800 (不健康)
-选择的部署: dep2
-
-=== Token耗尽无缝切换演示 ===
-Token快耗尽时选择部署: dep1 (剩余100)
-第1次请求后: Token剩余50
-第2次请求后: Token耗尽, 切换到dep2
-```
-
-### 真实LLM Demo (demo_real_llm_adaptive.py)
-
-**配置**:
-```python
-# 真实API Key (所有模型共用)
-REAL_API_KEY = "sk-xxxx"
-
-# 模型端口配置
-MODEL_PORT_MAP = {
-    "MiniMax-M2.7": [8001, 8002, 8003, 8004],
-    "Qwen3.5-122B-A10B": [8005, 8006, 8007, 8008],
-    "GLM-5": [8009, 8010, 8011, 8012],
-    "GLM-5.1": [8013, 8014, 8015, 8016],
-}
-```
+演示 OpenAI / Anthropic / Gemini 真实调用、dead 端点自动 failover、全部端点不可用时抛出 `RouterError`。未配置对应 API Key 的场景会自动跳过:
 
 **运行**:
 ```bash
-python3 intelli_router/demo_real_llm_adaptive.py
+export OPENAI_API_KEY="sk-..."
+python examples/demo_e2e.py
 ```
 
-**输出**:
+**输出示例**（配置 `OPENAI_API_KEY` 后）:
 ```
---- Task task-001: GLM-5.1 ---
-  Selected deployment: GLM-5.1-port8013
-  Latency: 10.84s
+intelli_router 端到端 Demo
+==================================================
 
---- Task task-002: GLM-5.1 ---
-  Selected deployment: GLM-5.1-port8013
-  Latency: 11.29s
+=== scene: OpenAI real ===
+  response: 你好世界
+  latency:  0.85s
+  usage:    {'prompt_tokens': 21, 'completion_tokens': 8, 'total_tokens': 29}
 
---- Task task-005: Qwen3.5-122B-A10B ---
-  Selected deployment: Qwen3.5-122B-A10B-port8005
-  Latency: 3.40s
+=== scene: Failover ===
+  primary deployment (dead):    openai-dead  → http://localhost:19999
+  fallback deployment (healthy): openai-real  → https://api.openai.com
+  response: 你好世界
+  latency:  1.23s
+  after call status:
+    openai-dead: cooldown
+    openai-real: healthy
 
-[Agent Core] Dispatching 10 tasks concurrently...
-[Agent Core] Completed 10 tasks in 13.42s
-[Agent Core] Success rate: 10/10
+=== scene: All dead ===
+  caught expected RouterError ✓
+  error: All deployments failed for model 'gpt-4o-mini'
+
+=== done ===
 ```
 
-### 测试文件 (test_adaptive_strategy.py)
+配置 `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` 后还会追加对应 Provider 的真实调用场景。
 
-**运行**:
+### Prometheus 指标示例 (examples/demo_prometheus.py)
+
+使用模拟请求，无需真实 API Key:
+
 ```bash
-python3 -m pytest intelli_router/tests/sdk_proxy_demo/test_adaptive_strategy.py -v
+pip install prometheus-client
+python examples/demo_prometheus.py
+
+# 另一个终端验证（默认端口 9091，可通过 METRICS_PORT 环境变量修改）
+curl http://localhost:9091/metrics | grep intelli_router
 ```
 
-## 项目结构
+### Web 指标看板示例 (examples/demo_web_dashboard.py)
 
-详见 `sdk_llm` 目录树:
+同样使用模拟请求，无需真实 API Key。启动后在浏览器打开 http://localhost:8080（端口可通过 `WEB_PORT` 环境变量修改）:
 
-- `core/`: 核心和状态管理
-- `strategy/`: 路由策略实现
-- `router/`: 路由器实现
-- `cache/`: 缓存实现
-- `health/`: 健康检查实现
-- `tests/`: 测试用例
-- `demo_*`: 演示脚本
+```bash
+python examples/demo_web_dashboard.py
+```
+
+### 路由策略对比演示 (demo_adaptive_strategy.py)
+
+用模拟部署依次演示 Token 感知、RPM 限流、自适应三种策略的选路过程（无真实 API Key，无网络请求）。该脚本位于模块根目录（`intelli_router/` 下），自带包路径处理，可直接运行:
+
+```bash
+python demo_adaptive_strategy.py
+```
+
+输出依次为三段：Token 感知策略演示（选择 Token 剩余充足的部署）、RPM 限流策略演示（选择 RPM 配额充足的部署）、自适应策略演示（打印各部署的多维度评分与最终选择）。
+
+### 运行测试
+
+```bash
+python3 -m pytest tests/ -v
+```
 
 ## 快速上手
 
@@ -276,7 +246,7 @@ IntelliRouter 以 OpenAI 格式为内部标准格式，通过 Provider Adapter �
 | InferenceAffinity (vLLM) | `inference-affinity` | OpenAI 兼容 + KV cache 共享 |
 | AWS Bedrock | `aws-bedrock` | 待实现（需 SigV4 签名） |
 
-各 Provider 协议差异详见 `docs/PROVIDER_API_DIFFERENCES.md`。
+各 Provider 适配器的差异详见 [API.md](API.md) 的「Provider 适配器」一节。
 
 ## 输出解析器 (Parser)
 
@@ -321,5 +291,6 @@ async for chunk in router.stream(...):
 
 - [API.md](API.md) — 完整 API 参考
 - [examples/demo_e2e.py](examples/demo_e2e.py) — 端到端演示（OpenAI / Anthropic / Gemini / Failover）
-- [docs/](docs/) — 设计文档（Provider 差异对比、可观测性设计等）
+- [examples/demo_prometheus.py](examples/demo_prometheus.py) — Prometheus 指标导出演示
+- [examples/demo_web_dashboard.py](examples/demo_web_dashboard.py) — Web 指标看板演示
 

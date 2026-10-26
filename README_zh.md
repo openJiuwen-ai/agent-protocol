@@ -34,7 +34,7 @@ SDK 提供 Ed25519 签名的授权对象、Ed25519 与 WebAuthn/passkey 用户�
 
 IntelliRouter 是一个轻量级 **LLM 代理 SDK**，将同一模型名映射到多个部署端点，并对每次请求进行智能路由。它支持池化管理多家 Provider 的部署——OpenAI、Anthropic、Bedrock、DeepSeek、Gemini、SiliconFlow，以及任意 OpenAI 兼容端点——并通过可插拔策略选择部署：SimpleShuffle、LowestLatency、TagBased、TokenAware、RateLimitAware、Adaptive、OrderedFailover 与 TagFiltered。
 
-路由器持续跟踪各部署的健康与配额状态（延迟、失败计数、TPM/RPM 用量、冷却窗口），后台运行健康检查，请求失败时自动重试与故障转移，并通过事件总线、Prometheus 指标、Web 看板和日志钩子提供可观测性。SDK 同时内置流式响应、本地 LRU 响应缓存，以及 JSON/Markdown 输出解析器。
+路由器持续跟踪各部署的健康与配额状态（延迟、失败计数、TPM/RPM 用量、冷却窗口），后台运行健康检查，请求失败时自动重试与故障转移，并通过事件总线、Prometheus 指标、Web 看板和日志钩子提供可观测性。SDK 同时内置流式响应与 JSON/Markdown 输出解析器。
 
 ## 组件选型
 
