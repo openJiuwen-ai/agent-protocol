@@ -4,9 +4,9 @@ English | [简体中文](./README_zh.md)
 
 ## Introduction
 
-**Agent Protocol** provides protocol SDKs and a service registry for agent interoperability in the [openJiuwen](https://github.com/openJiuwen-ai) ecosystem. It helps developers connect agents to tools, communicate with remote agents, discover available services, and enforce verifiable user authorization before sensitive operations.
+**Agent Protocol** provides protocol SDKs and a service registry for agent interoperability in the [openJiuwen](https://github.com/openJiuwen-ai) ecosystem. It helps developers connect agents to tools, communicate with remote agents, discover available services, route requests across LLM deployments, and enforce verifiable user authorization before sensitive operations.
 
-An agent application needs more than a model and task logic: it needs a way to access external capabilities, locate suitable collaborators, exchange messages and task results, and constrain what it can execute on a user's behalf. This repository addresses these needs through four complementary components: **MCP C++ SDK**, **A2A C++ SDK**, **A2X Registry**, and **A4P Python SDK**. Developers can choose individual components or combine them according to their integration needs.
+An agent application needs more than a model and task logic: it needs a way to access external capabilities, locate suitable collaborators, exchange messages and task results, and constrain what it can execute on a user's behalf. This repository addresses these needs through five complementary components: **MCP C++ SDK**, **A2A C++ SDK**, **A2X Registry**, **A4P Python SDK**, and **IntelliRouter**. Developers can choose individual components or combine them according to their integration needs.
 
 ## Core Capabilities
 
@@ -30,6 +30,12 @@ The Agentic Authentication, Authorization, and Audit Protocol (A4P) Python SDK s
 
 The SDK provides Ed25519-signed authorization objects, Ed25519 and WebAuthn/passkey user-signature methods, parameter-scope checks, and execution limits with SQLite-backed atomic consumption. Its two-stage prepare/complete interfaces support asynchronous user confirmation and integration with existing tool services.
 
+### Intelligent LLM routing with IntelliRouter
+
+IntelliRouter is a lightweight **LLM proxy SDK** that maps a single model name to multiple deployment endpoints and routes each request intelligently. It pools deployments across providers — OpenAI, Anthropic, Bedrock, DeepSeek, Gemini, and SiliconFlow, plus any OpenAI-compatible endpoint — and selects among them with pluggable strategies: SimpleShuffle, LowestLatency, TagBased, TokenAware, RateLimitAware, Adaptive, OrderedFailover, and TagFiltered.
+
+The router tracks per-deployment health and quota state (latency, failure counts, TPM/RPM usage, cooling windows), runs background health checks, retries failed requests with automatic failover, and exposes observability through an event bus, Prometheus metrics, a web dashboard, and logging hooks. Streaming responses, a local LRU response cache, and JSON/Markdown output parsers are also included.
+
 ## Choosing a Component
 
 Each component addresses a different integration need and can be used independently, without adopting the others.
@@ -40,6 +46,7 @@ Each component addresses a different integration need and can be used independen
 | Delegate work to another agent | A2A C++ SDK | Exchange messages, track tasks, and receive streaming results. |
 | Find an appropriate service or collaborator | A2X Registry | Register service metadata, discover capabilities, and coordinate availability. |
 | Execute within user-approved boundaries | A4P Python SDK | Obtain verifiable authorization and validate its scope before a protected operation. |
+| Route requests across multiple LLM deployments | IntelliRouter | Pool model endpoints, pick the best deployment per request, and fail over automatically. |
 
 ## Repository Layout
 
@@ -48,7 +55,8 @@ agent-protocol/
 ├── MCP/cpp-sdk/          # MCP C++ client/server SDK and examples
 ├── A2A/cpp-sdk/          # A2A C++ client/server SDK and examples
 ├── AgentRegistry/       # A2X registry, Python client, web UI, and documentation
-└── A4P-python-sdk/       # A4P Python SDK, protocol documentation, and examples
+├── A4P-python-sdk/       # A4P Python SDK, protocol documentation, and examples
+└── intelli_router/       # IntelliRouter LLM proxy SDK, tests, and examples
 ```
 
 ## Getting Started
@@ -66,6 +74,7 @@ cd agent-protocol
 | [A2A C++ SDK](./A2A/cpp-sdk/README.md) | C++17, CMake ≥ 3.15, and system dependencies; Linux is the primary validation platform | Build with examples enabled, then run the Hello World and streaming examples. |
 | [A2X Registry](./AgentRegistry/README.md) | Python ≥ 3.10; LLM configuration for A2X search | Install the registry, start the service, and register/query services through HTTP APIs or the UI. |
 | [A4P Python SDK](./A4P-python-sdk/README.md) | Python ≥ 3.10 and uv | Install dependencies and run the non-interactive Ed25519 authorization example. |
+| [IntelliRouter](./intelli_router/README.md) | Python ≥ 3.9 | Install the SDK, run the unit tests, then try the end-to-end and observability examples. |
 
 The components are built and installed separately. See each guide for complete dependency requirements and platform-specific instructions.
 
@@ -75,6 +84,7 @@ The components are built and installed separately. See each guide for complete d
 - **A2A:** [API reference](./A2A/cpp-sdk/docs/api/README.md) · [Dependencies](./A2A/cpp-sdk/docs/dependencies.md) · [Error handling](./A2A/cpp-sdk/docs/errors.md)
 - **A2X:** [Registry guide](./AgentRegistry/README.md) · [Python client](./AgentRegistry/client/README.md) · [Agent Team deployment](./AgentRegistry/README_forAgentTeam.md)
 - **A4P:** [Protocol](./A4P-python-sdk/A4P_PROTOCOL.md) · [SDK design](./A4P-python-sdk/A4P_SDK_DESIGN.md) · [MCP integration example](./A4P-python-sdk/examples/note_mcp_a4p/README.md)
+- **IntelliRouter:** [SDK guide](./intelli_router/README.md) · [API reference](./intelli_router/API.md) · [Examples](./intelli_router/examples/)
 
 ## Contributing
 
