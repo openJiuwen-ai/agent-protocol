@@ -115,7 +115,7 @@ public:
     /** Send notifications/progress to the server (MCP progress tracking). progressToken is string or int64_t. */
     void SendProgressNotification(ProgressToken progressToken, double progress,
                                   std::optional<double> total = std::nullopt,
-                                  const std::optional<std::string>& message = std::nullopt);
+                                  const std::optional<std::string>& message = std::nullopt) override;
 
 protected:
     /**

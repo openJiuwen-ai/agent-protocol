@@ -309,7 +309,7 @@ void HttpServer::HandleNewConnection(const Mcp::Net::TcpSocketPtr& connection)
 
     connection->OnClose([this](const Mcp::Net::SocketPtr& socket) { this->HandleClose(socket); });
 
-    connection->OnRead([this, fileDescriptor](const Mcp::Net::SocketPtr& socket) {
+    connection->OnRead([this](const Mcp::Net::SocketPtr& socket) {
         // Check if server is still running to avoid processing during shutdown
         if (!running_.load()) {
             return;

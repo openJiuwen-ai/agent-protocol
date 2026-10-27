@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -243,6 +244,117 @@ TEST(EventSystemTest, EventFdCreateNotifyReadClose)
     }
 
     // cleanup
+    EXPECT_TRUE(es.CloseNotifyEventId(notifyEventId));
+    es.Stop();
+}
+
+TEST(EventSystemTest, NotifyEventIdCoalescesIntoOneWakeup)
+{
+    Mcp::EventSystem es(true);
+    ASSERT_TRUE(es.Init());
+
+    constexpr uint64_t kNotifyCount = 10;
+    std::mutex m;
+    std::condition_variable cv;
+    std::vector<uint64_t> values;
+    std::atomic<int> calls{0};
+
+    auto cb = [&es, &m, &cv, &values, &calls](int fd, short, auto*) {
+        uint64_t v = 0;
+        while (es.ReadEventFd(fd, v)) {
+            std::lock_guard<std::mutex> lk(m);
+            values.push_back(v);
+        }
+        calls.fetch_add(1);
+        cv.notify_all();
+    };
+    int notifyEventId = es.CreateNotifyEventId(cb, nullptr, true);
+    ASSERT_GT(notifyEventId, 0);
+
+    // Ten notifications must coalesce into one accumulated wakeup.
+    for (uint64_t i = 0; i < kNotifyCount; ++i) {
+        ASSERT_TRUE(es.NotifyEventId(notifyEventId, 1));
+    }
+    es.Start(true);
+
+    {
+        std::unique_lock<std::mutex> lk(m);
+        ASSERT_TRUE(cv.wait_for(lk, std::chrono::milliseconds(NOTIFY_WAIT_TIMEOUT_MS),
+            [&calls]() { return calls.load() >= 1; }));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(NOTIFY_GAP_MS));
+    EXPECT_EQ(calls.load(), 1);
+    {
+        std::lock_guard<std::mutex> lk(m);
+        ASSERT_EQ(values.size(), 1u);
+        EXPECT_EQ(values[0], kNotifyCount);
+    }
+
+    EXPECT_TRUE(es.CloseNotifyEventId(notifyEventId));
+    es.Stop();
+}
+
+TEST(EventSystemTest, NotifyEventIdZeroIncrementDoesNotWake)
+{
+    Mcp::EventSystem es(true);
+    ASSERT_TRUE(es.Init());
+
+    std::atomic<int> calls{0};
+    int notifyEventId = es.CreateNotifyEventId(
+        [&calls](int, short, auto*) { calls.fetch_add(1); }, nullptr, true);
+    ASSERT_GT(notifyEventId, 0);
+
+    // eventfd parity: succeeds without becoming readable.
+    EXPECT_TRUE(es.NotifyEventId(notifyEventId, 0));
+    es.Start(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(ONE_SHOT_GRACE_PERIOD_MS));
+    EXPECT_EQ(calls.load(), 0);
+
+    EXPECT_TRUE(es.CloseNotifyEventId(notifyEventId));
+    es.Stop();
+}
+
+TEST(EventSystemTest, NotifyEventIdMaxIncrementRejected)
+{
+    Mcp::EventSystem es(true);
+    ASSERT_TRUE(es.Init());
+
+    std::mutex m;
+    std::condition_variable cv;
+    std::vector<uint64_t> values;
+    std::atomic<int> calls{0};
+
+    auto cb = [&es, &m, &cv, &values, &calls](int fd, short, auto*) {
+        uint64_t v = 0;
+        while (es.ReadEventFd(fd, v)) {
+            std::lock_guard<std::mutex> lk(m);
+            values.push_back(v);
+        }
+        calls.fetch_add(1);
+        cv.notify_all();
+    };
+    int notifyEventId = es.CreateNotifyEventId(cb, nullptr, true);
+    ASSERT_GT(notifyEventId, 0);
+
+    ASSERT_TRUE(es.NotifyEventId(notifyEventId, 1));
+    // eventfd rejects increments above 0xFFFFFFFFFFFFFFFE; the committed
+    // count must remain untouched.
+    EXPECT_FALSE(es.NotifyEventId(notifyEventId, std::numeric_limits<uint64_t>::max()));
+    es.Start(true);
+
+    {
+        std::unique_lock<std::mutex> lk(m);
+        ASSERT_TRUE(cv.wait_for(lk, std::chrono::milliseconds(NOTIFY_WAIT_TIMEOUT_MS),
+            [&calls]() { return calls.load() >= 1; }));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(NOTIFY_GAP_MS));
+    EXPECT_EQ(calls.load(), 1);
+    {
+        std::lock_guard<std::mutex> lk(m);
+        ASSERT_EQ(values.size(), 1u);
+        EXPECT_EQ(values[0], 1u);
+    }
+
     EXPECT_TRUE(es.CloseNotifyEventId(notifyEventId));
     es.Stop();
 }

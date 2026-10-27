@@ -4,8 +4,6 @@
 
 #include "http_client_service.h"
 
-#include <sys/syscall.h>
-
 #include <algorithm>
 #include <cstring>
 #include <queue>

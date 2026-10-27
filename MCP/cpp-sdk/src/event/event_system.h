@@ -120,9 +120,12 @@ public:
     /**
      * @brief Notify (write) to a notify eventId to wake up listeners. By default writes the value 1.
      * @param eventId The eventId returned by CreateNotifyEventId.
-     * @param increment The 64-bit value to add to the eventfd counter (default 1).
-     * @return true on success, false on failure.
-     */
+    * @param increment The 64-bit value to add to the eventfd counter (default 1).
+    * @return true on success, false on failure.
+    * @note Linux writes the event's fd directly (baseline). macOS writes
+    *       through the notify channel and only accepts eventIds from
+    *       CreateNotifyEventId.
+    */
     bool NotifyEventId(int eventId, uint64_t increment = 1);
 
     /**
