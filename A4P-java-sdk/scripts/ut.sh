@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # A4P-Java-SDK 单元测试 CI 步骤。
 #
 # 使用 Maven Surefire 运行 JUnit 5 测试，生成标准格式报告。
@@ -15,25 +16,18 @@ set -eu
 # ---------------------------------------------------------------------------
 # 0. 参数解析
 # ---------------------------------------------------------------------------
-# 优先使用 WORKSPACE 环境变量，否则使用脚本所在目录
+# 优先使用 WORKSPACE 环境变量，否则从脚本位置定位仓库根目录
 if [ -n "${WORKSPACE:-}" ]; then
   BASE_DIR="$WORKSPACE"
-elif [ -d "$(dirname "$0")" ]; then
-  cd "$(dirname "$0")"; BASE_DIR="$PWD"
 else
-  cd "$(dirname "$0")/.."; BASE_DIR="$PWD"
+  BASE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 fi
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "BASE_DIR: ${BASE_DIR}"
 
 # ---------------------------------------------------------------------------
 # 1. 必备工具
 # ---------------------------------------------------------------------------
-m=""
-for t in git mvn; do
-  command -v "$t" >/dev/null || m="$m $t"
-done
-[ -z "$m" ] || { echo "missing tools:$m" >&2; exit 1; }
-
 cd "$BASE_DIR"
 
 # ---------------------------------------------------------------------------
@@ -62,80 +56,37 @@ HTML="$BASE_DIR/outputs/unit_test_report.html"
 JUNIT="$BASE_DIR/outputs/junit.xml"
 LOG="$BASE_DIR/outputs/ut.log"
 JSON="$BASE_DIR/outputs/ut.json"
+# 清除上次运行或随仓库检出的报告，避免失败时上传旧产物。
+rm -f -- "$HTML" "$JUNIT" "$LOG" "$JSON"
+m=""
+for t in git mvn java; do
+  command -v "$t" >/dev/null || m="$m $t"
+done
+[ -z "$m" ] || { echo "missing tools:$m" >&2; exit 1; }
+echo ">>> Report output: $HTML"
 
 # ---------------------------------------------------------------------------
 # 4. 运行 Maven 测试
 # ---------------------------------------------------------------------------
 cd "$JAVA_PROJECT_DIR"
 
+started_at=$(date +%s)
 rc=0
 mvn --batch-mode --no-transfer-progress clean test 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
 
 # ---------------------------------------------------------------------------
 # 5. 转换 Surefire 报告为标准 JUnit XML
 # ---------------------------------------------------------------------------
-total_tests=0
-failures=0
-errors=0
-skipped=0
-
-if [ -d "target/surefire-reports" ] && [ -n "$(ls -A target/surefire-reports/*.xml 2>/dev/null)" ]; then
-  > "$JUNIT"
-  echo '<?xml version="1.0" encoding="UTF-8"?>' > "$JUNIT"
-  echo '<testsuites>' >> "$JUNIT"
-
-  for xml_file in target/surefire-reports/TEST-*.xml; do
-    if [ -f "$xml_file" ]; then
-      ts_tests=$(grep -oP 'tests="?\K[0-9]+' "$xml_file" | head -1 || echo 0)
-      ts_failures=$(grep -oP 'failures="?\K[0-9]+' "$xml_file" | head -1 || echo 0)
-      ts_errors=$(grep -oP 'errors="?\K[0-9]+' "$xml_file" | head -1 || echo 0)
-      ts_skipped=$(grep -oP 'skipped="?\K[0-9]+' "$xml_file" | head -1 || echo 0)
-
-      total_tests=$((total_tests + ts_tests))
-      failures=$((failures + ts_failures))
-      errors=$((errors + ts_errors))
-      skipped=$((skipped + ts_skipped))
-
-      sed -n '2,$p' "$xml_file" | sed '$d' >> "$JUNIT"
-    fi
-  done
-
-  echo '</testsuites>' >> "$JUNIT"
-fi
-
-# ---------------------------------------------------------------------------
-# 6. 生成 HTML 报告
-# ---------------------------------------------------------------------------
-{
-  echo "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Unit Test Report</title>"
-  echo "<style>"
-  echo "body{font-family:Arial,sans-serif;margin:20px}"
-  echo ".pass{color:green;font-weight:bold}"
-  echo ".fail{color:red;font-weight:bold}"
-  echo "pre{background:#f5f5f5;padding:10px;overflow-x:auto;max-height:500px}"
-  echo ".summary{background:#f0f0f0;padding:15px;border-radius:5px;margin:20px 0}"
-  echo "</style>"
-  echo "</head><body>"
-  echo "<h1>Java Unit Test Report (Maven Surefire)</h1>"
-  echo "<div class='summary'>"
-  echo "<p>Total tests: <strong>$total_tests</strong></p>"
-  echo "<p>Failures: <span class='fail'>$failures</span></p>"
-  echo "<p>Errors: <span class='fail'>$errors</span></p>"
-  echo "<p>Skipped: $skipped</p>"
-  echo "</div>"
-  echo "<hr><h2>Test Log (last 200 lines)</h2>"
-  echo "<pre>"
-  tail -n 200 "$LOG"
-  echo "</pre></body></html>"
-} > "$HTML"
+# 使用 JDK 17 源文件启动模式生成自包含报告，无需额外依赖。
+java -Dfile.encoding=UTF-8 "$SCRIPT_DIR/UtReport.java" \
+  "$JAVA_PROJECT_DIR" "$HTML" "$JUNIT" "$LOG" "$started_at" "$rc"
+echo ">>> Generated report: $HTML"
 
 # ---------------------------------------------------------------------------
 # 7. 判定通过/失败
 # ---------------------------------------------------------------------------
 if [ "$rc" -eq 0 ]; then
   st="PASS"
-elif [ "$rc" -eq 0 ] && [ "$failures" -gt 0 ] || [ "$errors" -gt 0 ]; then
-  st="FAILED"; echo ">>> ERROR: test failures or errors detected" >&2
 else
   st="FAILED"; echo ">>> ERROR: Maven exit code=$rc" >&2
 fi
