@@ -53,6 +53,9 @@ def _resolve_login_base_url(args: argparse.Namespace) -> str:
     if args.base_url:
         return args.base_url
     if not sys.stdin.isatty():
+        # Say which URL was chosen: a silent default is how `--base-url X` in
+        # front of the subcommand used to disappear unnoticed.
+        print(f"note: no --base-url given; using {DEFAULT_BASE_URL}", file=sys.stderr)
         return DEFAULT_BASE_URL
     return input(f"Registry URL [{DEFAULT_BASE_URL}]: ").strip() or DEFAULT_BASE_URL
 
@@ -175,7 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_login = sub.add_parser("login", help="Interactive paste → cli_token.json")
-    p_login.add_argument("--base-url", default=None, dest="base_url")
+    # SUPPRESS keeps a --base-url parsed by the top-level parser: a plain
+    # default here overwrites it in the shared namespace (argparse applies
+    # the subparser default after the parent already set the value).
+    p_login.add_argument("--base-url", default=argparse.SUPPRESS, dest="base_url")
     p_login.add_argument(
         "--token", default=None,
         help="Use this token instead of prompting (for scripts; less secure).",

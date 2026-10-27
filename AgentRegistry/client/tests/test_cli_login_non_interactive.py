@@ -50,3 +50,17 @@ def test_login_keeps_explicit_base_url(isolated_home, monkeypatch):
     assert cli_mod.cmd_login(args) == 0
 
     assert read_cli_token()["base_url"] == "https://registry.example"
+
+
+def test_login_keeps_a_base_url_given_before_the_subcommand(isolated_home, monkeypatch):
+    """The top-level --base-url must survive the login subparser's defaults."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr(cli_mod, "A2XRegistryClient", _OfflineClient)
+
+    args = cli_mod.build_parser().parse_args([
+        "--base-url", "https://registry.example",
+        "login", "--token", "a2x_pat_probe123",
+    ])
+    assert cli_mod.cmd_login(args) == 0
+
+    assert read_cli_token()["base_url"] == "https://registry.example"
