@@ -3,7 +3,6 @@
  */
 
 #include <event2/util.h>
-#include <sys/eventfd.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -15,6 +14,7 @@
 
 #include "a2a_log.h"
 #include "shared/thread_utils.h"
+#include "platform_compat.h"
 #include "event_system.h"
 
 namespace A2A {
@@ -90,6 +90,7 @@ struct EventSystem::Impl {
         std::unique_ptr<event, decltype(&event_free)> handle{nullptr, &event_free};
         short flags{0};
         bool persistent{false};
+        Platform::NotifyChannel notifyChannel;
 
         static void eventCallbackAdapter(evutil_socket_t eventFd, short events, void* arg)
         {
@@ -136,6 +137,9 @@ struct EventSystem::Impl {
     bool enableThreadSupport{false};
     std::atomic<int> nextEventId{1};
     std::unordered_map<int, std::unique_ptr<EventData>> events;
+    // Notify-channel events indexed by their registered read fd (guarded by the
+    // EventSystem mutex). Keeps ReadEventFd O(1) without exposing raw pointers.
+    std::unordered_map<int, EventData*> notifyEventsByFd;
     std::thread eventThread;
 };
 
@@ -152,12 +156,18 @@ EventSystem::~EventSystem()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         events.swap(impl_->events);
+        impl_->notifyEventsByFd.clear();
     }
 
     for (auto& entry : events) {
         if (entry.second != nullptr && entry.second->handle != nullptr) {
             event_del(entry.second->handle.get());
             entry.second->handle.reset();
+        }
+        // Only fds created by CreateNotifyEventId are owned here. Fds passed to
+        // AddEvent stay owned by their callers and must never be closed by us.
+        if (entry.second != nullptr) {
+            Platform::CloseNotifyChannel(entry.second->notifyChannel);
         }
     }
 
@@ -267,76 +277,85 @@ int EventSystem::CreateNotifyEventId(EventCallback callback, void* arg, bool per
         return -1;
     }
 
-    // Create an eventfd with non-blocking and close-on-exec flags.
-    int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (efd < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Create eventfd failed.");
+    Platform::NotifyChannel channel;
+    if (Platform::CreateNotifyChannel(channel) != 0) {
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Create notify channel failed.");
         return -1;
     }
 
-    // Register the eventfd for read events. Make it persistent by default unless caller says otherwise.
+    // Register the read end for read events. Make it persistent by default unless caller says otherwise.
     EventType type = EventType::READ;
     if (persist) {
         type = static_cast<EventType>(static_cast<unsigned int>(type) | static_cast<unsigned int>(EventType::PERSIST));
     }
 
-    int eventId = AddEvent(efd, type, std::move(callback), arg, 0);
+    int eventId = AddEvent(channel.readFd, type, std::move(callback), arg, 0);
     if (eventId < 0) {
-        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to add eventFd to the event system.");
-        ::close(efd);
+        A2A_LOG(A2A_LOG_LEVEL::ERROR, "Failed to add notify fd to the event system.");
+        Platform::CloseNotifyChannel(channel);
         return -1;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = impl_->events.find(eventId);
+        if (it != impl_->events.end() && it->second != nullptr) {
+            it->second->notifyChannel.readFd = channel.readFd;
+            it->second->notifyChannel.writeFd = channel.writeFd;
+            impl_->notifyEventsByFd[channel.readFd] = it->second.get();
+        }
+    }
+
+    // The eventId is published only after the channel is attached; notifying
+    // an unattached channel fails without touching its counter.
     return eventId;
 }
 
 bool EventSystem::NotifyEventId(int eventId, uint64_t increment)
 {
-    // Use eventfd write to increment the counter atomically.
-    ssize_t written = 0;
-    const uint64_t val = increment;
-
-    int eventFd = ToEventFd(eventId);
-    if (eventFd == -1) {
+#if defined(__linux__)
+    // Baseline: resolve the fd under the mutex, write outside it.
+    int eventFd = -1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = impl_->events.find(eventId);
+        if (it == impl_->events.end() || it->second == nullptr) {
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "The eventId not found.");
+            return false;
+        }
+        eventFd = it->second->fd;
+    }
+    return Platform::WriteChannelFdRaw(eventFd, increment);
+#else
+    // macOS: the channel may be closed concurrently, so write under the lock.
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = impl_->events.find(eventId);
+    if (it == impl_->events.end() || it->second == nullptr) {
         A2A_LOG(A2A_LOG_LEVEL::ERROR, "The eventId not found.");
         return false;
     }
-    while (true) {
-        written = ::write(eventFd, &val, sizeof(val));
-        if (written == static_cast<ssize_t>(sizeof(val))) {
-            return true;
-        }
-        if (written < 0) {
-            if (errno == EINTR) {
-                continue; // retry
-            }
-            // EAGAIN/EWOULDBLOCK means the fd would block; treat as failure for notify.
-            return false;
-        }
-        // Partial write, treat as failure.
-        return false;
-    }
+
+    return Platform::NotifyChannelNotify(it->second->notifyChannel, increment);
+#endif
 }
 
 bool EventSystem::ReadEventFd(int fd, uint64_t& outValue) const
 {
-    uint64_t val = 0;
-    ssize_t rd = 0;
-    while (true) {
-        rd = ::read(fd, &val, sizeof(val));
-        if (rd == static_cast<ssize_t>(sizeof(val))) {
-            outValue = val;
-            return true;
-        }
-        if (rd < 0) {
-            if (errno == EINTR) {
-                continue; // retry
-            }
-            return false;
-        }
-        // Partial read or EOF
-        return false;
+#if defined(__linux__)
+    // Baseline: plain eventfd read without the lock or a map lookup.
+    return Platform::ReadChannelFdRaw(fd, outValue);
+#else
+    // Keep the lookup and the read inside the lock: no raw EventData pointer
+    // escapes the critical section, so a concurrent RemoveEvent/destruction
+    // cannot invalidate it.
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = impl_->notifyEventsByFd.find(fd);
+    if (it != impl_->notifyEventsByFd.end() && it->second != nullptr) {
+        return Platform::NotifyChannelRead(it->second->notifyChannel, fd, outValue);
     }
+
+    return Platform::ReadChannelFdRaw(fd, outValue);
+#endif
 }
 
 bool EventSystem::CloseNotifyEventId(int eventId)
@@ -374,6 +393,9 @@ bool EventSystem::RemoveEventInternal(int eventId, bool closeFd)
         }
         data = std::move(it->second);
         impl_->events.erase(it);
+        if (data != nullptr && data->notifyChannel.readFd >= 0) {
+            impl_->notifyEventsByFd.erase(data->fd);
+        }
     }
 
     if (data != nullptr && data->handle != nullptr) {
@@ -381,8 +403,13 @@ bool EventSystem::RemoveEventInternal(int eventId, bool closeFd)
         data->handle.reset();
     }
 
-    if (closeFd && data != nullptr && data->fd >= 0) {
-        ::close(data->fd);
+    if (closeFd && data != nullptr) {
+        if (data->notifyChannel.readFd >= 0) {
+            Platform::CloseNotifyChannel(data->notifyChannel);
+            data->fd = -1;
+        } else if (data->fd >= 0) {
+            ::close(data->fd);
+        }
     }
 
     return true;
