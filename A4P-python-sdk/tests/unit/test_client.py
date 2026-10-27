@@ -96,3 +96,22 @@ def test_client_normalizes_empty_and_non_object_responses(
     )
 
     assert result == {}
+
+
+@pytest.mark.parametrize("body", [b"not-json", b"<html>proxy error</html>"])
+def test_client_reports_non_json_success_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+) -> None:
+    """2xx 非 JSON 响应（代理 HTML、错端口等）应转换为客户端的 RuntimeError 契约，而不是泄漏 JSONDecodeError。"""
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: _Response(body),
+    )
+
+    with pytest.raises(RuntimeError, match="A4P HTTP response is not valid JSON"):
+        asyncio.run(
+            A4PClient(base_url="http://a4p.example").webauthn_registration_options(
+                {"userId": "user-1"}
+            )
+        )
