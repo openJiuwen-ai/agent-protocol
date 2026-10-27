@@ -42,16 +42,16 @@ bash A4P-java-sdk/scripts/build.sh ut -Dtest=Rsa3072Test
 
 ### 生成 CI 报告的 UT 脚本
 
-如需运行单元测试并生成 CI 报告，在仓库根目录执行以下命令。必须通过 `WORKSPACE` 指定
-仓库根目录的绝对路径；未设置时，脚本默认使用脚本所在目录，在当前目录结构下无法找到 SDK。
+如需运行单元测试并生成 CI 报告，在仓库根目录执行以下命令。脚本根据自身位置定位仓库
+根目录，不依赖调用者的工作目录；也可通过 `WORKSPACE` 指定仓库根目录的绝对路径来覆盖默认值。
 
 ```sh
-WORKSPACE="$(pwd)" bash A4P-java-sdk/scripts/ut.sh
+bash A4P-java-sdk/scripts/ut.sh
 ```
 
 该脚本需要 Git、Maven 和常用 Shell 工具，其中 `grep` 需要支持 `-P`（例如 GNU grep）。
 脚本执行 `mvn clean test`，并返回 Maven 的退出码（`0` 为 `PASS`，非 `0` 为 `FAILED`）。
-报告输出到 `$WORKSPACE/outputs/`：
+报告输出到定位到的仓库根目录下的 `outputs/`（设置覆盖值时为 `$WORKSPACE/outputs/`）：
 
 | 文件 | 内容 |
 | --- | --- |
