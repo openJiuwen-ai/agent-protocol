@@ -54,7 +54,7 @@ IntelliRouter 是一个轻量级 **LLM 代理 SDK**，将同一模型名映射�
 agent-protocol/
 ├── MCP/cpp-sdk/          # MCP C++ 客户端/服务端 SDK 与示例
 ├── A2A/cpp-sdk/          # A2A C++ 客户端/服务端 SDK 与示例
-├── AgentRegistry/       # A2X 注册中心、Python 客户端、Web UI 与文档
+├── AgentRegistry/        # A2X 注册中心、Python 客户端、Web UI 与文档
 ├── A4P-python-sdk/       # A4P Python SDK、协议文档与示例
 └── intelli_router/       # IntelliRouter LLM 代理 SDK、测试与示例
 ```
@@ -88,7 +88,7 @@ cd agent-protocol
 
 ## 参与贡献
 
-我们欢迎所有形式的贡献，包括但不限于:
+我们欢迎所有形式的贡献，包括但不限于：
 
 - 提交问题和功能建议
 - 改进文档
@@ -97,6 +97,6 @@ cd agent-protocol
 
 ## 开源许可证
 
-本项目依据Apache-2.0许可证授权。
+本项目依据 Apache-2.0 许可证授权。
 
 本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。

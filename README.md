@@ -54,7 +54,7 @@ Each component addresses a different integration need and can be used independen
 agent-protocol/
 ├── MCP/cpp-sdk/          # MCP C++ client/server SDK and examples
 ├── A2A/cpp-sdk/          # A2A C++ client/server SDK and examples
-├── AgentRegistry/       # A2X registry, Python client, web UI, and documentation
+├── AgentRegistry/        # A2X registry, Python client, web UI, and documentation
 ├── A4P-python-sdk/       # A4P Python SDK, protocol documentation, and examples
 └── intelli_router/       # IntelliRouter LLM proxy SDK, tests, and examples
 ```
