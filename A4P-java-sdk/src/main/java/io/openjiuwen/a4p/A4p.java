@@ -61,9 +61,11 @@ public final class A4p {
             Validation.integer(now, false);
             Validation.signingEnv(environment);
             Validation.intentL2(intent);
-            Validation.version(intent.version());
+            Validation.versions(intent);
             verifyOrThrow(serverVerifier, intent, intent.sign());
             require(now >= intent.timestamp(), A4P_INVALID_PARAMETER);
+            PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL1().structuredIntent());
+            require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED);
             IntentL3 unsigned = new IntentL3(PROTOCOL_VERSION, intent, environment, now, null);
             return new IntentL3(PROTOCOL_VERSION, intent, environment, now, sign(userSigner, unsigned));
         });
@@ -103,6 +105,7 @@ public final class A4p {
         return A4pResult.capture(() -> {
             Validation.present(context);
             synchronized (context) {
+                require(System.currentTimeMillis() >= context.activatedTime(), A4P_INVALID_PARAMETER);
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS);
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
@@ -147,6 +150,7 @@ public final class A4p {
         Order order = Validation.execution(execution);
         String executionId = execution.id() == null ? UUID.randomUUID().toString() : execution.id();
         synchronized (context) {
+            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY);
             // Parameter consistency comes before state and ledger checks, and the expiry flip before duplicates.
             IntentL1 intent = context.authorizedIntent().intentL2().intentL1();
             PaymentConstraints constraints = context.constraints();
@@ -191,6 +195,7 @@ public final class A4p {
         Validation.integer(now, false);
         Validation.present(context);
         synchronized (context) {
+            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY);
             // Pending reservations made before revocation or expiry can still be finalized.
             require(context.status() == IntentExecutionStatus.ACTIVE || context.status() == IntentExecutionStatus.REVOKED
                     || context.status() == IntentExecutionStatus.EXPIRED, A4P_INVALID_STATUS);
@@ -212,9 +217,8 @@ public final class A4p {
                     cancel ? ExecutionStatus.CANCELED : ExecutionStatus.COMPLETED, record.periodIndex(),
                     record.reservedAt(), cancel ? null : now, cancel ? now : null, record.execution());
             ledger.set(index, new IntentExecutionContext.Entry(updated, entry.order()));
-            if (cancel) {
-                Accounting.recompute(context, now);
-            } else if (context.status() == IntentExecutionStatus.ACTIVE && Accounting.exhausted(context)) {
+            Accounting.recompute(context, now);
+            if (!cancel && context.status() == IntentExecutionStatus.ACTIVE && Accounting.exhausted(context)) {
                 // REVOKED and EXPIRED are terminal; draining their ledger does not rewrite them.
                 context.status(IntentExecutionStatus.CONSUMED);
             }

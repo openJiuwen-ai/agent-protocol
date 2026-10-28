@@ -18,6 +18,53 @@ class A4pTest {
     private static final Product OTHER = new Product(new SellerInfo("seller"), new SpuSkuInfo("spu", "other"));
 
     @Test
+    void futureActivationCannotBeRevokedAndInvalidPersistedTimesAreRejected() {
+        long future = System.currentTimeMillis() + 60_000;
+        PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
+                future + 60_000, null, null, null, null);
+        IntentExecutionContext futureContext = ok(A4p.activateIntent(authorized(limits), VERIFIER, future));
+        fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(futureContext));
+        assertEquals(IntentExecutionStatus.ACTIVE, futureContext.status());
+        A4pIntentCodec codec = A4pIntentCodec.standard();
+        String json = codec.serializeIntentExecutionContext(context());
+        for (String value : List.of("null", "-1", "9999", "\"10000\"", "10000.5")) {
+            fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+                    json.replace("\"activatedTime\":10000", "\"activatedTime\":" + value)));
+        }
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+                json.replace("\"activatedTime\":10000,", "")));
+    }
+
+    @Test
+    void activationTimeIsPersistedAndRejectsEarlierCallsWithoutMutation() {
+        IntentExecutionContext context = context();
+        assertEquals(NOW, context.activatedTime());
+        String before = A4pIntentCodec.standard().serializeIntentExecutionContext(context);
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(context, execution("early", 100, 1), NOW - 1));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.completeExecution(context, "early", NOW - 1));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.cancelExecution(context, "early", NOW - 1));
+        assertEquals(before, A4pIntentCodec.standard().serializeIntentExecutionContext(context));
+        IntentExecutionContext restored = ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(before));
+        assertEquals(NOW, restored.activatedTime());
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(restored, execution("early", 100, 1), NOW - 1));
+        ok(A4p.createExecution(restored, execution("same-ms", 100, 1), NOW));
+    }
+
+    @Test
+    void completingInNextPeriodRefreshesExecutionInfoAndRoundTrips() {
+        IntentExecutionContext context = context();
+        ok(A4p.createExecution(context, execution("cross-period", 100, 1), NOW));
+        long oldPeriod = info(context).periodIndex();
+        ok(A4p.completeExecution(context, "cross-period", NOW + 10_000));
+        assertEquals(oldPeriod + 1, info(context).periodIndex());
+        assertEquals(2, info(context).leftPeriodExecutionCount());
+        assertEquals(900, info(context).leftAmount());
+        IntentExecutionContext restored = ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(
+                A4pIntentCodec.standard().serializeIntentExecutionContext(context)));
+        assertEquals(info(context), info(restored));
+    }
+
+    @Test
     void lifecycleReservesCancelsAndConsumes() {
         IntentExecutionContext context = context();
         ok(A4p.createExecution(context, execution("one", 100, 1), NOW));
@@ -83,10 +130,16 @@ class A4pTest {
     void finalizationCannotPrecedeTheReservation() {
         IntentExecutionContext context = context();
         ok(A4p.createExecution(context, execution("one", 100, 1), NOW));
-        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(context, "one", NOW - 1));
-        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(context, "one", NOW - 1));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.completeExecution(context, "one", NOW - 1));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.cancelExecution(context, "one", NOW - 1));
         assertEquals(ExecutionStatus.PENDING, context.executions().get(0).status());
         ok(A4p.completeExecution(context, "one", NOW));
+
+        IntentExecutionContext laterReservation = context();
+        ok(A4p.createExecution(laterReservation, execution("later", 100, 1), NOW + 1));
+        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(laterReservation, "later", NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(laterReservation, "later", NOW));
+        assertEquals(ExecutionStatus.PENDING, laterReservation.executions().get(0).status());
     }
 
     @Test
@@ -296,7 +349,7 @@ class A4pTest {
         IntentExecutionContext context = ok(A4p.activateIntent(authorized(constraints), VERIFIER, maxSafe));
         assertEquals(1, info(context).periodIndex());
         Execution execution = execution(null, maxSafe, 1);
-        ok(A4p.createExecution(context, execution, 0));
+        ok(A4p.createExecution(context, execution, maxSafe));
         assertNull(execution.id());
         assertFalse(context.executions().get(0).executionId().isEmpty());
         assertEquals(context.executions().get(0).executionId(), context.executions().get(0).execution().id());
@@ -395,12 +448,63 @@ class A4pTest {
     }
 
     @Test
+    void signingRejectsUnsupportedVersionsAtEveryLevelBeforeSignatureCallbacks() {
+        IntentL2 second = authorized(constraints()).intentL2();
+        IntentL1 first = second.intentL1();
+        IntentL1 unsupportedFirst = new IntentL1("2.0", first.intentId(), first.intentConversation(),
+                first.intentSummary(), first.structuredIntent(), first.timestamp(), first.sign());
+        SigningEnv environment = new SigningEnv(Map.of(), Map.of());
+        SignatureVerifier unexpectedVerifier = (data, sign) -> {
+            fail("Unsupported versions must be rejected before signature verification");
+            return null;
+        };
+        Signer unexpectedSigner = data -> {
+            fail("Unsupported versions must not invoke the user signer");
+            return null;
+        };
+        for (IntentL2 unsupported : List.of(
+                new IntentL2("2.0", first, second.userIdentity(), second.agentIdentity(),
+                        second.serviceProviderIdentity(), second.timestamp(), second.sign()),
+                new IntentL2(second.version(), unsupportedFirst, second.userIdentity(), second.agentIdentity(),
+                        second.serviceProviderIdentity(), second.timestamp(), second.sign()))) {
+            fails(A4P_UNSUPPORTED_VERSION,
+                    A4p.signIntent(unsupported, unexpectedVerifier, environment, unexpectedSigner, NOW));
+        }
+        ok(A4p.signIntent(second, VERIFIER, environment, SIGNER, NOW));
+    }
+
+    @Test
+    void signingRejectsExpiredIntentsBeforeCallingUserSigner() {
+        PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 20_000L, 100_000L,
+                null, null, null, null);
+        IntentL1 first = ok(A4p.createIntent(request(limits), SIGNER, NOW));
+        IntentL2 second = ok(A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, NOW));
+        SigningEnv environment = new SigningEnv(Map.of(), Map.of());
+        Signer unexpectedSigner = data -> {
+            fail("Expired intents must not invoke the user signer");
+            return null;
+        };
+        fails(A4P_TIMESTAMP_EXPIRED, A4p.signIntent(second, VERIFIER, environment, unexpectedSigner, 100_001));
+        SignatureVerifier reject = (data, sign) -> new VerificationResult(false, A4P_VERIFY_FAIL.code(), null);
+        fails(A4P_VERIFY_FAIL, A4p.signIntent(second, reject, environment, unexpectedSigner, 100_001));
+        fails(A4P_VERIFY_FAIL, A4p.signIntent(second, reject, environment, unexpectedSigner, 19_999));
+
+        // Users may authorize a task before it starts; validUntil is inclusive.
+        for (long now : new long[] { NOW, 19_999, 20_000, 60_000, 99_999, 100_000 }) {
+            IntentL3 signed = ok(A4p.signIntent(second, VERIFIER, environment, SIGNER, now));
+            assertEquals(now, signed.timestamp());
+            assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(signed, VERIFIER, now)).status());
+        }
+    }
+
+    @Test
     void activationRejectsExpiredIntentsButAcceptsNotYetValidOnes() {
         IntentL3 intent = authorized(new PaymentConstraints(null, 1000L, "CNY", 20_000L, 100_000L,
                 null, null, null, null));
         fails(A4P_TIMESTAMP_EXPIRED, A4p.activateIntent(intent, VERIFIER, 100_001));
         assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(intent, VERIFIER, 100_000)).status());
         assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(intent, VERIFIER, NOW)).status());
+        assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(intent, VERIFIER, 20_000)).status());
         // The user signature is checked first, so a forged expired intent reports the forgery.
         SignatureVerifier reject = (data, sign) -> new VerificationResult(false, A4P_VERIFY_FAIL.code(), null);
         fails(A4P_VERIFY_FAIL, A4p.activateIntent(intent, reject, 100_001));

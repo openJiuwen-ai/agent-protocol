@@ -15,7 +15,7 @@ final class CanonicalIntentCodec implements A4pIntentCodec {
 
     // Wire form of a persisted context; reservedAt is boxed so a missing field is rejected instead of read as 0.
     record ContextJson(String version, String intentId, IntentL3 authorizedIntent, IntentExecutionStatus status,
-                       JsonNode executionInfo, List<RecordJson> executions) {}
+                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime) {}
 
     record RecordJson(String executionId, ExecutionStatus status, Long periodIndex, Long reservedAt,
                       Long completedAt, Long canceledAt, Execution execution) {}
@@ -55,6 +55,7 @@ final class CanonicalIntentCodec implements A4pIntentCodec {
             fields.put("version", intentExecutionContext.version());
             fields.put("intentId", intentExecutionContext.intentId());
             fields.put("authorizedIntent", intentExecutionContext.authorizedIntent());
+            fields.put("activatedTime", intentExecutionContext.activatedTime());
             fields.put("status", intentExecutionContext.status());
             fields.put("executionInfo", intentExecutionContext.executionInfo());
             fields.put("executions", intentExecutionContext.executions());
@@ -77,19 +78,22 @@ final class CanonicalIntentCodec implements A4pIntentCodec {
         Validation.versions(authorized);
         IntentL1 intent = authorized.intentL2().intentL1();
         Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER);
+        Validation.integer(wire.activatedTime(), false);
+        Validation.require(wire.activatedTime() >= authorized.timestamp(), A4P_INVALID_PARAMETER);
         Validation.present(wire.status());
         Validation.present(wire.executions());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
         for (RecordJson record : wire.executions()) {
             Validation.present(record);
             Validation.integer(record.reservedAt(), false);
+            Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER);
             Order order = Validation.execution(record.execution());
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),
                     record.periodIndex(), record.reservedAt(), record.completedAt(), record.canceledAt(),
                     record.execution()), order));
         }
         Long period = period(wire.executionInfo(), PaymentProfile.constraints(intent.structuredIntent()));
-        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period);
+        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime());
         Validation.ledger(context);
         // executionInfo is derived state, so it must match what the restored ledger yields.
         Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())),
