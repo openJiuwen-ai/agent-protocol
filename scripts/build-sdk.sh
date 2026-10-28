@@ -5,6 +5,7 @@ set -euo pipefail
 usage() {
   echo "Usage: bash scripts/build-sdk.sh <project> [project options...]"
   echo "Projects: A4P-java-sdk, A4P-arkts-sdk, MCP/cpp-sdk, A2A/cpp-sdk"
+  echo "ArkTS requires separately supplied SDK sources and scripts/build.sh."
 }
 
 case "${1:-}" in
@@ -13,7 +14,7 @@ case "${1:-}" in
   A4P-java-sdk) build_file="scripts/build.sh" ;;
   A4P-arkts-sdk) build_file="scripts/build.sh" ;;
   MCP/cpp-sdk) build_file="scripts/build.sh" ;;
-  A2A/cpp-sdk) build_file="build.sh" ;;
+  A2A/cpp-sdk) build_file="scripts/build.sh" ;;
   *) echo "Error: unknown build project '$1'." >&2; usage >&2; exit 2 ;;
 esac
 project="$1"
@@ -30,8 +31,8 @@ log() {
 
 project_dir="${ROOT_DIR}/${project}"
 if [[ ! -f "${project_dir}/${build_file}" ]]; then
-  log "[SKIP] ${project}: build script does not exist: ${project_dir}/${build_file}"
-  exit 0
+  log "[ERROR] ${project}: build script does not exist: ${project_dir}/${build_file}"
+  exit 1
 fi
 
 log "[BUILD] ${project}"
