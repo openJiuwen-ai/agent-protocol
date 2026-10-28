@@ -1,6 +1,6 @@
 # Canonical JSON and signed bytes
 
-Reference: PR #130
+Reference: PR #334
 
 1. Object keys are sorted lexicographically by UTF-16 code units (Java
    `String.compareTo`, equivalent to JavaScript's default string sort and to RFC 8785).
