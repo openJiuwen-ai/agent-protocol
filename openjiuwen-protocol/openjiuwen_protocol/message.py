@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 # 响应订阅，不提交新输入（gateway / runtime / server 三方共用的协议参数名）。
 TEAM_ATTACH_ONLY_PARAM = "attach_only"
 
+# ``EventType`` 之外的线协议事件名：由 AgentServer 产出、Gateway / Web 消费，
+# 不属于统一事件枚举的历史字符串（两仓字面量必须一致，故收敛到协议包）。
+SESSION_REQUEST_COMPLETED_EVENT = "chat.request_completed"
+PROMPT_SUGGESTION_READY_EVENT = "prompt_suggestion.ready"
+TOPIC_STARTERS_READY_EVENT = "topic_starters.ready"
+TOPIC_STARTERS_CONTROL_CHANGED_EVENT = "topic_starters.control_changed"
+
 # ── mode 归一化：与 jiuwenswarm ``common/mode_matrix.py`` 同源的纯数据副本 ──
 _MODE_ALIASES: dict[str, str] = {
     "team.plan": "team.plan.normal",
@@ -389,6 +396,21 @@ class ReqMethod(Enum):
     SKILL_SYNC_PACKAGE = "skills.sync.package"
     SKILL_SYNC_APPLY = "skills.sync.apply"
     SKILL_SYNC_RELOAD = "skills.sync.reload"
+
+    # 轨迹读取：web 轨迹面板经 E2A 代理到 AgentServer 执行。
+    TRAJECTORY_SUBJECTS_LIST = "trajectory.subjects.list"
+    TRAJECTORY_STREAM_FRAMES_GET = "trajectory.stream_frames.get"
+    TRAJECTORY_SEQUENCES_GET = "trajectory.sequences.get"
+    TRAJECTORY_CHECKPOINTS_GET = "trajectory.checkpoints.get"
+    TRAJECTORY_USAGE_GET = "trajectory.usage.get"
+    TRAJECTORY_SUBJECT_GET = "trajectory.subject.get"
+    TRAJECTORY_RAW_GET = "trajectory.raw.get"
+    TRAJECTORY_ARCHIVE_OPEN = "trajectory.archive.open"
+    TRAJECTORY_BLOB_READ = "trajectory.blob.read"
+    TRAJECTORY_BLOB_CLOSE = "trajectory.blob.close"
+
+    # 主动推荐任务调度（cron / hook 触发）。事件名见 PROACTIVE_RECOMMENDATION。
+    RECOMMENDATION = "recommendation.job"
 
     PERSONAL_CONTEXT_RUNTIME_STATUS = "personal_context.runtime.status"
     PERSONAL_CONTEXT_RUNTIME_START_COLLECTION = (
