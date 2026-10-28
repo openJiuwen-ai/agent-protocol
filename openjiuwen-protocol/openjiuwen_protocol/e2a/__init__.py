@@ -6,9 +6,9 @@ jiuwenswarm 侧 ``common/e2a`` 现为指向本包的转发别名（过渡形态�
 协议说明文档在 jiuwenswarm 仓 ``docs/{zh,en}/E2A-protocol.md``。
 
 与原仓差异（协议包零反向依赖所需）：
-- ``agent_compat.e2a_to_agent_request`` 未随迁（依赖 jiuwenswarm 侧
-  ``schema.agent.AgentRequest``/``ReqMethod`` 实例构造），留在 jiuwenswarm
-  仓 ``common/e2a``（该处保留实现而非别名）。
+- ``agent_compat.e2a_to_agent_request`` 已随迁（``AgentRequest`` 与 ``ReqMethod``
+  均在本包内，原"依赖 jiuwenswarm 侧实现"的理由不再成立）；两仓
+  ``common/e2a`` 均改为本模块的转发别名，并在本包顶层汇总导出。
 - ``AgentResponse`` / ``AgentResponseChunk`` 线协议类型定义在
   ``openjiuwen_protocol.e2a.agent_models``（原 jiuwenswarm ``schema.agent`` 的
   线协议部分；jiuwenswarm 侧 ``schema/agent.py`` 为其转发别名）。
@@ -34,6 +34,7 @@ from openjiuwen_protocol.e2a.adapters import (
     envelope_from_acp_jsonrpc,
     envelope_to_acp_jsonrpc_call,
 )
+from openjiuwen_protocol.e2a.agent_compat import e2a_to_agent_request
 from openjiuwen_protocol.e2a.agent_models import (
     AgentRef,
     AgentRequest,
@@ -166,6 +167,7 @@ __all__ = [
     "e2a_response_from_agent_response",
     "e2a_response_to_agent_chunk",
     "e2a_response_to_agent_response",
+    "e2a_to_agent_request",
     "encode_agent_chunk_for_wire",
     "encode_agent_response_for_wire",
     "encode_json_parse_error_wire",
