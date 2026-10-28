@@ -1,0 +1,148 @@
+# A4P HAR consumer obfuscation rules.
+#
+# The A4P wire format and every signature are computed over the canonical
+# JSON of the intent objects: the codec walks the real property names, so
+# the field names kept below are signature-bearing bytes. A consuming app
+# that enables -enable-property-obfuscation without these keeps renames
+# the SDK's properties and produces JSON that no other A4P implementation
+# (Java SDK, server) can parse or verify, while responses it receives
+# fail to parse against renamed keys.
+#
+# This file ships with the HAR (merged into the consuming app's rules
+# automatically). The kept names cover the SDK's full public property
+# surface — anything the app's obfuscator must NOT rename because a
+# pre-compiled SDK object or a cross-boundary call depends on it:
+#   - model fields (wire format, signature payloads)
+#   - namespace members (A4p.*/A4pCodec.*: app call sites resolve
+#     against the pre-compiled HAR bytecode, which keeps these names)
+#   - enum members (app accesses on the pre-compiled enum objects)
+#   - Signer.sign / SignatureVerifier.verify (app implements, SDK calls)
+#   - VerificationResult / HTTP envelope / thrown BusinessError fields
+#     (code, message, data, valid)
+#
+# Trade-off: kept names are never renamed anywhere in the consuming app,
+# including its own fields with the same spelling. That is the inherent
+# price of a wire-format SDK.
+#
+# Keep in sync with obfuscation-rules.txt and with the public surface in
+# Index.ets and src/main/ets/models/: every new wire-visible field,
+# namespace member, or enum member MUST be added here in the same change.
+# The golden wire-key test (A4pCodec.test.ets, GoldenWireKeys describe)
+# fails if a wire field name drifts.
+-keep-property-name
+version
+timestamp
+sign
+verify
+alg
+keyIdentifier
+action
+status
+code
+message
+name
+data
+valid
+id
+intentId
+intentConversation
+intentSummary
+structuredIntent
+intentL1
+intentL2
+userIdentity
+agentIdentity
+serviceProviderIdentity
+signingEnv
+authorizedIntent
+activatedTime
+executions
+executionInfo
+resource
+constraints
+singleOrderMaxAmount
+totalMaxAmount
+currency
+validFrom
+validUntil
+maxExecuteCount
+anchorTime
+periodSeconds
+maxExecutionCountPerPeriod
+itemsWhiteList
+whiteList
+quantity
+product
+seller
+spusku
+spuId
+skuId
+cartItems
+orderId
+amount
+executionContent
+execution
+executionId
+periodIndex
+reservedAt
+completedAt
+canceledAt
+leftAmount
+leftExecutionCount
+leftPeriodExecutionCount
+identityProvider
+additionalInfo
+device
+app
+model
+os
+method
+path
+headers
+body
+statusCode
+createIntent
+issueIntent
+signIntent
+activateIntent
+verifyIntentAuthenticity
+revokeIntent
+createExecution
+completeExecution
+cancelExecution
+serializeIntentL1
+deserializeIntentL1
+serializeIntentL2
+deserializeIntentL2
+serializeIntentL3
+deserializeIntentL3
+serializeIntentExecutionContext
+deserializeIntentExecutionContext
+A4P_SUCCESS
+A4P_INVALID_PARAMETER
+A4P_UNSUPPORTED_VERSION
+A4P_DUPLICATE_ID
+A4P_SIGNING_FAIL
+A4P_VERIFY_FAIL
+A4P_INVALID_STATUS
+A4P_TIMESTAMP_EXPIRED
+A4P_TIMESTAMP_TOO_EARLY
+A4P_EXECUTION_COUNT_EXCEEDED
+A4P_AMOUNT_EXCEEDED
+A4P_PERIOD_COUNT_EXCEEDED
+A4P_PERIOD_EXECUTION_COUNT_EXCEEDED
+A4P_CART_MISMATCH
+A4P_SINGLE_ORDER_AMOUNT_EXCEEDED
+A4P_PRODUCT_NOT_AUTHORIZED
+A4P_SERIALIZE_FAIL
+A4P_DESERIALIZE_FAIL
+A4P_INTERNAL_ERROR
+AI_PAY
+RSA3072
+ACTIVE
+CONSUMED
+REVOKED
+EXPIRED
+PENDING
+COMPLETED
+CANCELED
