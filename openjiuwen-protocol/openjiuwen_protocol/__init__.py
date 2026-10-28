@@ -13,6 +13,7 @@ SshAuthPort / CryptoProvider 等）、扩展基类（BaseExtension 及子类）�
 - ``auth``             SSH 认证结果/条目数据类（SshKeyEntry / SshAuthResult）
 - ``hooks``            AgentServer/Gateway hook 事件名常量与上下文数据类
 - ``message``          WS/E2A 线上报文与枚举（Message / ReqMethod / EventType / Mode）
+- ``mcp_oauth``        MCP OAuth 回调共享契约（McpOAuthError / provider 域名）
 - ``sdk``              扩展 SDK 共享数据类（ApplicationPluginServices / 贡献类）
 - ``types``            ExtensionConfig / ExtensionMetadata 等通用数据类型
 - ``e2a``              E2A 协议数据结构（信封/响应/线协议模型/常量；经
@@ -41,6 +42,7 @@ from openjiuwen_protocol.hooks import (
     MemoryHookContext,
     SystemPromptHookContext,
 )
+from openjiuwen_protocol.mcp_oauth import MCP_REGISTRY_PROVIDER_DOMAIN, McpOAuthError
 from openjiuwen_protocol.message import EventType, Message, Mode, ReqMethod
 from openjiuwen_protocol.sdk import (
     ApplicationPluginServices,
@@ -71,6 +73,8 @@ __all__ = [
     "FrontendContribution",
     "GatewayChatHookContext",
     "GatewayHookEvents",
+    "MCP_REGISTRY_PROVIDER_DOMAIN",
+    "McpOAuthError",
     "MemoryHookContext",
     "Message",
     "Mode",
