@@ -434,6 +434,10 @@ class MetricsCollector(EventHandler):
             self._prom["requests_total"].labels(model=event.model, status="success").inc()
             if event.latency is not None:
                 self._prom["latency"].labels(model=event.model).observe(event.latency)
+            if event.prompt_tokens:
+                self._prom["tokens_total"].labels(model=event.model, type="prompt").inc(event.prompt_tokens)
+            if event.completion_tokens:
+                self._prom["tokens_total"].labels(model=event.model, type="completion").inc(event.completion_tokens)
 
     def _on_stream_cancelled(self, event: RoutingEvent) -> None:
         """流被消费者提前中断（break/aclose/取消）：终态之一。
