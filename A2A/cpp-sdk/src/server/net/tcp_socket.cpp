@@ -18,6 +18,7 @@
 
 #include "a2a_log.h"
 #include "event_system.h"
+#include "platform_compat.h"
 
 namespace A2A::Server {
 
@@ -247,22 +248,19 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts) const
             A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(SO_KEEPALIVE) failed, errno: " + std::to_string(errno));
         }
         if (opts.keepAliveIdleSec > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &opts.keepAliveIdleSec,
-                static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
+            rc = Platform::SetKeepAliveIdle(fd_, opts.keepAliveIdleSec);
             if (rc != 0) {
-                A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_KEEPIDLE) failed, errno: " + std::to_string(errno));
+                A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(keepalive idle) failed, errno: " + std::to_string(errno));
             }
         }
         if (opts.keepAliveIntvlSec > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &opts.keepAliveIntvlSec,
-                static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
+            rc = Platform::SetKeepAliveIntvl(fd_, opts.keepAliveIntvlSec);
             if (rc != 0) {
                 A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_KEEPINTVL) failed, errno: " + std::to_string(errno));
             }
         }
         if (opts.keepAliveCnt > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &opts.keepAliveCnt,
-                static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
+            rc = Platform::SetKeepAliveCnt(fd_, opts.keepAliveCnt);
             if (rc != 0) {
                 A2A_LOG(A2A_LOG_LEVEL::ERROR, "setsockopt(TCP_KEEPCNT) failed, errno: " + std::to_string(errno));
             }

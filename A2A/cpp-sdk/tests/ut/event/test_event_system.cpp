@@ -3,15 +3,22 @@
  */
 
 #include <gtest/gtest.h>
+#include <fcntl.h>
 #include <unistd.h>
-#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <chrono>
 #include <atomic>
 #include <future>
+#include <mutex>
 #include <unordered_set>
+#include <vector>
+
+#if defined(__linux__)
+#include <sys/eventfd.h>
+#endif
 
 #include "event_system.h"
 #include "a2a_log.h"
@@ -27,18 +34,29 @@ using namespace A2A;
 /// Create a non-blocking socket pair for testing I/O events.
 static std::pair<int, int> CreateTestSocketPair()
 {
-    int fds[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fds) < 0) {
+    // A socket pair provides exactly two fds: the read end and the write end.
+    const int socketPairFdCount = 2;
+
+    int fds[socketPairFdCount];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
         return {-1, -1};
+    }
+    for (int i = 0; i < socketPairFdCount; ++i) {
+        int flags = fcntl(fds[i], F_GETFL, 0);
+        if (flags >= 0) {
+            (void)fcntl(fds[i], F_SETFL, flags | O_NONBLOCK);
+        }
     }
     return {fds[0], fds[1]};
 }
 
-/// Create an eventfd for testing notify events.
+#if defined(__linux__)
+/// Create an eventfd for testing notify events (eventfd is Linux-only).
 static int CreateTestEventFd()
 {
     return eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 }
+#endif
 
 /// Sleep helper for async tests.
 static void SleepMs(int ms)
@@ -308,6 +326,8 @@ TEST(EventSystemTest, NotifyEventId_InvalidId)
     EXPECT_FALSE(es.NotifyEventId(99999, 1));
 }
 
+#if defined(__linux__)
+// These tests rely on eventfd counter semantics (Linux-only).
 TEST(EventSystemTest, ReadEventFd_Valid)
 {
     EventSystem es(false, 0);
@@ -342,6 +362,7 @@ TEST(EventSystemTest, ReadEventFd_Empty)
 
     close(efd);
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // RemoveEvent Tests
@@ -806,6 +827,113 @@ TEST(EventSystemTest, NotifyEventId_WithIncrements)
     es.CloseNotifyEventId(eventId);
 }
 
+TEST(EventSystemTest, NotifyEventId_CoalescesIntoOneWakeup)
+{
+    EventSystem es(true, 0);
+    es.Init();
+
+    std::mutex readsMutex;
+    std::vector<uint64_t> reads;
+    std::atomic<int> callbackCount{0};
+
+    int eventId = es.CreateNotifyEventId(
+        [&](int fd, short, auto*) {
+            callbackCount.fetch_add(1);
+            uint64_t value = 0;
+            while (es.ReadEventFd(fd, value)) {
+                std::lock_guard<std::mutex> lock(readsMutex);
+                reads.push_back(value);
+            }
+        },
+        nullptr, true);
+    ASSERT_GE(eventId, 0);
+
+    // Ten notifications must coalesce into one accumulated wakeup; extra wake
+    // bytes would cause additional callbacks.
+    for (int i = 0; i < 10; ++i) {
+        ASSERT_TRUE(es.NotifyEventId(eventId, 1));
+    }
+
+    std::thread loop([&es]() { es.Start(false); });
+    SleepMs(100);
+    es.Stop();
+    loop.join();
+
+    EXPECT_EQ(callbackCount.load(), 1);
+    {
+        std::lock_guard<std::mutex> lock(readsMutex);
+        ASSERT_EQ(reads.size(), 1u);
+        EXPECT_EQ(reads[0], 10u);
+    }
+
+    es.CloseNotifyEventId(eventId);
+}
+
+TEST(EventSystemTest, NotifyEventId_ZeroIncrementDoesNotWake)
+{
+    EventSystem es(true, 0);
+    es.Init();
+
+    std::atomic<int> callbackCount{0};
+    int eventId = es.CreateNotifyEventId(
+        [&callbackCount](int, short, auto*) { callbackCount.fetch_add(1); },
+        nullptr, true);
+    ASSERT_GE(eventId, 0);
+
+    // eventfd parity: succeeds without becoming readable.
+    EXPECT_TRUE(es.NotifyEventId(eventId, 0));
+
+    std::thread loop([&es]() { es.Start(false); });
+    SleepMs(100);
+    es.Stop();
+    loop.join();
+
+    EXPECT_EQ(callbackCount.load(), 0);
+
+    es.CloseNotifyEventId(eventId);
+}
+
+TEST(EventSystemTest, NotifyEventId_MaxIncrementRejected)
+{
+    EventSystem es(true, 0);
+    es.Init();
+
+    std::mutex readsMutex;
+    uint64_t readValue = 0;
+    std::atomic<int> callbackCount{0};
+
+    int eventId = es.CreateNotifyEventId(
+        [&](int fd, short, auto*) {
+            callbackCount.fetch_add(1);
+            uint64_t value = 0;
+            while (es.ReadEventFd(fd, value)) {
+                std::lock_guard<std::mutex> lock(readsMutex);
+                readValue = value;
+            }
+        },
+        nullptr, true);
+    ASSERT_GE(eventId, 0);
+
+    ASSERT_TRUE(es.NotifyEventId(eventId, 1));
+    // eventfd rejects increments above 0xFFFFFFFFFFFFFFFE; the committed
+    // count must remain untouched.
+    EXPECT_FALSE(es.NotifyEventId(eventId, std::numeric_limits<uint64_t>::max()));
+
+    std::thread loop([&es]() { es.Start(false); });
+    SleepMs(100);
+    es.Stop();
+    loop.join();
+
+    EXPECT_EQ(callbackCount.load(), 1);
+    {
+        std::lock_guard<std::mutex> lock(readsMutex);
+        EXPECT_EQ(readValue, 1u);
+    }
+
+    es.CloseNotifyEventId(eventId);
+}
+
+#if defined(__linux__)
 TEST(EventSystemTest, ReadEventFd_MultipleValues)
 {
     EventSystem es(false, 0);
@@ -830,6 +958,7 @@ TEST(EventSystemTest, ReadEventFd_MultipleValues)
 
     close(efd);
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // CloseNotifyEventId Tests
@@ -1164,8 +1293,11 @@ TEST(EventSystemTest, AddEvent_InvalidFd)
     es.Init();
 
     // Use a closed fd
-    int invalidFd = CreateTestEventFd();
-    close(invalidFd);
+    auto [fd1, fd2] = CreateTestSocketPair();
+    ASSERT_GE(fd1, 0);
+    close(fd1);
+    close(fd2);
+    int invalidFd = fd1;
 
     int eventId = es.AddEvent(invalidFd, EventType::READ, [](int, short, void*) {}, nullptr, 0);
 

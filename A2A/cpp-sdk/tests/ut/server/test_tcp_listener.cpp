@@ -28,7 +28,9 @@ class TcpListenerTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        eventSystem_ = std::make_unique<EventSystem>(false, 0);
+        // Thread support is required: these tests run the event loop in the
+        // background and stop it from the test thread afterwards.
+        eventSystem_ = std::make_unique<EventSystem>(true, 0);
         ASSERT_TRUE(eventSystem_->Init());
 
         listener_ = std::make_unique<TcpListener>(*eventSystem_);

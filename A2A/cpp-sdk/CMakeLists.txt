@@ -5,6 +5,26 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# On macOS, Homebrew installs some dependencies (OpenSSL, curl, ...) as keg-only,
+# meaning they are not on the default search path. Prepend their prefixes so that
+# find_package/find_library can locate them without manual OPENSSL_ROOT_DIR.
+if(APPLE)
+    find_program(A2A_BREW_EXECUTABLE brew)
+    if(A2A_BREW_EXECUTABLE)
+        foreach(_a2a_brew_pkg openssl@3 openssl curl libevent nlohmann-json)
+            execute_process(
+                COMMAND ${A2A_BREW_EXECUTABLE} --prefix ${_a2a_brew_pkg}
+                OUTPUT_VARIABLE _a2a_brew_prefix
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+            if(_a2a_brew_prefix AND EXISTS "${_a2a_brew_prefix}")
+                list(APPEND CMAKE_PREFIX_PATH "${_a2a_brew_prefix}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
+    endif()
+endif()
+
 option(A2A_BUILD_CLIENT "Build A2A client components" ON)
 option(A2A_BUILD_SERVER "Build A2A server components" ON)
 option(A2A_ENABLE_EXAMPLES "Build example binaries" OFF)
@@ -32,13 +52,35 @@ endif()
 
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
+find_package(Threads REQUIRED)
 
-set(_a2a_link_libs pthread dl OpenSSL::SSL OpenSSL::Crypto http_parser)
+# pthread is provided by the system (Threads::Threads); dl exists only on Linux
+# and is exposed via CMAKE_DL_LIBS (empty on macOS).
+set(_a2a_link_libs Threads::Threads ${CMAKE_DL_LIBS} OpenSSL::SSL OpenSSL::Crypto http_parser)
 
 if(TARGET event)
     list(APPEND _a2a_link_libs event)
 elseif(TARGET libevent)
     list(APPEND _a2a_link_libs libevent)
+else()
+    # Preferred: imported targets from find_package (Linux distros). Fallback:
+    # locate the library by name (macOS/Homebrew ships libevent without a
+    # CMake config; the brew prefixes were already added to CMAKE_PREFIX_PATH).
+    find_library(_a2a_event_lib NAMES event libevent)
+    if(NOT _a2a_event_lib)
+        message(FATAL_ERROR
+            "libevent not found. Install it first: 'brew install libevent' (macOS) "
+            "or 'apt install libevent-dev' (Linux).")
+    endif()
+    list(APPEND _a2a_link_libs ${_a2a_event_lib})
+    # Keep headers and library from the same prefix so the fallback can never
+    # pair a system libevent library with third-party headers. The include dir
+    # is attached to the shared interface target because event_system.cpp is
+    # compiled by object libraries (a2a_event/a2a_shared), not by `a2a` itself.
+    get_filename_component(_a2a_event_lib_dir "${_a2a_event_lib}" DIRECTORY)
+    if(EXISTS "${_a2a_event_lib_dir}/../include")
+        target_include_directories(third_party_headers INTERFACE "${_a2a_event_lib_dir}/../include")
+    endif()
 endif()
 
 if(TARGET event_pthreads)
