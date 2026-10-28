@@ -805,6 +805,85 @@ class TestThreadSafety:
         assert not errors, errors
 
 
+class TestPrometheusStreamingTokens:
+    @pytest.fixture
+    def prometheus_collector(self):
+        prometheus = pytest.importorskip("prometheus_client")
+        registry = prometheus.CollectorRegistry()
+        collector = MetricsCollector(
+            enable_prometheus=True, prometheus_registry=registry,
+        )
+        return collector, registry
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("prompt_tokens,completion_tokens", [
+        (100, 20), (100, None), (None, 20), (None, None), (0, 0),
+    ])
+    async def test_stream_tokens_match_reported_usage(
+        self, prometheus_collector, prompt_tokens, completion_tokens,
+    ):
+        collector, registry = prometheus_collector
+        await collector.handle_event(_event(RoutingEventType.STREAM_STARTED))
+        await collector.handle_event(_event(
+            RoutingEventType.STREAM_SUCCEEDED,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            chunk_count=80,
+        ))
+
+        stats = collector.get_stats()
+        for token_type, reported in (
+            ("prompt", prompt_tokens), ("completion", completion_tokens),
+        ):
+            value = registry.get_sample_value(
+                "intelli_router_tokens_total",
+                {"model": "gpt-4", "type": token_type},
+            )
+            # Missing/zero usage contributes no tokens, regardless of chunk count.
+            # An absent sample and a materialized zero sample are both valid.
+            expected = reported if reported is not None else 0
+            assert (value if value is not None else 0) == expected
+            assert stats["tokens"][token_type] == expected
+
+    @pytest.mark.asyncio
+    async def test_stream_and_non_stream_tokens_accumulate(self, prometheus_collector):
+        collector, registry = prometheus_collector
+        for started, succeeded, prompt, completion in (
+            (RoutingEventType.STREAM_STARTED, RoutingEventType.STREAM_SUCCEEDED, 100, 20),
+            (RoutingEventType.REQUEST_STARTED, RoutingEventType.REQUEST_SUCCEEDED, 30, 5),
+            (RoutingEventType.STREAM_STARTED, RoutingEventType.STREAM_SUCCEEDED, 10, 2),
+        ):
+            await collector.handle_event(_event(started))
+            await collector.handle_event(_event(
+                succeeded, prompt_tokens=prompt, completion_tokens=completion,
+            ))
+
+        stats = collector.get_stats()
+        for token_type, expected in (("prompt", 140), ("completion", 27)):
+            assert registry.get_sample_value(
+                "intelli_router_tokens_total",
+                {"model": "gpt-4", "type": token_type},
+            ) == expected
+            assert stats["tokens"][token_type] == expected
+
+    @pytest.mark.asyncio
+    async def test_stream_tokens_are_separated_by_model(self, prometheus_collector):
+        collector, registry = prometheus_collector
+        usages = (("model-a", 100, 20), ("model-b", 30, 5))
+        for model, prompt, completion in usages:
+            await collector.handle_event(_event(RoutingEventType.STREAM_STARTED, model=model))
+            await collector.handle_event(_event(
+                RoutingEventType.STREAM_SUCCEEDED, model=model,
+                prompt_tokens=prompt, completion_tokens=completion,
+            ))
+
+        for model, prompt, completion in usages:
+            for token_type, expected in (("prompt", prompt), ("completion", completion)):
+                assert registry.get_sample_value(
+                    "intelli_router_tokens_total",
+                    {"model": model, "type": token_type},
+                ) == expected
+
+
 class TestPrometheusRegistry:
     """意见12: MetricsCollector 支持自定义 prometheus registry，
     同进程多个 collector 可并存（指标名只由 prefix 决定，全部注册
