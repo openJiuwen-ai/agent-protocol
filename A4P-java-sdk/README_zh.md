@@ -205,7 +205,8 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 - 撤销会阻止预留，但允许对待处理记录执行完成/取消。
 - 超过 `validUntil` 的预留会把 context 标记为 EXPIRED，尽管该次调用失败。待处理记录在 EXPIRED 状态下
   仍可被完成或取消。
-- 完成与取消操作若 `now` 早于该记录的 `reservedAt`，会以 `A4P_INVALID_PARAMETER` 被拒绝；记录保持待处理。
+- 创建执行、完成与取消操作若 `now` 早于上下文的 `activatedTime`，会以 `A4P_TIMESTAMP_TOO_EARLY`（3003）被拒绝。
+- 当 `activatedTime <= now < reservedAt` 时，完成与取消操作会以 `A4P_INVALID_PARAMETER`（1001）被拒绝；记录保持待处理。
 - 当一次完成操作之后不再有待处理记录，且要么达到次数上限、要么剩余金额为 0 时，ACTIVE 意图变为
   CONSUMED。REVOKED 与 EXPIRED 是终态。
 - `executionInfo()` 始终给出 `leftExecutionCount`、`leftAmount`、`periodIndex` 与

@@ -7,6 +7,7 @@ import java.util.List;
 
 public final class IntentExecutionContext {
     private final IntentL3 authorizedIntent;
+    private final long activatedTime;
     private final ShoppingItems resources;
     private final PaymentConstraints constraints;
     private IntentExecutionStatus status = IntentExecutionStatus.ACTIVE;
@@ -17,25 +18,29 @@ public final class IntentExecutionContext {
     record Entry(ExecutionRecord record, Order order) {}
 
     IntentExecutionContext(IntentL3 authorizedIntent, long now) {
-        this(authorizedIntent);
+        this(now, authorizedIntent);
         Accounting.recompute(this, now);
     }
 
     // Restores a persisted context; executionInfo is recomputed for the period it was last computed in.
     IntentExecutionContext(IntentL3 authorizedIntent, IntentExecutionStatus status, List<Entry> ledger,
-                           Long period) {
-        this(authorizedIntent);
+                           Long period, long activatedTime) {
+        this(activatedTime, authorizedIntent);
         this.status = status;
         this.ledger.addAll(ledger);
         this.executionInfo = Accounting.executionInfo(this, period);
     }
 
-    private IntentExecutionContext(IntentL3 authorizedIntent) {
+    private IntentExecutionContext(long activatedTime, IntentL3 authorizedIntent) {
+        this.activatedTime = activatedTime;
         this.authorizedIntent = authorizedIntent;
         StructuredIntent intent = authorizedIntent.intentL2().intentL1().structuredIntent();
         this.resources = PaymentProfile.resources(intent);
         this.constraints = PaymentProfile.constraints(intent);
     }
+
+    /** Activation instant in epoch milliseconds, preserved by the context codec. */
+    public long activatedTime() { return activatedTime; }
 
     public String version() { return A4p.PROTOCOL_VERSION; }
     public String intentId() { return authorizedIntent.intentL2().intentL1().intentId(); }

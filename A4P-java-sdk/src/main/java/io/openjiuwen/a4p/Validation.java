@@ -166,10 +166,14 @@ final class Validation {
         return order;
     }
 
+    static void versions(IntentL2 intent) {
+        version(intent.version());
+        version(intent.intentL1().version());
+    }
+
     static void versions(IntentL3 intent) {
         version(intent.version());
-        version(intent.intentL2().version());
-        version(intent.intentL2().intentL1().version());
+        versions(intent.intentL2());
     }
 
     // A persisted ledger is untrusted: it must be one the execution operations could have produced for the

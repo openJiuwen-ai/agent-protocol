@@ -235,8 +235,10 @@ the SDK, as described below.
 - Revocation blocks reservations but permits pending completion/cancellation.
 - A reservation past `validUntil` marks the context EXPIRED, even though the call fails.
   Pending records can still be completed or canceled in EXPIRED status.
-- Completion and cancellation reject a `now` earlier than the record's `reservedAt` with
-  `A4P_INVALID_PARAMETER`; the record stays pending.
+- Reservation, completion, and cancellation reject a `now` earlier than the context's
+  `activatedTime` with `A4P_TIMESTAMP_TOO_EARLY` (3003).
+- When `activatedTime <= now < reservedAt`, completion and cancellation reject the call
+  with `A4P_INVALID_PARAMETER` (1001). A rejected finalization leaves the record pending.
 - An ACTIVE intent becomes CONSUMED after a completion leaves no pending record and either
   the count cap is reached or the remaining amount is 0. REVOKED and EXPIRED are terminal.
 - `executionInfo()` always declares `leftExecutionCount`, `leftAmount`, `periodIndex` and
