@@ -235,6 +235,79 @@ TEST(HttpCommonTest, ParseHeadersAndBody_BodyExactlyContentLength)
     EXPECT_EQ(consumedBytes, buffer.size());
 }
 
+TEST(HttpCommonTest, ParseSseLine_MultilineData)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: {", event));
+    EXPECT_FALSE(parseSseLine("data:   \"result\": 1", event));
+    EXPECT_FALSE(parseSseLine("data: }", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "{\n  \"result\": 1\n}");
+}
+
+TEST(HttpCommonTest, ParseSseLine_PreservesEmptyDataLines)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data:", event));
+    EXPECT_FALSE(parseSseLine("data: middle", event));
+    EXPECT_FALSE(parseSseLine("data", event));
+    EXPECT_FALSE(parseSseLine("data:", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "\nmiddle\n\n");
+}
+
+TEST(HttpCommonTest, ParseSseLine_RemovesOnlyOneSpaceAfterColon)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data:  leading spaces", event));
+    EXPECT_FALSE(parseSseLine("data:\tleading tab", event));
+    EXPECT_FALSE(parseSseLine("data: trailing spaces  ", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, " leading spaces\n\tleading tab\ntrailing spaces  ");
+}
+
+TEST(HttpCommonTest, ParseSseLine_SingleLineAndEmptyData)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: single line", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "single line");
+
+    event = ServerSentEvent();
+    EXPECT_FALSE(parseSseLine("data:", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_TRUE(event.data.empty());
+}
+
+TEST(HttpCommonTest, ParseSseLine_InterleavedFieldsDoNotDiscardData)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: first", event));
+    EXPECT_FALSE(parseSseLine(": keepalive", event));
+    EXPECT_FALSE(parseSseLine("event: message", event));
+    EXPECT_FALSE(parseSseLine("id: request-1", event));
+    EXPECT_FALSE(parseSseLine("data: second", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "first\nsecond");
+    EXPECT_EQ(event.event, "message");
+    EXPECT_EQ(event.id, "request-1");
+}
+
+TEST(HttpCommonTest, ParseSseLine_ResetSeparatesEvents)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: first", event));
+    EXPECT_FALSE(parseSseLine("data: event", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "first\nevent");
+
+    // The HTTP transport resets the event after invoking its callback.
+    event = ServerSentEvent();
+    EXPECT_FALSE(parseSseLine("data: next", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "next");
+}
+
 TEST(HttpCommonTest, HttpResponse_DefaultConstructor)
 {
     HttpResponse response;

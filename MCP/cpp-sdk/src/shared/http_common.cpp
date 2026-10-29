@@ -159,6 +159,10 @@ bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent)
 {
     // check if end of event
     if (line.empty()) {
+        // Each data field contributes a trailing LF; remove only the final one.
+        if (!sseEvent.data.empty() && sseEvent.data.back() == '\n') {
+            sseEvent.data.pop_back();
+        }
         if (sseEvent.event.empty() && sseEvent.id.empty() && sseEvent.data.empty() && sseEvent.retry == 0) {
             return false;
         }
@@ -180,13 +184,14 @@ bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent)
         if (firstNonSpace != std::string::npos) {
             sseEvent.id = sseEvent.id.substr(firstNonSpace);
         }
-    } else if (line.find("data:") == 0) {
-        sseEvent.data = line.substr(SSE_DATA_PREFIX_LEN);
-        // Trim leading whitespace
-        size_t firstNonSpace = sseEvent.data.find_first_not_of(" \t");
-        if (firstNonSpace != std::string::npos) {
-            sseEvent.data = sseEvent.data.substr(firstNonSpace);
+    } else if (line == "data" || line.find("data:") == 0) {
+        std::string dataValue = line == "data" ? "" : line.substr(SSE_DATA_PREFIX_LEN);
+        // SSE removes at most one ASCII space after the colon, preserving payload whitespace.
+        if (!dataValue.empty() && dataValue.front() == ' ') {
+            dataValue.erase(0, 1);
         }
+        sseEvent.data += dataValue;
+        sseEvent.data.push_back('\n');
     }
 
     return false;
