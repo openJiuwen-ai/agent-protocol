@@ -59,6 +59,12 @@ struct A2AClientJSONRPCError : public std::runtime_error {
     {
     }
 };
+
+// Error Codes
+enum class A2AErrno : int {
+    OK = 0,
+    INVALID_ARG = 1,
+};
 } // namespace A2A
 
 #endif
