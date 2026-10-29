@@ -125,7 +125,7 @@ export default function a4pHttpTest() {
           intentSummary: l1.intentSummary,
           structuredIntent: {
             action: l1.structuredIntent.action,
-            resource: l1.structuredIntent.resource,
+            resources: l1.structuredIntent.resources,
             constraints: l1.structuredIntent.constraints
           },
           timestamp: l1.timestamp

@@ -58,14 +58,14 @@ authorizedIntent
 activatedTime
 executions
 executionInfo
-resource
+resources
 constraints
 singleOrderMaxAmount
 totalMaxAmount
 currency
 validFrom
 validUntil
-maxExecuteCount
+maxExecutionCount
 anchorTime
 periodSeconds
 maxExecutionCountPerPeriod
@@ -81,7 +81,6 @@ cartItems
 orderId
 amount
 executionContent
-execution
 executionId
 periodIndex
 reservedAt

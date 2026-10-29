@@ -71,7 +71,7 @@ export function createTestPaymentConstraintsAround(now: number): PaymentConstrai
     currency: 'CNY',
     validFrom: now - 60000,
     validUntil: now + 3600000,
-    maxExecuteCount: 10,
+    maxExecutionCount: 10,
     anchorTime: now - 60000,
     periodSeconds: 3600,
     maxExecutionCountPerPeriod: 10
@@ -81,7 +81,7 @@ export function createTestPaymentConstraintsAround(now: number): PaymentConstrai
 export function createTestStructuredIntent(now: number): StructuredIntent {
   return {
     action: IntentActionType.AI_PAY,
-    resource: createTestShoppingItems(),
+    resources: createTestShoppingItems(),
     constraints: createTestPaymentConstraintsAround(now)
   };
 }

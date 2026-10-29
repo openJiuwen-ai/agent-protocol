@@ -45,14 +45,16 @@ function raise(err: A4pValidationFailure | null): void {
  * verifiers are expected to report failure through VerificationResult, but
  * a throwing verifier must still surface as an A4pError per the
  * throw-on-failure convention, never as a leaked raw exception. A verifier
- * returning no result at all is treated the same way. The verdict itself
- * is returned as-is, whatever it says.
+ * returning no result at all is treated the same way. A verdict whose
+ * parts agree is returned as-is; a self-contradictory one — `valid` true
+ * with a non-success code, or `valid` false with the success code — is
+ * not a verdict the SDK can trust or relay and is reported the same way.
  * @param verifier - The verifier to invoke
  * @param data - The signed bytes to verify
  * @param signature - The signature information to check
  * @param who - Whose signature is being checked (for the logged detail)
- * @returns The verifier's result
- * @throws A4pError with A4P_VERIFY_FAIL when the verifier throws or returns no result
+ * @returns The verifier's result (present and self-consistent)
+ * @throws A4pError with A4P_VERIFY_FAIL when the verifier throws, returns no result, or returns a contradictory one
  */
 function runVerifier(verifier: SignatureVerifier, data: Uint8Array, signature: SignatureInfo,
                      who: string): VerificationResult {
@@ -67,6 +69,18 @@ function runVerifier(verifier: SignatureVerifier, data: Uint8Array, signature: S
   // reading the absent result.
   if (!result) {
     a4pThrow(A4pErrorCode.A4P_VERIFY_FAIL, who + ' signature verifier returned no result');
+  }
+  // The verdict's parts must agree: code 0 is success, anything else a
+  // failure, so a valid verdict carrying a failure code — or an invalid
+  // one carrying the success code — is self-contradictory. Such a result
+  // is a broken verifier's output, not a verdict to trust or relay, so it
+  // is reported as a verification failure like the ones above.
+  const contradictory: boolean = (result.valid && result.code !== A4pErrorCode.A4P_SUCCESS) ||
+    (!result.valid && result.code === A4pErrorCode.A4P_SUCCESS);
+  if (contradictory) {
+    a4pThrow(A4pErrorCode.A4P_VERIFY_FAIL,
+      who + ' signature verifier returned a contradictory result: valid is ' + result.valid +
+      ' but code is ' + result.code);
   }
   return result;
 }
@@ -143,10 +157,11 @@ export namespace A4p {
    * `now` is the signing instant (epoch milliseconds) recorded in the
    * intent's `timestamp` field and thereby covered by the signature. Unlike
    * the evaluation instant of the execution APIs it drives no decision —
-   * validity windows are judged at reservation time, not at signing time.
-   * Defaults to the system clock; pass a fixed value in tests to make the
-   * signed bytes reproducible. A provided `now` must be a non-negative
-   * safe integer.
+   * creation applies no validity-window check; the window's upper bound is
+   * first judged at L3 signing (see signIntent) and the full window at
+   * reservation time. Defaults to the system clock; pass a fixed value in
+   * tests to make the signed bytes reproducible. A provided `now` must be a
+   * non-negative safe integer.
    * @param { CreateIntentRequest } request - The create-intent request containing intent details and constraints.
    * @param { Signer } agentSigner - The signer used to produce the agent's L1 signature.
    * @param { number } now - Optional signing instant in epoch milliseconds; defaults to Date.now().
@@ -262,6 +277,10 @@ export namespace A4p {
    * authorization would violate the chain's monotonic timestamps, so it is
    * rejected here instead of producing an L3 that activateIntent (and every
    * other receiver validating the chain) would refuse.
+   * It must not be later than the intent's `validUntil`: the user cannot
+   * authorize an intent whose validity window has already closed — every
+   * execution against it would be refused as expired — so a post-validUntil
+   * signing instant is rejected here instead of producing a dead-end L3.
    * The embedded L2 and the signing environment are deep copies — the
    * caller's objects are never aliased into the returned intent.
    * @param { IntentL2 } intentL2 - The Level 2 intent to verify and sign.
@@ -274,6 +293,7 @@ export namespace A4p {
    * @throws { BusinessError } 1002 - Unsupported version.
    * @throws { BusinessError } 2001 - Signing failed.
    * @throws { BusinessError } 2002 - Verification failed.
+   * @throws { BusinessError } 3002 - Timestamp expired.
    * @throws { BusinessError } 5001 - Serialization failed.
    */
   export function signIntent(intentL2: IntentL2, serverVerifier: SignatureVerifier, signingEnv: SigningEnv,
@@ -296,6 +316,10 @@ export namespace A4p {
         'IntentL1 version ' + intentL2.intentL1.version + ' is not supported');
     }
 
+    // Check order is part of the contract: structure and versions are
+    // judged before any clock verdict, so a malformed or mixed-version
+    // chain is reported as such even when its validity window has also
+    // lapsed.
     // The user's signing stamp must not predate the issuance it authorizes
     // (see issueIntent): reject the skewed clock here instead of signing a
     // dead-end L3 that activation would always refuse.
@@ -303,6 +327,15 @@ export namespace A4p {
     if (timestamp < intentL2.timestamp) {
       a4pThrow(A4pErrorCode.A4P_INVALID_PARAMETER,
         'Signing timestamp ' + timestamp + ' is earlier than intentL2.timestamp ' + intentL2.timestamp);
+    }
+    // Nor may the stamp fall past the validity window being authorized:
+    // an L3 signed after validUntil could never execute (every reservation
+    // would be refused as expired), so the closed window is reported here
+    // instead of at activation.
+    const constraints: PaymentConstraints = intentL2.intentL1.structuredIntent.constraints;
+    if (timestamp > constraints.validUntil) {
+      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_EXPIRED,
+        'Signing timestamp ' + timestamp + ' is after validUntil ' + constraints.validUntil);
     }
 
     const l2Data: Uint8Array = toSignableBytes(intentL2);
@@ -362,7 +395,12 @@ export namespace A4p {
    * earlier than the L3's own `timestamp` — the chain's
    * monotonic-timestamp rule (see issueIntent) applied to the activation
    * step: no context can be created for an authorization that did not
-   * exist yet at that instant. Defaults
+   * exist yet at that instant. It must not be later than the intent's
+   * `validUntil`: an intent whose validity window has already closed can
+   * no longer be activated — every execution against it would be refused
+   * as expired — so no context is created for it (an intent not yet valid,
+   * in contrast, is activated and waits for validFrom).
+   * Defaults
    * to the system clock; pass the same value intended for the execution
    * APIs to keep the activation snapshot and the first reservation in the
    * same period. A provided `now` must be a non-negative safe integer.
@@ -373,6 +411,7 @@ export namespace A4p {
    * @throws { BusinessError } 1001 - Invalid parameter.
    * @throws { BusinessError } 1002 - Unsupported version.
    * @throws { BusinessError } 2002 - Verification failed.
+   * @throws { BusinessError } 3002 - Timestamp expired.
    * @throws { BusinessError } 5001 - Serialization failed.
    */
   export function activateIntent(intentL3: IntentL3, userVerifier: SignatureVerifier,
@@ -383,6 +422,10 @@ export namespace A4p {
     raise(validateIntentL3(intentL3));
     raise(checkChainVersions(intentL3));
 
+    // Check order is part of the contract: structure and versions are
+    // judged before any clock verdict, so a malformed or mixed-version
+    // chain is reported as such even when its validity window has also
+    // lapsed.
     // The activation instant must not predate the authorization it
     // activates (the monotonic rule issueIntent/signIntent enforce for
     // their stamps): a context created before the L3's signing timestamp
@@ -394,6 +437,17 @@ export namespace A4p {
       a4pThrow(A4pErrorCode.A4P_INVALID_PARAMETER,
         'Activation timestamp ' + nowMs + ' is earlier than intentL3.timestamp ' + intentL3.timestamp);
     }
+    const constraints: PaymentConstraints = intentL3.intentL2.intentL1.structuredIntent.constraints;
+    // Nor may it fall past the validity window: a context created after
+    // validUntil could never reserve (every createExecution would be
+    // refused as expired), so the closed window is reported instead of
+    // handing out a dead-end context. An intent not yet valid is
+    // activated and waits for validFrom — reservations, not activation,
+    // judge the window's opening.
+    if (nowMs > constraints.validUntil) {
+      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_EXPIRED,
+        'Activation timestamp ' + nowMs + ' is after validUntil ' + constraints.validUntil);
+    }
 
     const l3Data: Uint8Array = toSignableBytes(intentL3);
     // validateIntentL3 guarantees sign is present (validateSignatureInfo
@@ -401,7 +455,6 @@ export namespace A4p {
     verifyOrThrow(userVerifier, l3Data, intentL3.sign as SignatureInfo, 'User');
 
     const intentId: string = intentL3.intentL2.intentL1.intentId;
-    const constraints: PaymentConstraints = intentL3.intentL2.intentL1.structuredIntent.constraints;
 
     const authorizedIntent: IntentL3 = deepFreeze(deepClone(intentL3));
 
@@ -427,19 +480,22 @@ export namespace A4p {
    * activateIntent. See issueIntent for the detached
    * `alg`/`keyIdentifier` verification caveat.
    *
-   * The L3 is only the carrier here: the sole L3-level check is that it
-   * contains the L2 — the L3's own `sign`, `signingEnv`, `timestamp`, and
-   * `version` are neither verified nor required. The embedded L2 (with its
-   * L1) is structurally validated and version-checked before verification,
-   * and the signature is verified over the embedded L2's own bytes, so a
-   * tampered L2 carrying a signature over different bytes must fail.
+   * The L3 is structurally validated as a whole before verification —
+   * its own `sign`, `signingEnv`, `timestamp`, and `version` must be
+   * present and well-formed, exactly like any chain the SDK accepts —
+   * but its signature value is not verified here (that is activateIntent's
+   * job) and its version is not compared against the protocol version:
+   * the carrier's version plays no role in the verdict. The signature is
+   * verified over the embedded L2's own bytes, so a tampered L2 carrying
+   * a signature over different bytes must fail.
    *
    * Unlike the lifecycle APIs this is a pure query: the verifier's verdict
    * is the answer, so an invalid signature is returned as a
    * VerificationResult with `valid: false` (carrying the verifier's own
    * `code`/`message`) instead of being thrown. Structural problems
-   * (malformed L2 chain, unsupported L2/L1 version, serialization failure)
-   * and a throwing verifier still throw.
+   * (malformed L3/L2 chain, unsupported L2/L1 version, serialization
+   * failure), a throwing verifier, and a self-contradictory verdict
+   * (see runVerifier) still throw.
    * @param { IntentL3 } intentL3 - The Level 3 intent carrying the Level 2 intent to verify.
    * @param { SignatureVerifier } serverVerifier - The verifier used to check the server's L2 signature.
    * @returns { VerificationResult } The verifier's result, including invalid (`valid: false`) verdicts.
@@ -449,15 +505,16 @@ export namespace A4p {
    * @throws { BusinessError } 5001 - Serialization failed.
    */
   export function verifyIntentAuthenticity(intentL3: IntentL3, serverVerifier: SignatureVerifier): VerificationResult {
-    // The L3 is only the carrier here: its own (user) signature is
-    // activateIntent's to verify, not this query's — the sole L3-level
-    // requirement is that it contains the L2 whose signature is checked.
-    if (!intentL3 || !intentL3.intentL2) {
-      a4pThrow(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3 must contain the intentL2 to verify');
-    }
+    // The L3 is structurally validated as a whole: the carrier must be a
+    // well-formed chain (its own sign, signingEnv, timestamp, version
+    // included) exactly like the one activateIntent freezes. Its own
+    // (user) signature remains activateIntent's to verify, not this
+    // query's — presence and shape are checked here, the value is not.
+    // validateIntentL3 also covers the embedded L2 (with its L1), so no
+    // separate L2 validation is needed.
+    raise(validateIntentL3(intentL3));
 
     const intentL2: IntentL2 = intentL3.intentL2;
-    raise(validateIntentL2(intentL2));
     // The verified chain is the L2 with its embedded L1: a mixed-version
     // chain is signature-valid but semantically unsupported. The carrier
     // L3's version plays no role in the verdict.
@@ -470,24 +527,51 @@ export namespace A4p {
     }
 
     const l2Data: Uint8Array = toSignableBytes(intentL2);
-    // validateIntentL2 guarantees sign is present (validateSignatureInfo
-    // rejects a missing or blank one); the cast only satisfies the compiler.
+    // validateIntentL3 guarantees the embedded L2's sign is present
+    // (validateSignatureInfo rejects a missing or blank one); the cast
+    // only satisfies the compiler.
     return runVerifier(serverVerifier, l2Data, intentL2.sign as SignatureInfo, 'Server');
   }
 
   /**
    * Revokes the intent: no new executions may be reserved; pending ones
    * can still complete or cancel.
+   * `now` is the revocation instant in epoch milliseconds. It is validated
+   * but never recorded — the status flip carries no timestamp, so unlike
+   * the completion/cancellation floors this one guards no persisted
+   * field. Its reason is the protocol's own: the revocable object is the
+   * activated context, which exists only from `activatedTime` on, so an
+   * instant before it is refused (equality allowed). Beyond that floor
+   * the clock plays no role — the intent's validity window is
+   * deliberately not judged: revocation is an administrative kill-switch,
+   * and an intent whose window already closed is revoked rather than
+   * reported as expired. Defaults to the system clock. A provided `now`
+   * must be a non-negative safe integer.
    * @param { IntentExecutionContext } context - The execution context to revoke.
+   * @param { number } now - Optional revocation instant in epoch milliseconds; defaults to Date.now().
    * @returns { IntentExecutionContext } The updated execution context with status set to REVOKED.
    * @throws { BusinessError } 1001 - Invalid parameter.
    * @throws { BusinessError } 3001 - Invalid status.
+   * @throws { BusinessError } 3003 - Timestamp too early.
    */
-  export function revokeIntent(context: IntentExecutionContext): IntentExecutionContext {
+  export function revokeIntent(context: IntentExecutionContext, now?: number): IntentExecutionContext {
     raise(validateExecutionContext(context));
+    if (now !== undefined) {
+      raise(validateNow(now));
+    }
     if (context.status !== IntentExecutionStatus.ACTIVE) {
       a4pThrow(A4pErrorCode.A4P_INVALID_STATUS,
         'revokeIntent requires an active intent, current status: ' + context.status);
+    }
+
+    const nowMs: number = now !== undefined ? now : Date.now();
+    // The revocation instant is floored by the context's creation: the
+    // revocable object exists only from activatedTime on. Unlike the
+    // completion/cancellation floors this guards no persisted field —
+    // the status flip carries no timestamp. Equality is allowed.
+    if (nowMs < context.activatedTime) {
+      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
+        'Revocation timestamp ' + nowMs + ' is earlier than activatedTime ' + context.activatedTime);
     }
 
     context.status = IntentExecutionStatus.REVOKED;
@@ -502,10 +586,10 @@ export namespace A4p {
    * @returns A validation failure if the cart exceeds scope, or null if within scope
    */
   function enforceWhitelistScope(context: IntentExecutionContext, cartItems: CartItem[]): A4pValidationFailure | null {
-    const resource: ShoppingItems = context.authorizedIntent.intentL2.intentL1.structuredIntent.resource;
+    const resources: ShoppingItems = context.authorizedIntent.intentL2.intentL1.structuredIntent.resources;
     for (let i = 0; i < cartItems.length; i++) {
       const item = cartItems[i];
-      const whitelisted: boolean = resource.itemsWhiteList.some(
+      const whitelisted: boolean = resources.itemsWhiteList.some(
         (group: ItemWhiteList) => group.whiteList.some((p: Product) => productMatches(p, item.product)));
       if (!whitelisted) {
         return new A4pValidationFailure(A4pErrorCode.A4P_PRODUCT_NOT_AUTHORIZED,
@@ -538,7 +622,7 @@ export namespace A4p {
    */
   function enforceTemplateMatch(context: IntentExecutionContext, cartItems: CartItem[]): A4pValidationFailure | null {
     const groups: ItemWhiteList[] =
-      context.authorizedIntent.intentL2.intentL1.structuredIntent.resource.itemsWhiteList;
+      context.authorizedIntent.intentL2.intentL1.structuredIntent.resources.itemsWhiteList;
     if (cartItems.length !== groups.length) {
       return new A4pValidationFailure(A4pErrorCode.A4P_CART_MISMATCH,
         'Cart has ' + cartItems.length + ' items but the authorized resource has ' + groups.length +
@@ -584,11 +668,13 @@ export namespace A4p {
   /**
    * Reserves an execution against the context: the order is validated
    * against the frozen authorization snapshot (scope, order template,
-   * amounts, caps, period), appended to the ledger as PENDING, and the
-   * quota figures are re-derived from the ledger. The caller's execution
-   * object is never mutated — the id is resolved locally (generated when
-   * absent) and lands on the ledger's own deep copy only after every
-   * check has passed.
+   * amounts, caps, period), appended to the ledger as a flat PENDING
+   * record (executionId, action, executionContent), and the quota
+   * figures are re-derived from the ledger. The caller's execution
+   * object is neither mutated nor aliased — the id is resolved locally
+   * (generated when absent) and stored as the record's executionId, and
+   * the action plus a deep copy of the executionContent land on the
+   * record only after every check has passed.
    *
    * `orderId` is the payment idempotency key: a reservation whose orderId
    * is already present in the context's ledger — canceled records included
@@ -648,9 +734,10 @@ export namespace A4p {
       raise(validateNow(now));
     }
     raise(validateExecution(execution));
-    // The caller's object is never mutated: the id is resolved locally
-    // (generated when absent) and assigned to the ledger's own deep copy
-    // only after every check has passed.
+    // The caller's object is never mutated or aliased: the id is resolved
+    // locally (generated when absent) and stored as the record's
+    // executionId; the content lands as the record's own deep copy only
+    // after every check has passed.
     const executionId: string = execution.id !== undefined ? execution.id : util.generateRandomUUID();
 
     // Checks run in a fixed order — request structure (above), parameter
@@ -704,19 +791,19 @@ export namespace A4p {
     // most once per context — canceled records included, so a canceled
     // reservation cannot be re-reserved under a fresh execution id.
     const duplicateOrder: boolean = context.executions.some(
-      (r: ExecutionRecord) => r.execution.executionContent.orderId === execution.executionContent.orderId);
+      (r: ExecutionRecord) => r.executionContent.orderId === execution.executionContent.orderId);
     if (duplicateOrder) {
       a4pThrow(A4pErrorCode.A4P_DUPLICATE_ID,
         'Order ID already exists: ' + execution.executionContent.orderId);
     }
     // Optional caps: an absent cap means no limit of that kind, so the
     // check is skipped entirely.
-    const countCap: number | undefined = constraints.maxExecuteCount;
+    const countCap: number | undefined = constraints.maxExecutionCount;
     if (countCap !== undefined) {
       const executionCount: number = computeExecutionCount(context.executions);
       if (executionCount >= countCap) {
         a4pThrow(A4pErrorCode.A4P_EXECUTION_COUNT_EXCEEDED,
-          'Execution count ' + executionCount + ' reached maxExecuteCount ' + countCap);
+          'Execution count ' + executionCount + ' reached maxExecutionCount ' + countCap);
       }
     }
 
@@ -752,13 +839,17 @@ export namespace A4p {
       }
     }
 
-    const storedExecution: Execution = deepClone(execution);
-    storedExecution.id = executionId;
+    // The caller's object is never mutated and never aliased: the id is
+    // resolved locally (generated when absent) and stored as the record's
+    // executionId, while the action and a deep copy of the executionContent
+    // land on the ledger's own flat record only after every check has
+    // passed.
     const record: ExecutionRecord = {
       executionId: executionId,
       status: ExecutionStatus.PENDING,
+      action: execution.action,
+      executionContent: deepClone(execution.executionContent),
       reservedAt: nowMs,
-      execution: storedExecution,
     };
     if (currentPeriodIndex !== undefined) {
       record.periodIndex = currentPeriodIndex;
@@ -783,13 +874,17 @@ export namespace A4p {
    * completion books no quota (a PENDING record already counts), but the
    * evaluation instant moves, so the period figures (periodIndex,
    * leftPeriodExecutionCount) are updated to the period containing the
-   * completion instant.
+   * completion instant. It must not be earlier than the record's
+   * `reservedAt`: a finalization predating its own reservation would
+   * rewrite history (the ledger's timestamps are monotonic like the
+   * chain's), so such a clock is rejected instead of persisted.
    * @param { IntentExecutionContext } context - The execution context containing the pending execution.
    * @param { string } executionId - The ID of the execution to mark completed.
    * @param { number } now - Optional completion timestamp in epoch milliseconds; defaults to Date.now().
    * @returns { IntentExecutionContext } The updated execution context.
    * @throws { BusinessError } 1001 - Invalid parameter.
    * @throws { BusinessError } 3001 - Invalid status.
+   * @throws { BusinessError } 3003 - Timestamp too early.
    */
   export function completeExecution(context: IntentExecutionContext, executionId: string,
                                     now?: number): IntentExecutionContext {
@@ -813,6 +908,14 @@ export namespace A4p {
     }
 
     const nowMs: number = now !== undefined ? now : Date.now();
+    // Record timestamps are monotonic like the chain's: a completion can
+    // never predate the reservation it finalizes. A clock stepped back past
+    // reservedAt is refused here rather than persisted as a record that
+    // restore-side validation would reject as corrupted.
+    if (nowMs < record.reservedAt) {
+      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
+        'Completion timestamp ' + nowMs + ' is earlier than reservedAt ' + record.reservedAt);
+    }
     record.status = ExecutionStatus.COMPLETED;
     record.completedAt = nowMs;
 
@@ -829,14 +932,14 @@ export namespace A4p {
     // settled ledger: the count cap is reached or the total amount budget
     // is exhausted, and every record is finalized (flipping while a record
     // is still PENDING would strand it — finalize APIs require a
-    // non-CONSUMED status). Without maxExecuteCount the count trigger is
+    // non-CONSUMED status). Without maxExecutionCount the count trigger is
     // absent but the amount trigger remains (totalMaxAmount is always
     // present). A REVOKED or EXPIRED context keeps its status —
     // revocation/expiry is a fact about the intent's history, not erased
     // by the ledger draining.
     const constraints: PaymentConstraints =
       context.authorizedIntent.intentL2.intentL1.structuredIntent.constraints;
-    const countCap: number | undefined = constraints.maxExecuteCount;
+    const countCap: number | undefined = constraints.maxExecutionCount;
     const countReached: boolean = countCap !== undefined &&
       computeExecutionCount(context.executions) >= countCap;
     const amountExhausted: boolean = computeAccumulatedAmount(context.executions) >= constraints.totalMaxAmount;
@@ -857,12 +960,17 @@ export namespace A4p {
    * `now` is the evaluation instant in epoch milliseconds (see createExecution).
    * Allowed when the context is ACTIVE, REVOKED, or EXPIRED (so pending
    * executions reserved before revocation or expiry can still be finalized).
+   * `now` must not be earlier than the record's `reservedAt`: a
+   * finalization predating its own reservation would rewrite history (the
+   * ledger's timestamps are monotonic like the chain's), so such a clock is
+   * rejected instead of persisted.
    * @param { IntentExecutionContext } context - The execution context containing the pending execution.
    * @param { string } executionId - The ID of the execution to cancel.
    * @param { number } now - Optional cancellation timestamp in epoch milliseconds; defaults to Date.now().
    * @returns { IntentExecutionContext } The updated execution context with quota released.
    * @throws { BusinessError } 1001 - Invalid parameter.
    * @throws { BusinessError } 3001 - Invalid status.
+   * @throws { BusinessError } 3003 - Timestamp too early.
    */
   export function cancelExecution(context: IntentExecutionContext, executionId: string,
                                   now?: number): IntentExecutionContext {
@@ -885,8 +993,14 @@ export namespace A4p {
       a4pThrow(A4pErrorCode.A4P_INVALID_STATUS, 'Execution is not pending, current status: ' + record.status);
     }
 
-    record.status = ExecutionStatus.CANCELED;
     const nowMs: number = now !== undefined ? now : Date.now();
+    // Same monotonic rule as completeExecution: a cancellation predating
+    // its own reservation is a rewound clock, not a fact to persist.
+    if (nowMs < record.reservedAt) {
+      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
+        'Cancellation timestamp ' + nowMs + ' is earlier than reservedAt ' + record.reservedAt);
+    }
+    record.status = ExecutionStatus.CANCELED;
     record.canceledAt = nowMs;
 
     // Quota release happens by re-deriving from the ledger — the canceled

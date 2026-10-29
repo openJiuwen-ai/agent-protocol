@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from '@ohos/hypium';
 import {
-  A4p, A4pErrorCode,
+  A4p, A4pCodec, A4pErrorCode,
   IntentL1, IntentL2, IntentL3,
   IntentExecutionContext, IntentExecutionStatus, ExecutionStatus, Execution,
   CreateIntentRequest, PaymentConstraints, Product, AlgorithmType, IntentActionType,
@@ -12,7 +12,8 @@ import {
 } from '../../../../Index';
 import { A4pError } from '../../../main/ets/models/common';
 import {
-  MockSigner, MockVerifier, FailingSigner, FailingVerifier, NoResultVerifier, NoResultSigner, BlankSignatureSigner
+  MockSigner, MockVerifier, FailingSigner, FailingVerifier, NoResultVerifier, NoResultSigner, BlankSignatureSigner,
+  ContradictoryVerifier
 } from './mock/MockSigner';
 import {
   createTestCreateIntentRequest,
@@ -28,7 +29,11 @@ import {
 
 // Deterministic evaluation instant used by execution-period tests:
 // constraints built with createTestCreateIntentRequestAround(FIXED_NOW)
-// stay valid there.
+// stay valid there. Every signIntent/activateIntent call on a chain
+// anchored here must inject the clock (FIXED_NOW or a later in-window
+// instant): the real wall clock is years past the anchored validUntil,
+// and the signing/activation expiry gate would fire before the checks
+// such tests assert.
 const FIXED_NOW: number = 1730000000000;
 
 /**
@@ -119,7 +124,7 @@ function createRequestMissingPeriodField(missing: string): CreateIntentRequest {
     currency: base.currency,
     validFrom: base.validFrom,
     validUntil: base.validUntil,
-    maxExecuteCount: base.maxExecuteCount
+    maxExecutionCount: base.maxExecutionCount
   };
   if (missing !== 'anchorTime') {
     constraints.anchorTime = base.anchorTime;
@@ -221,7 +226,7 @@ export default function a4pTest() {
 
       it('createIntent_fails_whenMaxExecuteCountIsZero', 0, () => {
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.constraints.maxExecuteCount = 0;
+        request.structuredIntent.constraints.maxExecutionCount = 0;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.createIntent(request, new MockSigner());
@@ -276,7 +281,7 @@ export default function a4pTest() {
 
       it('createIntent_fails_whenMaxExecuteCountIsNegative', 0, () => {
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.constraints.maxExecuteCount = -5;
+        request.structuredIntent.constraints.maxExecutionCount = -5;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.createIntent(request, new MockSigner());
@@ -285,7 +290,7 @@ export default function a4pTest() {
 
       it('createIntent_fails_whenMaxExecuteCountIsDecimal', 0, () => {
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.constraints.maxExecuteCount = 1.5;
+        request.structuredIntent.constraints.maxExecutionCount = 1.5;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.createIntent(request, new MockSigner());
@@ -357,7 +362,7 @@ export default function a4pTest() {
 
       it('createIntent_fails_whenWhiteListGroupIsEmpty', 0, () => {
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: []
         };
 
@@ -368,7 +373,7 @@ export default function a4pTest() {
 
       it('createIntent_fails_whenGroupWhiteListIsEmpty', 0, () => {
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [],
             quantity: 1
@@ -382,7 +387,7 @@ export default function a4pTest() {
 
       it('createIntent_fails_whenGroupQuantityIsZero', 0, () => {
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [{ seller: { id: '' }, spusku: { spuId: '', skuId: '' } }],
             quantity: 0
@@ -397,7 +402,7 @@ export default function a4pTest() {
       it('createIntent_fails_whenGroupProductSellerIsMissing', 0, () => {
         const request = createTestCreateIntentRequest();
         const product: Product = JSON.parse('{"spusku":{}}') as Product;
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [product],
             quantity: 1
@@ -413,7 +418,7 @@ export default function a4pTest() {
         // seller.id is part of the whitelist matching key: whitespace-only
         // ids are rejected like empty ones.
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [{ seller: { id: '   ' }, spusku: { spuId: 'spu-001', skuId: 'sku-001' } }],
             quantity: 1
@@ -429,7 +434,7 @@ export default function a4pTest() {
         // A product with neither spuId nor skuId carries no variant
         // identity and could match whitelist entries vacuously.
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [{ seller: { id: 'seller-001' }, spusku: {} }],
             quantity: 1
@@ -445,7 +450,7 @@ export default function a4pTest() {
         // A provided id must be non-blank: a blank spuId alongside a real
         // skuId is still a malformed product.
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [{ seller: { id: 'seller-001' }, spusku: { spuId: '   ', skuId: 'sku-001' } }],
             quantity: 1
@@ -461,7 +466,7 @@ export default function a4pTest() {
         // At least one of spuId/skuId is enough: a sku-only product is a
         // valid whitelist entry.
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [{ seller: { id: 'seller-001' }, spusku: { skuId: 'sku-001' } }],
             quantity: 1
@@ -477,7 +482,7 @@ export default function a4pTest() {
         // A product may appear at most once per group: duplicates would
         // make the group's OR semantics ambiguous.
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [{
             whiteList: [
               { seller: { id: 'seller-001' }, spusku: { spuId: 'spu-001', skuId: 'sku-001' } },
@@ -497,7 +502,7 @@ export default function a4pTest() {
         // correspondence of createExecution relies on it), so the same
         // product may not be whitelisted by two groups.
         const request = createTestCreateIntentRequest();
-        request.structuredIntent.resource = {
+        request.structuredIntent.resources = {
           itemsWhiteList: [
             {
               whiteList: [{ seller: { id: 'seller-001' }, spusku: { spuId: 'spu-001', skuId: 'sku-001' } }],
@@ -985,6 +990,12 @@ export default function a4pTest() {
         expect(l3.signingEnv !== undefined).assertTrue();
         expect(l3.sign !== undefined).assertTrue();
         expect(l3.sign?.sign.indexOf('.')).assertEqual(-1);
+        // The L3 carries the very L2 that was signed: same intent (the id
+        // lives on the L1) and an identical canonical wire form — the
+        // embedded L2 is a deep clone, so its identities, timestamp,
+        // embedded L1, and the server's sign must all match the input.
+        expect(l3.intentL2.intentL1.intentId).assertEqual(l2.intentL1.intentId);
+        expect(A4pCodec.serializeIntentL2(l3.intentL2)).assertEqual(A4pCodec.serializeIntentL2(l2));
       });
 
       it('signIntent_usesInjectedClock_forTimestamp', 0, () => {
@@ -1016,6 +1027,28 @@ export default function a4pTest() {
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
             new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+        });
+      });
+
+      it('signIntent_fails_whenNowAfterValidUntil', 0, () => {
+        // The user's signing stamp must also not fall past the validity
+        // window being authorized: an L3 signed after validUntil could
+        // never execute (every reservation would be refused as expired),
+        // so the closed window is reported at signing time. Equality is
+        // allowed — validUntil itself is inside the window.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validUntil = FIXED_NOW;
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+        expect(l3.intentL2.intentL1.intentId).assertEqual(l2.intentL1.intentId);
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
+          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+            new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW + 1);
         });
       });
 
@@ -1111,7 +1144,7 @@ export default function a4pTest() {
         l2.timestamp = FIXED_NOW - 1;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(), new MockSigner());
+          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(), new MockSigner(), FIXED_NOW);
         });
       });
 
@@ -1125,7 +1158,7 @@ export default function a4pTest() {
 
         expectThrows(A4pErrorCode.A4P_UNSUPPORTED_VERSION, () => {
           A4p.signIntent(lifecycle.l2, new MockVerifier(),
-            createTestSigningEnv(), new MockSigner(AlgorithmType.RSA3072, 'user-key-001'));
+            createTestSigningEnv(), new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
         });
       });
 
@@ -1181,9 +1214,12 @@ export default function a4pTest() {
 
     describe('activateIntent', () => {
       it('activateIntent_success', 0, () => {
+        // The clock is injected (not defaulted): the request is anchored on
+        // the fixed past instant, and the wall clock — years later — now
+        // falls past its validUntil, which activation refuses.
         const lifecycle = createFullLifecycle();
 
-        const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier());
+        const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
 
         expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
         expect(ctx.intentId).assertEqual('test-intent-001');
@@ -1215,7 +1251,7 @@ export default function a4pTest() {
         const lifecycle = createFullLifecycle();
 
         expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier(false));
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(false), FIXED_NOW);
         });
       });
 
@@ -1225,7 +1261,19 @@ export default function a4pTest() {
         const lifecycle = createFullLifecycle();
 
         expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
-          A4p.activateIntent(lifecycle.l3, new NoResultVerifier());
+          A4p.activateIntent(lifecycle.l3, new NoResultVerifier(), FIXED_NOW);
+        });
+      });
+
+      it('activateIntent_fails_whenVerifierResultContradictory', 0, () => {
+        // The lifecycle path goes through the same consistency guard as the
+        // query path (runVerifier): a "valid" verdict carrying a failure
+        // code must not activate an intent — verifyOrThrow would have
+        // endorsed it on the strength of `valid` alone.
+        const lifecycle = createFullLifecycle();
+
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.activateIntent(lifecycle.l3, new ContradictoryVerifier(true), FIXED_NOW);
         });
       });
 
@@ -1234,7 +1282,7 @@ export default function a4pTest() {
         lifecycle.l3.sign = undefined;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier());
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
         });
       });
 
@@ -1247,7 +1295,7 @@ export default function a4pTest() {
         lifecycle.l3.intentL2.intentL1.structuredIntent.constraints.totalMaxAmount = 0;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier());
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
         });
       });
 
@@ -1262,7 +1310,7 @@ export default function a4pTest() {
         lifecycle.l3.timestamp = lifecycle.l3.intentL2.timestamp - 1;
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier());
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
         });
       });
 
@@ -1291,6 +1339,23 @@ export default function a4pTest() {
         expect(ctx.intentId).assertEqual('test-intent-001');
       });
 
+      it('activateIntent_fails_whenNowAfterValidUntil', 0, () => {
+        // A context created past validUntil could never reserve (every
+        // createExecution would be refused as expired), so the closed
+        // window is reported instead of handing out a dead-end context.
+        // Equality is allowed — validUntil itself is inside the window.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validUntil = FIXED_NOW;
+        const lifecycle = createFullLifecycle(request, FIXED_NOW);
+
+        const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
+        expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW + 1);
+        });
+      });
+
       it('activateIntent_recordsActivatedTime', 0, () => {
         // The activation instant is recorded as the context's
         // activatedTime — the floor createExecution judges reservations
@@ -1307,7 +1372,7 @@ export default function a4pTest() {
         lifecycle.l3.version = '9.9';
 
         expectThrows(A4pErrorCode.A4P_UNSUPPORTED_VERSION, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier());
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
         });
       });
 
@@ -1316,7 +1381,7 @@ export default function a4pTest() {
         lifecycle.l3.intentL2.version = '9.9';
 
         expectThrows(A4pErrorCode.A4P_UNSUPPORTED_VERSION, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier());
+          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
         });
       });
 
@@ -1329,7 +1394,7 @@ export default function a4pTest() {
         let threw: boolean = false;
         try {
           lifecycle.ctx.authorizedIntent.intentL2.intentL1.structuredIntent.constraints
-            .maxExecuteCount = 999;
+            .maxExecutionCount = 999;
         } catch (e) {
           threw = true;
         }
@@ -1380,6 +1445,21 @@ export default function a4pTest() {
         });
       });
 
+      it('verifyIntentAuthenticity_throws_whenVerifierResultContradictory', 0, () => {
+        // A verdict whose parts disagree — valid with a failure code, or
+        // invalid with the success code — is a broken verifier's output,
+        // not a verdict to return: it surfaces as A4P_VERIFY_FAIL on the
+        // query path too, never as a trusted or relayed result.
+        const lifecycle = createFullLifecycle();
+
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.verifyIntentAuthenticity(lifecycle.l3, new ContradictoryVerifier(true));
+        });
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.verifyIntentAuthenticity(lifecycle.l3, new ContradictoryVerifier(false));
+        });
+      });
+
       it('verifyIntentAuthenticity_returnsInvalidResult_whenL2ContentTampered', 0, () => {
         const lifecycle = createFullLifecycle();
 
@@ -1412,31 +1492,53 @@ export default function a4pTest() {
         expect(result.valid).assertFalse();
       });
 
-      it('verifyIntentAuthenticity_succeeds_whenIntentL3HasNoSignature', 0, () => {
-        // The L3 is only the carrier: its own (user) signature is
-        // activateIntent's to verify, not this query's — an unsigned L3
-        // still carries a verifiable L2.
+      it('verifyIntentAuthenticity_fails_whenIntentL3HasNoSignature', 0, () => {
+        // The L3 is structurally validated as a whole: its own (user)
+        // signature must be present and well-formed even though its value
+        // is activateIntent's to verify, not this query's.
         const lifecycle = createFullLifecycle();
         lifecycle.l3.sign = undefined;
 
-        const result: VerificationResult =
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.verifyIntentAuthenticity(lifecycle.l3, new MockVerifier());
-
-        expect(result.valid).assertTrue();
+        });
       });
 
-      it('verifyIntentAuthenticity_succeeds_whenL3CarrierFieldsTampered', 0, () => {
-        // Carrier-level noise — a tampered L3 signature, a foreign L3
-        // version, a regressive L3 timestamp, a missing signingEnv — must
-        // not touch the verdict: the query is about the embedded L2.
+      it('verifyIntentAuthenticity_fails_whenL3CarrierFieldsInvalid', 0, () => {
+        // The carrier must be structurally sound: a negative or regressive
+        // timestamp and a missing signingEnv each fail the structural
+        // check before the L2's signature is verified, independent of the
+        // verifier's verdict.
+        const negativeTs = createFullLifecycle();
+        negativeTs.l3.timestamp = -1;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.verifyIntentAuthenticity(negativeTs.l3, new MockVerifier());
+        });
+
+        const regressiveTs = createFullLifecycle();
+        regressiveTs.l3.timestamp = regressiveTs.l3.intentL2.timestamp - 1;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.verifyIntentAuthenticity(regressiveTs.l3, new MockVerifier());
+        });
+
+        const noEnv = createFullLifecycle();
+        noEnv.l3.signingEnv = JSON.parse('null') as SigningEnv;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.verifyIntentAuthenticity(noEnv.l3, new MockVerifier());
+        });
+      });
+
+      it('verifyIntentAuthenticity_succeeds_whenL3CarrierSignatureTampered', 0, () => {
+        // Structure is checked, not the signature's value: a garbage (but
+        // non-blank) L3 signature string and a foreign carrier version do
+        // not touch the verdict — the user signature is activateIntent's
+        // to verify, and the carrier's version plays no role in it.
         const lifecycle = createFullLifecycle();
         if (!lifecycle.l3.sign) {
           throw new Error('Expected sign to be present on the L3');
         }
         lifecycle.l3.sign.sign = 'tampered-signature';
         lifecycle.l3.version = '0.9';
-        lifecycle.l3.timestamp = -1;
-        lifecycle.l3.signingEnv = JSON.parse('null') as SigningEnv;
 
         const result: VerificationResult =
           A4p.verifyIntentAuthenticity(lifecycle.l3, new MockVerifier());
@@ -1492,6 +1594,41 @@ export default function a4pTest() {
         expectThrows(A4pErrorCode.A4P_INVALID_STATUS, () => {
           A4p.revokeIntent(lifecycle.ctx);
         });
+      });
+
+      it('revokeIntent_fails_whenNowBeforeActivatedTime', 0, () => {
+        // The revocation instant is floored by the context's creation, like
+        // every reservation: a clock stepped back past activatedTime is
+        // refused and the context stays active. Equality is allowed. The
+        // instant is validated only — the flip records no timestamp — and
+        // the validity window is deliberately not judged (an intent whose
+        // window closed is revoked, not reported as expired).
+        const lifecycle = createFullLifecycle();
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4p.revokeIntent(lifecycle.ctx, FIXED_NOW - 1);
+        });
+        expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+
+        const ctx = A4p.revokeIntent(lifecycle.ctx, FIXED_NOW);
+
+        expect(ctx.status).assertEqual(IntentExecutionStatus.REVOKED);
+      });
+
+      it('revokeIntent_succeeds_afterValidUntil', 0, () => {
+        // Revocation judges the activatedTime floor only, never the
+        // validity window: an intent whose window already closed (but whose
+        // lazy EXPIRED flip has not fired — that happens only in
+        // createExecution) is revoked rather than reported as expired, so
+        // the caller need not fake a reservation to terminalize it.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validFrom = FIXED_NOW - 60000;
+        request.structuredIntent.constraints.validUntil = FIXED_NOW + 60000;
+        const lifecycle = createFullLifecycle(request);
+
+        const ctx = A4p.revokeIntent(lifecycle.ctx, FIXED_NOW + 120000);
+
+        expect(ctx.status).assertEqual(IntentExecutionStatus.REVOKED);
       });
 
       it('revokeIntent_allowsPendingExecutionToComplete', 0, () => {
@@ -1556,17 +1693,20 @@ export default function a4pTest() {
 
         const ctx = A4p.createExecution(lifecycle.ctx, execution, FIXED_NOW);
 
-        // The generated ID is recorded both as the ledger key and on the
-        // stored copy of the execution.
+        // The generated ID is recorded as the ledger key; the reserved
+        // execution's fields live flat on the record.
         expect(ctx.executions[0].executionId !== undefined).assertTrue();
         expect(ctx.executions[0].executionId.length).assertLarger(0);
-        expect(ctx.executions[0].execution.id).assertEqual(ctx.executions[0].executionId);
+        expect(ctx.executions[0].action).assertEqual(execution.action);
+        expect(ctx.executions[0].executionContent.orderId).assertEqual(execution.executionContent.orderId);
       });
 
       it('createExecution_doesNotMutateCallerObject', 0, () => {
-        // The id is resolved locally and lands only on the ledger's deep
-        // copy: neither a successful nor a rejected reservation may write
-        // an id back to the caller's object.
+        // The id is resolved locally and the content lands only on the
+        // ledger's own deep copy: neither a successful nor a rejected
+        // reservation may write an id back to the caller's object, and
+        // later mutations of the caller's object must not leak into the
+        // ledger.
         const lifecycle = createFullLifecycle();
 
         const execNoId: Execution = {
@@ -1575,7 +1715,9 @@ export default function a4pTest() {
         };
         const ctx = A4p.createExecution(lifecycle.ctx, execNoId, FIXED_NOW);
         expect(execNoId.id === undefined).assertTrue();
-        expect(ctx.executions[0].execution.id).assertEqual(ctx.executions[0].executionId);
+        const recordedOrderId: string = ctx.executions[0].executionContent.orderId;
+        execNoId.executionContent.orderId = 'tampered-after-reservation';
+        expect(ctx.executions[0].executionContent.orderId).assertEqual(recordedOrderId);
 
         const rejectedOrder = createTestOrder();
         rejectedOrder.amount = 200000; // exceeds singleOrderMaxAmount (100000)
@@ -1770,16 +1912,16 @@ export default function a4pTest() {
       });
 
       it('createExecution_fails_whenAfterValidUntil', 0, () => {
+        // Activation refuses an instant past validUntil, so the window must
+        // still be open at the fixed clock for the context to exist at all;
+        // the expiry itself is then observed by reserving past the window.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.validFrom = FIXED_NOW - 7200000;
-        request.structuredIntent.constraints.validUntil = FIXED_NOW - 3600000;
-        // Keep the anchor at (or before) the shifted validFrom: an anchor
-        // later than validFrom is rejected at intent creation.
-        request.structuredIntent.constraints.anchorTime = FIXED_NOW - 7200000;
+        request.structuredIntent.constraints.validFrom = FIXED_NOW - 60000;
+        request.structuredIntent.constraints.validUntil = FIXED_NOW + 60000;
         const lifecycle = createFullLifecycle(request);
 
         expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
-          A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW);
+          A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW + 120000);
         });
         // The failed attempt must lazily mark the intent as EXPIRED.
         expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.EXPIRED);
@@ -1805,7 +1947,7 @@ export default function a4pTest() {
 
       it('createExecution_fails_whenExecutionCountExceeded', 0, () => {
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 1;
+        request.structuredIntent.constraints.maxExecutionCount = 1;
         const lifecycle = createFullLifecycle(request);
 
         A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW);
@@ -1816,10 +1958,10 @@ export default function a4pTest() {
       });
 
       it('createExecution_cancelReleasesCountSlot', 0, () => {
-        // maxExecuteCount caps non-canceled executions: reserve → cancel →
+        // maxExecutionCount caps non-canceled executions: reserve → cancel →
         // reserve frees the count slot up again.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 1;
+        request.structuredIntent.constraints.maxExecutionCount = 1;
         const lifecycle = createFullLifecycle(request);
 
         const exec1 = createTestExecution();
@@ -1950,7 +2092,7 @@ export default function a4pTest() {
         });
 
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.resource.itemsWhiteList[0].quantity = 2;
+        request.structuredIntent.resources.itemsWhiteList[0].quantity = 2;
         const lifecycle2 = createFullLifecycle(request);
         const execution2 = createTestExecution();
         execution2.executionContent.cartItems[0].quantity = 1;
@@ -1965,7 +2107,7 @@ export default function a4pTest() {
         // missing group's item and a second item on an already-covered
         // group are both a mismatch.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.resource.itemsWhiteList = [
+        request.structuredIntent.resources.itemsWhiteList = [
           { whiteList: [createTestProductWithIds('seller-001', 'spu-001', 'sku-001')], quantity: 1 },
           { whiteList: [createTestProductWithIds('seller-002', 'spu-002', 'sku-002')], quantity: 2 }
         ];
@@ -1996,7 +2138,7 @@ export default function a4pTest() {
         // order: a product determines its group, so any permutation of
         // the template's items is accepted.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.resource.itemsWhiteList = [
+        request.structuredIntent.resources.itemsWhiteList = [
           { whiteList: [createTestProductWithIds('seller-001', 'spu-001', 'sku-001')], quantity: 2 },
           { whiteList: [createTestProductWithIds('seller-002', 'spu-002', 'sku-002')], quantity: 1 }
         ];
@@ -2016,7 +2158,7 @@ export default function a4pTest() {
         // OR within a group: any single product of the group's whitelist
         // satisfies the group's slot.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.resource.itemsWhiteList = [{
+        request.structuredIntent.resources.itemsWhiteList = [{
           whiteList: [
             createTestProductWithIds('seller-001', 'spu-001', 'sku-001'),
             createTestProductWithIds('seller-001', 'spu-001', 'sku-002')
@@ -2131,7 +2273,7 @@ export default function a4pTest() {
       });
 
       it('createExecution_succeeds_whenExecuteCountCapOmitted', 0, () => {
-        // Without maxExecuteCount executions are budget-bound only: the
+        // Without maxExecutionCount executions are budget-bound only: the
         // count check is skipped and leftExecutionCount is omitted.
         const lifecycle = createFullLifecycle(createOptionalFieldsOmittedRequest());
 
@@ -2180,7 +2322,7 @@ export default function a4pTest() {
 
       it('completeIntent_completes_whenAllExecutionsDoneAndCountReached', 0, () => {
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 1;
+        request.structuredIntent.constraints.maxExecutionCount = 1;
         const lifecycle = createFullLifecycle(request);
 
         const exec = createTestExecution();
@@ -2206,7 +2348,7 @@ export default function a4pTest() {
       });
 
       it('completeExecution_completes_whenAmountExhausted_andCountCapOmitted', 0, () => {
-        // Without maxExecuteCount auto-completion rests on the amount
+        // Without maxExecutionCount auto-completion rests on the amount
         // trigger alone — an uncapped intent still consumes once its
         // totalMaxAmount is exhausted.
         const request = createOptionalFieldsOmittedRequest();
@@ -2246,7 +2388,7 @@ export default function a4pTest() {
         // its status when its last pending record finalizes — the
         // revocation is a fact about the intent's history.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 1;
+        request.structuredIntent.constraints.maxExecutionCount = 1;
         const lifecycle = createFullLifecycle(request);
 
         const exec = createTestExecution();
@@ -2260,7 +2402,7 @@ export default function a4pTest() {
 
       it('completeExecution_doesNotAutoComplete_fromExpired', 0, () => {
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 1;
+        request.structuredIntent.constraints.maxExecutionCount = 1;
         const lifecycle = createFullLifecycle(request);
 
         const exec = createTestExecution();
@@ -2274,7 +2416,7 @@ export default function a4pTest() {
 
       it('completeExecution_remainsActive_whenCountNotReached', 0, () => {
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 5;
+        request.structuredIntent.constraints.maxExecutionCount = 5;
         const lifecycle = createFullLifecycle(request);
 
         const exec = createTestExecution();
@@ -2285,7 +2427,7 @@ export default function a4pTest() {
       });
 
       it('completeExecution_remainsActive_whenExecuteCountCapOmitted', 0, () => {
-        // Without maxExecuteCount there is no count trigger for
+        // Without maxExecutionCount there is no count trigger for
         // auto-completion, and with the amount budget far from exhausted
         // the intent stays open for further executions.
         const lifecycle = createFullLifecycle(createOptionalFieldsOmittedRequest());
@@ -2339,9 +2481,27 @@ export default function a4pTest() {
         });
       });
 
+      it('completeExecution_fails_whenNowBeforeReservedAt', 0, () => {
+        // Record timestamps are monotonic like the chain's: a completion
+        // predating its own reservation would rewrite history, so a clock
+        // stepped back past reservedAt is refused and the record stays
+        // pending (equality is allowed — the floor is non-strict).
+        const lifecycle = createFullLifecycle();
+        const exec = createTestExecution();
+        A4p.createExecution(lifecycle.ctx, exec, FIXED_NOW);
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4p.completeExecution(lifecycle.ctx, exec.id, FIXED_NOW - 1);
+        });
+        expect(lifecycle.ctx.executions[0].status).assertEqual(ExecutionStatus.PENDING);
+
+        const ctx = A4p.completeExecution(lifecycle.ctx, exec.id, FIXED_NOW);
+        expect(ctx.executions[0].status).assertEqual(ExecutionStatus.COMPLETED);
+      });
+
       it('completeExecution_remainsActive_whenHasCanceledRecord', 0, () => {
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        request.structuredIntent.constraints.maxExecuteCount = 2;
+        request.structuredIntent.constraints.maxExecutionCount = 2;
         const lifecycle = createFullLifecycle(request);
 
         const exec1 = createTestExecution();
@@ -2352,7 +2512,7 @@ export default function a4pTest() {
 
         const ctx = A4p.completeExecution(lifecycle.ctx, exec2.id, FIXED_NOW);
 
-        // Canceled records do not count toward maxExecuteCount: only 1
+        // Canceled records do not count toward maxExecutionCount: only 1
         // non-canceled record < 2, so the intent stays active.
         expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
       });
@@ -2379,6 +2539,25 @@ export default function a4pTest() {
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.cancelExecution(lifecycle.ctx, 'non-existent', FIXED_NOW);
         });
+      });
+
+      it('cancelExecution_fails_whenNowBeforeReservedAt', 0, () => {
+        // Same monotonic rule as completeExecution: a cancellation
+        // predating its own reservation is a rewound clock, not a fact to
+        // persist — the record stays pending and keeps its quota (equality
+        // is allowed).
+        const lifecycle = createFullLifecycle();
+        const exec = createTestExecution();
+        A4p.createExecution(lifecycle.ctx, exec, FIXED_NOW);
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4p.cancelExecution(lifecycle.ctx, exec.id, FIXED_NOW - 1);
+        });
+        expect(lifecycle.ctx.executions[0].status).assertEqual(ExecutionStatus.PENDING);
+        expect(lifecycle.ctx.executionInfo.leftExecutionCount).assertEqual(9);
+
+        const ctx = A4p.cancelExecution(lifecycle.ctx, exec.id, FIXED_NOW);
+        expect(ctx.executions[0].status).assertEqual(ExecutionStatus.CANCELED);
       });
 
       it('cancelExecution_fails_whenAlreadyCompleted', 0, () => {

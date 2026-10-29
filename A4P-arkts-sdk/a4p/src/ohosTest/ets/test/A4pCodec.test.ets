@@ -121,7 +121,7 @@ export default function a4pCodecTest() {
           timestamp: l1.timestamp,
           structuredIntent: {
             constraints: l1.structuredIntent.constraints,
-            resource: l1.structuredIntent.resource,
+            resources: l1.structuredIntent.resources,
             action: l1.structuredIntent.action
           },
           intentSummary: l1.intentSummary,
@@ -274,7 +274,7 @@ export default function a4pCodecTest() {
             intentSummary: l2.intentL1.intentSummary,
             structuredIntent: {
               action: l2.intentL1.structuredIntent.action,
-              resource: l2.intentL1.structuredIntent.resource,
+              resources: l2.intentL1.structuredIntent.resources,
               constraints: new CustomInfo() as Object as PaymentConstraints
             },
             timestamp: l2.intentL1.timestamp,
@@ -654,6 +654,23 @@ export default function a4pCodecTest() {
         });
       });
 
+      it('deserialize_fails_whenCompletedAtBeforeReservedAt', 0, () => {
+        // completeExecution/cancelExecution refuse a clock earlier than the
+        // record's reservedAt, so a persisted record violating that
+        // monotonic rule is corrupted data: restore fails with the code the
+        // offending operation would have returned.
+        const context = createExecutionContextWithLedger();
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
+        const reservedAt: number = executions[0]['reservedAt'] as number;
+        executions[0]['completedAt'] = reservedAt - 1;
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
       it('deserialize_fails_whenPeriodicRecordLacksPeriodIndex', 0, () => {
         // The default test constraints are periodic, so every record must
         // carry its period index.
@@ -748,8 +765,12 @@ export default function a4pCodecTest() {
         expect(j1).assertContain('"keyIdentifier":"key-001"');
         expect(j1).assertContain('"sign":"');
 
-        // L1 structuredIntent: action, order template, constraints.
+        // L1 structuredIntent: action, order template, constraints. The
+        // resources key is asserted both positively and negatively: the
+        // wire name (Java-compatible) must never drift back to the old
+        // singular form this SDK once signed.
         expect(j1).assertContain('"action":"AI_PAY"');
+        expect(j1).assertContain('"resources":{');
         expect(j1).assertContain('"itemsWhiteList":[');
         expect(j1).assertContain('"whiteList":[');
         expect(j1).assertContain('"quantity":1');
@@ -760,10 +781,11 @@ export default function a4pCodecTest() {
         expect(j1).assertContain('"currency":"CNY"');
         expect(j1).assertContain('"validFrom":1699999940000');
         expect(j1).assertContain('"validUntil":1700003600000');
-        expect(j1).assertContain('"maxExecuteCount":10');
+        expect(j1).assertContain('"maxExecutionCount":10');
         expect(j1).assertContain('"anchorTime":1699999940000');
         expect(j1).assertContain('"periodSeconds":3600');
         expect(j1).assertContain('"maxExecutionCountPerPeriod":10');
+        expect(j1.indexOf('"resource":')).assertEqual(-1);
 
         // L2 embeds the full L1 (its signature included) and adds the
         // three identities plus the server's sign metadata.

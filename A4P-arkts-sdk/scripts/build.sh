@@ -6,8 +6,8 @@
 # without opening DevEco Studio. Always cleans previous outputs first.
 # The test HAP packaging step additionally requires java on PATH.
 #
-# Output: A4P-arkts-sdk/build/default/outputs/default/a4p.har
-#         A4P-arkts-sdk/build/default/outputs/ohosTest/a4p-ohosTest-unsigned.hap
+# Output: A4P-arkts-sdk/a4p/build/default/outputs/default/a4p.har
+#         A4P-arkts-sdk/a4p/build/default/outputs/ohosTest/a4p-ohosTest-unsigned.hap
 
 set -euo pipefail
 
