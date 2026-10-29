@@ -6,14 +6,34 @@
 #define MCP_TOOL_MANAGER_INCLUDE_H_
 
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "mcp_server.h"
 #include "mcp_type.h"
 #include "shared/jsonrpc.h"
 
 namespace Mcp {
+
+class ToolInputValidationError : public std::runtime_error {
+public:
+    ToolInputValidationError(const std::string& message, JsonValue data)
+        : std::runtime_error(message), data_(std::move(data))
+    {
+    }
+
+    ~ToolInputValidationError() override = default;
+
+    const JsonValue& Data() const
+    {
+        return data_;
+    }
+
+private:
+    JsonValue data_;
+};
 
 struct ServerTool {
     std::string name;

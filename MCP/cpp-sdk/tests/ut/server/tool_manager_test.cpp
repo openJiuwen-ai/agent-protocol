@@ -564,4 +564,183 @@ TEST_F(ToolManagerTest, OutputSchemaValidation_ErrorSkipValidation)
     EXPECT_NO_THROW(toolManager->CallTool("test", R"({})"));
 }
 
+static ServerTool MakeInputSchemaTool(const std::string& name, const std::string& schema)
+{
+    ServerTool tool;
+    tool.name = name;
+    tool.inputSchema = schema;
+    tool.func = TestToolFunc;
+    return tool;
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_Pass)
+{
+    auto tool = MakeInputSchemaTool("test", R"({
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+        "required": ["name"]
+    })");
+    toolManager->AddTool(tool);
+
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({"name":"a","count":1})"));
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_MissingRequired)
+{
+    auto tool = MakeInputSchemaTool("test", R"({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+    })");
+    toolManager->AddTool(tool);
+
+    try {
+        (void)toolManager->CallTool("test", R"({})");
+        FAIL() << "Expected ToolInputValidationError";
+    } catch (const ToolInputValidationError& e) {
+        EXPECT_NE(std::string(e.what()).find("Input validation failed"), std::string::npos);
+        EXPECT_NE(std::string(e.what()).find("name"), std::string::npos);
+
+        const JsonValue& data = e.Data();
+        EXPECT_EQ(data.value("tool", std::string()), "test");
+        ASSERT_TRUE(data.contains("error"));
+        ASSERT_TRUE(data["error"].is_object());
+        const std::string errorMessage = data["error"].value("message", std::string());
+        EXPECT_NE(errorMessage.find("name"), std::string::npos);
+    }
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_TypeMismatch)
+{
+    auto tool = MakeInputSchemaTool("test", R"({
+        "type": "object",
+        "properties": {"name": {"type": "string"}}
+    })");
+    toolManager->AddTool(tool);
+
+    try {
+        (void)toolManager->CallTool("test", R"({"name":123})");
+        FAIL() << "Expected ToolInputValidationError";
+    } catch (const ToolInputValidationError& e) {
+        const JsonValue& data = e.Data();
+        ASSERT_TRUE(data.contains("error"));
+        EXPECT_EQ(data["error"].value("instancePath", std::string()), "/name");
+    }
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_RejectAdditionalProperty)
+{
+    auto tool = MakeInputSchemaTool("test", R"({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "additionalProperties": false
+    })");
+    toolManager->AddTool(tool);
+
+    EXPECT_THROW(toolManager->CallTool("test", R"({"name":"a","extra":1})"), ToolInputValidationError);
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_AllowAdditionalPropertyByDefault)
+{
+    auto tool = MakeInputSchemaTool("test", R"({
+        "type": "object",
+        "properties": {"name": {"type": "string"}}
+    })");
+    toolManager->AddTool(tool);
+
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({"name":"a","extra":1})"));
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_NullArguments)
+{
+    auto tool = MakeInputSchemaTool("test", R"({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+    })");
+    toolManager->AddTool(tool);
+
+    EXPECT_THROW(toolManager->CallTool("test", "null"), ToolInputValidationError);
+}
+
+static ToolFunc MakeTrackingToolFunc(bool& handlerCalled)
+{
+    return [&handlerCalled](const ServerContext&, const std::string&, const std::string&) -> ToolReturn {
+        handlerCalled = true;
+        return CallToolResult{};
+    };
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_AnyOfProbeDoesNotRejectValidInput)
+{
+    bool handlerCalled = false;
+    ServerTool tool;
+    tool.name = "test";
+    tool.inputSchema = R"({
+        "type": "object",
+        "anyOf": [
+            {"required": ["a"]},
+            {"required": ["b"]}
+        ]
+    })";
+    tool.func = MakeTrackingToolFunc(handlerCalled);
+    toolManager->AddTool(tool);
+
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({"b":1})"));
+    EXPECT_TRUE(handlerCalled);
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_OneOfProbeDoesNotRejectValidInput)
+{
+    bool handlerCalled = false;
+    ServerTool tool;
+    tool.name = "test";
+    tool.inputSchema = R"({
+        "type": "object",
+        "oneOf": [
+            {"required": ["a"]},
+            {"required": ["b"]}
+        ]
+    })";
+    tool.func = MakeTrackingToolFunc(handlerCalled);
+    toolManager->AddTool(tool);
+
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({"b":1})"));
+    EXPECT_TRUE(handlerCalled);
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_NotProbeDoesNotRejectValidInput)
+{
+    bool handlerCalled = false;
+    ServerTool tool;
+    tool.name = "test";
+    tool.inputSchema = R"({
+        "type": "object",
+        "not": {"required": ["a"]}
+    })";
+    tool.func = MakeTrackingToolFunc(handlerCalled);
+    toolManager->AddTool(tool);
+
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({"b":1})"));
+    EXPECT_TRUE(handlerCalled);
+}
+
+TEST_F(ToolManagerTest, InputSchemaValidation_IfThenElseProbeDoesNotRejectValidInput)
+{
+    bool handlerCalled = false;
+    ServerTool tool;
+    tool.name = "test";
+    tool.inputSchema = R"({
+        "type": "object",
+        "if": {"required": ["a"]},
+        "then": {"required": ["b"]},
+        "else": {"required": ["c"]}
+    })";
+    tool.func = MakeTrackingToolFunc(handlerCalled);
+    toolManager->AddTool(tool);
+
+    EXPECT_NO_THROW(toolManager->CallTool("test", R"({"c":1})"));
+    EXPECT_TRUE(handlerCalled);
+}
+
 } // namespace Mcp

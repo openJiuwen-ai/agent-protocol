@@ -532,6 +532,38 @@ TEST_F(McpIntegrationTest, CallToolWithInvalidArguments)
     }
 }
 
+TEST_F(McpIntegrationTest, CallToolWithInvalidArgumentsReturnsInvalidParamsWithData)
+{
+    auto client = CreateTestClient();
+    ASSERT_NE(client, nullptr);
+
+    auto initFuture = client->Initialize();
+    ASSERT_EQ(initFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS)), std::future_status::ready);
+    ASSERT_NO_THROW(initFuture.get());
+
+    nlohmann::json arguments = {{"user_query", 123}};
+    auto callFuture = client->CallTool(ECHO_TOOL_NAME, arguments.dump(), TEST_TIMEOUT_MS);
+    ASSERT_EQ(callFuture.wait_for(std::chrono::milliseconds(TEST_TIMEOUT_MS)), std::future_status::ready);
+
+    try {
+        (void)callFuture.get();
+        FAIL() << "Expected MCPError";
+    } catch (const Mcp::MCPError& e) {
+        EXPECT_EQ(e.code(), static_cast<int>(Mcp::JsonRpcErrorCode::INVALID_PARAMS));
+        EXPECT_NE(e.message().find("Input validation failed"), std::string::npos);
+
+        ASSERT_TRUE(e.data().has_value());
+        auto data = nlohmann::json::parse(e.data().value());
+        EXPECT_EQ(data.value("tool", std::string()), ECHO_TOOL_NAME);
+        ASSERT_TRUE(data.contains("error"));
+        ASSERT_TRUE(data["error"].is_object());
+        EXPECT_EQ(data["error"].value("instancePath", std::string()), "/user_query");
+        EXPECT_FALSE(data["error"].value("message", std::string()).empty());
+    } catch (const std::exception& e) {
+        FAIL() << "Expected MCPError, got: " << e.what();
+    }
+}
+
 // tools/call: non-existent tool should return JSON-RPC error with code
 TEST_F(McpIntegrationTest, CallToolNonExistent_ShouldReturnErrorCode)
 {

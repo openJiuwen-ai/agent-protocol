@@ -5,11 +5,34 @@
 #include "tool_manager.h"
 #include "mcp_log.h"
 
+#include <exception>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json-schema.hpp>
 #include <stdexcept>
 
 namespace Mcp {
+
+namespace {
+
+class ValidationAborted : public std::exception {
+};
+
+class FirstInputSchemaErrorCollector : public nlohmann::json_schema::error_handler {
+public:
+    ~FirstInputSchemaErrorCollector() override = default;
+
+    nlohmann::json errors = nlohmann::json::array();
+
+    void error(const nlohmann::json::json_pointer& ptr, const nlohmann::json& instance,
+               const std::string& message) override
+    {
+        (void)instance;
+        errors.push_back({{"instancePath", ptr.to_string()}, {"message", message}});
+        throw ValidationAborted();
+    }
+};
+
+} // namespace
 
 CallToolResult NormalizeToolReturn(const ToolReturn& raw)
 {
@@ -136,14 +159,30 @@ std::optional<CallToolResult> ToolManager::CallTool(const ServerContext& ctx, co
     }
 
     if (tool.inputSchema.has_value()) {
+        JsonValue schemaJson;
+        nlohmann::json_schema::json_validator validator;
+        FirstInputSchemaErrorCollector collector;
         try {
-            JsonValue schemaJson = JsonValue::parse(tool.inputSchema.value());
-
-            nlohmann::json_schema::json_validator validator;
+            schemaJson = JsonValue::parse(tool.inputSchema.value());
             validator.set_root_schema(schemaJson);
-            validator.validate(args);
+            validator.validate(args, collector);
+        } catch (const ValidationAborted&) {
+            // ValidationAborted is the expected stop signal; the first error is already stored in collector.errors.
         } catch (const std::exception& e) {
             throw std::runtime_error("Input validation failed for tool '" + name + "': " + std::string(e.what()));
+        }
+
+        if (!collector.errors.empty()) {
+            const auto& firstError = collector.errors.front();
+            const std::string instancePath = firstError.value("instancePath", std::string());
+            std::string message = "Input validation failed for tool '" + name + "'";
+            if (!instancePath.empty()) {
+                message += " at '" + instancePath + "'";
+            }
+            message += ": " + firstError.value("message", std::string("invalid arguments"));
+
+            JsonValue data = {{"tool", name}, {"error", firstError}};
+            throw ToolInputValidationError(message, std::move(data));
         }
     }
     // Sync tools get ServerContext without responseCallback (same as upstream): avoids

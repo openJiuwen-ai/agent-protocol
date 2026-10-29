@@ -107,7 +107,8 @@ void McpServerImplement::ReceiveIncomingMessages(const RequestId& requestId, con
 void McpServerImplement::SendErrorResponse(const RequestId& requestId,
                                            JsonRpcErrorCode code,
                                            const std::string& message,
-                                           ServerRequestContext& ctx)
+                                           ServerRequestContext& ctx,
+                                           const std::optional<JsonValue>& data)
 {
     auto session = ctx.activeSession.lock();
     if (session == nullptr) {
@@ -119,6 +120,7 @@ void McpServerImplement::SendErrorResponse(const RequestId& requestId,
     error.id_ = requestId;
     error.code_ = static_cast<int>(code);
     error.message_ = message;
+    error.data_ = data;
     session->SendResponse(requestId, error, ctx);
 }
 
@@ -168,6 +170,9 @@ void McpServerImplement::HandleToolsCall(const RequestId& requestId, const Reque
             session->SendResponse(requestId, result, ctx);
         }
         // Asynchronous function has no return value, response will be sent via callback
+    } catch (const ToolInputValidationError& e) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool: caught exception: " + std::string(e.what()));
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx, e.Data());
     } catch (const std::exception& e) {
         MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool: caught exception: " + std::string(e.what()));
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx);
