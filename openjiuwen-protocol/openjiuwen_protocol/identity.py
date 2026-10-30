@@ -1,15 +1,29 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
-"""请求身份字段契约（Web → Gateway → AgentServer 全链路）。
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-来源：``jiuwenswarm/common/request_identity.py``。字段名字符串会同时出现在
-WS query、HTTP 头、``metadata``、E2A ``channel_context.routing`` 与企业版租户
-查询参数中，是跨进程契约。
+"""Transport-level Web request identity helpers.
 
-除字段常量外，本模块还固化三个**零依赖纯函数**：gateway 写侧
-``apply_routing_metadata`` 与读侧 ``normalize_routing_identity`` /
-``web_routing_identity``。读写两侧必须对「缺字段 / 空串 / 非字符串」采用同一
-口径，分叉会导致身份在进程间丢失，故一并收口。``merge_routing_into_params``
-是 gateway 本地 handler 的适配层，不属双端契约，留在实现侧。
+分层约定（企业版与个人版共用同一结构，按字段必填性区分）：
+
+1. **Wire**（浏览器 → Gateway，非权威）
+   - WS query：``user_id`` / ``group_id`` / ``bot_id`` / ``gateway_id``
+   - HTTP 头：``X-User-Id`` / ``X-Group-Id`` / ``X-Bot-Id`` / ``X-Gateway-Id``
+
+2. **进站后权威落点**
+
+   - ``metadata["user_id"]``（顶层）—— 谁在说话；并镜像到
+     ``Message.user_id`` / ``E2AEnvelope.user_id``
+   - ``metadata["routing"] = {group_id, bot_id, gateway_id}``—— 路由维
+     （E2A 上对应 ``channel_context.routing``）
+
+   Gateway 入口用 :func:`normalize_routing_identity` + :func:`apply_routing_metadata`
+   写一次；下游用 :func:`web_routing_identity` 一次读全（含顶层 ``user_id``）。
+
+3. **不要**：把身份写入业务 ``params``；不要把 ``group_id``/``bot_id``/``gateway_id``
+   摊到 metadata 顶层；不要把 ``user_id`` 放进 ``routing``。
+
+4. **必填策略**
+   - 个人版 Web：建议有顶层 ``user_id``；其余可缺
+   - 企业版 Web：``routing.bot_id`` 建议有；``user_id``/``group_id`` 按策略需要
 """
 
 from __future__ import annotations
@@ -17,26 +31,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-#: ``metadata`` 中承载路由维度的键。
-ROUTING_METADATA_KEY: str = "routing"
-#: 说话人标识（放在 ``metadata`` 顶层，不放进 routing）。
-USER_ID_FIELD: str = "user_id"
-#: 仅这些字段写入 ``metadata.routing``。
-WEB_ROUTING_ID_FIELDS: tuple[str, ...] = ("group_id", "bot_id", "gateway_id")
-#: 完整身份字段（顶层 user_id + routing 维度）。
-WEB_IDENTITY_FIELDS: tuple[str, ...] = (USER_ID_FIELD, *WEB_ROUTING_ID_FIELDS)
-#: 企业版租户路由/查询字段（HTTP query 与 E2A routing 共用）。
-TENANT_ROUTING_FIELDS: tuple[str, ...] = (
-    "group_id",
-    "bot_id",
-    "user_id",
-    "service_id",
-    "agent_id",
-)
+ROUTING_METADATA_KEY = "routing"
+USER_ID_FIELD = "user_id"
+# 仅这些写入 metadata.routing；user_id 在 metadata 顶层。
+WEB_ROUTING_ID_FIELDS = ("group_id", "bot_id", "gateway_id")
+WEB_IDENTITY_FIELDS = (USER_ID_FIELD, *WEB_ROUTING_ID_FIELDS)
 
 
 def _identity_value(value: Any) -> str | None:
-    """归一化单个字段值：列表取首元素，去空白，空串视为未提供。"""
     if isinstance(value, (list, tuple)):
         value = value[0] if value else None
     if value is None:
@@ -113,13 +115,27 @@ def web_routing_identity(metadata: Mapping[str, Any] | None) -> dict[str, str]:
     return identity
 
 
-__all__ = [
+def merge_routing_into_params(
+    params: Mapping[str, Any] | None,
+    metadata: Mapping[str, Any] | None,
+    *,
+    override: bool = True,
+) -> dict[str, Any]:
+    """仅用于 Gateway **本地** handler：handler 签名只有 params。"""
+    result = dict(params or {})
+    for field, value in web_routing_identity(metadata).items():
+        if override or field not in result:
+            result[field] = value
+    return result
+
+
+__all__ = (
     "ROUTING_METADATA_KEY",
-    "TENANT_ROUTING_FIELDS",
     "USER_ID_FIELD",
-    "WEB_IDENTITY_FIELDS",
     "WEB_ROUTING_ID_FIELDS",
-    "apply_routing_metadata",
+    "WEB_IDENTITY_FIELDS",
     "normalize_routing_identity",
+    "apply_routing_metadata",
+    "merge_routing_into_params",
     "web_routing_identity",
-]
+)

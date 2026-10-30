@@ -1,94 +1,165 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
-"""审计打点字段契约（Gateway ↔ 企业版 telemetry）。
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""兼容封装：优先转调 ``telemetry.audit``；无则直调 foundation ``log_audit``。
 
-来源：``gateway/enterprise/capabilities/audit/audit_emit.py``。gateway 侧不能
-依赖企业版私有库，因此把「事件类型 / 字段名 / 响应码 / 等级」等契约固化在
-本包，由 provider 注入具体打点实现。
+新代码请使用 ``jiuwenswarm.telemetry.audit.audit_claw_log``。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import inspect
+import logging
+import time
 from typing import Any
 
-# ── 事件类型（``event_type`` 首参）──────────────────────────────────────────
-AUDIT_EVENT_USER_ACTION: str = "UA"
-AUDIT_EVENT_EVENT: str = "EVT"
+logger = logging.getLogger(__name__)
 
-# ── 业务字段名（大写，作为 kwargs / 顶层映射键）────────────────────────────
-AUDIT_FIELD_SUBMDL: str = "SUBMDL"
-AUDIT_FIELD_PROC: str = "PROC"
-AUDIT_FIELD_RSPCD: str = "RSPCD"
-AUDIT_FIELD_UA: str = "UA"
-AUDIT_FIELD_EVT: str = "EVT"
-AUDIT_FIELD_MSG: str = "MSG"
-AUDIT_FIELD_UID: str = "UID"
-AUDIT_FIELD_UID_LOWER: str = "uid"
-AUDIT_FIELD_SESSION_ID: str = "session_id"
-AUDIT_FIELD_REQUEST_ID: str = "request_id"
-
-#: 必须进 ``audit_claw_log`` 顶层映射入参、不能只塞 extra 的字段
-#: （否则无 ContextVar 时 trace_id/txn_seq/UID 仍为占位）。
-AUDIT_LIFTED_FIELDS: tuple[str, ...] = (
-    AUDIT_FIELD_UA,
-    AUDIT_FIELD_EVT,
-    AUDIT_FIELD_MSG,
-    AUDIT_FIELD_UID,
-    AUDIT_FIELD_UID_LOWER,
-    AUDIT_FIELD_SESSION_ID,
-    AUDIT_FIELD_REQUEST_ID,
+# caller 要落到业务打点，不能停在本封装或 telemetry / foundation 入口上。
+_CALLER_SKIP_MODULES = (
+    "openjiuwen_runtime.foundation.audit",
+    "jiuwenswarm.telemetry.audit",
+    "gateway.enterprise.capabilities.audit.audit_emit",
 )
 
-# ── 响应码 / 等级 ──────────────────────────────────────────────────────────
-AUDIT_RSPCD_SUCCESS: str = "0000"
-AUDIT_RSPCD_FAILURE: str = "E999"
-AUDIT_LEVEL_INFO: str = "INFO"
-AUDIT_LEVEL_WARN: str = "WARN"
+
+def capture_audit_caller() -> str:
+    """栈回溯：``模块.函数:行号``，跳过审计封装帧。"""
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            module = str(frame.f_globals.get("__name__", "") or "")
+            if any(
+                module == prefix or module.startswith(prefix + ".")
+                for prefix in _CALLER_SKIP_MODULES
+            ):
+                frame = frame.f_back
+                continue
+            func = frame.f_code.co_name
+            short = module.rsplit(".", 1)[-1] if module else "<unknown>"
+            return f"{short}.{func}:{frame.f_lineno}"
+        return "-"
+    finally:
+        del frame
 
 
-@dataclass
-class AuditEvent:
-    """一条审计事件（provider 实现的入参形状）。
+def emit_audit(
+    event_type: str,
+    *,
+    level: str,
+    SUBMDL: str,
+    PROC: str,
+    RSPCD: str = "0000",
+    **fields: Any,
+) -> None:
+    """打点；个人版 no-op；异常只记 warning。"""
+    caller = capture_audit_caller()
+    try:
+        from gateway.enterprise import is_enterprise
 
-    成功/失败以 ``rspcd`` 为准：``AUDIT_RSPCD_SUCCESS`` 表示成功，其余取值
-    （如 ``AUDIT_RSPCD_FAILURE``）表示失败。``success`` 只是实现侧的便捷标记，
-    与 ``rspcd`` 冗余；落盘、检索与告警一律读 ``rspcd``，两者不一致时以
-    ``rspcd`` 为准，实现侧应尽量由 ``rspcd`` 推导 ``success`` 以避免漂移。
-    """
+        if not is_enterprise():
+            return
+    except Exception:  # noqa: BLE001
+        pass
 
-    submdl: str
-    proc: str
-    level: str = AUDIT_LEVEL_INFO
-    #: 权威字段：成功/失败判定以此为准。
-    rspcd: str = AUDIT_RSPCD_SUCCESS
-    #: 便捷标记，与 ``rspcd`` 冗余；不一致时以 ``rspcd`` 为准（见类文档）。
-    success: bool = True
-    uid: str | None = None
-    session_id: str | None = None
-    request_id: str | None = None
-    desc: str | None = None
-    message: str = ""
-    caller: str = "-"
-    extra: dict[str, Any] = field(default_factory=dict)
+    try:
+        from gateway.enterprise.capabilities.audit.audit_gate import is_audit_config_enabled
+
+        if not is_audit_config_enabled():
+            return
+    except Exception:  # noqa: BLE001
+        return
+
+    try:
+        from jiuwenswarm.telemetry.audit import audit_claw_log
+
+        keyword = str(event_type or "").strip().upper()
+        success = keyword != "EVT"
+        desc = fields.get("UA") or fields.get("EVT") or fields.get("MSG")
+        # UID / session_id / request_id 必须进 audit_claw_log 顶层映射入参，
+        # 不能只塞 extra（否则无 ContextVar 时 trace_id/txn_seq/UID 仍为占位，
+        # 且会把 session_id/request_id 原名泄漏到 attributes）。
+        _lift = ("UA", "EVT", "MSG", "UID", "uid", "session_id", "request_id")
+        rest = {k: v for k, v in fields.items() if k not in _lift}
+        raw_uid = fields.get("UID", fields.get("uid"))
+        uid = str(raw_uid).strip() if raw_uid is not None else ""
+        raw_sid = fields.get("session_id")
+        raw_rid = fields.get("request_id")
+        sid = str(raw_sid).strip() if raw_sid is not None else ""
+        rid = str(raw_rid).strip() if raw_rid is not None else ""
+        audit_claw_log(
+            submdl=SUBMDL,
+            proc=PROC,
+            success=success,
+            uid=uid or None,
+            session_id=sid or None,
+            request_id=rid or None,
+            rspcd=RSPCD,
+            desc=str(desc) if desc is not None else None,
+            message=str(fields.get("MSG") or ""),
+            level=level,
+            caller=caller,
+            extra=rest,
+        )
+        return
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from openjiuwen_runtime.foundation.audit import log_audit
+
+        payload = dict(fields)
+        payload.setdefault("SUBMDL", SUBMDL)
+        payload.setdefault("PROC", PROC)
+        payload.setdefault("RSPCD", RSPCD)
+        payload["caller"] = caller
+        keyword = str(event_type or "").strip().upper()
+        if keyword == "UA":
+            payload.setdefault("UA", PROC)
+        elif keyword == "EVT":
+            payload.setdefault("EVT", PROC)
+        log_audit(keyword, level=level, **payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "emit_audit failed event_type=%s SUBMDL=%s PROC=%s: %s",
+            event_type,
+            SUBMDL,
+            PROC,
+            exc,
+        )
 
 
-__all__ = [
-    "AUDIT_EVENT_EVENT",
-    "AUDIT_EVENT_USER_ACTION",
-    "AUDIT_FIELD_EVT",
-    "AUDIT_FIELD_MSG",
-    "AUDIT_FIELD_PROC",
-    "AUDIT_FIELD_REQUEST_ID",
-    "AUDIT_FIELD_RSPCD",
-    "AUDIT_FIELD_SESSION_ID",
-    "AUDIT_FIELD_SUBMDL",
-    "AUDIT_FIELD_UA",
-    "AUDIT_FIELD_UID",
-    "AUDIT_FIELD_UID_LOWER",
-    "AUDIT_LEVEL_INFO",
-    "AUDIT_LEVEL_WARN",
-    "AUDIT_LIFTED_FIELDS",
-    "AUDIT_RSPCD_FAILURE",
-    "AUDIT_RSPCD_SUCCESS",
-    "AuditEvent",
-]
+def emit_audit_ua(
+    *,
+    SUBMDL: str,
+    PROC: str,
+    RSPCD: str = "0000",
+    level: str = "INFO",
+    **fields: Any,
+) -> None:
+    emit_audit("UA", level=level, SUBMDL=SUBMDL, PROC=PROC, RSPCD=RSPCD, **fields)
+
+
+def emit_audit_evt(
+    *,
+    SUBMDL: str,
+    PROC: str,
+    RSPCD: str = "E999",
+    level: str = "WARN",
+    **fields: Any,
+) -> None:
+    emit_audit("EVT", level=level, SUBMDL=SUBMDL, PROC=PROC, RSPCD=RSPCD, **fields)
+
+
+class AuditTimer:
+    """上下文：记录耗时毫秒。"""
+
+    def __init__(self) -> None:
+        self._start = 0.0
+        self.cost_ms = 0
+
+    def __enter__(self) -> "AuditTimer":
+        self._start = time.perf_counter()
+        self.cost_ms = 0
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.cost_ms = int((time.perf_counter() - self._start) * 1000)
