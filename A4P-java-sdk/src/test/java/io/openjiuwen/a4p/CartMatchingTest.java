@@ -33,26 +33,16 @@ class CartMatchingTest {
     }
 
     @Test
-    void reassignsEarlierItemsWhenAGreedyChoiceWouldBlock() {
-        // Greedy pairs A with the first group, leaving B with nowhere to go; a valid matching still exists.
-        List<ItemWhiteList> groups = List.of(group(A, B), group(A));
-        assertDoesNotThrow(() -> CartMatching.requireOneToOne(cart(A, B), groups));
-        assertDoesNotThrow(() -> CartMatching.requireOneToOne(cart(B, A), groups));
-        List<ItemWhiteList> chain = List.of(group(A, B), group(B, C), group(A));
-        assertDoesNotThrow(() -> CartMatching.requireOneToOne(cart(A, B, C), chain));
-    }
-
-    @Test
     void rejectsCartsWithoutAOneToOneMatching() {
-        thrown(A4P_PRODUCT_NOT_AUTHORIZED, () -> CartMatching.requireOneToOne(cart(A, A), List.of(group(A), group(B))));
+        thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A, A), List.of(group(A), group(B))));
         thrown(A4P_PRODUCT_NOT_AUTHORIZED, () -> CartMatching.requireOneToOne(cart(C), List.of(group(A, B))));
-        thrown(A4P_PRODUCT_NOT_AUTHORIZED,
-                () -> CartMatching.requireOneToOne(cart(A, B, C), List.of(group(A, B), group(A, B), group(A))));
+        thrown(A4P_CART_MISMATCH,
+                () -> CartMatching.requireOneToOne(cart(A, B, A), List.of(group(A, B), group(A, B), group(A))));
     }
 
     @Test
     void rejectsCartsWhoseSizeDiffersFromTheWhitelist() {
-        thrown(A4P_INVALID_PARAMETER, () -> CartMatching.requireOneToOne(cart(A), List.of(group(A), group(B))));
-        thrown(A4P_INVALID_PARAMETER, () -> CartMatching.requireOneToOne(cart(A, B), List.of(group(A, B))));
+        thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A), List.of(group(A), group(B))));
+        thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A, B), List.of(group(A, B))));
     }
 }

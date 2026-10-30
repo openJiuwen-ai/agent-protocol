@@ -38,7 +38,7 @@ class Rsa3072Test {
 
         IntentL3 tampered = new IntentL3(third.version(), third.intentL2(), third.signingEnv(), NOW + 1, third.sign());
         A4pErrorCode verifyFail = A4pErrorCode.A4P_VERIFY_FAIL;
-        fails(verifyFail, A4p.activateIntent(tampered, userVerifier, NOW));
+        fails(verifyFail, A4p.activateIntent(tampered, userVerifier, NOW + 1));
         byte[] bytes = CanonicalJson.toSignableBytes(third);
         VerificationResult confused = userVerifier.verify(bytes, new SignatureInfo("HS256", "user", third.sign().sign()));
         assertFalse(confused.valid());

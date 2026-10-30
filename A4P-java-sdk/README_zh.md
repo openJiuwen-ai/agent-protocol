@@ -94,7 +94,7 @@ mvn compile org.codehaus.mojo:exec-maven-plugin:3.6.3:java "-Dexec.mainClass=io.
 | `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer[, long now])` 返回 `A4pResult<IntentL3>` |
 | `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier[, long now])` 返回 `A4pResult<IntentExecutionContext>` |
 | `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` 返回 `A4pResult<VerificationResult>` |
-| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` 返回 `A4pResult<IntentExecutionContext>` |
+| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` / `A4p.revokeIntent(IntentExecutionContext, long now)` 返回 `A4pResult<IntentExecutionContext>` |
 | `createExecution / completeExecution / cancelExecution` | `A4p` 上的静态方法，返回 `A4pResult<IntentExecutionContext>` |
 | `A4pResult<T>` | `A4pResult`：`success()`、`data()`、`code()`（`long`）、`message()` |
 | `A4pException` | `A4pException`，仅由返回值型辅助方法以及 SDK 缺陷抛出 |
@@ -128,7 +128,7 @@ IntentExecutionContext context = activated.data();
 
 // 针对已激活的意图预留一笔订单，然后完成它。
 Order order = new Order("order-1", 3000L, "CNY", List.of(new CartItem(product, 1L)), now);
-Execution execution = PaymentProfile.execution("execution-1", "1.0", order);
+Execution execution = PaymentProfile.execution("execution-1", order);
 A4pResult<IntentExecutionContext> reserved = A4p.createExecution(context, execution, now);
 if (!reserved.success()) { /* 依据 reserved.code() 分支处理，然后持久化 context */ }
 A4pResult<IntentExecutionContext> completed = A4p.completeExecution(context, execution.id(), now);
@@ -179,7 +179,7 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 | 4002 | `A4P_AMOUNT_EXCEEDED` | 超出金额上限 |
 | 4003 | `A4P_PERIOD_COUNT_EXCEEDED` | 为兼容 ArkTS 错误码而保留；Java 当前不返回此码（周期执行次数超限使用 4004） |
 | 4004 | `A4P_PERIOD_EXECUTION_COUNT_EXCEEDED` | 超出周期执行次数上限 |
-| 4005 | `A4P_PRODUCT_QUANTITY_EXCEEDED` | 超出商品数量上限 |
+| 4005 | `A4P_CART_MISMATCH` | 购物车不符合授权订单模板 |
 | 4006 | `A4P_SINGLE_ORDER_AMOUNT_EXCEEDED` | 超出单笔订单金额上限 |
 | 4007 | `A4P_PRODUCT_NOT_AUTHORIZED` | 商品未被授权 |
 | 5001 | `A4P_SERIALIZE_FAIL` | 序列化失败 |
@@ -191,26 +191,25 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 
 ## 执行语义
 
-- 待处理记录与已完成记录都会占用金额、次数和白名单数量。
-- 显式取消会释放配额；下游结果未知则不会释放。
-- 订单购物车必须与白名单分组一一匹配：`cartItems` 与 `itemsWhiteList` 长度相同，并且每个购物车
-  条目与一个不同的、列出该商品的分组配对。购物车顺序无关紧要，只要存在一种有效配对即可。
-- `orderId` 是支付的幂等键：账本中已存在的订单 ID（含已取消记录）会以 `A4P_DUPLICATE_ID` 被拒绝。
-- 重复的执行 ID 在取消之后依然会被拒绝。调用方提供的执行 ID 不能为空白；自动生成的 ID 会写入账本记录。
-- 预留检查按固定顺序执行：请求结构（包括提供的执行 ID 非空白）；版本、动作与币种是否与已授权意图
-  一致；context 状态；有效期窗口（惰性置为 EXPIRED）；执行/订单 ID 重复；随后是执行次数上限、
-  单笔订单金额上限、剩余金额、购物车一一匹配、白名单数量，最后是周期配额。
-- 购物车长度不匹配会以 `A4P_INVALID_PARAMETER` 失败；购物车不存在有效配对（包括商品不在任何分组中）
-  会以 `A4P_PRODUCT_NOT_AUTHORIZED` 失败。在数量校验中，一个条目仍会针对每一个列出其商品的分组计数。
+- 待处理和已完成记录占用金额及执行次数；显式取消释放配额。
+- 白名单是每笔订单的固定模板：每个分组恰好购买一种商品，数量必须等于分组的 `quantity`。数量不跨执行累计，购物车顺序不限。
+- 意图校验拒绝组内重复商品及跨组重叠商品，返回 `1001`。
+- 未授权商品优先返回 `4007`；购物车长度、分组覆盖或数量不匹配统一返回 `A4P_CART_MISMATCH`（`4005`）。
+- `Execution` 已移除 `version`，使用 `PaymentProfile.execution(id, order)` 构造。
+- 执行 ID 和订单 ID 在取消后仍不能复用，重复时返回 `1003`。
+- 预留按请求结构、动作和币种、状态、有效期及激活时间下限、过期、重复 ID、次数、单笔金额、总金额、购物车模板、周期额度的顺序校验。
+- `revokeIntent(context)` 使用系统时间；`revokeIntent(context, now)` 支持指定非负安全整数时间。先检查状态，再检查激活时间下限，时间倒退返回 `3003`。
+- 完成和取消时间早于记录的 `reservedAt` 时返回 `3003`。
 - 撤销会阻止预留，但允许对待处理记录执行完成/取消。
 - 超过 `validUntil` 的预留会把 context 标记为 EXPIRED，尽管该次调用失败。待处理记录在 EXPIRED 状态下
   仍可被完成或取消。
-- 创建执行、完成与取消操作若 `now` 早于上下文的 `activatedTime`，会以 `A4P_TIMESTAMP_TOO_EARLY`（3003）被拒绝。
-- 当 `activatedTime <= now < reservedAt` 时，完成与取消操作会以 `A4P_INVALID_PARAMETER`（1001）被拒绝；记录保持待处理。
+- 创建执行时，`now` 早于上下文的 `activatedTime` 会返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。
+- 完成或取消被拒绝时，记录保持待处理。
 - 当一次完成操作之后不再有待处理记录，且要么达到次数上限、要么剩余金额为 0 时，ACTIVE 意图变为
   CONSUMED。REVOKED 与 EXPIRED 是终态。
-- `executionInfo()` 始终给出 `leftExecutionCount`、`leftAmount`、`periodIndex` 与
-  `leftPeriodExecutionCount`；不适用的数值为 `null`。
+- `executionInfo()` 始终包含 `leftAmount`；有次数上限时才包含 `leftExecutionCount`，
+  周期意图才包含 `periodIndex` 和 `leftPeriodExecutionCount`。Java 的
+  `PaymentExecutionInfo` 记录中，不适用数值仍为 `null`；上下文 JSON 会省略这些字段，供 ArkTS 解析。
 - context 操作对校验与更新加锁。这保护共享同一个 context 的线程，而**不**保护多个进程或各自独立激活
   的副本。
 - `A4pIntentCodec.standard()` 返回无状态的共享单例，因此一个实例可以服务所有线程。

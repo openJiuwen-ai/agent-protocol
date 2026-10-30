@@ -36,7 +36,7 @@ final class Accounting {
     static boolean exhausted(IntentExecutionContext context) {
         boolean pending = context.ledger().stream()
                 .anyMatch(entry -> entry.record().status() == ExecutionStatus.PENDING);
-        Long countCap = context.constraints().maxExecuteCount();
+        Long countCap = context.constraints().maxExecutionCount();
         boolean countUsedUp = countCap != null && count(context) >= countCap;
         return !pending && (countUsedUp || leftAmount(context) == 0);
     }
@@ -53,7 +53,7 @@ final class Accounting {
     static PaymentExecutionInfo executionInfo(IntentExecutionContext context, Long period) {
         PaymentConstraints constraints = context.constraints();
         return new PaymentExecutionInfo(
-                constraints.maxExecuteCount() == null ? null : constraints.maxExecuteCount() - count(context),
+                constraints.maxExecutionCount() == null ? null : constraints.maxExecutionCount() - count(context),
                 leftAmount(context),
                 period,
                 period == null ? null : constraints.maxExecutionCountPerPeriod() - periodCount(context, period));

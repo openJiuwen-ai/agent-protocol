@@ -23,7 +23,7 @@ class A4pTest {
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
                 future + 60_000, null, null, null, null);
         IntentExecutionContext futureContext = ok(A4p.activateIntent(authorized(limits), VERIFIER, future));
-        fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(futureContext));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(futureContext));
         assertEquals(IntentExecutionStatus.ACTIVE, futureContext.status());
         A4pIntentCodec codec = A4pIntentCodec.standard();
         String json = codec.serializeIntentExecutionContext(context());
@@ -41,8 +41,8 @@ class A4pTest {
         assertEquals(NOW, context.activatedTime());
         String before = A4pIntentCodec.standard().serializeIntentExecutionContext(context);
         fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(context, execution("early", 100, 1), NOW - 1));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.completeExecution(context, "early", NOW - 1));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.cancelExecution(context, "early", NOW - 1));
+        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(context, "early", NOW - 1));
+        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(context, "early", NOW - 1));
         assertEquals(before, A4pIntentCodec.standard().serializeIntentExecutionContext(context));
         IntentExecutionContext restored = ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(before));
         assertEquals(NOW, restored.activatedTime());
@@ -100,8 +100,8 @@ class A4pTest {
     void enforcesAmountCountCurrencyAndProductLimits() {
         IntentExecutionContext context = context();
         fails(A4P_SINGLE_ORDER_AMOUNT_EXCEEDED, A4p.createExecution(context, execution("big", 501, 1), NOW));
-        fails(A4P_PRODUCT_QUANTITY_EXCEEDED, A4p.createExecution(context, execution("many", 1, 6), NOW));
-        Execution foreign = PaymentProfile.execution("foreign", "1.0",
+        fails(A4P_CART_MISMATCH, A4p.createExecution(context, execution("many", 1, 6), NOW));
+        Execution foreign = PaymentProfile.execution("foreign",
                 new Order("foreign", 1L, "USD", List.of(new CartItem(PRODUCT, 1L)), NOW));
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, foreign, NOW));
         Product unknown = new Product(new SellerInfo("other"), PRODUCT.spusku());
@@ -137,8 +137,8 @@ class A4pTest {
 
         IntentExecutionContext laterReservation = context();
         ok(A4p.createExecution(laterReservation, execution("later", 100, 1), NOW + 1));
-        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(laterReservation, "later", NOW));
-        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(laterReservation, "later", NOW));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.completeExecution(laterReservation, "later", NOW));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.cancelExecution(laterReservation, "later", NOW));
         assertEquals(ExecutionStatus.PENDING, laterReservation.executions().get(0).status());
     }
 
@@ -201,12 +201,12 @@ class A4pTest {
     @Test
     void cartMustMatchWhitelistGroupsOneToOneInAnyOrder() {
         CreateIntentRequest request = new CreateIntentRequest("conversation", "summary", structured(List.of(
-                new ItemWhiteList(List.of(PRODUCT), 5L), new ItemWhiteList(List.of(OTHER), 5L)), constraints()), null);
+                new ItemWhiteList(List.of(PRODUCT), 1L), new ItemWhiteList(List.of(OTHER), 1L)), constraints()), null);
         IntentExecutionContext context = activate(request);
-        fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, execution("short", 1, 1), NOW));
-        fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, cart("long", 1,
+        fails(A4P_CART_MISMATCH, A4p.createExecution(context, execution("short", 1, 1), NOW));
+        fails(A4P_CART_MISMATCH, A4p.createExecution(context, cart("long", 1,
                 new CartItem(PRODUCT, 1L), new CartItem(OTHER, 1L), new CartItem(PRODUCT, 1L)), NOW));
-        fails(A4P_PRODUCT_NOT_AUTHORIZED, A4p.createExecution(context, cart("same-group", 1,
+        fails(A4P_CART_MISMATCH, A4p.createExecution(context, cart("same-group", 1,
                 new CartItem(PRODUCT, 1L), new CartItem(PRODUCT, 1L)), NOW));
         ok(A4p.createExecution(context, cart("reversed", 1, new CartItem(OTHER, 1L), new CartItem(PRODUCT, 1L)), NOW));
         ok(A4p.createExecution(context, cart("both", 1, new CartItem(PRODUCT, 1L), new CartItem(OTHER, 1L)), NOW));
@@ -298,7 +298,7 @@ class A4pTest {
     }
 
     @Test
-    void executionInfoDeclaresEveryFieldAndUsesNullWhenNotApplicable() {
+    void executionInfoOmitsInapplicableFields() {
         IntentExecutionContext capped = context();
         JsonNode full = capped.executionInfo();
         assertEquals(3, full.get("leftExecutionCount").longValue());
@@ -309,25 +309,45 @@ class A4pTest {
         IntentExecutionContext open = ok(A4p.activateIntent(authorized(
                 new PaymentConstraints(null, 1000L, "CNY", 0L, 100_000L, null, null, null, null)), VERIFIER, NOW));
         JsonNode sparse = open.executionInfo();
-        assertEquals(4, sparse.size());
-        assertTrue(sparse.get("leftExecutionCount").isNull());
-        assertTrue(sparse.get("periodIndex").isNull());
-        assertTrue(sparse.get("leftPeriodExecutionCount").isNull());
+        assertEquals(1, sparse.size());
+        assertFalse(sparse.has("leftExecutionCount"));
+        assertFalse(sparse.has("periodIndex"));
+        assertFalse(sparse.has("leftPeriodExecutionCount"));
         assertEquals(1000, sparse.get("leftAmount").longValue());
     }
 
     @Test
-    void overlappingWhitelistGroupsAndDuplicateCartEntriesConsumeEveryMatchingGroup() {
-        CreateIntentRequest request = new CreateIntentRequest("conversation", "summary", structured(List.of(
-                new ItemWhiteList(List.of(PRODUCT), 5L), new ItemWhiteList(List.of(PRODUCT), 2L)), constraints()),
-                "overlap");
-        IntentExecutionContext context = activate(request);
-        ok(A4p.createExecution(context, cart("repeated", 1, new CartItem(PRODUCT, 1L), new CartItem(PRODUCT, 1L)), NOW));
-        fails(A4P_PRODUCT_QUANTITY_EXCEEDED, A4p.createExecution(context,
-                cart("excess", 1, new CartItem(PRODUCT, 1L), new CartItem(PRODUCT, 1L)), NOW));
-        ok(A4p.cancelExecution(context, "repeated", NOW));
-        ok(A4p.createExecution(context, cart("released", 1, new CartItem(PRODUCT, 1L), new CartItem(PRODUCT, 1L)), NOW));
-        assertEquals(2, context.executions().size());
+    void duplicateAndOverlappingWhitelistProductsAreRejected() {
+        for (List<ItemWhiteList> groups : List.of(
+                List.of(new ItemWhiteList(List.of(PRODUCT, PRODUCT), 1L)),
+                List.of(new ItemWhiteList(List.of(PRODUCT), 1L), new ItemWhiteList(List.of(PRODUCT), 2L)))) {
+            fails(A4P_INVALID_PARAMETER, A4p.createIntent(new CreateIntentRequest("conversation", "summary",
+                    structured(groups, constraints()), "duplicates"), SIGNER, NOW));
+        }
+    }
+
+    @Test
+    void templateQuantityAppliesToEveryExecutionInsteadOfLifetimeTotal() throws Exception {
+        IntentExecutionContext context = activate(new CreateIntentRequest("conversation", "summary",
+                structured(List.of(new ItemWhiteList(List.of(PRODUCT), 3L)), constraints()), "template"));
+        fails(A4P_CART_MISMATCH, A4p.createExecution(context, execution("too-few", 1, 1), NOW));
+        fails(A4P_CART_MISMATCH, A4p.createExecution(context, execution("too-many", 1, 4), NOW));
+        ok(A4p.createExecution(context, execution("one", 1, 3), NOW));
+        ok(A4p.createExecution(context, execution("two", 1, 3), NOW));
+        String json = A4pIntentCodec.standard().serializeIntentExecutionContext(context);
+        assertFalse(CanonicalJson.MAPPER.readTree(json).get("executions").get(0).has("version"));
+        assertEquals(2, ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(json)).executions().size());
+    }
+
+    @Test
+    void revocationUsesOptionalClockAndArkTsErrorPrecedence() {
+        IntentExecutionContext context = context();
+        fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(context, -1));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(context, NOW - 1));
+        assertEquals(IntentExecutionStatus.ACTIVE, context.status());
+        ok(A4p.revokeIntent(context, NOW));
+        fails(A4P_INVALID_STATUS, A4p.revokeIntent(context, NOW - 1));
+        assertEquals(4005, A4P_CART_MISMATCH.code());
     }
 
     @Test
@@ -352,7 +372,8 @@ class A4pTest {
         ok(A4p.createExecution(context, execution, maxSafe));
         assertNull(execution.id());
         assertFalse(context.executions().get(0).executionId().isEmpty());
-        assertEquals(context.executions().get(0).executionId(), context.executions().get(0).execution().id());
+        assertEquals(execution.action(), context.executions().get(0).action());
+        assertEquals(execution.executionContent(), context.executions().get(0).executionContent());
         assertEquals(0, info(context).leftAmount());
         fails(A4P_AMOUNT_EXCEEDED, A4p.createExecution(context, execution("extra", 1, 1), maxSafe));
         PaymentConstraints tooLong = new PaymentConstraints(null, maxSafe, "CNY",
@@ -486,7 +507,7 @@ class A4pTest {
         };
         fails(A4P_TIMESTAMP_EXPIRED, A4p.signIntent(second, VERIFIER, environment, unexpectedSigner, 100_001));
         SignatureVerifier reject = (data, sign) -> new VerificationResult(false, A4P_VERIFY_FAIL.code(), null);
-        fails(A4P_VERIFY_FAIL, A4p.signIntent(second, reject, environment, unexpectedSigner, 100_001));
+        fails(A4P_TIMESTAMP_EXPIRED, A4p.signIntent(second, reject, environment, unexpectedSigner, 100_001));
         fails(A4P_VERIFY_FAIL, A4p.signIntent(second, reject, environment, unexpectedSigner, 19_999));
 
         // Users may authorize a task before it starts; validUntil is inclusive.
@@ -505,9 +526,9 @@ class A4pTest {
         assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(intent, VERIFIER, 100_000)).status());
         assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(intent, VERIFIER, NOW)).status());
         assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(intent, VERIFIER, 20_000)).status());
-        // The user signature is checked first, so a forged expired intent reports the forgery.
+        // Like ArkTS, the expired window is checked before invoking the verifier.
         SignatureVerifier reject = (data, sign) -> new VerificationResult(false, A4P_VERIFY_FAIL.code(), null);
-        fails(A4P_VERIFY_FAIL, A4p.activateIntent(intent, reject, 100_001));
+        fails(A4P_TIMESTAMP_EXPIRED, A4p.activateIntent(intent, reject, 100_001));
     }
 
     @Test
@@ -527,7 +548,7 @@ class A4pTest {
     void checkOrderReportsParameterAndExpiryBeforeLedgerConflicts() {
         IntentExecutionContext context = context();
         ok(A4p.createExecution(context, execution("first", 100, 1), NOW));
-        Execution foreign = PaymentProfile.execution("first", "1.0",
+        Execution foreign = PaymentProfile.execution("first",
                 new Order("foreign", 200_000L, "USD", List.of(new CartItem(PRODUCT, 1L)), NOW));
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, foreign, NOW));
         ok(A4p.revokeIntent(context));

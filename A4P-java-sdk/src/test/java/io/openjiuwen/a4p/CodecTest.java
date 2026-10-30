@@ -148,7 +148,7 @@ class CodecTest {
                 json.replace("\"totalMaxAmount\":1000", "\"totalMaxAmount\":null"),
                 // An explicit null on an optional field is rejected rather than read as "absent".
                 json.replace("\"singleOrderMaxAmount\":500", "\"singleOrderMaxAmount\":null"),
-                json.replace("\"quantity\":5", "\"quantity\":5,\"extra\":true"));
+                json.replace("\"quantity\":1", "\"quantity\":1,\"extra\":true"));
         for (String input : tampered) {
             assertNotEquals(json, input);
             fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL1(input));
@@ -170,6 +170,11 @@ class CodecTest {
     void executionContextRoundTripsAndKeepsEnforcingTheLedger() {
         IntentExecutionContext context = ledgerContext();
         String json = codec.serializeIntentExecutionContext(context);
+        var recordJson = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json)).get("executions").get(0);
+        assertEquals("AI_PAY", recordJson.get("action").asText());
+        assertEquals("one", recordJson.get("executionId").asText());
+        assertTrue(recordJson.has("executionContent"));
+        assertFalse(recordJson.has("execution"));
         assertTrue(json.contains("\"executionInfo\":{\"leftAmount\":800,\"leftExecutionCount\":1,"
                 + "\"leftPeriodExecutionCount\":1,\"periodIndex\":2}"));
         IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(json));
@@ -188,19 +193,20 @@ class CodecTest {
     }
 
     @Test
-    void executionContextKeepsTerminalStatusAndDeclaresInapplicableFiguresAsNull() {
+    void executionContextKeepsTerminalStatusAndOmitsInapplicableFigures() {
         PaymentConstraints unbounded = new PaymentConstraints(null, 1000L, "CNY", 0L, 100_000L, null, null, null, null);
         IntentExecutionContext context = ok(A4p.activateIntent(authorized(unbounded), VERIFIER, NOW));
         ok(A4p.revokeIntent(context));
         String json = codec.serializeIntentExecutionContext(context);
-        assertTrue(json.contains("\"executionInfo\":{\"leftAmount\":1000,\"leftExecutionCount\":null,"
-                + "\"leftPeriodExecutionCount\":null,\"periodIndex\":null},\"executions\":[]"));
+        assertTrue(json.contains("\"executionInfo\":{\"leftAmount\":1000},\"executions\":[]"));
         IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(json));
         assertEquals(IntentExecutionStatus.REVOKED, restored.status());
         fails(A4P_INVALID_STATUS, A4p.createExecution(restored, execution("one", 100, 1), NOW));
         // Without a period constraint there is no current period.
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
-                json.replace("\"periodIndex\":null", "\"periodIndex\":0")));
+                json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":0")));
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+                json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":null")));
     }
 
     @Test
@@ -234,7 +240,7 @@ class CodecTest {
                 A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"three\"", "\"two\""), A4P_DUPLICATE_ID);
         tampered.put(json.replace("\"amount\":100", "\"amount\":501"), A4P_SINGLE_ORDER_AMOUNT_EXCEEDED);
-        tampered.put(json.replace("\"quantity\":1", "\"quantity\":3"), A4P_PRODUCT_QUANTITY_EXCEEDED);
+        tampered.put(json.replace("\"quantity\":1}", "\"quantity\":3}"), A4P_CART_MISMATCH);
         tampered.forEach((input, code) -> {
             assertNotEquals(json, input);
             fails(code, codec.deserializeIntentExecutionContext(input));
@@ -257,7 +263,7 @@ class CodecTest {
 
         ok(A4p.completeExecution(context, "one", 20_000));
         String completed = codec.serializeIntentExecutionContext(context);
-        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
                 completed.replace("\"completedAt\":20000", "\"completedAt\":19999")));
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 completed.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
@@ -265,7 +271,7 @@ class CodecTest {
         ok(A4p.createExecution(context, execution("two", 100, 1), 20_000));
         ok(A4p.cancelExecution(context, "two", 20_000));
         String canceled = codec.serializeIntentExecutionContext(context);
-        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
                 canceled.replace("\"canceledAt\":20000", "\"canceledAt\":19999")));
 
         ok(A4p.createExecution(context, execution("three", 100, 1), 20_000));

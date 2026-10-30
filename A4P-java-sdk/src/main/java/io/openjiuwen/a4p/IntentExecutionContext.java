@@ -1,6 +1,7 @@
 package io.openjiuwen.a4p;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.openjiuwen.a4p.Models.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,7 +51,18 @@ public final class IntentExecutionContext {
 
     // Typed union: the action selects the schema; read it as PaymentExecutionInfo via PaymentProfile.
     public synchronized JsonNode executionInfo() {
-        return CanonicalJson.freezeNode(CanonicalJson.MAPPER.valueToTree(executionInfo));
+        ObjectNode fields = CanonicalJson.MAPPER.createObjectNode();
+        fields.put("leftAmount", executionInfo.leftAmount());
+        if (executionInfo.leftExecutionCount() != null) {
+            fields.put("leftExecutionCount", executionInfo.leftExecutionCount());
+        }
+        if (executionInfo.periodIndex() != null) {
+            fields.put("periodIndex", executionInfo.periodIndex());
+        }
+        if (executionInfo.leftPeriodExecutionCount() != null) {
+            fields.put("leftPeriodExecutionCount", executionInfo.leftPeriodExecutionCount());
+        }
+        return fields;
     }
 
     synchronized PaymentExecutionInfo paymentExecutionInfo() { return executionInfo; }
