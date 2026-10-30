@@ -4,23 +4,30 @@ Mounted at app level (no prefix beyond the dataset path). Routes:
 
     POST   /api/datasets/{ds}/services/{sid}/heartbeat
            body: {status?: "online"|"busy"|"offline"}
-           → 200 {service_id, expires_at, state}
-           → 404 if no lease (service permanent / never registered with ttl)
+           -> 200 {service_id, expires_at, state}
+           -> 404 if no lease (service permanent / never registered with ttl)
 
     DELETE /api/datasets/{ds}/services/{sid}/heartbeat
            body: {permanent?: bool = false}
-           → 200 {service_id, deleted: bool}
+           -> 200 {service_id, deleted: bool}
            permanent=false: mark unhealthy, grace window starts
            permanent=true: hard-delete via RegistryService (same path as
                             an admin DELETE /services/{sid})
 
 Both endpoints respect ``Depends(authorize)`` for namespace + auth
 checks (mirrors the existing reservation endpoints in dataset.py).
+
+NOTE: the appliance-mode per-node heartbeat endpoints
+(``POST /api/nodes/{node}/heartbeat``, ``GET/POST /api/lease-config``)
+were removed — the registry no longer receives node
+heartbeats; instance liveness is reported by the gateway via
+``PATCH /api/instances/{service_id}`` (据元戎 List).
 """
 
 from __future__ import annotations
 
 import logging
+import time as _t
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -100,7 +107,6 @@ async def send_heartbeat(
                 dataset, service_id, exc,
             )
 
-    import time as _t
     return {
         "service_id": service_id,
         "dataset": dataset,

@@ -6,6 +6,7 @@ server can begin accepting requests (e.g. /api/warmup-status) while loading.
 
 import logging
 import time
+from typing import Optional
 
 from a2x_registry.common.paths import database_dir
 from a2x_registry.common import feature_flags
@@ -19,6 +20,221 @@ warmup_state: dict = {
     "progress": 0,
     "error": None,
 }
+
+
+# ── env var names (storage backend selection) ───────────────────────────
+_ENV_DB_KIND = "A2X_REGISTRY_DB_KIND"
+_ENV_DB_ENDPOINT = "A2X_REGISTRY_DB_ENDPOINT"
+_ENV_ETCD_NAMESPACE = "A2X_REGISTRY_ETCD_NAMESPACE"
+_ENV_ETCD_TLS_CA = "A2X_REGISTRY_ETCD_TLS_CA"
+_ENV_ETCD_TLS_CERT = "A2X_REGISTRY_ETCD_TLS_CERT"
+_ENV_ETCD_TLS_KEY = "A2X_REGISTRY_ETCD_TLS_KEY"
+# How long warmup waits for etcd to accept connections before failing.
+# systemd usually starts etcd and this service together; etcd can come up
+# slower, and without the wait the first failed probe aborts warmup for
+# good (manual restart required).
+_ETCD_STARTUP_WAIT_S = 600.0
+_ETCD_RETRY_MAX_DELAY = 10.0
+# Single source of truth for valid storage kinds — ``backend.__main__``
+# (CLI pre-validation) imports this instead of redefining its own tuple.
+VALID_DB_KINDS = ("sqlite", "memory", "etcd")
+
+
+def _resolve_db_config() -> dict:
+    """Build the ``connect(cfg)`` dict from ``A2X_REGISTRY_DB_KIND``.
+
+    - empty/missing -> ``sqlite`` (production single-node, file-persisted at
+      ``<home>/database/registry.db``).
+    - ``memory`` -> in-process ``:memory:`` backend (debug only, lost on
+      process exit); no ``path`` key.
+    - ``etcd`` -> distributed shared-store backend. Requires
+      ``A2X_REGISTRY_DB_ENDPOINT`` (single ``http(s)://`` URL); key prefix from
+      ``A2X_REGISTRY_ETCD_NAMESPACE`` (default ``a2x-registry``). TLS: set
+      ``A2X_REGISTRY_ETCD_TLS_CA/CERT/KEY`` together -> HTTPS + mutual TLS;
+      leave all empty -> plain HTTP, no auth. The endpoint scheme must match:
+      certs configured -> ``https://``, none -> ``http://`` (mismatch is an
+      error).
+
+    Raises ``ValueError`` on an unknown kind or invalid etcd config so a typo
+    never silently falls back. Business code never branches on kind - it only
+    sees the repo returned by ``build_table_repo``.
+    """
+    import os
+
+    kind = os.environ.get(_ENV_DB_KIND, "").strip() or "sqlite"
+    if kind not in VALID_DB_KINDS:
+        raise ValueError(
+            f"unknown A2X_REGISTRY_DB_KIND={kind!r}; "
+            f"accepted values: {', '.join(VALID_DB_KINDS)}"
+        )
+    if kind == "memory":
+        return {"kind": "memory"}
+    if kind == "etcd":
+        # Lazy import: pulls the (heavy) register package, so only pay it on
+        # the etcd path; DEFAULT_NAMESPACE is the canonical default the
+        # EtcdClient itself falls back to.
+        from a2x_registry.register.etcd_client import DEFAULT_NAMESPACE
+
+        endpoint = os.environ.get(_ENV_DB_ENDPOINT, "").strip()
+        if not endpoint:
+            raise ValueError(
+                "A2X_REGISTRY_DB_ENDPOINT is required when DB_KIND=etcd"
+            )
+        if not endpoint.startswith(("http://", "https://")):
+            raise ValueError(f"A2X_REGISTRY_DB_ENDPOINT must be http(s)://, got {endpoint!r}")
+        namespace = (
+            os.environ.get(_ENV_ETCD_NAMESPACE, "").strip()
+            or DEFAULT_NAMESPACE
+        )
+        ca = os.environ.get(_ENV_ETCD_TLS_CA, "").strip()
+        cert = os.environ.get(_ENV_ETCD_TLS_CERT, "").strip()
+        key = os.environ.get(_ENV_ETCD_TLS_KEY, "").strip()
+        tls_set = (bool(ca), bool(cert), bool(key))
+        if any(tls_set) and not all(tls_set):
+            raise ValueError(
+                "A2X_REGISTRY_ETCD_TLS_CA / _CERT / _KEY must all be set "
+                "together (mutual TLS) or all empty (no auth)"
+            )
+        if all(tls_set) and not endpoint.startswith("https://"):
+            raise ValueError(
+                "etcd certs configured but A2X_REGISTRY_DB_ENDPOINT is not "
+                "https://; certs require TLS"
+            )
+        return {
+            "kind": "etcd",
+            "endpoint": endpoint,
+            "namespace": namespace,
+            "ca": ca, "cert": cert, "key": key,
+        }
+    # sqlite (default)
+    db_path = database_dir() / "registry.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return {"kind": "sqlite", "path": str(db_path)}
+
+
+def _build_yuanrong_client(instance_consts) -> Optional[object]:
+    """按环境变量构造元戎沙箱客户端；endpoint 空 → None（模式 B 回 501）。
+
+    环境变量与默认值见 ``a2x_registry/instance/constants.py``（可配置常量区）。
+    数值非法（非浮点）时抛 ValueError 使启动失败——配置错误应当显式暴露。
+    """
+    import os
+
+    endpoint = os.environ.get(
+        instance_consts.YUANRONG_ENDPOINT_ENV, ""
+    ).strip()
+    if not endpoint:
+        return None
+
+    def _float_env(env_name: str, default: float) -> float:
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            return float(default)
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{env_name}={raw!r} is not a number"
+            ) from exc
+
+    from a2x_registry.instance.yuanrong_client import YuanrongSandboxClient
+
+    return YuanrongSandboxClient(
+        frontend_endpoint=endpoint,
+        agent_timeout_s=_float_env(
+            instance_consts.YUANRONG_TIMEOUT_S_ENV,
+            instance_consts.YUANRONG_TIMEOUT_S_DEFAULT,
+        ),
+        agent_namespace=(
+            os.environ.get(
+                instance_consts.YUANRONG_NAMESPACE_ENV, ""
+            ).strip()
+            or instance_consts.YUANRONG_NAMESPACE_DEFAULT
+        ),
+        wait_running_timeout_s=_float_env(
+            instance_consts.YUANRONG_WAIT_RUNNING_S_ENV,
+            instance_consts.YUANRONG_WAIT_RUNNING_S_DEFAULT,
+        ),
+        wait_running_interval_s=_float_env(
+            instance_consts.YUANRONG_WAIT_INTERVAL_S_ENV,
+            instance_consts.YUANRONG_WAIT_INTERVAL_S_DEFAULT,
+        ),
+    )
+
+
+def _wait_for_etcd(client, endpoint: str, wait_s: float) -> None:
+    """Probe ``client`` until etcd answers, up to ``wait_s`` seconds.
+
+    Covers the systemd race where this unit starts before etcd is ready:
+    retrying here lets warmup finish once etcd comes up, instead of leaving
+    the process permanently unassembled until an operator restarts it.
+    """
+    from a2x_registry.register.etcd_client import EtcdError
+
+    logger = logging.getLogger("uvicorn")
+    started = time.monotonic()
+    deadline = started + wait_s
+    delay = 1.0
+    attempt = 0
+    while True:
+        try:
+            client.ping()
+            if attempt:
+                logger.info(
+                    "  etcd reachable at %s after %.1fs",
+                    endpoint, time.monotonic() - started,
+                )
+            return
+        except EtcdError as exc:
+            attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            logger.warning(
+                "  etcd not reachable at %s yet - retrying in %.0fs "
+                "(%.0fs left): %s",
+                endpoint, min(delay, remaining), remaining, exc,
+            )
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, _ETCD_RETRY_MAX_DELAY)
+
+
+def build_table_repo(cfg: dict):
+    """Build the storage repo (``TableRepo``) for the resolved config.
+
+    - ``sqlite`` / ``memory``: connect the backend, initialise the schema, wrap
+      in ``RegistryTableService``.
+    - ``etcd``: build ``EtcdTableRepo`` on an ``EtcdClient``; probe
+      connectivity first, retrying for up to 600s so a slow-starting etcd
+      (systemd start ordering) does not abort startup. Still fails if etcd
+      never becomes reachable.
+
+    Raises on backend connect / schema / connectivity failure; the caller
+    decides how to surface it.
+    """
+    if cfg.get("kind") == "etcd":
+        from a2x_registry.register.etcd_client import (
+            DEFAULT_NAMESPACE,
+            EtcdClient,
+        )
+        from a2x_registry.register.etcd_repo import EtcdTableRepo
+
+        client = EtcdClient(
+            endpoint=cfg["endpoint"],
+            namespace=cfg.get("namespace", DEFAULT_NAMESPACE),
+            ca=cfg.get("ca", ""),
+            cert=cfg.get("cert", ""),
+            key=cfg.get("key", ""),
+        )
+        _wait_for_etcd(client, cfg["endpoint"], _ETCD_STARTUP_WAIT_S)
+        return EtcdTableRepo(client)
+
+    from a2x_registry.common.db import connect, init_schema
+    from a2x_registry.register.service import RegistryTableService
+
+    backend = connect(cfg)
+    init_schema(backend.conn)
+    return RegistryTableService(backend)
 
 
 def run_warmup() -> None:
@@ -40,8 +256,83 @@ def run_warmup() -> None:
     try:
         t0 = time.time()
 
+        # 0. SQL backend + RegistryTableService (base assembly).
+        #    image/instance services pick up ``_table_service`` from
+        #    warmup_state instead of re-instantiating their own Backend.
+        #    Failure here is fatal — without the SQL layer image/instance
+        #    modules have no store to bind to.
+        _stage("Initializing SQL backend...", 2)
+        try:
+            import os
+
+            db_cfg = _resolve_db_config()
+            table_svc = build_table_repo(db_cfg)
+
+            # Register the named registries per startup mode.
+            # Generic mode: only the A2X backward-compat ``default``
+            # service registry. Appliance mode: also create the image /
+            # instance registries so image/instance routes have a target.
+            mode = os.environ.get("A2X_REGISTRY_MODE", "").strip()
+            table_svc.create_registry("default", "service")
+            if mode == "appliance":
+                table_svc.create_registry("images", "image")
+                table_svc.create_registry("instances", "instance")
+
+            warmup_state["_table_service"] = table_svc
+            logger.info(
+                "  SQL backend ready (kind=%s, mode=%s)",
+                db_cfg.get("kind"), mode or "generic",
+            )
+
+            # Assemble ImageService only in appliance mode (image registry
+            # already created above). Non-appliance mode skips assembly;
+            # the router's _resolve_service then returns 404, matching the
+            # design that generic mode does not create image/instance
+            # tables. The image module picks up the already-assembled
+            # RegistryTableService from _table_service.
+            if mode == "appliance":
+                from a2x_registry.image.service import ImageService
+                from a2x_registry.image.deps import set_image_service
+                from a2x_registry.instance.service import InstanceService
+                from a2x_registry.instance.deps import set_instance_service
+                from a2x_registry.instance import constants as instance_consts
+                from a2x_registry.instance.yuanrong_client import (
+                    YuanrongSandboxClient,
+                )
+
+                image_svc = ImageService(table_svc)
+                set_image_service(image_svc)
+                logger.info("  ImageService assembled (appliance mode)")
+
+                # 元戎客户端（可选）：endpoint 空 = 未配置，模式 B 请求回 501。
+                yuanrong_client = _build_yuanrong_client(instance_consts)
+                instance_svc = InstanceService(
+                    table_svc, yuanrong_client=yuanrong_client
+                )
+                set_instance_service(instance_svc)
+                logger.info(
+                    "  InstanceService assembled (appliance mode, "
+                    "yuanrong=%s)",
+                    "configured" if yuanrong_client is not None
+                    else "not-configured",
+                )
+
+                # NOTE: per-node heartbeat assembly was removed
+                # the registry no longer receives node heartbeats or derives
+                # instance status; the gateway polls 元戎 and PATCHes status.
+        except Exception as exc:
+            from a2x_registry.register.etcd_client import EtcdError
+
+            if isinstance(exc, EtcdError):
+                # One-line connection error — no traceback (etcd down /
+                # unreachable is an ops issue, the message says it all).
+                logger.error("  etcd backend init failed: %s", exc)
+            else:
+                logger.error("  SQL backend init failed: %s", exc, exc_info=True)
+            raise
+
         # 1. Registry
-        _stage("注册服务加载...", 5)
+        _stage("Loading registry services...", 5)
         registry_svc = init_registry_service(DATABASE_DIR)
         init_build_service(registry_svc)  # share the same instance with build router
         registry_states = registry_svc.startup()
@@ -174,7 +465,7 @@ def run_warmup() -> None:
         logger.info("Warmup: registry done (%.1fs)", time.time() - t0)
 
         # 2. Taxonomy caches
-        _stage("加载分类树...", 20)
+        _stage("Loading taxonomy tree...", 20)
         from a2x_registry.backend.services.taxonomy_service import get_taxonomy_tree
         for ds in discover_datasets():
             try:
@@ -185,12 +476,12 @@ def run_warmup() -> None:
         logger.info("Warmup: taxonomy done (%.1fs)", time.time() - t0)
 
         # 3. A2X engines — pure LLM, runs on the lite install too.
-        _stage("加载 A2X 搜索引擎...", 35)
+        _stage("Loading A2X search engine...", 35)
         for ds in discover_datasets():
             paths = resolve_dataset_paths(ds)
             if paths["taxonomy_path"].exists():
                 for mode in ("get_one", "get_all", "get_important"):
-                    _stage(f"加载 A2X {mode} ({ds})...", 35)
+                    _stage(f"Loading A2X {mode} ({ds})...", 35)
                     try:
                         search_service._get_a2x(ds, mode)
                         logger.info("  A2X %s ready: %s", mode, ds)
@@ -202,7 +493,7 @@ def run_warmup() -> None:
         # sentence_transformers). On lite installs we skip them cleanly.
         if feature_flags.has("vector"):
             # 4. Clean stale ChromaDB collections
-            _stage("清理向量数据库...", 58)
+            _stage("Cleaning vector store...", 58)
             try:
                 import chromadb
                 chroma_dir = str(DATABASE_DIR / "chroma")
@@ -217,9 +508,9 @@ def run_warmup() -> None:
                 logger.warning("  ChromaDB cleanup failed: %s", e)
 
             # 5. Vector sync for registry-managed datasets
-            _stage("同步向量数据库...", 62)
+            _stage("Syncing vector store...", 62)
             for ds in registry_states:
-                _stage(f"同步向量数据库 ({ds})...", 62)
+                _stage(f"Syncing vector store ({ds})...", 62)
                 try:
                     search_service.sync_vector(ds)
                     logger.info("  Vector sync done: %s", ds)
@@ -228,9 +519,9 @@ def run_warmup() -> None:
             logger.info("Warmup: vector sync done (%.1fs)", time.time() - t0)
 
             # 5b. Vector engines
-            _stage("加载向量搜索引擎...", 75)
+            _stage("Loading vector search engine...", 75)
             for ds in discover_datasets():
-                _stage(f"加载向量引擎 ({ds})...", 75)
+                _stage(f"Loading vector engine ({ds})...", 75)
                 try:
                     search_service._get_vector(ds)
                     logger.info("  Vector ready: %s", ds)
@@ -239,7 +530,7 @@ def run_warmup() -> None:
             logger.info("Warmup: vector done (%.1fs)", time.time() - t0)
 
             # 6. Pre-heat embedding models (one per unique model across datasets)
-            _stage("预热向量模型...", 90)
+            _stage("Pre-heating embedding model...", 90)
             seen_models = set()
             for ds in discover_datasets():
                 model_name = search_service.read_vector_config(ds)
@@ -254,13 +545,18 @@ def run_warmup() -> None:
         else:
             logger.info("Warmup: lite install detected — skipping vector / chroma stages")
 
-        warmup_state["stage"] = "完成"
+        warmup_state["stage"] = "complete"
         warmup_state["progress"] = 100
         warmup_state["ready"] = True
         logger.info("Warmup [100%%] complete — total %.1fs", time.time() - t0)
 
     except Exception as e:
-        import traceback
+        from a2x_registry.register.etcd_client import EtcdError
+
         warmup_state["error"] = str(e)
         warmup_state["ready"] = True
-        logger.error("Warmup error: %s\n%s", e, traceback.format_exc())
+        if isinstance(e, EtcdError):
+            logger.error("Warmup error: %s", e)  # one-liner, no traceback
+        else:
+            import traceback
+            logger.error("Warmup error: %s\n%s", e, traceback.format_exc())

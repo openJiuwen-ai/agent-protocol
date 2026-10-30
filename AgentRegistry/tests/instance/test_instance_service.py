@@ -1,0 +1,278 @@
+"""InstanceService 业务逻辑测试（memory 后端）。
+
+覆盖全部函数契约：
+- register_instance：新增 / 幂等 upsert 保留 created_at / 校验
+- update_instance：部分更新 node/address/instance_id/status / 404 / 空字段
+- deregister_instance：删存在 / 幂等删不存在
+- list_instances：全量 / 过滤 / include_unhealthy（基于落库 status）
+- status 落库：注册即 运行、PATCH 可改，注册中心不派生
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from a2x_registry.instance.errors import (
+    InstanceNotFoundError,
+    InstanceValidationError,
+)
+from a2x_registry.instance.service import InstanceService
+
+from .conftest import make_entry
+
+
+# ── register_instance ──────────────────────────────────────────
+
+def test_register_new_instance(instance_svc: InstanceService):
+    """首次注册 → status=运行，全部字段落库。"""
+    entry = make_entry()
+    result = instance_svc.register_instance(entry)
+    assert result["service_id"] == entry["service_id"]
+    assert result["kind"] == "三方"
+    assert result["framework"] == "langchain"
+    assert result["framework_version"] == "0.2.0"
+    assert result["node"] == "192.168.0.11"
+    assert result["address"] == "10.244.1.7:4096"
+    assert result["user"] == "alice"
+    assert result["status"] == "运行"
+    # created_at / last_active_at 均已填写
+    assert result["created_at"]
+    assert result["last_active_at"]
+    assert result["created_at"] == result["last_active_at"]
+
+
+def test_register_upsert_preserves_created_at(instance_svc: InstanceService):
+    """同 service_id 二次注册 → created_at 保留，last_active_at 更新，
+    node/address 覆盖。"""
+    r1 = instance_svc.register_instance(
+        make_entry(node="192.168.0.11", address="http://old")
+    )
+    created_at = r1["created_at"]
+
+    r2 = instance_svc.register_instance(
+        make_entry(node="192.168.0.99", address="http://new")
+    )
+    assert r2["created_at"] == created_at          # 保留
+    assert r2["node"] == "192.168.0.99"            # 覆盖
+    assert r2["address"] == "http://new"           # 覆盖
+    # last_active_at 已刷新（至少不早于 created_at）
+    assert r2["last_active_at"] >= r2["created_at"]
+
+
+def test_register_invalid_kind_rejected(instance_svc: InstanceService):
+    """kind 只接受 三方 / 九问。"""
+    with pytest.raises(InstanceValidationError, match="kind"):
+        instance_svc.register_instance(make_entry(kind="xxx"))
+
+
+def test_register_missing_field_rejected(instance_svc: InstanceService):
+    """缺少必填字段 → ValidationError。"""
+    entry = make_entry()
+    # node/address 已改为可选（缺省写空串）；user 仍必填
+    del entry["user"]
+    with pytest.raises(InstanceValidationError, match="user"):
+        instance_svc.register_instance(entry)
+
+
+# ── update_instance ────────────────────────────────────────────
+
+def test_update_node_only(instance_svc: InstanceService):
+    """PATCH 只改 node → node 更新，address 不动。"""
+    instance_svc.register_instance(make_entry(node="10.0.0.1", address="http://old"))
+    sid = make_entry()["service_id"]
+    result = instance_svc.update_instance(sid, {"node": "10.0.0.2"})
+    assert result["node"] == "10.0.0.2"
+    assert result["address"] == "http://old"       # 保留
+
+
+def test_update_address_only(instance_svc: InstanceService):
+    """PATCH 只改 address → address 更新，last_active_at 刷新。"""
+    r1 = instance_svc.register_instance(make_entry(address="http://old"))
+    result = instance_svc.update_instance(r1["service_id"], {"address": "http://new"})
+    assert result["address"] == "http://new"
+    assert result["last_active_at"] >= r1["last_active_at"]
+
+
+def test_update_both_node_and_address(instance_svc: InstanceService):
+    """PATCH 同时改 node + address。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    result = instance_svc.update_instance(
+        sid, {"node": "10.0.0.9", "address": "10.9.9.9:8080"}
+    )
+    assert result["node"] == "10.0.0.9"
+    assert result["address"] == "10.9.9.9:8080"
+
+
+def test_update_missing_instance_raises_404(instance_svc: InstanceService):
+    """更新不存在的 sid → InstanceNotFoundError。"""
+    with pytest.raises(InstanceNotFoundError):
+        instance_svc.update_instance("generic_nope", {"node": "10.0.0.1"})
+
+
+def test_update_no_fields_rejected(instance_svc: InstanceService):
+    """空 fields（既无 node 也无 address）→ ValidationError。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    with pytest.raises(InstanceValidationError):
+        instance_svc.update_instance(sid, {})
+
+
+# ── deregister_instance ────────────────────────────────────────
+
+def test_deregister_existing(instance_svc: InstanceService):
+    """删存在的实例 → deleted=True。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    result = instance_svc.deregister_instance(sid)
+    assert result == {"service_id": sid, "deleted": True}
+    # 再查 -> 不在列表中
+    rows, _ = instance_svc.list_instances()
+    assert rows == []
+
+
+def test_deregister_missing_is_idempotent(instance_svc: InstanceService):
+    """删不存在的实例 → deleted=False（幂等）。"""
+    result = instance_svc.deregister_instance("generic_nope")
+    assert result == {"service_id": "generic_nope", "deleted": False}
+
+
+# ── list_instances ─────────────────────────────────────────────
+
+def _seed_list_data(instance_svc: InstanceService):
+    """灌入 3 条实例供过滤测试。"""
+    instance_svc.register_instance(
+        make_entry(user="alice", framework="langchain", node="192.168.0.11", kind="三方")
+    )
+    instance_svc.register_instance(
+        make_entry(user="alice", framework="llama_index", node="192.168.0.11", kind="三方")
+    )
+    instance_svc.register_instance(
+        make_entry(user="bob", framework="langchain", node="192.168.0.12", kind="九问")
+    )
+
+
+def test_list_all(instance_svc: InstanceService):
+    _seed_list_data(instance_svc)
+    rows, _ = instance_svc.list_instances()
+    assert len(rows) == 3
+    assert all(r["status"] == "运行" for r in rows)
+
+
+def test_list_filter_by_node(instance_svc: InstanceService):
+    _seed_list_data(instance_svc)
+    rows, _ = instance_svc.list_instances(filter={"node": "192.168.0.11"})
+    assert len(rows) == 2
+
+
+def test_list_filter_by_framework(instance_svc: InstanceService):
+    _seed_list_data(instance_svc)
+    rows, _ = instance_svc.list_instances(filter={"framework": "langchain"})
+    assert len(rows) == 2
+
+
+def test_list_filter_by_kind(instance_svc: InstanceService):
+    _seed_list_data(instance_svc)
+    rows, _ = instance_svc.list_instances(filter={"kind": "九问"})
+    assert len(rows) == 1
+    assert rows[0]["user"] == "bob"
+
+
+def test_list_filter_by_user(instance_svc: InstanceService):
+    _seed_list_data(instance_svc)
+    rows, _ = instance_svc.list_instances(filter={"user": "alice"})
+    assert len(rows) == 2
+
+
+def test_list_include_unhealthy_filter(instance_svc: InstanceService):
+    """include_unhealthy=False（默认）排除停止/异常；=True 返回全部。
+
+    注册中心不收心跳、不派生状态：非运行状态由
+    gateway 据元戎 List 经 PATCH 写入，这里直接 PATCH 落库模拟。
+    """
+    _seed_list_data(instance_svc)
+    # gateway 把 192.168.0.11 上的实例置为 异常
+    for row in instance_svc.list_instances(include_unhealthy=True)[0]:
+        if row["node"] == "192.168.0.11":
+            instance_svc.update_instance(row["service_id"], {"status": "异常"})
+
+    # 默认：192.168.0.11 的 2 条被过滤，只剩 192.168.0.12 的 1 条
+    rows, _ = instance_svc.list_instances()
+    assert len(rows) == 1
+    assert rows[0]["node"] == "192.168.0.12"
+
+    # include_unhealthy=True：全部返回（运行 + 异常）
+    rows, _ = instance_svc.list_instances(include_unhealthy=True)
+    assert len(rows) == 3
+    assert {r["status"] for r in rows} == {"运行", "异常"}
+
+
+# ── instance_id（元戎实例 ID，可选、不作为主键）────────────────
+
+def test_register_with_instance_id(instance_svc: InstanceService):
+    """注册带 instance_id → 存入 data JSON 并在条目中返回。"""
+    result = instance_svc.register_instance(
+        make_entry(instance_id="yr-inst-7f3a92")
+    )
+    assert result["instance_id"] == "yr-inst-7f3a92"
+
+
+def test_register_without_instance_id_defaults_empty(instance_svc: InstanceService):
+    """注册不带 instance_id → 条目返回空串（非元戎拉起可空）。"""
+    result = instance_svc.register_instance(make_entry())
+    assert result["instance_id"] == ""
+
+
+def test_register_upsert_overwrites_instance_id(instance_svc: InstanceService):
+    """同 service_id 重注册 → instance_id 覆盖为最新值。"""
+    instance_svc.register_instance(make_entry(instance_id="yr-inst-old"))
+    result = instance_svc.register_instance(
+        make_entry(instance_id="yr-inst-new")
+    )
+    assert result["instance_id"] == "yr-inst-new"
+
+
+def test_update_instance_id_only(instance_svc: InstanceService):
+    """PATCH 只改 instance_id（元戎迁移后回填）→ 其他字段不动。"""
+    instance_svc.register_instance(make_entry(address="10.0.0.1:80"))
+    sid = make_entry()["service_id"]
+    result = instance_svc.update_instance(sid, {"instance_id": "yr-inst-9d1e07"})
+    assert result["instance_id"] == "yr-inst-9d1e07"
+    assert result["address"] == "10.0.0.1:80"      # 保留
+    assert result["status"] == "运行"               # 保留
+
+
+# ── status 落库（gateway 写入，注册中心不派生）────────────────
+
+def test_update_status_stopped(instance_svc: InstanceService):
+    """PATCH status=停止 → 落库并在 include_unhealthy=true 时可见。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    result = instance_svc.update_instance(sid, {"status": "停止"})
+    assert result["status"] == "停止"
+
+    # 默认查询（只回运行）不含该实例；include_unhealthy=true 可见
+    rows, _ = instance_svc.list_instances()
+    assert rows == []
+    rows, _ = instance_svc.list_instances(include_unhealthy=True)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "停止"
+
+
+def test_update_status_back_to_running(instance_svc: InstanceService):
+    """PATCH status=运行 可恢复默认可见性。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    instance_svc.update_instance(sid, {"status": "异常"})
+    result = instance_svc.update_instance(sid, {"status": "运行"})
+    assert result["status"] == "运行"
+    rows, _ = instance_svc.list_instances()
+    assert len(rows) == 1
+
+
+def test_update_invalid_status_rejected(instance_svc: InstanceService):
+    """status 非法值（不在 运行/停止/异常 枚举）→ ValidationError。"""
+    instance_svc.register_instance(make_entry())
+    sid = make_entry()["service_id"]
+    with pytest.raises(InstanceValidationError, match="status"):
+        instance_svc.update_instance(sid, {"status": "running"})

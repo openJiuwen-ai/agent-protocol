@@ -1,37 +1,37 @@
-"""通用检索评估指标"""
+"""General-purpose retrieval evaluation metrics."""
 
 from typing import List, Set
 import numpy as np
 
 
 def precision_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
-    """计算 Precision@K
+    """Compute Precision@K.
 
     P@K = |retrieved[:k] ∩ relevant| / k
 
     Args:
-        retrieved: 检索结果 ID 列表（按相关性排序）
-        relevant: 相关文档 ID 集合
-        k: 截断位置
+        retrieved: list of retrieved document IDs (ranked by relevance)
+        relevant: set of relevant document IDs
+        k: cutoff position
 
     Returns:
-        Precision@K 值，范围 [0, 1]
+        Precision@K value, in [0, 1]
     """
     return len(set(retrieved[:k]) & relevant) / k
 
 
 def recall_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
-    """计算 Recall@K
+    """Compute Recall@K.
 
     R@K = |retrieved[:k] ∩ relevant| / |relevant|
 
     Args:
-        retrieved: 检索结果 ID 列表
-        relevant: 相关文档 ID 集合
-        k: 截断位置
+        retrieved: list of retrieved document IDs
+        relevant: set of relevant document IDs
+        k: cutoff position
 
     Returns:
-        Recall@K 值，范围 [0, 1]
+        Recall@K value, in [0, 1]
     """
     if not relevant:
         return 0.0
@@ -39,32 +39,32 @@ def recall_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
 
 
 def hit_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
-    """计算 Hit@K
+    """Compute Hit@K.
 
-    Hit@K = 1 如果 top-k 中有任意相关文档，否则为 0
+    Hit@K = 1 if any relevant document is in the top-k, else 0.
 
     Args:
-        retrieved: 检索结果 ID 列表
-        relevant: 相关文档 ID 集合
-        k: 截断位置
+        retrieved: list of retrieved document IDs
+        relevant: set of relevant document IDs
+        k: cutoff position
 
     Returns:
-        1.0 或 0.0
+        1.0 or 0.0
     """
     return 1.0 if set(retrieved[:k]) & relevant else 0.0
 
 
 def mrr(retrieved: List[str], relevant: Set[str]) -> float:
-    """计算 Mean Reciprocal Rank
+    """Compute Mean Reciprocal Rank.
 
-    MRR = 1 / (第一个相关文档的排名)
+    MRR = 1 / (rank of the first relevant document)
 
     Args:
-        retrieved: 检索结果 ID 列表
-        relevant: 相关文档 ID 集合
+        retrieved: list of retrieved document IDs
+        relevant: set of relevant document IDs
 
     Returns:
-        MRR 值，范围 [0, 1]
+        MRR value, in [0, 1]
     """
     for i, doc_id in enumerate(retrieved, 1):
         if doc_id in relevant:
@@ -73,27 +73,27 @@ def mrr(retrieved: List[str], relevant: Set[str]) -> float:
 
 
 def ndcg_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
-    """计算 NDCG@K (Normalized Discounted Cumulative Gain)
+    """Compute NDCG@K (Normalized Discounted Cumulative Gain).
 
     DCG@K = Σ rel_i / log2(i+1)
     NDCG@K = DCG@K / IDCG@K
 
     Args:
-        retrieved: 检索结果 ID 列表
-        relevant: 相关文档 ID 集合
-        k: 截断位置
+        retrieved: list of retrieved document IDs
+        relevant: set of relevant document IDs
+        k: cutoff position
 
     Returns:
-        NDCG@K 值，范围 [0, 1]
+        NDCG@K value, in [0, 1]
     """
-    # 计算 DCG
+    # Compute DCG
     dcg = sum(
         1.0 / np.log2(i + 1)
         for i, doc_id in enumerate(retrieved[:k], 1)
         if doc_id in relevant
     )
 
-    # 计算 IDCG (理想情况：所有相关文档排在最前)
+    # Compute IDCG (ideal: all relevant documents ranked first)
     n_relevant = min(k, len(relevant))
     idcg = sum(1.0 / np.log2(i + 1) for i in range(1, n_relevant + 1))
 
