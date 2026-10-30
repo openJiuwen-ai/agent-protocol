@@ -1,17 +1,8 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""企业级配置 ``template_ref`` 槽位契约。
-
-来源：``jiuwenswarm/enterprise/config/effective/schemas.py``。槽位名是
-``agent_template.template_ref`` 的 JSON 键，gateway（配置写入/生效解析）与
-AgentServer（按槽位加载）必须逐字一致，否则会出现「配置写进去了但读侧取不到」。
-
-边界：本模块只保留槽位枚举、槽位 → 实体表映射与 ``normalize_template_ref``
-这一零依赖纯函数；``RoutingContext`` / ``EffectiveEnterpriseConfig`` 等加载
-快照依赖各仓的数据库与运行时，留在实现侧。
-"""
+"""企业级配置路由上下文、加载结果与 ``template_ref`` 槽位定义。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -32,7 +23,6 @@ class TemplateRefSlot(StrEnum):
     A2A_ACCESS_POLICY = "a2a_access_policy"
 
 
-#: 槽位 → 企业配置实体表名。
 SLOT_ENTITY_TABLE: dict[TemplateRefSlot, str] = {
     TemplateRefSlot.DEFAULT_MODEL: "model_template",
     TemplateRefSlot.VIDEO_MODEL: "model_template",
@@ -47,7 +37,6 @@ SLOT_ENTITY_TABLE: dict[TemplateRefSlot, str] = {
     TemplateRefSlot.A2A_ACCESS_POLICY: "a2a_access_policy_template",
 }
 
-#: 模型类槽位（共用 ``model_template`` 表）。
 MODEL_SLOT_KEYS = frozenset({
     TemplateRefSlot.DEFAULT_MODEL,
     TemplateRefSlot.VIDEO_MODEL,
@@ -56,7 +45,6 @@ MODEL_SLOT_KEYS = frozenset({
     TemplateRefSlot.IMAGE_GEN_MODEL,
 })
 
-#: 默认加载的槽位集合。
 DEFAULT_AGENT_LOAD_SLOTS = frozenset({
     *MODEL_SLOT_KEYS,
     TemplateRefSlot.EMBEDDING_MODEL,
@@ -96,10 +84,70 @@ def normalize_template_ref(value: Any) -> dict[str, list[str]]:
     return out
 
 
-__all__ = [
+@dataclass(frozen=True)
+class RoutingContext:
+    """企业配置路由三元组；不含 ``gateway_id``（Agent 业务不消费）。"""
+
+    group_id: str
+    bot_id: str
+    user_id: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "group_id": self.group_id,
+            "bot_id": self.bot_id,
+            "user_id": self.user_id,
+        }
+
+
+@dataclass
+class EffectiveEnterpriseConfig:
+    """单次路由上下文下解析完成的企业级配置快照。"""
+
+    routing: RoutingContext
+    resource_id: str | None = None
+    instance_agent_resource: dict[str, Any] | None = None
+    ref_template_id: str | None = None
+    agent_template: dict[str, Any] | None = None
+    template_ref: dict[str, list[str]] = field(default_factory=dict)
+    models: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    embedding: list[dict[str, Any]] | None = None
+    skill_prebuilt: list[dict[str, Any]] | None = None
+    extension_config: list[dict[str, Any]] | None = None
+    mcp: list[dict[str, Any]] | None = None
+    permissions: list[dict[str, Any]] | None = None
+    a2a_access_policy: list[dict[str, Any]] | None = None
+    service_id: str | None = None
+    send_file_allowed: bool = True
+    debug: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "routing": self.routing.as_dict(),
+            "resource_id": self.resource_id,
+            "instance_agent_resource": self.instance_agent_resource,
+            "ref_template_id": self.ref_template_id,
+            "agent_template": self.agent_template,
+            "template_ref": dict(self.template_ref),
+            "models": dict(self.models),
+            "embedding": self.embedding,
+            "skill_prebuilt": self.skill_prebuilt,
+            "extension_config": self.extension_config,
+            "mcp": self.mcp,
+            "permissions": self.permissions,
+            "a2a_access_policy": self.a2a_access_policy,
+            "service_id": self.service_id,
+            "send_file_allowed": self.send_file_allowed,
+            "debug": dict(self.debug),
+        }
+
+
+__all__ = (
     "DEFAULT_AGENT_LOAD_SLOTS",
+    "EffectiveEnterpriseConfig",
     "MODEL_SLOT_KEYS",
+    "RoutingContext",
     "SLOT_ENTITY_TABLE",
     "TemplateRefSlot",
     "normalize_template_ref",
-]
+)
