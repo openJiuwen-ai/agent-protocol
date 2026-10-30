@@ -1,23 +1,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""企业版专家包允许名单的线上契约（元数据键 / 内部 HTTP 头 / 规范化与编解码）。
 
-来源：``jiuwenswarm/common/schema/package_allowlist.py``（原
-``jiuwenswarm/server/runtime/package_allowlist.py``）。Gateway 把名单写进
-E2A 信封的 ``channel_context``，并通过内部 HTTP 头转给 server；两侧必须使用
-同一份键名、长度上限与规范化规则，否则会出现「配置了名单但请求被拒」的漂移。
+"""企业版专家包允许名单。
 
-边界：本模块只保留**无状态**部分——常量、``normalize_packages`` 等纯函数与
-信封写入；``bind_request_subject`` / ``bind_outbound_allowlist`` 等 ContextVar
-状态，以及 ``allows`` 依赖的 Hub/市场包查找，均依赖具体仓的运行时，留在实现侧。
-``match_expr`` 只做结构规范化（是否可求值由企业版准入层用
-``openjiuwen_protocol.match_expressions`` 校验），保证传输层不会因策略差异
-改变报文形状。
-
-**空名单语义（fail-closed）**：名单为空时，受控包（Hub/内置/resources）一律
-不可用，只有用户 local 根下的自有包放行（见 ``allows``）。因此 encode / decode
-在遇到非法、超长或损坏内容时降级成空名单是**拒绝**而非放行，不能把空名单
-改读成「未配置、不限制」。空名单和「配置了但损坏」在线上不做区分（两者的安全
-效果必须一致），只在日志上区分：缺失/空白不告警，解析失败或超长打 warning。
+个人版不读名单。企业版里，用户 local 根下且来源不是 hub 的包始终可用。
+Hub、内置和 resources 包必须出现在本次请求带上的名单里。没有名单或名单为空时，这些包不可用。
 """
 
 from __future__ import annotations
@@ -25,49 +11,44 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: E2A 信封 ``channel_context`` 中承载名单的键。
-PACKAGE_ALLOWLIST_METADATA_KEY: str = "package_allowlist"
-#: Gateway → server 内部 HTTP 头名。
-PACKAGE_ALLOWLIST_HEADER_NAME: str = "X-Jiuwenswarm-Package-Allowlist"
-#: 名单 JSON 序列化后的上限（16KiB）。
-MAX_PACKAGE_ALLOWLIST_JSON_BYTES: int = 16 * 1024
+METADATA_KEY = "package_allowlist"
+HEADER_NAME = "X-Jiuwenswarm-Package-Allowlist"
+MAX_ALLOWLIST_JSON_BYTES = 16 * 1024
 
-
-def _hub_asset_id(encoded: str) -> str:
-    """Decode a base64-wrapped Hub asset id (catalog key, not a secret)."""
-    return base64.b64decode(encoded.encode("ascii")).hex()
-
-
-#: 企业版目录不展示的 Hub asset id（公共层只保留这一份，不判断产品形态）。
-HIDDEN_HUB_ASSET_IDS = frozenset(
-    (
-        _hub_asset_id("eU2xv+iITWiX1i01hIlKWQ=="),  # 鸿蒙 App 开发专家
-        _hub_asset_id("9jOxRcOrTkK4njb6NpssAA=="),  # 健康生活顾问
-        _hub_asset_id("MsIj1puDTDW0C8OTXG+fZw=="),  # 旅游规划专家团
-        _hub_asset_id("NZ846g53QWuNltI64sEr5Q=="),  # 身材管理专家团
-    )
+# (user_id, group_id)。未绑定表示这次调用没有请求身份。
+_SUBJECT: ContextVar[tuple[str, str] | None] = ContextVar(
+    "package_allowlist_subject", default=None
+)
+# 本次请求的 packages。None 表示还没有绑定。
+_ALLOWLIST: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "package_allowlist_packages", default=None
+)
+# Gateway 组 HTTP 头时的名单。None 表示这次发送没有绑定。
+_OUTBOUND: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "package_allowlist_outbound", default=None
 )
 
-#: 包种类别名 → 规范名。
-PACKAGE_KIND_ALIASES: dict[str, str] = {
+_CANONICAL_KINDS = {
     "agent_template": "agent_template",
     "agent_templates": "agent_template",
     "agent_group": "agent_group",
     "agent_groups": "agent_group",
 }
-#: 规范包种类 → 本地目录名。
-PACKAGE_KIND_DIRS: dict[str, str] = {
+_KIND_DIRS = {
     "agent_template": "agent_templates",
     "agent_group": "agent_groups",
 }
 
 
 def canonical_kind(kind: str) -> str | None:
-    return PACKAGE_KIND_ALIASES.get(str(kind or "").strip())
+    return _CANONICAL_KINDS.get(str(kind or "").strip())
 
 
 def normalize_packages(raw: Any) -> list[dict[str, Any]]:
@@ -99,27 +80,35 @@ def normalize_packages(raw: Any) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         record: dict[str, Any] = {"kind": kind, "id": package_id}
-        match_expr = _structural_match_expr(item.get("match_expr"))
+        match_expr = _normalize_match_expr(item.get("match_expr"))
         if match_expr is not None:
             record["match_expr"] = match_expr
         packages.append(record)
     return packages
 
 
-def _structural_match_expr(raw: Any) -> Any:
-    """空范围保持为空。非空范围只保留字符串或字符串列表，不求值。"""
+def _normalize_match_expr(raw: Any) -> Any:
+    """空范围保持为空。非空范围必须是可求值的 user_id / group_id 表达式。"""
     if raw is None or raw == "" or raw == []:
         return None
+    from gateway.config.enterprise.expressions import validate_match_expr
+
     if isinstance(raw, str):
         text = raw.strip()
-        return text or None
+        if not text:
+            return None
+        validate_match_expr(text)
+        return text
     if isinstance(raw, list):
         items = []
         for item in raw:
             text = str(item or "").strip()
             if text:
                 items.append(text)
-        return items or None
+        if not items:
+            return None
+        validate_match_expr(items)
+        return items
     raise ValueError("match_expr is invalid")
 
 
@@ -134,36 +123,25 @@ def _packages_json(packages: list[dict[str, Any]]) -> bytes:
 
 def ensure_packages_fit(packages: list[dict[str, Any]]) -> None:
     """名单 JSON 超过 16KiB 时拒绝写入。"""
-    if len(_packages_json(packages)) > MAX_PACKAGE_ALLOWLIST_JSON_BYTES:
+    if len(_packages_json(packages)) > MAX_ALLOWLIST_JSON_BYTES:
         raise ValueError("package allowlist exceeds 16384 bytes")
 
 
 def encode_package_allowlist_header(packages: list[dict[str, Any]]) -> str:
-    """把名单编成内部 HTTP 头。过大或非法时改发空名单。
-
-    发空名单等价于「受控包全部拒绝」（fail-closed），不是「不限制」；这样网关侧
-    配置异常时不会静默放开访问，代价是受控包不可用，需靠 warning 日志定位。
-    """
+    """把名单编成内部 HTTP 头。过大或非法时改发空名单。"""
     try:
         payload = normalize_packages(packages)
         raw = _packages_json(payload)
-        if len(raw) > MAX_PACKAGE_ALLOWLIST_JSON_BYTES:
+        if len(raw) > MAX_ALLOWLIST_JSON_BYTES:
             raise ValueError("package allowlist exceeds 16384 bytes")
     except ValueError:
-        logger.warning(
-            "[package_allowlist] allowlist header encode failed, sending empty "
-            "(controlled packages will be denied)"
-        )
+        logger.warning("[package_allowlist] allowlist header encode failed, sending empty")
         raw = b"[]"
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
 def decode_package_allowlist_header(value: str | None) -> list[dict[str, Any]]:
-    """还原内部 HTTP 头。缺失或损坏时为空名单。
-
-    与 encode 对称：空名单即拒绝受控包，不是放行。缺失/空白是正常路径（静默），
-    解码失败或超长才打 warning，据此可区分「未配置」与「配置了但损坏」。
-    """
+    """还原内部 HTTP 头。缺失或损坏时为空名单。"""
     if value is None or not str(value).strip():
         return []
     encoded = str(value).strip()
@@ -171,38 +149,201 @@ def decode_package_allowlist_header(value: str | None) -> list[dict[str, Any]]:
         encoded_bytes = encoded.encode("ascii")
         padding = b"=" * (-len(encoded_bytes) % 4)
         raw = base64.b64decode(encoded_bytes + padding, altchars=b"-_", validate=True)
-        if len(raw) > MAX_PACKAGE_ALLOWLIST_JSON_BYTES:
+        if len(raw) > MAX_ALLOWLIST_JSON_BYTES:
             raise ValueError("package allowlist exceeds 16384 bytes")
         decoded = json.loads(raw.decode("utf-8"))
         return normalize_packages(decoded)
     except ValueError:
         # json.JSONDecodeError / UnicodeError 都是 ValueError 子类，勿并列捕获 (G.ERR.09)。
-        logger.warning(
-            "[package_allowlist] allowlist header rejected, treating as empty "
-            "(controlled packages will be denied)"
-        )
+        logger.warning("[package_allowlist] allowlist header rejected, treating as empty")
         return []
+
+
+def _packages_from_metadata(metadata: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(metadata, Mapping) or METADATA_KEY not in metadata:
+        return []
+    try:
+        packages = normalize_packages(metadata.get(METADATA_KEY))
+        ensure_packages_fit(packages)
+    except ValueError:
+        logger.warning("[package_allowlist] request packages rejected, treating as empty")
+        return []
+    return packages
+
+
+@contextmanager
+def bind_outbound_allowlist(packages: list[dict[str, Any]]) -> Iterator[None]:
+    """Gateway 组 HTTP 头期间持有刚从库里读出的名单。"""
+    token = _OUTBOUND.set(list(packages))
+    try:
+        yield
+    finally:
+        _OUTBOUND.reset(token)
+
+
+def outbound_allowlist_packages() -> list[dict[str, Any]] | None:
+    """未绑定时为 None。调用方不得改用客户端自带的名单。"""
+    current = _OUTBOUND.get()
+    if current is None:
+        return None
+    return list(current)
 
 
 def apply_allowlist_to_envelope(envelope: Any, packages: list[dict[str, Any]]) -> None:
     """覆盖 channel_context 里的名单，不沿用客户端字段。"""
     ctx = getattr(envelope, "channel_context", None)
     copied = dict(ctx) if isinstance(ctx, dict) else {}
-    copied[PACKAGE_ALLOWLIST_METADATA_KEY] = list(packages)
+    copied[METADATA_KEY] = list(packages)
     envelope.channel_context = copied
 
 
-__all__ = [
-    "HIDDEN_HUB_ASSET_IDS",
-    "MAX_PACKAGE_ALLOWLIST_JSON_BYTES",
-    "PACKAGE_ALLOWLIST_HEADER_NAME",
-    "PACKAGE_ALLOWLIST_METADATA_KEY",
-    "PACKAGE_KIND_ALIASES",
-    "PACKAGE_KIND_DIRS",
-    "apply_allowlist_to_envelope",
-    "canonical_kind",
-    "decode_package_allowlist_header",
-    "encode_package_allowlist_header",
-    "ensure_packages_fit",
-    "normalize_packages",
-]
+@contextmanager
+def bind_request_subject(metadata: Mapping[str, Any] | None) -> Iterator[None]:
+    """把本次请求的用户和名单绑定到允许名单判断。不写入业务 params。"""
+    from jiuwenswarm.common.request_identity import web_routing_identity
+
+    identity = web_routing_identity(metadata if isinstance(metadata, Mapping) else None)
+    subject_token = _SUBJECT.set((identity.get("user_id", ""), identity.get("group_id", "")))
+    allowlist_token = _ALLOWLIST.set(
+        _packages_from_metadata(metadata if isinstance(metadata, Mapping) else None)
+    )
+    try:
+        yield
+    finally:
+        for var, token in ((_ALLOWLIST, allowlist_token), (_SUBJECT, subject_token)):
+            try:
+                var.reset(token)
+            except ValueError:
+                var.set(None)
+
+
+def _current_identity() -> dict[str, str]:
+    subject = _SUBJECT.get()
+    if not subject:
+        return {"user_id": "", "group_id": ""}
+    return {"user_id": subject[0], "group_id": subject[1]}
+
+
+def _request_packages() -> list[dict[str, Any]]:
+    bound = _ALLOWLIST.get()
+    if not bound:
+        return []
+    return bound
+
+
+def _scope_allows(match_expr: Any, identity: dict[str, str]) -> bool:
+    """空范围对任何身份放行。限定范围在没有身份或求值失败时拒绝。"""
+    if match_expr is None or match_expr == "" or match_expr == []:
+        return True
+    from gateway.config.enterprise.expressions import matches
+
+    try:
+        return matches(match_expr, identity)
+    except ValueError:
+        logger.warning("[package_allowlist] match_expr rejected")
+        return False
+
+
+def allows(kind: str, package_id: str) -> bool:
+    """个人版放行。企业版放行用户自己的包，以及范围命中的受控包。"""
+    from jiuwenswarm.enterprise import is_enterprise
+
+    if not is_enterprise():
+        return True
+    canonical = canonical_kind(kind)
+    wanted = str(package_id or "").strip()
+    if canonical is None or not wanted:
+        return False
+    if _is_user_owned(canonical, wanted):
+        return True
+    candidates = _candidate_ids(canonical, wanted)
+    identity = _current_identity()
+    for item in _request_packages():
+        item_kind = canonical_kind(str(item.get("kind") or ""))
+        package_id_value = str(item.get("id") or "").strip()
+        if item_kind != canonical or package_id_value not in candidates:
+            continue
+        if _scope_allows(item.get("match_expr"), identity):
+            return True
+    return False
+
+
+def require_allowed(kind: str, package_id: str) -> None:
+    if allows(kind, package_id):
+        return
+    label = canonical_kind(kind) or str(kind or "").strip()
+    raise ValueError(f"package not allowed: {label} {str(package_id or '').strip()}")
+
+
+def filter_cards(kind: str, cards: list[dict]) -> list[dict]:
+    kept: list[dict] = []
+    for card in cards:
+        card_id = str(card.get("id") or "").strip()
+        if card_id and allows(kind, card_id):
+            kept.append(card)
+    return kept
+
+
+def _kind_dir(kind: str) -> str:
+    return _KIND_DIRS[kind]
+
+
+def _hub_record(kind: str, package_id: str):
+    from jiuwenswarm.server.runtime.extension_package_manager import (
+        _hub_install_state_store,
+    )
+
+    store = _hub_install_state_store(_kind_dir(kind))
+    return store.get(package_id) or store.get_by_package_id(package_id)
+
+
+def _candidate_ids(kind: str, package_id: str) -> set[str]:
+    ids = {package_id}
+    record = _hub_record(kind, package_id)
+    if record is not None:
+        asset_id = str(getattr(record, "asset_id", "") or "").strip()
+        runtime_id = str(getattr(record, "package_id", "") or "").strip()
+        if asset_id:
+            ids.add(asset_id)
+        if runtime_id:
+            ids.add(runtime_id)
+    return ids
+
+
+def _marketplace_source(kind: str, *package_ids: str) -> str | None:
+    from jiuwenswarm.server.runtime.extension_package_manager import (
+        read_agent_group_marketplace_entries,
+        read_agent_template_marketplace_entries,
+    )
+
+    if kind == "agent_template":
+        entries = read_agent_template_marketplace_entries()
+    else:
+        entries = read_agent_group_marketplace_entries()
+    wanted = {item for item in package_ids if item}
+    for entry in entries:
+        if entry.get("id") not in wanted:
+            continue
+        source = entry.get("source")
+        if isinstance(source, str) and source.strip():
+            return source.strip()
+    return None
+
+
+def _is_user_owned(kind: str, package_id: str) -> bool:
+    """用户 local 根下、且不是 Hub 安装的包。"""
+    record = _hub_record(kind, package_id)
+    if record is not None:
+        return False
+    if _marketplace_source(kind, package_id) == "hub":
+        return False
+    from jiuwenswarm.server.runtime.extension_package_manager import _local_root
+
+    root = _local_root(_kind_dir(kind)).resolve()
+    candidate = (root / package_id).resolve()
+    if candidate.parent != root:
+        return False
+    try:
+        return candidate.is_dir()
+    except OSError:
+        return False

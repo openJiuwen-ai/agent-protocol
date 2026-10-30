@@ -1,14 +1,6 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""实例 Agent 授权表达式：配置写入和请求准入共用的解析、校验与求值。
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-来源：``gateway/config/enterprise/expressions.py``。表达式只允许 ``user_id`` /
-``group_id`` / ``bot_id`` 三个字段，支持 ``==`` / ``!=`` / ``in`` / ``not in``
-以及 ``and`` / ``or`` 组合；列表表示 OR。
-
-边界：本模块是纯 stdlib 的确定性纯函数，无反向依赖，故收口到协议包作为
-gateway 与 server 两侧共用的唯一实现。与其配套的配置读写、准入流程仍留在
-各仓实现侧。
-"""
+"""实例 Agent 授权表达式：配置写入和请求准入共用解析、校验与求值。"""
 
 from __future__ import annotations
 
