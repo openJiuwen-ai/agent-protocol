@@ -49,11 +49,15 @@ final class Validation {
         require(intent.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER);
         ShoppingItems resources = PaymentProfile.resources(intent);
         nonempty(resources.itemsWhiteList());
+        Set<Product> products = new HashSet<>();
         for (ItemWhiteList group : resources.itemsWhiteList()) {
             present(group);
             integer(group.quantity(), true);
             nonempty(group.whiteList());
-            group.whiteList().forEach(Validation::product);
+            for (Product item : group.whiteList()) {
+                product(item);
+                require(products.add(item), A4P_INVALID_PARAMETER);
+            }
         }
         PaymentConstraints constraints = PaymentProfile.constraints(intent);
         integer(constraints.totalMaxAmount(), true);
@@ -62,7 +66,7 @@ final class Validation {
         integer(constraints.validUntil(), false);
         require(constraints.validFrom() <= constraints.validUntil(), A4P_INVALID_PARAMETER);
         if (constraints.singleOrderMaxAmount() != null) { integer(constraints.singleOrderMaxAmount(), true); }
-        if (constraints.maxExecuteCount() != null) { integer(constraints.maxExecuteCount(), true); }
+        if (constraints.maxExecutionCount() != null) { integer(constraints.maxExecutionCount(), true); }
         if (constraints.anchorTime() != null || constraints.periodSeconds() != null
                 || constraints.maxExecutionCountPerPeriod() != null) {
             integer(constraints.anchorTime(), false);
@@ -150,7 +154,6 @@ final class Validation {
     static Order execution(Execution execution) {
         present(execution);
         require(execution.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER);
-        text(execution.version());
         optionalText(execution.id());
         Order order = PaymentProfile.order(execution);
         text(order.orderId());
@@ -191,9 +194,7 @@ final class Validation {
             Order order = entry.order();
             text(record.executionId());
             present(record.status());
-            require(record.executionId().equals(record.execution().id()), A4P_INVALID_PARAMETER);
-            require(record.execution().version().equals(intent.version()), A4P_UNSUPPORTED_VERSION);
-            require(record.execution().action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER);
+            require(record.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER);
             require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER);
             require(record.reservedAt() >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY);
             require(record.reservedAt() <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED);
@@ -212,19 +213,13 @@ final class Validation {
                 if (record.periodIndex() != null) { periodCounts.merge(record.periodIndex(), 1L, Long::sum); }
             }
         }
-        if (constraints.maxExecuteCount() != null) {
-            require(Accounting.count(context) <= constraints.maxExecuteCount(), A4P_EXECUTION_COUNT_EXCEEDED);
+        if (constraints.maxExecutionCount() != null) {
+            require(Accounting.count(context) <= constraints.maxExecutionCount(), A4P_EXECUTION_COUNT_EXCEEDED);
         }
         require(amount.compareTo(BigInteger.valueOf(constraints.totalMaxAmount())) <= 0, A4P_AMOUNT_EXCEEDED);
         if (constraints.maxExecutionCountPerPeriod() != null) {
             require(periodCounts.values().stream().allMatch(count -> count <= constraints.maxExecutionCountPerPeriod()),
                     A4P_PERIOD_EXECUTION_COUNT_EXCEEDED);
-        }
-        for (ItemWhiteList group : groups) {
-            BigInteger accumulated = context.ledger().stream().filter(Accounting::counted)
-                    .map(entry -> CartMatching.quantity(entry.order().cartItems(), group))
-                    .reduce(BigInteger.ZERO, BigInteger::add);
-            require(accumulated.compareTo(BigInteger.valueOf(group.quantity())) <= 0, A4P_PRODUCT_QUANTITY_EXCEEDED);
         }
         // Completing the last pending record of an exhausted ACTIVE intent always yields CONSUMED, and nothing
         // else does; REVOKED and EXPIRED are reachable with any ledger.
@@ -240,7 +235,7 @@ final class Validation {
         require((timestamp != null) == expected, A4P_INVALID_PARAMETER);
         if (timestamp != null) {
             integer(timestamp, false);
-            require(timestamp >= reservedAt, A4P_INVALID_PARAMETER);
+            require(timestamp >= reservedAt, A4P_TIMESTAMP_TOO_EARLY);
         }
     }
 

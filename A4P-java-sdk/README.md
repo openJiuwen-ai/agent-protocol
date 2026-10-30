@@ -106,7 +106,7 @@ issues, authorizes, activates, verifies, reserves and completes a payment.
 | `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer[, long now])` returns `A4pResult<IntentL3>` |
 | `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier[, long now])` returns `A4pResult<IntentExecutionContext>` |
 | `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` returns `A4pResult<VerificationResult>` |
-| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` returns `A4pResult<IntentExecutionContext>` |
+| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` / `A4p.revokeIntent(IntentExecutionContext, long now)` returns `A4pResult<IntentExecutionContext>` |
 | `createExecution / completeExecution / cancelExecution` | Static methods on `A4p`, returning `A4pResult<IntentExecutionContext>` |
 | `A4pResult<T>` | `A4pResult`: `success()`, `data()`, `code()` (`long`), `message()` |
 | `A4pException` | `A4pException`, thrown only by value-returning helpers and for SDK defects |
@@ -142,7 +142,7 @@ IntentExecutionContext context = activated.data();
 
 // Reserve, then complete, one order against the activated intent.
 Order order = new Order("order-1", 3000L, "CNY", List.of(new CartItem(product, 1L)), now);
-Execution execution = PaymentProfile.execution("execution-1", "1.0", order);
+Execution execution = PaymentProfile.execution("execution-1", order);
 A4pResult<IntentExecutionContext> reserved = A4p.createExecution(context, execution, now);
 if (!reserved.success()) { /* branch on reserved.code(), then persist the context */ }
 A4pResult<IntentExecutionContext> completed = A4p.completeExecution(context, execution.id(), now);
@@ -202,7 +202,7 @@ maps an unknown value to `A4P_INTERNAL_ERROR` (cast the `long` returned by `code
 | 4002 | `A4P_AMOUNT_EXCEEDED` | Amount exceeded |
 | 4003 | `A4P_PERIOD_COUNT_EXCEEDED` | Reserved for ArkTS error-code compatibility; not returned by Java (per-period execution limits use 4004) |
 | 4004 | `A4P_PERIOD_EXECUTION_COUNT_EXCEEDED` | Period execution count exceeded |
-| 4005 | `A4P_PRODUCT_QUANTITY_EXCEEDED` | Product quantity exceeded |
+| 4005 | `A4P_CART_MISMATCH` | Cart does not match the authorized template |
 | 4006 | `A4P_SINGLE_ORDER_AMOUNT_EXCEEDED` | Single order amount exceeded |
 | 4007 | `A4P_PRODUCT_NOT_AUTHORIZED` | Product not authorized |
 | 5001 | `A4P_SERIALIZE_FAIL` | Serialization failed |
@@ -215,34 +215,24 @@ the SDK, as described below.
 
 ## Execution semantics
 
-- Pending and completed records both consume amount, count and whitelist quantity.
-- Explicit cancellation releases quota; unknown downstream outcomes do not.
-- An order's cart must match the whitelist groups one to one: `cartItems` and
-  `itemsWhiteList` have the same length, and each cart item is paired with a distinct
-  group listing its product. The cart order does not matter; any valid pairing is enough.
-- `orderId` is the payment idempotency key: an order ID already in the ledger,
-  canceled records included, is rejected with `A4P_DUPLICATE_ID`.
-- Duplicate execution IDs remain rejected after cancellation. A provided execution ID
-  must not be blank; a generated ID is stored on the ledger record.
-- Reservation checks run in a fixed order: request structure (including a non-blank
-  provided execution ID); version, action and currency against the authorized intent;
-  context status; validity window (the lazy EXPIRED flip); duplicate execution/order IDs;
-  then the execution-count cap, the single-order amount cap, the remaining amount, the
-  one-to-one cart match, whitelist quantity, and period quota.
-- A cart of the wrong size fails with `A4P_INVALID_PARAMETER`; a cart without a valid
-  pairing (including a product outside every group) fails with `A4P_PRODUCT_NOT_AUTHORIZED`.
-  For quantity, an item still counts against every group that lists its product.
-- Revocation blocks reservations but permits pending completion/cancellation.
+- Pending and completed records consume amount and execution-count quotas; explicit cancellation releases them.
+- Each whitelist group is a per-order template: every execution buys exactly one listed product at exactly the group's `quantity`, in any cart order. Quantities do not accumulate across executions.
+- Duplicate products within a group and products shared across groups are rejected with `1001` when validating an intent.
+- Products outside the whitelist fail with `4007` before template checks. Wrong cart size, repeated groups, and wrong quantities fail with `A4P_CART_MISMATCH` (`4005`).
+- `Execution` has no `version` field; `PaymentProfile.execution(id, order)` constructs it.
+- Execution and order IDs remain reserved after cancellation; duplicates fail with `1003`.
+- Reservation checks run in order: request structure; action and currency; context status; validity and activation floors; expiry; duplicate IDs; count, single-order amount, total amount, cart template, and period quotas.
+- `revokeIntent(context)` uses the system clock; `revokeIntent(context, now)` accepts an explicit non-negative safe integer. Status is checked before the activation floor; an earlier instant fails with `3003`. Revocation permits pending completion/cancellation.
 - A reservation past `validUntil` marks the context EXPIRED, even though the call fails.
   Pending records can still be completed or canceled in EXPIRED status.
-- Reservation, completion, and cancellation reject a `now` earlier than the context's
-  `activatedTime` with `A4P_TIMESTAMP_TOO_EARLY` (3003).
-- When `activatedTime <= now < reservedAt`, completion and cancellation reject the call
-  with `A4P_INVALID_PARAMETER` (1001). A rejected finalization leaves the record pending.
+- Reservation rejects `now < activatedTime`; completion/cancellation reject `now < reservedAt`, with `A4P_TIMESTAMP_TOO_EARLY` (3003).
+- A rejected finalization leaves the record pending.
 - An ACTIVE intent becomes CONSUMED after a completion leaves no pending record and either
   the count cap is reached or the remaining amount is 0. REVOKED and EXPIRED are terminal.
-- `executionInfo()` always declares `leftExecutionCount`, `leftAmount`, `periodIndex` and
-  `leftPeriodExecutionCount`; non-applicable figures are `null`.
+- `executionInfo()` always includes `leftAmount`. It includes `leftExecutionCount` only with a
+  count cap, and `periodIndex` / `leftPeriodExecutionCount` only for periodic intents.
+  The Java `PaymentExecutionInfo` record represents inapplicable figures as `null`; they are
+  omitted from context JSON so ArkTS can deserialize it.
 - Context operations synchronize validation and updates. This protects threads
   sharing one context, **not** multiple processes or independently activated copies.
 - `A4pIntentCodec.standard()` returns a stateless shared singleton, so one instance can

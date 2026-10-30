@@ -15,7 +15,7 @@ public enum A4pErrorCode {
     // Retained for ArkTS error-code compatibility; Java uses 4004 for per-period execution limits.
     A4P_PERIOD_COUNT_EXCEEDED(4003, "Period count exceeded"),
     A4P_PERIOD_EXECUTION_COUNT_EXCEEDED(4004, "Period execution count exceeded"),
-    A4P_PRODUCT_QUANTITY_EXCEEDED(4005, "Product quantity exceeded"),
+    A4P_CART_MISMATCH(4005, "Cart does not match the authorized resource"),
     A4P_SINGLE_ORDER_AMOUNT_EXCEEDED(4006, "Single order amount exceeded"),
     A4P_PRODUCT_NOT_AUTHORIZED(4007, "Product not authorized"),
     A4P_SERIALIZE_FAIL(5001, "Serialization failed"),

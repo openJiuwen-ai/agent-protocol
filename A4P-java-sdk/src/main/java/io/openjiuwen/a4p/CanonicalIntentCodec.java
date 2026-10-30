@@ -17,8 +17,9 @@ final class CanonicalIntentCodec implements A4pIntentCodec {
     record ContextJson(String version, String intentId, IntentL3 authorizedIntent, IntentExecutionStatus status,
                        JsonNode executionInfo, List<RecordJson> executions, Long activatedTime) {}
 
-    record RecordJson(String executionId, ExecutionStatus status, Long periodIndex, Long reservedAt,
-                      Long completedAt, Long canceledAt, Execution execution) {}
+    record RecordJson(String executionId, ExecutionStatus status, IntentActionType action,
+                      JsonNode executionContent, Long periodIndex, Long reservedAt,
+                      Long completedAt, Long canceledAt) {}
 
     private CanonicalIntentCodec() {}
 
@@ -87,10 +88,11 @@ final class CanonicalIntentCodec implements A4pIntentCodec {
             Validation.present(record);
             Validation.integer(record.reservedAt(), false);
             Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER);
-            Order order = Validation.execution(record.execution());
+            Order order = Validation.execution(new Execution(record.action(), record.executionId(),
+                    record.executionContent()));
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),
-                    record.periodIndex(), record.reservedAt(), record.completedAt(), record.canceledAt(),
-                    record.execution()), order));
+                    record.action(), record.executionContent(), record.periodIndex(), record.reservedAt(),
+                    record.completedAt(), record.canceledAt()), order));
         }
         Long period = period(wire.executionInfo(), PaymentProfile.constraints(intent.structuredIntent()));
         IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime());

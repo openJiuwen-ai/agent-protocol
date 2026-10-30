@@ -24,6 +24,7 @@ public final class Models {
     public record Product(SellerInfo seller, SpuSkuInfo spusku) {}
     public record CartItem(Product product, Long quantity) {}
 
+    // Per-execution template quantity, not a lifetime quota. Products must be unique across all groups.
     public record ItemWhiteList(List<Product> whiteList, Long quantity) {
         public ItemWhiteList { whiteList = snapshot(whiteList); }
     }
@@ -33,14 +34,14 @@ public final class Models {
     }
 
     public record PaymentConstraints(Long singleOrderMaxAmount, Long totalMaxAmount, String currency,
-                                     Long validFrom, Long validUntil, Long maxExecuteCount,
+                                     Long validFrom, Long validUntil, Long maxExecutionCount,
                                      Long anchorTime, Long periodSeconds, Long maxExecutionCountPerPeriod) {}
 
     public record Order(String orderId, Long amount, String currency, List<CartItem> cartItems, Long timestamp) {
         public Order { cartItems = snapshot(cartItems); }
     }
 
-    // Non-applicable figures are null and still serialized, so every field is always declared.
+    // Non-applicable figures are null in Java and omitted from context JSON.
     public record PaymentExecutionInfo(Long leftExecutionCount, long leftAmount, Long periodIndex,
                                        Long leftPeriodExecutionCount) {}
 
@@ -88,15 +89,21 @@ public final class Models {
     public record IntentL3(String version, IntentL2 intentL2, SigningEnv signingEnv,
                            Long timestamp, SignatureInfo sign) {}
 
-    public record Execution(IntentActionType action, String id, String version, JsonNode executionContent) {
+    public record Execution(IntentActionType action, String id, JsonNode executionContent) {
         public Execution { executionContent = CanonicalJson.freezeNode(executionContent); }
 
         @Override
         public JsonNode executionContent() { return CanonicalJson.freezeNode(executionContent); }
     }
 
-    public record ExecutionRecord(String executionId, ExecutionStatus status, Long periodIndex,
-                                  long reservedAt, Long completedAt, Long canceledAt, Execution execution) {}
+    public record ExecutionRecord(String executionId, ExecutionStatus status, IntentActionType action,
+                                  JsonNode executionContent, Long periodIndex, long reservedAt,
+                                  Long completedAt, Long canceledAt) {
+        public ExecutionRecord { executionContent = CanonicalJson.freezeNode(executionContent); }
+
+        @Override
+        public JsonNode executionContent() { return CanonicalJson.freezeNode(executionContent); }
+    }
 
     private static <Value> List<Value> snapshot(List<Value> values) {
         return values == null ? null : Collections.unmodifiableList(new ArrayList<>(values));

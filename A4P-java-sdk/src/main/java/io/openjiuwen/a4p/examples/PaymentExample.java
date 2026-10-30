@@ -36,8 +36,8 @@ public final class PaymentExample {
         IntentExecutionContext context = unwrap(A4p.activateIntent(authorized, userVerifier, now));
         System.out.println("Issued by intent center: "
                 + unwrap(A4p.verifyIntentAuthenticity(authorized, serverVerifier)).valid());
-        Execution execution = PaymentProfile.execution("execution-1", "1.0",
-                new Order("order-1", 3000L, "CNY", List.of(new CartItem(product, 1L)), now));
+        Execution execution = PaymentProfile.execution("execution-1",
+                new Order("order-1", 3000L, "CNY", List.of(new CartItem(product, 2L)), now));
         unwrap(A4p.createExecution(context, execution, now));
         unwrap(A4p.completeExecution(context, execution.id(), now));
         System.out.println("Intent: " + context.intentId() + " (" + context.status() + ")");

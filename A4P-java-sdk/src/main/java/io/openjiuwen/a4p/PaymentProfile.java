@@ -20,8 +20,8 @@ public final class PaymentProfile {
         return new StructuredIntent(IntentActionType.AI_PAY, toNode(resources), toNode(constraints));
     }
 
-    public static Execution execution(String id, String version, Order order) {
-        return new Execution(IntentActionType.AI_PAY, id, version, toNode(order));
+    public static Execution execution(String id, Order order) {
+        return new Execution(IntentActionType.AI_PAY, id, toNode(order));
     }
 
     public static ShoppingItems resources(StructuredIntent intent) {

@@ -51,12 +51,12 @@ final class Fixtures {
 
     static CreateIntentRequest request(PaymentConstraints constraints) {
         return new CreateIntentRequest("conversation", "summary",
-                structured(List.of(new ItemWhiteList(List.of(PRODUCT), 5L)), constraints), "intent");
+                structured(List.of(new ItemWhiteList(List.of(PRODUCT), 1L)), constraints), "intent");
     }
 
     static CreateIntentRequest requestFor(Product product) {
         return new CreateIntentRequest("conversation", "summary",
-                structured(List.of(new ItemWhiteList(List.of(product), 5L)), constraints()), null);
+                structured(List.of(new ItemWhiteList(List.of(product), 1L)), constraints()), null);
     }
 
     static IntentIssueContext issueContext() {
@@ -91,13 +91,13 @@ final class Fixtures {
     }
 
     static Execution cart(String id, long amount, CartItem... items) {
-        return PaymentProfile.execution(id, "1.0",
+        return PaymentProfile.execution(id,
                 new Order("order-" + ORDERS.incrementAndGet(), amount, "CNY", List.of(items), 0L));
     }
 
     static Execution withOrderId(Execution execution, String orderId) {
         Order order = PaymentProfile.order(execution);
-        return PaymentProfile.execution(execution.id(), execution.version(),
+        return PaymentProfile.execution(execution.id(),
                 new Order(orderId, order.amount(), order.currency(), order.cartItems(), order.timestamp()));
     }
 

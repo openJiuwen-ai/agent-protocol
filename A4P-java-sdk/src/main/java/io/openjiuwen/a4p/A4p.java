@@ -1,7 +1,6 @@
 package io.openjiuwen.a4p;
 
 import io.openjiuwen.a4p.Models.*;
-import java.math.BigInteger;
 import java.util.List;
 import java.util.UUID;
 import static io.openjiuwen.a4p.A4pErrorCode.*;
@@ -40,9 +39,9 @@ public final class A4p {
             Validation.issueContext(context);
             Validation.intentL1(intent);
             Validation.version(intent.version());
-            verifyOrThrow(agentVerifier, intent, intent.sign());
             // Chain timestamps are monotonic; refuse to emit an L2 that every peer would reject.
             require(now >= intent.timestamp(), A4P_INVALID_PARAMETER);
+            verifyOrThrow(agentVerifier, intent, intent.sign());
             IntentL2 unsigned = new IntentL2(PROTOCOL_VERSION, intent, context.userIdentity(),
                     context.agentIdentity(), context.serviceProviderIdentity(), now, null);
             return new IntentL2(unsigned.version(), intent, unsigned.userIdentity(), unsigned.agentIdentity(),
@@ -62,10 +61,10 @@ public final class A4p {
             Validation.signingEnv(environment);
             Validation.intentL2(intent);
             Validation.versions(intent);
-            verifyOrThrow(serverVerifier, intent, intent.sign());
             require(now >= intent.timestamp(), A4P_INVALID_PARAMETER);
             PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL1().structuredIntent());
             require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED);
+            verifyOrThrow(serverVerifier, intent, intent.sign());
             IntentL3 unsigned = new IntentL3(PROTOCOL_VERSION, intent, environment, now, null);
             return new IntentL3(PROTOCOL_VERSION, intent, environment, now, sign(userSigner, unsigned));
         });
@@ -81,11 +80,11 @@ public final class A4p {
             Validation.integer(now, false);
             Validation.intentL3(intent);
             Validation.versions(intent);
-            verifyOrThrow(userVerifier, intent, intent.sign());
             require(now >= intent.timestamp(), A4P_INVALID_PARAMETER);
             // An intent past validUntil could never execute; one not yet valid is activated and waits for validFrom.
             PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent());
             require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED);
+            verifyOrThrow(userVerifier, intent, intent.sign());
             return new IntentExecutionContext(intent, now);
         });
     }
@@ -102,11 +101,17 @@ public final class A4p {
     }
 
     public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context) {
+        return revokeIntent(context, System.currentTimeMillis());
+    }
+
+    /** Revokes at the supplied epoch-millisecond instant; the validity window does not restrict revocation. */
+    public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now) {
         return A4pResult.capture(() -> {
             Validation.present(context);
+            Validation.integer(now, false);
             synchronized (context) {
-                require(System.currentTimeMillis() >= context.activatedTime(), A4P_INVALID_PARAMETER);
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS);
+                require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY);
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
             }
@@ -150,15 +155,14 @@ public final class A4p {
         Order order = Validation.execution(execution);
         String executionId = execution.id() == null ? UUID.randomUUID().toString() : execution.id();
         synchronized (context) {
-            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY);
             // Parameter consistency comes before state and ledger checks, and the expiry flip before duplicates.
             IntentL1 intent = context.authorizedIntent().intentL2().intentL1();
             PaymentConstraints constraints = context.constraints();
-            require(execution.version().equals(intent.version()), A4P_UNSUPPORTED_VERSION);
             require(execution.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER);
             require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER);
             require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS);
             require(now >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY);
+            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY);
             if (now > constraints.validUntil()) {
                 context.status(IntentExecutionStatus.EXPIRED);
                 throw new A4pException(A4P_TIMESTAMP_EXPIRED);
@@ -168,8 +172,8 @@ public final class A4p {
             // orderId is the payment idempotency key, so canceled records still block reuse.
             require(context.ledger().stream().noneMatch(entry -> entry.order().orderId().equals(order.orderId())),
                     A4P_DUPLICATE_ID);
-            if (constraints.maxExecuteCount() != null) {
-                require(Accounting.count(context) < constraints.maxExecuteCount(), A4P_EXECUTION_COUNT_EXCEEDED);
+            if (constraints.maxExecutionCount() != null) {
+                require(Accounting.count(context) < constraints.maxExecutionCount(), A4P_EXECUTION_COUNT_EXCEEDED);
             }
             if (constraints.singleOrderMaxAmount() != null) {
                 require(order.amount() <= constraints.singleOrderMaxAmount(), A4P_SINGLE_ORDER_AMOUNT_EXCEEDED);
@@ -181,10 +185,9 @@ public final class A4p {
                 require(Accounting.periodCount(context, period) < constraints.maxExecutionCountPerPeriod(),
                         A4P_PERIOD_EXECUTION_COUNT_EXCEEDED);
             }
-            Execution snapshot = new Execution(execution.action(), executionId, execution.version(),
-                    execution.executionContent());
             context.ledger().add(new IntentExecutionContext.Entry(new ExecutionRecord(executionId,
-                    ExecutionStatus.PENDING, period, now, null, null, snapshot), order));
+                    ExecutionStatus.PENDING, execution.action(), execution.executionContent(),
+                    period, now, null, null), order));
             Accounting.recompute(context, now);
             return context;
         }
@@ -195,7 +198,6 @@ public final class A4p {
         Validation.integer(now, false);
         Validation.present(context);
         synchronized (context) {
-            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY);
             // Pending reservations made before revocation or expiry can still be finalized.
             require(context.status() == IntentExecutionStatus.ACTIVE || context.status() == IntentExecutionStatus.REVOKED
                     || context.status() == IntentExecutionStatus.EXPIRED, A4P_INVALID_STATUS);
@@ -212,10 +214,11 @@ public final class A4p {
             ExecutionRecord record = entry.record();
             require(record.status() == ExecutionStatus.PENDING, A4P_INVALID_STATUS);
             // Record timestamps are monotonic like the chain's, so a persisted ledger can be checked for them.
-            require(now >= record.reservedAt(), A4P_INVALID_PARAMETER);
+            require(now >= record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY);
             ExecutionRecord updated = new ExecutionRecord(record.executionId(),
-                    cancel ? ExecutionStatus.CANCELED : ExecutionStatus.COMPLETED, record.periodIndex(),
-                    record.reservedAt(), cancel ? null : now, cancel ? now : null, record.execution());
+                    cancel ? ExecutionStatus.CANCELED : ExecutionStatus.COMPLETED,
+                    record.action(), record.executionContent(), record.periodIndex(),
+                    record.reservedAt(), cancel ? null : now, cancel ? now : null);
             ledger.set(index, new IntentExecutionContext.Entry(updated, entry.order()));
             Accounting.recompute(context, now);
             if (!cancel && context.status() == IntentExecutionStatus.ACTIVE && Accounting.exhausted(context)) {
@@ -229,14 +232,6 @@ public final class A4p {
     private static void enforceWhitelist(IntentExecutionContext context, List<CartItem> items) {
         List<ItemWhiteList> groups = context.resources().itemsWhiteList();
         CartMatching.requireOneToOne(items, groups);
-        // Quantity stays fail-closed: an item counts against every group that lists its product.
-        for (ItemWhiteList group : groups) {
-            BigInteger accumulated = context.ledger().stream().filter(Accounting::counted)
-                    .map(entry -> CartMatching.quantity(entry.order().cartItems(), group))
-                    .reduce(BigInteger.ZERO, BigInteger::add);
-            require(accumulated.add(CartMatching.quantity(items, group))
-                    .compareTo(BigInteger.valueOf(group.quantity())) <= 0, A4P_PRODUCT_QUANTITY_EXCEEDED);
-        }
     }
 
     private static SignatureInfo sign(Signer signer, Object intent) {
