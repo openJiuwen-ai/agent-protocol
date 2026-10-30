@@ -3,9 +3,10 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: bash build.sh [build|ut] [additional Maven options]"
+  echo "Usage: bash build.sh [build|ut|docs] [additional Maven options]"
   echo "  build  Compile and package the JAR without compiling/running tests (default)."
   echo "  ut     Compile and run unit tests without packaging the JAR."
+  echo "  docs   Generate English HTML API documentation from Javadoc comments."
 }
 
 MODE="${1:-build}"
@@ -18,6 +19,9 @@ case "${MODE}" in
     ;;
   ut)
     MAVEN_ARGS=(-DskipTests=false -Dmaven.test.skip=false -Dmaven.test.failure.ignore=false -DfailIfNoTests=true clean test)
+    ;;
+  docs)
+    MAVEN_ARGS=(javadoc:javadoc)
     ;;
   -h|--help)
     usage

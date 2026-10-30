@@ -1,8 +1,18 @@
 # A4P Java SDK
 
+[公开 API 与使用约束](docs/API_zh.md) | [Public API and usage contract](docs/API.md)
+
 [English](./README.md) | 简体中文
 
-A4P 支付意图协议的 Java 17 实现，移植自 [PR #130](https://github.com/openJiuwen-ai/agent-protocol/pull/130) 中的 ArkTS SDK。
+A4P 支付意图协议的 Java 17 实现
+
+## 快速构建
+
+```sh
+bash A4P-java-sdk/scripts/build.sh build    # 显式指定编译打包
+```
+
+构建产物位于 A4P-java-sdk/target/a4p-java-sdk-*.jar
 
 ## 构建与测试
 
@@ -14,6 +24,30 @@ mvn test
 mvn package
 ```
 
+### 生成英文 API 文档
+
+在仓库根目录执行：
+
+```sh
+mvn -f A4P-java-sdk/pom.xml javadoc:javadoc
+```
+
+打开 `A4P-java-sdk/target/site/apidocs/index.html` 浏览英文文档。
+需要完整 JDK 17+（含 `javadoc`）及 Maven 3.9+；首次执行需要下载插件。
+生成页面展示公开 API（含嵌套类型），不包含测试和独立示例模块。
+缺失注释不会阻止构建；错误的 Javadoc 语法或失效引用会使生成失败。
+
+`mvn package` 会自动生成并附带英文 `target/a4p-java-sdk-0.1.0-javadoc.jar`。
+同时执行测试、SDK 打包及 HTML 生成：
+
+```sh
+mvn -f A4P-java-sdk/pom.xml clean verify javadoc:javadoc
+```
+
+修改 API 时，在同一次变更中同步更新英文源码注释；公开用法或构建方式变化时，
+再更新 `docs/API.md`、`docs/API_zh.md` 和相应 README。
+`target/` 下的生成文件无需手工修改或提交。
+
 ### 编译脚本
 
 脚本需要 Bash 环境（例如 Linux、WSL 或 Windows 上的 Git Bash）。在仓库根目录执行：
@@ -22,19 +56,23 @@ mvn package
 bash A4P-java-sdk/scripts/build.sh          # 默认使用 build 模式
 bash A4P-java-sdk/scripts/build.sh build    # 显式指定编译打包
 bash A4P-java-sdk/scripts/build.sh ut       # 仅运行单元测试
+bash A4P-java-sdk/scripts/build.sh docs     # 生成 javadoc 文档
 bash A4P-java-sdk/scripts/build.sh --help
 ```
 
-`build` 使用 `-Dmaven.test.skip=true` 执行 `clean package`，跳过测试代码的编译与执行，
-产物为 `A4P-java-sdk/target/a4p-java-sdk-0.1.0.jar`。`ut` 执行 `clean test`，
-要求存在测试，测试失败时返回失败，不打包 JAR；Surefire 测试报告位于
-`A4P-java-sdk/target/surefire-reports/`。两种模式都会先清理 `target/`，并返回 Maven 的退出码。
+- `build` 使用 `-Dmaven.test.skip=true` 执行 `clean package`，跳过测试代码的编译与执行，
+产物为 `A4P-java-sdk/target/a4p-java-sdk-0.1.0.jar`。
+- `ut` 执行 `clean test`，要求存在测试，测试失败时返回失败，不打包 JAR；Surefire 测试报告位于
+`A4P-java-sdk/target/surefire-reports/`。
+- `docs` 使用 javadoc 生成文档
 
-额外的 Maven 参数放在模式之后，例如：
+所有模式都会先清理 `target/`，并返回 Maven 的退出码。
+
+额外的 Maven 参数放在脚本选择运行模式之后，例如：
 
 ```sh
 bash A4P-java-sdk/scripts/build.sh build -o
-bash A4P-java-sdk/scripts/build.sh ut -Dtest=Rsa3072Test
+mvn -f A4P-java-sdk/examples/pom.xml test
 ```
 
 `-o` 表示 Maven 离线模式，所需依赖和插件必须已缓存。脚本根据自身位置定位 `pom.xml`，
@@ -63,9 +101,15 @@ bash A4P-java-sdk/scripts/ut.sh
 可选环境变量 `PR_ID`（默认 `0`）与 `OBS_BUCKET`（默认 `openjiuwen-ci`）用于配置
 `ut.json` 中的报告链接。脚本只生成本地报告，上传到链接对应的 OBS 位置需由 CI 另行完成。
 
+### 构建依赖
+
 构件坐标为 `io.openjiuwen:a4p-java-sdk:0.1.0`。JSON 由 Jackson 处理；JUnit 5 仅用于测试。不需要任何 Web 框架。
 
 `jackson-databind`（此处为 2.20.1）是唯一的运行时依赖，JUnit 5 为 `test` 作用域。
+
+## 运行示例程序
+
+示例程序依赖外部的 java SDK
 
 ```xml
 <dependency>
@@ -75,10 +119,10 @@ bash A4P-java-sdk/scripts/ut.sh
 </dependency>
 ```
 
-可在 IDE 中运行 `io.openjiuwen.a4p.examples.PaymentExample`，或执行：
+先运行 `mvn -f A4P-java-sdk/pom.xml install` 构建 SDK，再从独立示例模块运行 `io.openjiuwen.a4p.examples.PaymentExample`：
 
 ```sh
-mvn compile org.codehaus.mojo:exec-maven-plugin:3.6.3:java "-Dexec.mainClass=io.openjiuwen.a4p.examples.PaymentExample"
+mvn -f A4P-java-sdk/examples/pom.xml compile org.codehaus.mojo:exec-maven-plugin:3.6.3:java "-Dexec.mainClass=io.openjiuwen.a4p.examples.PaymentExample"
 ```
 
 `pom.xml` 中并未声明 exec 插件，因此该命令首次执行时会从 Maven 中央仓库解析该插件，需要有网络访问。
@@ -87,41 +131,20 @@ mvn compile org.codehaus.mojo:exec-maven-plugin:3.6.3:java "-Dexec.mainClass=io.
 
 ## API
 
-| 规范 | Java |
-| --- | --- |
-| `createIntent` | `A4p.createIntent(CreateIntentRequest, Signer[, long now])` 返回 `A4pResult<IntentL1>` |
-| `issueIntent` | `A4p.issueIntent(IntentL1, SignatureVerifier, IntentIssueContext, Signer[, long now])` 返回 `A4pResult<IntentL2>` |
-| `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer[, long now])` 返回 `A4pResult<IntentL3>` |
-| `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier[, long now])` 返回 `A4pResult<IntentExecutionContext>` |
-| `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` 返回 `A4pResult<VerificationResult>` |
-| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` / `A4p.revokeIntent(IntentExecutionContext, long now)` 返回 `A4pResult<IntentExecutionContext>` |
-| `createExecution / completeExecution / cancelExecution` | `A4p` 上的静态方法，返回 `A4pResult<IntentExecutionContext>` |
-| `A4pResult<T>` | `A4pResult`：`success()`、`data()`、`code()`（`long`）、`message()` |
-| `A4pException` | `A4pException`，仅由返回值型辅助方法以及 SDK 缺陷抛出 |
-| `A4pErrorCode` | `code()`、`message()`，以及把结果码还原为常量的 `fromCode(int)` |
-| `A4pIntentCodec` | `A4pIntentCodec.standard()`；`serializeIntentL1/L2/L3` 与 `serializeIntentExecutionContext` 返回 `String`，对应的每个 `deserialize…` 返回 `A4pResult` |
-| `Signer / SignatureVerifier` | 函数式接口；`Signer.sign(byte[])` 返回 `SignatureInfo` |
-| `Rsa3072` | 可选适配器：`Rsa3072.signer(String, PrivateKey)` 与 `Rsa3072.verifier(Map<String, PublicKey>)` |
-| `CanonicalJson` | 签名时使用的规范化辅助方法：`stringify`、`toSignableBytes`、`encodeUtf8`/`decodeUtf8`、`base64UrlEncode`/`base64UrlDecode`、`MAX_SAFE_INTEGER` |
-| 类型联合（`StructuredIntent`、`Execution`、`executionInfo`） | `JsonNode` 载荷；`PaymentProfile` 在 AI_PAY 载荷与记录之间相互转换 |
-| 数据模型 | `Models` 中的不可变 record 与枚举 |
+详细的 API 请见 [[docs/API_zh.md]]
 
-`[long now]` 表示下文中说明的显式时钟重载。
-
-这些 record 与枚举嵌套在 `Models` 中；`A4p`、`A4pResult`、`A4pException`、`A4pErrorCode`、
-`A4pIntentCodec`、`IntentExecutionContext`、`PaymentProfile` 与 `Rsa3072` 是顶层类，因此两个 import 都需要：
+若要使用 SDK 中定义的类和函数，用以下方式导入：
 
 ```java
 import io.openjiuwen.a4p.*;
 import io.openjiuwen.a4p.Models.*;
 ```
 
-AI_PAY 载荷请通过 `PaymentProfile` 构造。下面的片段展示调用形态；完整可编译的版本见
-`io.openjiuwen.a4p.examples.PaymentExample`，其中还包含密钥对、L1/L2/L3 链以及规范化序列化的搭建过程。
+AI_PAY 载荷请通过 `PaymentProfile` 辅助类构造。下面的片段展示调用形态；完整可编译的版本见
+`io.openjiuwen.a4p.examples.PaymentExample`，其中还包含密钥对、L1/L2/L3 链的搭建过程。
 
 ```java
 // 激活一个由 Agent 创建、意图中心签发并签名的意图。
-SignatureVerifier userVerifier = Rsa3072.verifier(Map.of("user", userPublicKey));
 A4pResult<IntentExecutionContext> activated = A4p.activateIntent(authorizedIntent, userVerifier, now);
 if (!activated.success()) { /* 依据 activated.code() 分支处理 */ }
 IntentExecutionContext context = activated.data();
@@ -136,32 +159,10 @@ A4pResult<IntentExecutionContext> completed = A4p.completeExecution(context, exe
 PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 ```
 
-失败的 `createExecution` 仍可能已把 context 置为 `EXPIRED`，因此每次调用后都要持久化 context。
-`A4pIntentCodec` 上的 `serializeIntentExecutionContext` / `deserializeIntentExecutionContext`
-提供持久化形式；反序列化会重新校验存储的 L3（不重新验证用户签名），检查账本是否符合已授权约束，
-并要求 `executionInfo` 与账本一致。它还要求状态可达：每个 `reservedAt` 落在 `[validFrom, validUntil]` 内，
-`completedAt`/`canceledAt` 不早于 `reservedAt`，并且当且仅当没有待处理记录且全局配额已用尽时状态为
-`CONSUMED`（`REVOKED` 与 `EXPIRED` 接受任意账本）。
-
-可选字段使用 `null`；缺席的可选字段不会出现在签名 JSON 中。AI_PAY 载荷内显式的 `null` 会被拒绝。
-金额是应用约定的最小货币单位下的正整数。所有协议数值都是限制在 JavaScript 安全整数范围内的整数；
-不是整数的值必须以字符串承载。
-
-生命周期与执行方法都同时提供系统时钟重载与显式的 `long now` 重载（epoch 毫秒）。显式 `now`
-必须是非负安全整数，并且在其他校验之前最先被验证。生产代码必须提供可信时钟，绝不能使用客户端
-提供的时间戳。订单时间戳不决定配额周期，也不决定授权有效期。
-
-必填字符串不能为空白（使用 JavaScript `trim()` 的空白字符集）。一个商品需要非空白的 seller ID，
-并且 `spuId`/`skuId` 至少提供一个。周期规则要求 `anchorTime <= validFrom` 且
-`periodSeconds <= 9007199254740`。链上时间戳单调：`L1.timestamp <= L2.timestamp <= L3.timestamp`。
-激活要求 `L3.timestamp <= now <= validUntil`（`A4P_INVALID_PARAMETER` / `A4P_TIMESTAMP_EXPIRED`）；
-尚未生效的意图可以被激活，而在 `validFrom` 之前的预留会以 `A4P_TIMESTAMP_TOO_EARLY` 失败。
-`intentConversation` 的长度限制与敏感数据过滤由 Agent 负责。
-
 ### 结果码
 
-调用方依据 `code()` 分支处理；`message()` 是固定的诊断文本，取值来自与 ArkTS SDK 共用的
-`A4pErrorCode`。`0` 表示成功，其他任何值都是协议失败。`A4pErrorCode.fromCode(int)` 把码还原为常量，
+下面的取值来自与 ArkTS SDK 共用的 `A4pErrorCode`。`0` 表示成功，其他任何值都是协议失败。
+`A4pErrorCode.fromCode(int)` 把码还原为常量，
 未知值映射为 `A4P_INTERNAL_ERROR`（调用时需把 `code()` 返回的 `long` 转成 `int`）。
 
 | 码 | 常量 | 含义 |
@@ -186,78 +187,10 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 | 5002 | `A4P_DESERIALIZE_FAIL` | 反序列化失败 |
 | 6001 | `A4P_INTERNAL_ERROR` | 意外的内部错误 |
 
-`2001` 与 `2002` 也覆盖可选适配器：`Rsa3072` 对签名被拒返回 `2002`，抛出异常的
-`Signer`/`SignatureVerifier` 会被 SDK 映射为同样的码，详见下文。
-
-## 执行语义
-
-- 待处理和已完成记录占用金额及执行次数；显式取消释放配额。
-- 白名单是每笔订单的固定模板：每个分组恰好购买一种商品，数量必须等于分组的 `quantity`。数量不跨执行累计，购物车顺序不限。
-- 意图校验拒绝组内重复商品及跨组重叠商品，返回 `1001`。
-- 未授权商品优先返回 `4007`；购物车长度、分组覆盖或数量不匹配统一返回 `A4P_CART_MISMATCH`（`4005`）。
-- `Execution` 已移除 `version`，使用 `PaymentProfile.execution(id, order)` 构造。
-- 执行 ID 和订单 ID 在取消后仍不能复用，重复时返回 `1003`。
-- 预留按请求结构、动作和币种、状态、有效期及激活时间下限、过期、重复 ID、次数、单笔金额、总金额、购物车模板、周期额度的顺序校验。
-- `revokeIntent(context)` 使用系统时间；`revokeIntent(context, now)` 支持指定非负安全整数时间。先检查状态，再检查激活时间下限，时间倒退返回 `3003`。
-- 完成和取消时间早于记录的 `reservedAt` 时返回 `3003`。
-- 撤销会阻止预留，但允许对待处理记录执行完成/取消。
-- 超过 `validUntil` 的预留会把 context 标记为 EXPIRED，尽管该次调用失败。待处理记录在 EXPIRED 状态下
-  仍可被完成或取消。
-- 创建执行时，`now` 早于上下文的 `activatedTime` 会返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。
-- 完成或取消被拒绝时，记录保持待处理。
-- 当一次完成操作之后不再有待处理记录，且要么达到次数上限、要么剩余金额为 0 时，ACTIVE 意图变为
-  CONSUMED。REVOKED 与 EXPIRED 是终态。
-- `executionInfo()` 始终包含 `leftAmount`；有次数上限时才包含 `leftExecutionCount`，
-  周期意图才包含 `periodIndex` 和 `leftPeriodExecutionCount`。Java 的
-  `PaymentExecutionInfo` 记录中，不适用数值仍为 `null`；上下文 JSON 会省略这些字段，供 ArkTS 解析。
-- context 操作对校验与更新加锁。这保护共享同一个 context 的线程，而**不**保护多个进程或各自独立激活
-  的副本。
-- `A4pIntentCodec.standard()` 返回无状态的共享单例，因此一个实例可以服务所有线程。
-
-账本位于内存中。意图中心必须在以 `intentId` 加锁的数据库事务中持久化 context，防止同一个 `intentId`
-被重放，并把密钥与身份绑定。激活会校验最外层的用户签名；`verifyIntentAuthenticity` 校验 L3 链与意图
-中心的 L2 签名，不校验用户签名，也不依赖 context 状态。
-
-## 线格式与安全
-
-参见 [canonical JSON 规范](docs/canonical-json-spec.md)。JSON 字段名遵循规范
-（`intentConversation`、`resources`、`UserIdentity.id`），每个枚举都按名称序列化
-（`"AI_PAY"`、`"CONSUMED"`、`"PENDING"`），协议版本为 `1.0`。在规范确定它们之前，HTTP 绑定不属于本 SDK。
-
-每一层的签名覆盖该层除去整个 `sign` 对象之后的内容，因此该层自己的 `alg` 与 `keyIdentifier`
-不在其自身签名字节内；它们由下一层的签名覆盖。这是规范规定的设计。`alg` 必须是 `RSA3072`。
-验证方必须只从可信注册表中解析密钥，并把每个密钥绑定到允许的算法；绝不要信任传入的 `alg`。
-
-`Rsa3072` 是一个可选但可用的适配器，使用 JCA `SHA256withRSA`（PKCS#1 v1.5）、3072 位 RSA 密钥
-和无填充的 Base64URL。其 `VerificationResult.code` 成功为 `0`、失败为 `2002`，失败原因放在
-`message` 中。缺失信任映射表、空白密钥标识符或缺失/非 3072 位密钥时，其工厂方法抛出
-`A4pException(A4P_INVALID_PARAMETER)`。对端必须就该套件达成一致，或提供相匹配的
-`Signer`/`SignatureVerifier` 实现。任何验证器返回的 `VerificationResult` 都必须在 `code` 为 `0`
-时恰好令 `valid` 为 true；结果不一致时按验证失败处理。
-
-意图记录与嵌套载荷不可变；`JsonNode` 载荷在进出时都会被复制。该 Java 移植还拒绝重复的 JSON 键、
-未知的模型字段、非法 UTF-8、带小数的整数字段、数值型枚举值、标量强制转换以及非法的回调结果，
-而不是静默地规范化安全敏感输入。
-
 ## 版本与兼容性
 
-协议版本是 `1.0`（`A4p.PROTOCOL_VERSION`）。本 SDK 创建的每一层都写入该常量，每一步都会校验所收到的
-各层，不一致时以 `A4P_UNSUPPORTED_VERSION` 拒绝。该移植与它所来自的 ArkTS SDK（`A4P-arkts-sdk/`）
-实现相同的线格式，canonical-vector 测试让两者保持一致，因此在双方都使用 canonical JSON 规则与同一
-签名套件的前提下，意图与持久化的 context 可以在两个 SDK 之间互换。构件版本为 `0.1.0`；
-协议兼容性由 `version` 字段决定，而不是由构件版本决定。
-
-## 已知限制
-
-- 账本是内存内的、以单个 context 为粒度。持久化、加锁写入、防重放以及密钥与身份的绑定都由意图中心负责。
-- 同步只覆盖共享同一个 `IntentExecutionContext` 的线程，不覆盖多个进程，也不覆盖同一个 `intentId`
-  各自独立激活的副本。
-- 在规范确定之前，HTTP 绑定不在范围内；仅提供进程内调用与 canonical JSON 序列化。
-- `Rsa3072` 是约定好的一个套件，而非协商结果；对端要么使用它，要么提供相匹配的
-  `Signer`/`SignatureVerifier` 实现。
-- `verifyIntentAuthenticity` 有意不校验用户签名。
-- 该移植在若干处比协议最低要求更严格（重复 JSON 键、未知字段、数值枚举、标量强制转换），以确保安全
-  敏感输入永远不会被静默规范化。下文的对齐文档记录了改了什么以及为什么。
+- 当前协议版本: `1.0`（`A4p.PROTOCOL_VERSION`）
+- java SDK 构建版本: `0.1.0`
 
 ## 更多文档
 
@@ -265,7 +198,8 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 
 | 文档 | 内容 |
 | --- | --- |
-| [canonical-json-spec.md](docs/canonical-json-spec.md) | 每次签名背后的 canonical JSON 与 Base64URL 规则。 |
+| [API_zh.md](docs/API_zh.md) | API 详细说明 |
+| [serialization_and_signature_rules_zh.md](docs/serialization_and_signature_rules_zh.md) | 序列化与签名规则 |
 
 ## 测试
 
