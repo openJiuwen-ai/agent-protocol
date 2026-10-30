@@ -102,8 +102,8 @@ cd agent-protocol
 - **A2A：** [API 参考](./A2A/cpp-sdk/docs/api/README.md) · [依赖说明](./A2A/cpp-sdk/docs/dependencies.md) · [错误处理](./A2A/cpp-sdk/docs/errors.md)
 - **A2X：** [注册中心指南](./AgentRegistry/README.md) · [Python 客户端](./AgentRegistry/client/README.md) · [Agent Team 部署](./AgentRegistry/README_forAgentTeam.md)
 - **A4P：** [协议说明](./A4P-python-sdk/A4P_PROTOCOL.md) · [SDK 设计](./A4P-python-sdk/A4P_SDK_DESIGN.md) · [MCP 集成示例](./A4P-python-sdk/examples/note_mcp_a4p/README.md)
-- **A4P Java：** [SDK 指南](./A4P-java-sdk/README_zh.md) · [规范化 JSON 与签名字节](./A4P-java-sdk/docs/canonical-json-spec.md) · [支付示例](./A4P-java-sdk/src/main/java/io/openjiuwen/a4p/examples/PaymentExample.java)
-- **A4P ArkTS：** [SDK 指南](./A4P-arkts-sdk/README_zh.md) · [规范化 JSON 与签名字节](./A4P-java-sdk/docs/canonical-json-spec.md)
+- **A4P Java：** [SDK 指南](./A4P-java-sdk/README_zh.md) · [规范化 JSON 与签名字节](./A4P-java-sdk/docs/serialization_and_signature_rules_zh.md) · [支付示例](./A4P-java-sdk/examples/src/main/java/io/openjiuwen/a4p/examples/PaymentExample.java)
+- **A4P ArkTS：** [SDK 指南](./A4P-arkts-sdk/README_zh.md) · [规范化 JSON 与签名字节](./A4P-java-sdk/docs/serialization_and_signature_rules_zh.md)
 - **IntelliRouter：** [SDK 指南](./intelli_router/README.md) · [API 参考](./intelli_router/API.md) · [示例](./intelli_router/examples/)
 
 ## 参与贡献

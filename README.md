@@ -102,8 +102,8 @@ The components are built and installed separately. See each guide for complete d
 - **A2A:** [API reference](./A2A/cpp-sdk/docs/api/README.md) · [Dependencies](./A2A/cpp-sdk/docs/dependencies.md) · [Error handling](./A2A/cpp-sdk/docs/errors.md)
 - **A2X:** [Registry guide](./AgentRegistry/README.md) · [Python client](./AgentRegistry/client/README.md) · [Agent Team deployment](./AgentRegistry/README_forAgentTeam.md)
 - **A4P:** [Protocol](./A4P-python-sdk/A4P_PROTOCOL.md) · [SDK design](./A4P-python-sdk/A4P_SDK_DESIGN.md) · [MCP integration example](./A4P-python-sdk/examples/note_mcp_a4p/README.md)
-- **A4P Java:** [SDK guide](./A4P-java-sdk/README.md) · [Canonical JSON and signed bytes](./A4P-java-sdk/docs/canonical-json-spec.md) · [Payment example](./A4P-java-sdk/src/main/java/io/openjiuwen/a4p/examples/PaymentExample.java)
-- **A4P ArkTS:** [SDK guide](./A4P-arkts-sdk/README.md) · [Canonical JSON and signed bytes](./A4P-java-sdk/docs/canonical-json-spec.md)
+- **A4P Java:** [SDK guide](./A4P-java-sdk/README.md) · [Canonical JSON and signed bytes](./A4P-java-sdk/docs/serialization_and_signature_rules.md) · [Payment example](./A4P-java-sdk/examples/src/main/java/io/openjiuwen/a4p/examples/PaymentExample.java)
+- **A4P ArkTS:** [SDK guide](./A4P-arkts-sdk/README.md) · [Canonical JSON and signed bytes](./A4P-java-sdk/docs/serialization_and_signature_rules.md)
 - **IntelliRouter:** [SDK guide](./intelli_router/README.md) · [API reference](./intelli_router/API.md) · [Examples](./intelli_router/examples/)
 
 ## Contributing

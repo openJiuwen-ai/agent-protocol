@@ -3,9 +3,10 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: bash build.sh [build|ut] [additional Maven options]"
+  echo "Usage: bash build.sh [build|ut|docs] [additional Maven options]"
   echo "  build  Compile and package the JAR without compiling/running tests (default)."
   echo "  ut     Compile and run unit tests without packaging the JAR."
+  echo "  docs   Generate English HTML API documentation from Javadoc comments."
 }
 
 MODE="${1:-build}"
@@ -18,6 +19,9 @@ case "${MODE}" in
     ;;
   ut)
     MAVEN_ARGS=(-DskipTests=false -Dmaven.test.skip=false -Dmaven.test.failure.ignore=false -DfailIfNoTests=true clean test)
+    ;;
+  docs)
+    MAVEN_ARGS=(javadoc:javadoc)
     ;;
   -h|--help)
     usage
@@ -35,6 +39,12 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 if ! command -v mvn >/dev/null 2>&1; then
   echo "Error: Maven 3.9+ is required; install Maven and add mvn to PATH." >&2
   exit 1
+fi
+
+if [[ "$MODE" == "ut" ]]; then
+  mvn --batch-mode --no-transfer-progress --file "${PROJECT_DIR}/pom.xml" "$@" "${MAVEN_ARGS[@]}"
+  mvn --batch-mode --no-transfer-progress --file "${PROJECT_DIR}/pom.xml" "$@" install -DskipTests
+  exec mvn --batch-mode --no-transfer-progress --file "${PROJECT_DIR}/examples/pom.xml" "$@" clean test -DskipTests=false -Dmaven.test.skip=false -Dmaven.test.failure.ignore=false -DfailIfNoTests=true
 fi
 
 # Resolve the project independently of the caller's working directory.

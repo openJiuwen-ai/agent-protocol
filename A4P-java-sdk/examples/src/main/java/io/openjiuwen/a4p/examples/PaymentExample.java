@@ -42,7 +42,8 @@ public final class PaymentExample {
         unwrap(A4p.completeExecution(context, execution.id(), now));
         System.out.println("Intent: " + context.intentId() + " (" + context.status() + ")");
         System.out.println("Remaining amount: " + PaymentProfile.executionInfo(context).leftAmount());
-        System.out.println(A4pIntentCodec.standard().serializeIntentL3(authorized));
+        A4pIntentCodec codec = new A4pIntentCodec();
+        unwrap(codec.deserializeIntentExecutionContext(codec.serializeIntentExecutionContext(context)));
     }
 
     private static <Value> Value unwrap(A4pResult<Value> result) {
