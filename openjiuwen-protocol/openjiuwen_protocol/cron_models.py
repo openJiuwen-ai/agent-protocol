@@ -99,6 +99,12 @@ class CronJob:
     credential_ref: str = ""
     # 工作模式派生快照：由 project_id 归属推导（"code" / DEFAULT_WEB_WORK_MODE）。
     work_mode: str = DEFAULT_WEB_WORK_MODE
+    # 企业多租户维度：创建该任务的 group / bot；个人版为空串（与
+    # ``jiuwenswarm/runtime/cron/models.py`` 同名字段一致）。
+    group_id: str = ""
+    bot_id: str = ""
+    # 调度器写入的下次触发时间（epoch 秒）；用于列表展示与「即将执行」排序。
+    next_run_at: float | None = None
 
     # NOTE(to_dict / from_dict)：序列化与反序列化属实现逻辑，不在本包；
     # 各仓实现侧持有（from_dict 依赖 validate_cron_expression /
@@ -135,6 +141,9 @@ class CronRunState:
     # Tenant route captured with the executing request.  A removed persisted
     # job must not make ghost/timeout cancellation fall back to the default user.
     exec_user_id: str | None = None
+    exec_app_id: str | None = None
+    exec_group_id: str | None = None
+    exec_bot_id: str | None = None
     # Remaining AgentManager cache identity captured by the executing request.
     exec_work_mode: str | None = None
     exec_project_id: str | None = None
@@ -144,6 +153,16 @@ class CronRunState:
     execution_session_allocated: bool = False
     # Manual proactive checks report their outcome through a UI notification.
     manually_triggered: bool = False
+    # 执行流已经把终稿放进会话直播。后面的推送不再往同一条直播放第二遍。
+    live_final_forwarded: bool = False
+    # 直播帧序号。浏览器若短暂连了两次，用它丢掉来晚的旧帧。
+    live_seq: int = 0
+    # 执行请求 / 执行实例标识：区分同一任务的多次尝试，供直播与通知去重。
+    exec_request_id: str | None = None
+    exec_execution_id: str | None = None
+    # 通知版本号与执行流错误标记：Web 侧据此决定是否重放终态。
+    notification_revision: int = 0
+    stream_error_seen: bool = False
 
 
 __all__ = [
