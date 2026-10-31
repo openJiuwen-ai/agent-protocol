@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   echo "Usage: bash scripts/build-sdk.sh <project> [project options...]"
-  echo "Projects: A4P-java-sdk, A4P-arkts-sdk, MCP/cpp-sdk, A2A/cpp-sdk"
+  echo "Projects: A4P-java-sdk, A4P-arkts-sdk, MCP/cpp-sdk, A2A/cpp-sdk, intelli_router"
   echo "ArkTS requires separately supplied SDK sources and scripts/build.sh."
 }
 
@@ -15,6 +15,7 @@ case "${1:-}" in
   A4P-arkts-sdk) build_file="scripts/build.sh" ;;
   MCP/cpp-sdk) build_file="scripts/build.sh" ;;
   A2A/cpp-sdk) build_file="scripts/build.sh" ;;
+  intelli_router) build_file="scripts/build.sh" ;;
   *) echo "Error: unknown build project '$1'." >&2; usage >&2; exit 2 ;;
 esac
 project="$1"
