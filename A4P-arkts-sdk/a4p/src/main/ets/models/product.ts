@@ -67,10 +67,10 @@ export interface ItemWhiteList {
 }
 
 /**
- * Resource object of a structured intent: the whitelist groups that
- * together form the order template every AI_PAY execution must satisfy
- * — all groups must be purchased (AND), each group satisfied by any
- * one of its whitelisted products (OR).
+ * Resources object of a structured intent (the `resources` field): the
+ * whitelist groups that together form the order template every AI_PAY
+ * execution must satisfy — all groups must be purchased (AND), each
+ * group satisfied by any one of its whitelisted products (OR).
  *
  * The template binds products and quantities only: Product carries no
  * price, so the signed scope places no price terms on an order and the

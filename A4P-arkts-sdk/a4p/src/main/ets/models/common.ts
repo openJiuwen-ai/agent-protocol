@@ -84,7 +84,7 @@ export enum A4pErrorCode {
   A4P_INVALID_STATUS = 3001,
   /** Timestamp has expired (exceeded validUntil) */
   A4P_TIMESTAMP_EXPIRED = 3002,
-  /** Timestamp is too early (before validFrom) */
+  /** Timestamp is too early (before validFrom, or before a record's reservedAt) */
   A4P_TIMESTAMP_TOO_EARLY = 3003,
 
   /** Total execution count limit exceeded */
@@ -95,7 +95,7 @@ export enum A4pErrorCode {
   A4P_PERIOD_COUNT_EXCEEDED = 4003,
   /** Period execution count limit exceeded */
   A4P_PERIOD_EXECUTION_COUNT_EXCEEDED = 4004,
-  /** Cart does not match the intent's authorized resource order template */
+  /** Cart does not match the intent's authorized resources order template */
   A4P_CART_MISMATCH = 4005,
   /** Single order amount limit exceeded */
   A4P_SINGLE_ORDER_AMOUNT_EXCEEDED = 4006,

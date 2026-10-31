@@ -32,14 +32,14 @@ export enum AlgorithmType {
 }
 
 /**
- * Structured intent data defining the action, the authorized resource,
+ * Structured intent data defining the action, the authorized resources,
  * and the payment constraints.
  */
 export interface StructuredIntent {
   /** Action to be performed */
   action: IntentActionType;
-  /** Resource being acted upon (the authorized purchase whitelist) */
-  resource: ShoppingItems;
+  /** Resources being acted upon (the authorized purchase whitelist) */
+  resources: ShoppingItems;
   /** Payment constraints for this intent */
   constraints: PaymentConstraints;
 }

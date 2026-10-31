@@ -63,7 +63,7 @@ namespaces, the `Signer` / `SignatureVerifier` interfaces, and the data models.
 | `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer[, now?])` returns `IntentL3` |
 | `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier[, now?])` returns `IntentExecutionContext` |
 | `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` returns `VerificationResult` |
-| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` returns `IntentExecutionContext` |
+| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext[, now?])` returns `IntentExecutionContext` |
 | `createExecution / completeExecution / cancelExecution` | Functions on the `A4p` namespace, returning `IntentExecutionContext` |
 | Failure reporting | No result wrapper: APIs return data directly and throw a `BusinessError`-shaped error whose `code` is an `A4pErrorCode` (the concrete class is module-internal; catch structurally) |
 | Codec | `A4pCodec.serializeIntentL1/L2/L3/IntentExecutionContext` return `String`; each `deserialize…` counterpart validates the structure and returns the object |
@@ -103,8 +103,8 @@ described below), so persist the context after every call.
 `A4pCodec.serializeIntentExecutionContext` / `deserializeIntentExecutionContext` provide
 the persisted form; deserialization re-validates the whole stored structure — the
 authorized L3 chain, the `intentId` derivation, every ledger record (status-bound
-finalization timestamps, `execution.id === executionId`, `periodIndex` presence matching
-the intent's periodicity) and the accounting snapshot (period figures and
+finalization timestamps, a well-formed flat `action`/`executionContent`, `periodIndex`
+presence matching the intent's periodicity) and the accounting snapshot (period figures and
 `leftExecutionCount` present exactly when their caps apply) — and re-freezes the
 authorization snapshot.
 
@@ -128,10 +128,14 @@ skuId is the whitelist matching key, and a product may appear at most once per g
 in at most one group. A period rule requires all of `anchorTime`, `periodSeconds` and
 `maxExecutionCountPerPeriod`, with `anchorTime <= validFrom` and
 `periodSeconds <= 9007199254740`. Chain timestamps are monotonic:
-`L1.timestamp <= L2.timestamp <= L3.timestamp <= activation`. Activation applies no
-validity-window check: an intent can be activated before `validFrom` (and even after
-`validUntil`); the window is enforced at reservation time, where an early reservation
-fails with `A4P_TIMESTAMP_TOO_EARLY`. Length limits and sensitive-data filtering of
+`L1.timestamp <= L2.timestamp <= L3.timestamp <= activation`. The validity window is
+judged progressively as the chain approaches execution: issuance applies no window
+check; signing and activation refuse an instant past `validUntil` with
+`A4P_TIMESTAMP_EXPIRED` (an L3 or a context created there could never reserve) but
+permit one before `validFrom`, the intent simply waiting for the window to open; the
+full window — both ends plus the `activatedTime` floor — is enforced at reservation
+time, where an early reservation fails with `A4P_TIMESTAMP_TOO_EARLY` and a late one
+flips the context to EXPIRED. Length limits and sensitive-data filtering of
 `intentConversation` are the Agent's responsibility.
 
 ### Result codes
@@ -163,8 +167,9 @@ Callers branch on the numeric `code`; the message is a fixed diagnostic text per
 | 6001 | `A4P_INTERNAL_ERROR` | Unexpected internal error |
 
 `2001` and `2002` also cover the crypto boundary: a `Signer`/`SignatureVerifier` that
-throws, returns nothing, or returns a malformed result is mapped to these codes by the
-SDK, so raw exceptions never leak through the lifecycle APIs.
+throws, returns nothing, or returns a malformed or self-contradictory result (`valid`
+true with a non-success code, or `valid` false with code `0`) is mapped to these codes
+by the SDK, so raw exceptions never leak through the lifecycle APIs.
 
 ## Execution semantics
 
@@ -196,19 +201,22 @@ SDK, so raw exceptions never leak through the lifecycle APIs.
   either the count cap is reached or the amount budget is exhausted. REVOKED and
   EXPIRED are terminal.
 - `executionInfo` always provides `leftAmount`; `periodIndex`/`leftPeriodExecutionCount`
-  appear only for periodic intents and `leftExecutionCount` only when `maxExecuteCount`
+  appear only for periodic intents and `leftExecutionCount` only when `maxExecutionCount`
   is present — non-applicable figures are omitted, not null. The snapshot is always
   re-derived from the ledger, never maintained by hand.
-- The caller's execution object is never mutated: the id is resolved locally and lands
-  on the ledger's own deep copy after every check has passed. The ledger is append-only.
+- The caller's execution object is neither mutated nor aliased: the id is resolved
+  locally and stored as the record's `executionId`, and a deep copy of the execution
+  content lands on the flat ledger record after every check has passed. The ledger is
+  append-only.
 - Completion books no quota but re-derives the accounting snapshot at the evaluation
   instant, so the period figures follow `now`, not the last ledger mutation.
 - The authorized intent is deep-cloned and deep-frozen at activation; execution checks
   read the immutable snapshot while the ledger and figures stay mutable.
 - Context operations carry no locks. That is safe in the ArkTS single-threaded runtime,
   **not** across processes or independently activated copies of the same `intentId`.
-- `verifyIntentAuthenticity` verifies the L3 chain and the server's L2 signature, not
-  the user signature, and does not depend on any context status.
+- `verifyIntentAuthenticity` structurally validates the whole L3 chain (its own `sign`,
+  `signingEnv`, `timestamp` and `version` included) and verifies the server's L2
+  signature, not the user signature; it does not depend on any context status.
 
 The ledger is in-memory. The integrating service (the intent center) must persist the
 context inside a database transaction locked by `intentId`, prevent replay of the same
@@ -222,7 +230,7 @@ UTF-16 code units, no whitespace, finite safe integers only, `undefined` omitted
 signing strips only the complete top-level `sign` property (nested chain signatures
 stay), UTF-8 without BOM, and RFC 4648 Base64URL without padding, with the decoder
 rejecting padding, non-URL-safe characters and nonzero unused trailing bits. JSON field
-names are the interface property names (`intentConversation`, `structuredIntent.resource`,
+names are the interface property names (`intentConversation`, `structuredIntent.resources`,
 `userIdentity.id`), every enum is serialized by name (`"AI_PAY"`, `"CONSUMED"`,
 `"PENDING"`), and the protocol version is `1.0`.
 
@@ -255,12 +263,6 @@ step validates the levels it receives, rejecting a mismatch (including mixed-ver
 chains) with `A4P_UNSUPPORTED_VERSION`. The HAR version is `1.0.0`; protocol
 compatibility is governed by the `version` field, not by the HAR version.
 
-The Java port ([`A4P-java-sdk/`](../A4P-java-sdk)) was ported from this SDK and shares
-the canonical JSON rules and the error-code table, but it follows the API
-specification's newer field spellings (`resources` where this SDK signs `resource`, an
-explicit `version` on `Execution`). Serialized intents are therefore not byte-identical
-across the two SDKs; check the field names before exchanging wire data.
-
 ## Known limitations
 
 - The ledger is in-memory and per-context. Durability, locked persistence, replay
@@ -273,8 +275,9 @@ across the two SDKs; check the field names before exchanging wire data.
 - `verifyIntentAuthenticity` deliberately does not verify the user signature.
 - Deserialization is structural (JSON.parse semantics): unknown fields and duplicate
   JSON keys are not rejected, unlike the stricter Java port.
-- Activation applies no validity-window check; the window is enforced at reservation
-  time (with the lazy EXPIRED flip).
+- Signing and activation judge only the window's upper bound (`validUntil`); the
+  window's opening (`validFrom`) and the lazy EXPIRED flip are left to reservation
+  time.
 - Context operations are unsynchronized: safe in the single-threaded ArkTS runtime
   only, not across processes or independently activated copies.
 

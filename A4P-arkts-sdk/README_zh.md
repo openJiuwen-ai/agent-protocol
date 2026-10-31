@@ -60,7 +60,7 @@ import { A4p, A4pCodec, A4pErrorCode } from 'a4p';
 | `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer[, now?])` 返回 `IntentL3` |
 | `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier[, now?])` 返回 `IntentExecutionContext` |
 | `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` 返回 `VerificationResult` |
-| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext)` 返回 `IntentExecutionContext` |
+| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext[, now?])` 返回 `IntentExecutionContext` |
 | `createExecution / completeExecution / cancelExecution` | `A4p` 命名空间下的函数，返回 `IntentExecutionContext` |
 | 失败上报 | 无结果包装：API 直接返回数据，失败时抛出符合 `BusinessError` 形态的错误，`code` 为 `A4pErrorCode`（具体类为模块内部实现，按结构捕获） |
 | 编解码 | `A4pCodec.serializeIntentL1/L2/L3/IntentExecutionContext` 返回 `String`；对应的每个 `deserialize…` 先做结构校验再返回对象 |
@@ -98,7 +98,7 @@ try {
 每次调用后都要持久化 context。`A4pCodec.serializeIntentExecutionContext` /
 `deserializeIntentExecutionContext` 提供持久化形式；反序列化会重新校验存储的完整结构
 ——已授权的 L3 链、`intentId` 的推导、每一条账本记录（与状态绑定的终结时间戳、
-`execution.id === executionId`、`periodIndex` 的有无与意图周期性一致）以及记账快照
+结构合法的扁平 `action`/`executionContent`、`periodIndex` 的有无与意图周期性一致）以及记账快照
 （周期数值与 `leftExecutionCount` 恰在对应上限存在时出现）——并重新冻结授权快照。
 
 可选字段用 `undefined` 表示；缺席的可选字段不会出现在签名 JSON 中。金额是应用约定的
@@ -117,10 +117,13 @@ seller id，且 `spuId`/`skuId` 至少提供一个非空白值；seller id + spu
 匹配键，一个商品在每个分组内至多出现一次，且至多属于一个分组。周期规则要求
 `anchorTime`、`periodSeconds`、`maxExecutionCountPerPeriod` 三者同时提供，且
 `anchorTime <= validFrom`、`periodSeconds <= 9007199254740`。链上时间戳单调：
-`L1.timestamp <= L2.timestamp <= L3.timestamp <= 激活时刻`。激活不做有效期窗口检查：
-意图可以在 `validFrom` 之前（甚至 `validUntil` 之后）被激活；窗口在预留时才被强制，
-早于窗口的预留以 `A4P_TIMESTAMP_TOO_EARLY` 失败。`intentConversation` 的长度限制与
-敏感数据过滤由 Agent 负责。
+`L1.timestamp <= L2.timestamp <= L3.timestamp <= 激活时刻`。有效期窗口随链路推进逐级
+判定：签发不做窗口检查；签名与激活各自以 `A4P_TIMESTAMP_EXPIRED` 拒绝越过
+`validUntil` 的时刻（彼时生成的 L3 或 context 永远无法预留），但允许早于
+`validFrom`，意图只是等待窗口开启；完整窗口（两端加 `activatedTime` 下限）在预留时
+强制。早于窗口的预留以 `A4P_TIMESTAMP_TOO_EARLY` 失败，越过 `validUntil` 的预留把
+context 惰性置为 EXPIRED。`intentConversation` 的长度限制与敏感数据过滤由 Agent
+负责。
 
 ### 结果码
 
@@ -149,7 +152,8 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
 | 5002 | `A4P_DESERIALIZE_FAIL` | 反序列化失败 |
 | 6001 | `A4P_INTERNAL_ERROR` | 意外的内部错误 |
 
-`2001` 与 `2002` 同样覆盖密码学边界：抛出异常、不返回结果或返回畸形结果的
+`2001` 与 `2002` 同样覆盖密码学边界：抛出异常、不返回结果，或返回畸形/自相矛盾结果
+（`valid` 为真却携带非成功码，或 `valid` 为假却携带码 `0`）的
 `Signer`/`SignatureVerifier` 会被 SDK 映射为这两个码，原始异常不会穿透生命周期 API。
 
 ## 执行语义
@@ -175,17 +179,18 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
 - 当一次完成操作之后不再有待处理记录，且要么达到次数上限、要么金额预算用尽时，ACTIVE
   的 context 变为 CONSUMED。REVOKED 与 EXPIRED 是终态。
 - `executionInfo` 始终给出 `leftAmount`；`periodIndex`/`leftPeriodExecutionCount` 仅在
-  周期意图上出现，`leftExecutionCount` 仅在存在 `maxExecuteCount` 时出现——不适用的数值
+  周期意图上出现，`leftExecutionCount` 仅在存在 `maxExecutionCount` 时出现——不适用的数值
   被省略而非置 null。快照始终由账本推导，从不手工维护。
-- 调用方的 execution 对象不会被改动：ID 在本地解析，且只在全部检查通过后写入账本自己的
-  深拷贝。账本只追加。
+- 调用方的 execution 对象既不会被改动也不会被别名引用：ID 在本地解析并存为记录的
+  `executionId`，执行内容的深拷贝则在全部检查通过后写入扁平的账本记录。账本只追加。
 - 完成操作不占用配额，但会按评估时刻重新推导记账快照，因此周期数值跟随 `now`，而不是
   最近一次账本变更。
 - 已授权意图在激活时被深拷贝并深度冻结；执行检查读取不可变快照，而账本与数值保持
   可变。
 - context 操作不加锁。这在 ArkTS 单线程运行时中是安全的，但**不**覆盖多个进程或同一个
   `intentId` 各自独立激活的副本。
-- `verifyIntentAuthenticity` 校验 L3 链与服务端的 L2 签名，不校验用户签名，也不依赖任何
+- `verifyIntentAuthenticity` 结构化校验整条 L3 链（含 L3 自身的 `sign`、`signingEnv`、
+  `timestamp` 与 `version`）并验证服务端的 L2 签名，不校验用户签名，也不依赖任何
   context 状态。
 
 账本位于内存中。接入方（意图中心）必须在以 `intentId` 加锁的数据库事务中持久化
@@ -198,7 +203,7 @@ context，防止同一个 `intentId` 被重放，并把密钥与身份绑定。
 UTF-16 码元排序、无空白、仅限有限安全整数、`undefined` 省略、签名时仅移除顶层完整的
 `sign` 属性（链上下层签名保留）、UTF-8 编码不带 BOM，以及 RFC 4648 无填充 Base64URL，
 解码端拒绝填充、非 URL 安全字符与非零的未用尾随位。JSON 字段名即接口属性名
-（`intentConversation`、`structuredIntent.resource`、`userIdentity.id`），每个枚举都按
+（`intentConversation`、`structuredIntent.resources`、`userIdentity.id`），每个枚举都按
 名称序列化（`"AI_PAY"`、`"CONSUMED"`、`"PENDING"`），协议版本为 `1.0`。
 
 每一层的签名覆盖该层除去整个 `sign` 对象之后的内容，因此该层自己的 `alg` 与
@@ -225,11 +230,6 @@ Base64URL，以便与 Java SDK 的 `Rsa3072` 适配器互操作。
 （包括混合版本的链）时以 `A4P_UNSUPPORTED_VERSION` 拒绝。HAR 版本为 `1.0.0`；协议兼容
 性由 `version` 字段决定，而不是由 HAR 版本决定。
 
-Java 移植版（[`A4P-java-sdk/`](../A4P-java-sdk)）移植自本 SDK，与本文共享 canonical JSON
-规则与错误码表，但它遵循 API 规范中更新的字段拼写（本 SDK 签名 `resource`，Java 侧为
-`resources`；`Execution` 上多出显式的 `version` 字段）。因此两个 SDK 序列化出的意图并非
-字节级一致；交换线格式数据前请先核对字段名。
-
 ## 已知限制
 
 - 账本是内存内的、以单个 context 为粒度。持久化、加锁写入、防重放以及密钥与身份的绑定
@@ -241,7 +241,8 @@ Java 移植版（[`A4P-java-sdk/`](../A4P-java-sdk)）移植自本 SDK，与本�
 - `verifyIntentAuthenticity` 有意不校验用户签名。
 - 反序列化是结构性的（JSON.parse 语义）：不拒绝未知字段与重复 JSON 键，这一点不如
   Java 移植版严格。
-- 激活不做有效期窗口检查；窗口在预留时强制（伴随惰性的 EXPIRED 翻转）。
+- 签名与激活只判定窗口上界（`validUntil`）；窗口的开启（`validFrom`）与惰性的 EXPIRED
+  翻转都留给预留阶段。
 - context 操作无同步保护：仅在 ArkTS 单线程运行时中安全，不覆盖多进程或各自独立激活的
   副本。
 

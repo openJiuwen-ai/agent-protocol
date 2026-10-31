@@ -11,7 +11,7 @@
 /**
  * Payment constraints for an intent: per-order and total amount limits,
  * validity window, execution count cap, and per-period execution limits.
- * `singleOrderMaxAmount` and `maxExecuteCount` are optional (absent means
+ * `singleOrderMaxAmount` and `maxExecutionCount` are optional (absent means
  * no cap of that kind); the period rule (`anchorTime`/`periodSeconds`/
  * `maxExecutionCountPerPeriod`) is all-or-nothing — a periodic intent
  * provides all three, a non-periodic intent omits all three.
@@ -36,7 +36,7 @@ export interface PaymentConstraints {
    * a slot); must be a positive integer when present — absent means no
    * execution count cap
    */
-  maxExecuteCount?: number;
+  maxExecutionCount?: number;
   /**
    * Anchor time for period calculation (milliseconds since epoch); provided
    * together with periodSeconds and maxExecutionCountPerPeriod, or all

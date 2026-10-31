@@ -111,7 +111,7 @@ export function computeAccumulatedAmount(executions: ExecutionRecord[]): number 
   let sum: number = 0;
   for (let i = 0; i < executions.length; i++) {
     if (isCountedRecord(executions[i])) {
-      sum += executions[i].execution.executionContent.amount;
+      sum += executions[i].executionContent.amount;
     }
   }
   return sum;
@@ -121,7 +121,7 @@ export function computeAccumulatedAmount(executions: ExecutionRecord[]): number 
  * Derives the execution-info snapshot from the payment constraints and the
  * executions ledger:
  * - fields whose cap does not apply are omitted: `leftExecutionCount` when
- *   the intent carries no `maxExecuteCount` cap, and the period figures
+ *   the intent carries no `maxExecutionCount` cap, and the period figures
  *   (`periodIndex`, `leftPeriodExecutionCount`) for non-periodic intents;
  * - all figures count only non-canceled records (an explicit cancel
  *   releases the quota);
@@ -136,7 +136,7 @@ export function computeExecutionInfo(constraints: PaymentConstraints, executions
   const info: PaymentExecutionInfo = {
     leftAmount: constraints.totalMaxAmount - computeAccumulatedAmount(executions)
   };
-  const countCap: number | undefined = constraints.maxExecuteCount;
+  const countCap: number | undefined = constraints.maxExecutionCount;
   if (countCap !== undefined) {
     info.leftExecutionCount = countCap - computeExecutionCount(executions);
   }

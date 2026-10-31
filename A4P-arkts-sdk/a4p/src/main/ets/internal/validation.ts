@@ -90,7 +90,7 @@ function isValidAlgorithmType(alg: AlgorithmType): boolean {
 
 /**
  * Validates a PaymentConstraints object: amounts, validity window, and the
- * period rule. Optional caps (`singleOrderMaxAmount`, `maxExecuteCount`)
+ * period rule. Optional caps (`singleOrderMaxAmount`, `maxExecutionCount`)
  * are validated only when present; the period rule is all-or-nothing —
  * all three fields provided (periodic) or all three omitted
  * (non-periodic), never partial.
@@ -114,8 +114,8 @@ function validatePaymentConstraints(pc: PaymentConstraints): Validation {
   if (pc.validFrom > pc.validUntil) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'validFrom must not be later than validUntil');
   }
-  if (pc.maxExecuteCount !== undefined && !isPositiveInteger(pc.maxExecuteCount)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'maxExecuteCount must be a positive integer');
+  if (pc.maxExecutionCount !== undefined && !isPositiveInteger(pc.maxExecutionCount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'maxExecutionCount must be a positive integer');
   }
   const hasAnchorTime: boolean = pc.anchorTime !== undefined;
   const hasPeriodSeconds: boolean = pc.periodSeconds !== undefined;
@@ -224,23 +224,23 @@ function validateItemWhiteList(group: ItemWhiteList, field: string): Validation 
 }
 
 /**
- * Validates the resource: a non-empty list of valid whitelist groups with
- * no product shared by two groups. The resource is an order template and
+ * Validates the resources: a non-empty list of valid whitelist groups with
+ * no product shared by two groups. The resources are an order template and
  * a cart item finds its group by product alone, so a product must
  * uniquely determine its group.
  */
-function validateShoppingItems(resource: ShoppingItems, field: string): Validation {
-  if (!resource.itemsWhiteList || resource.itemsWhiteList.length === 0) {
+function validateShoppingItems(resources: ShoppingItems, field: string): Validation {
+  if (!resources.itemsWhiteList || resources.itemsWhiteList.length === 0) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.itemsWhiteList must not be empty');
   }
-  for (let i = 0; i < resource.itemsWhiteList.length; i++) {
-    const groupErr = validateItemWhiteList(resource.itemsWhiteList[i], field + '.itemsWhiteList[' + i + ']');
+  for (let i = 0; i < resources.itemsWhiteList.length; i++) {
+    const groupErr = validateItemWhiteList(resources.itemsWhiteList[i], field + '.itemsWhiteList[' + i + ']');
     if (groupErr) {
       return groupErr;
     }
     for (let j = 0; j < i; j++) {
-      const earlier: ItemWhiteList = resource.itemsWhiteList[j];
-      const current: ItemWhiteList = resource.itemsWhiteList[i];
+      const earlier: ItemWhiteList = resources.itemsWhiteList[j];
+      const current: ItemWhiteList = resources.itemsWhiteList[i];
       for (let a = 0; a < current.whiteList.length; a++) {
         for (let b = 0; b < earlier.whiteList.length; b++) {
           if (productMatches(current.whiteList[a], earlier.whiteList[b])) {
@@ -279,17 +279,17 @@ function validateCartItems(cartItems: CartItem[], field: string): Validation {
   return null;
 }
 
-/** Validates a StructuredIntent: action, resource, and constraints. */
+/** Validates a StructuredIntent: action, resources, and constraints. */
 function validateStructuredIntent(si: StructuredIntent): Validation {
   if (!isValidIntentActionType(si.action)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent.action must be a valid IntentActionType');
   }
-  if (!si.resource) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent.resource must not be null');
+  if (!si.resources) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent.resources must not be null');
   }
-  const resourceErr = validateShoppingItems(si.resource, 'structuredIntent.resource');
-  if (resourceErr) {
-    return resourceErr;
+  const resourcesErr = validateShoppingItems(si.resources, 'structuredIntent.resources');
+  if (resourcesErr) {
+    return resourcesErr;
   }
   if (!si.constraints) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent.constraints must not be null');
@@ -666,7 +666,8 @@ function isValidIntentExecutionStatus(status: IntentExecutionStatus): boolean {
  * Validates an execution record: a non-blank executionId, a defined
  * status, a non-negative reservedAt, the status-bound finalization
  * timestamps (completedAt on a COMPLETED record, canceledAt on a CANCELED
- * one — and only there), and the embedded execution itself.
+ * one — and only there), and the flat reserved-execution fields (a valid
+ * action and a well-formed executionContent).
  * @param record - The execution record to validate
  * @param field - The field path prefix for error messages
  * @returns A validation failure if invalid, or null if valid
@@ -721,19 +722,31 @@ function validateExecutionRecord(record: ExecutionRecord, field: string): Valida
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.canceledAt must be present only on a CANCELED record');
   }
-  if (!record.execution) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.execution must not be null');
+  // Record timestamps are monotonic like the chain's: a finalization can
+  // never predate the reservation it finalizes (completeExecution and
+  // cancelExecution reject such a clock), so a persisted record violating
+  // it is corrupted data and fails with the code the offending operation
+  // would have returned.
+  if (record.completedAt !== undefined && record.completedAt < record.reservedAt) {
+    return fail(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
+      field + '.completedAt must not be earlier than ' + field + '.reservedAt');
   }
-  const execErr = validateExecution(record.execution);
-  if (execErr) {
-    return execErr;
+  if (record.canceledAt !== undefined && record.canceledAt < record.reservedAt) {
+    return fail(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
+      field + '.canceledAt must not be earlier than ' + field + '.reservedAt');
   }
-  // The record's key and the stored execution's id are the same id by
-  // construction (createExecution resolves it once); a mismatch is
-  // corrupted data.
-  if (record.execution.id !== record.executionId) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      field + '.execution.id must equal ' + field + '.executionId');
+  // The reserved execution's fields live flat on the record: a valid
+  // action and a well-formed order, exactly like the execution
+  // createExecution received and validated the same way.
+  if (!isValidIntentActionType(record.action)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.action must be a valid IntentActionType');
+  }
+  if (!record.executionContent) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.executionContent must not be null');
+  }
+  const orderErr = validateOrder(record.executionContent);
+  if (orderErr) {
+    return orderErr;
   }
   return null;
 }
@@ -752,9 +765,10 @@ function validatePaymentExecutionInfo(info: PaymentExecutionInfo, field: string)
   if (!info) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not be null');
   }
-  // The snapshot period index may be negative: activateIntent applies no
-  // validity-window check, so an activation before the anchor snapshots
-  // the pre-anchor period. Record indexes, in contrast, are reserved at
+  // The snapshot period index may be negative: activateIntent judges only
+  // the window's upper bound (validUntil) and permits an instant before
+  // validFrom, so an activation before the anchor snapshots the pre-anchor
+  // period. Record indexes, in contrast, are reserved at
   // now >= validFrom >= anchorTime and are never negative.
   if (info.periodIndex !== undefined && !isSafeInteger(info.periodIndex)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
@@ -782,7 +796,7 @@ function validatePaymentExecutionInfo(info: PaymentExecutionInfo, field: string)
  * snapshot — including the cap-tied presence rules: records carry a
  * periodIndex exactly when the intent is periodic, and the snapshot
  * carries its period figures exactly when periodic and
- * leftExecutionCount exactly when the intent has a maxExecuteCount cap.
+ * leftExecutionCount exactly when the intent has a maxExecutionCount cap.
  * Used by the codec when deserializing a context (see
  * A4pCodec.deserializeIntentExecutionContext); the execution APIs keep
  * the lighter presence-only validateExecutionContext.
@@ -857,14 +871,14 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'context.executionInfo.periodIndex and leftPeriodExecutionCount must be absent on a non-periodic intent');
   }
-  const countCap: number | undefined = l1.structuredIntent.constraints.maxExecuteCount;
+  const countCap: number | undefined = l1.structuredIntent.constraints.maxExecutionCount;
   if (countCap !== undefined && context.executionInfo.leftExecutionCount === undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'context.executionInfo.leftExecutionCount must be present when the intent carries maxExecuteCount');
+      'context.executionInfo.leftExecutionCount must be present when the intent carries maxExecutionCount');
   }
   if (countCap === undefined && context.executionInfo.leftExecutionCount !== undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'context.executionInfo.leftExecutionCount must be absent when the intent carries no maxExecuteCount');
+      'context.executionInfo.leftExecutionCount must be absent when the intent carries no maxExecutionCount');
   }
   return null;
 }

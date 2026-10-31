@@ -39,13 +39,15 @@ export interface Order {
 }
 
 /**
- * An execution requested against an activated intent: reserved via
- * createExecution and recorded in the ledger as an ExecutionRecord.
+ * An execution requested against an activated intent: the input to
+ * createExecution. The reserved ledger record stores its fields flat (see
+ * ExecutionRecord): the resolved id becomes the record's `executionId`,
+ * and `action`/`executionContent` are copied onto the record itself.
  */
 export interface Execution {
   /** Action to perform; must match the authorized intent's action */
   action: IntentActionType;
-  /** Unique execution identifier */
+  /** Unique execution identifier; resolved into the record's executionId (generated when absent) */
   id?: string;
   /** Execution content (order details) */
   executionContent: Order;
@@ -85,6 +87,10 @@ export interface ExecutionRecord {
   executionId: string;
   /** Current status of the execution */
   status: ExecutionStatus;
+  /** Action to perform; copied from the reserved execution (matches the authorized intent's action) */
+  action: IntentActionType;
+  /** Execution content (order details); a deep copy of the reserved execution's content */
+  executionContent: Order;
   /** Period index of the reservation; present only for periodic intents */
   periodIndex?: number;
   /** Timestamp when execution was reserved (always present) */
@@ -93,8 +99,6 @@ export interface ExecutionRecord {
   completedAt?: number;
   /** Timestamp when execution was canceled (only when status is CANCELED) */
   canceledAt?: number;
-  /** The execution that was reserved */
-  execution: Execution;
 }
 
 /**
@@ -103,7 +107,7 @@ export interface ExecutionRecord {
  * hand; see internal/accounting.ts). Fields whose cap does not apply are
  * omitted: `periodIndex`/`leftPeriodExecutionCount` for non-periodic
  * intents, `leftExecutionCount` when the intent carries no
- * `maxExecuteCount` cap.
+ * `maxExecutionCount` cap.
  */
 export interface PaymentExecutionInfo {
   /** Index of the period containing the evaluation instant; periodic intents only */
@@ -112,7 +116,7 @@ export interface PaymentExecutionInfo {
   leftPeriodExecutionCount?: number;
   /**
    * Executions still allowed against the count cap (an explicit cancel
-   * releases a slot); omitted when the intent carries no maxExecuteCount cap
+   * releases a slot); omitted when the intent carries no maxExecutionCount cap
    */
   leftExecutionCount?: number;
   /** Amount still allowed against the total amount cap (non-canceled records only) */

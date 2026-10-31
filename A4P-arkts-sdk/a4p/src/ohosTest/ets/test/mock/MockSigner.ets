@@ -131,6 +131,36 @@ export class NoResultVerifier implements SignatureVerifier {
 }
 
 /**
+ * Test verifier whose verdict contradicts itself, for exercising the
+ * result-consistency guard: `valid` and `code` must agree (code 0 is
+ * success, anything else a failure), or the verdict is a broken
+ * verifier's output and must surface as A4P_VERIFY_FAIL instead of being
+ * trusted or relayed.
+ */
+export class ContradictoryVerifier implements SignatureVerifier {
+  /** Which contradiction to produce: a valid verdict with a failure code (true), or an invalid one with the success code (false) */
+  private validWithFailureCode: boolean;
+
+  constructor(validWithFailureCode: boolean = true) {
+    this.validWithFailureCode = validWithFailureCode;
+  }
+
+  verify(_data: Uint8Array, _signatureInfo: SignatureInfo): VerificationResult {
+    return this.validWithFailureCode
+      ? {
+        valid: true,
+        code: A4pErrorCode.A4P_VERIFY_FAIL,
+        message: 'Valid verdict carrying a failure code'
+      }
+      : {
+        valid: false,
+        code: A4pErrorCode.A4P_SUCCESS,
+        message: 'Invalid verdict carrying the success code'
+      };
+  }
+}
+
+/**
  * Test signer that returns no result at all, for exercising the
  * signer-result guard: a broken signer must surface as A4P_SIGNING_FAIL,
  * never as a signed intent whose sign field fails every downstream check.
