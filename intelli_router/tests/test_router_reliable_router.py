@@ -10,6 +10,7 @@ from intelli_router.core.deployment import Deployment, DeploymentStatus
 from intelli_router.utils.exceptions import (
     AllDeploymentsFailed,
     DeploymentNetworkError,
+    DeploymentServerError,
     NoDeploymentAvailable,
     RouterError,
 )
@@ -694,3 +695,33 @@ def test_update_deployments_shared_state_no_clobber():
     # 旧部署 a1 的状态应被清理
     assert "a1" not in shared_state.deployment_status
     assert router_b.get_model_list() == ["model-b"]
+
+
+@pytest.mark.asyncio
+async def test_failover_with_explicit_none_ids_keeps_the_healthy_sibling():
+    """多个显式 id=None 的部署：一个失败后应 fallback 到健康备用。
+
+    修复前 ``ReliableRouter`` 以 ``d.id`` 为状态 key，所有 None-id 部署折叠成
+    同一个 ``"null"``：一次失败会把全部候选从 available 里清掉，直接抛
+    ``AllDeploymentsFailed``，健康备用一次都不会被请求（@JustinBieber1223 的
+    检视意见要求用路由级用例固化这个症状）。
+    """
+    bad = Deployment(model_name="m", api_key="k", api_base="http://bad", id=None)
+    good = Deployment(model_name="m", api_key="k", api_base="http://good", id=None)
+    router = ReliableRouter(
+        deployments=[bad, good], strategy="ordered-failover", num_retries=2,
+    )
+    calls = []
+
+    async def mock_make_request(deployment, request_body):
+        calls.append(deployment.api_base)
+        if deployment.api_base == "http://bad":
+            raise DeploymentServerError(deployment.id, status_code=500)
+        return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    with patch.object(router, "_make_request", new=mock_make_request):
+        result = await router.completion("m", [{"role": "user", "content": "hi"}])
+
+    assert result["choices"][0]["message"]["content"] == "ok"
+    assert calls == ["http://bad", "http://good"]
+    assert bad.id != good.id
