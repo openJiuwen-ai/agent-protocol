@@ -2,6 +2,9 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
+#include <algorithm>
+#include <charconv>
+#include <cctype>
 #include <sstream>
 #include <stdexcept>
 
@@ -31,11 +34,21 @@ void TrimInPlace(std::string& value)
 
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     std::unordered_map<std::string, std::string>& headers, std::string& body,
-    std::size_t& consumedBytes)
+    std::size_t& consumedBytes, HttpParseStatus* status)
 {
     consumedBytes = 0;
+    if (status != nullptr) {
+        *status = HttpParseStatus::INCOMPLETE;
+    }
+    auto invalid = [status]() {
+        if (status != nullptr) {
+            *status = HttpParseStatus::INVALID;
+        }
+        return false;
+    };
 
-    if (headerEnd == std::string::npos || headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH > buffer.size()) {
+    if (headerEnd == std::string::npos || headerEnd > buffer.size() ||
+        buffer.size() - headerEnd < HTTP_HEADER_BODY_SEPARATOR_LENGTH) {
         return false;
     }
 
@@ -45,6 +58,9 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     std::string headerPart = buffer.substr(0, headerEnd);
     std::istringstream headerStream(headerPart);
 
+    std::size_t contentLength = 0;
+    bool hasContentLength = false;
+    bool hasTransferEncoding = false;
     std::string headerLine;
     while (std::getline(headerStream, headerLine)) {
         if (!headerLine.empty() && headerLine.back() == '\r') {
@@ -64,17 +80,27 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
         TrimInPlace(key);
         TrimInPlace(value);
 
+        std::string normalizedKey = key;
+        std::transform(normalizedKey.begin(), normalizedKey.end(), normalizedKey.begin(),
+            [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        if (normalizedKey == "content-length") {
+            // Reject duplicates before the header map can overwrite them.
+            if (hasContentLength) {
+                return invalid();
+            }
+            hasContentLength = true;
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), contentLength);
+            if (result.ec != std::errc() || result.ptr != value.data() + value.size()) {
+                return invalid();
+            }
+        } else if (normalizedKey == "transfer-encoding") {
+            hasTransferEncoding = true;
+        }
         headers[key] = value;
     }
 
-    std::size_t contentLength = 0;
-    std::string contentLengthStr = GetHeaderValue(headers, CONTENT_LENGTH_HEADER);
-    if (!contentLengthStr.empty()) {
-        try {
-            contentLength = static_cast<std::size_t>(std::stoul(contentLengthStr));
-        } catch (...) {
-            contentLength = 0;
-        }
+    if (hasContentLength && hasTransferEncoding) {
+        return invalid();
     }
 
     if (buffer.size() - bodyStart < contentLength) {
@@ -83,6 +109,9 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
 
     body = buffer.substr(bodyStart, contentLength);
     consumedBytes = bodyStart + contentLength;
+    if (status != nullptr) {
+        *status = HttpParseStatus::COMPLETE;
+    }
     return true;
 }
 

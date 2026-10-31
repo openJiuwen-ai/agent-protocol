@@ -152,16 +152,20 @@ enum class HttpServerStartResult {
 // Trim ASCII spaces and tabs from both ends of a string in place.
 void TrimInPlace(std::string& value);
 
+enum class HttpParseStatus { COMPLETE, INCOMPLETE, INVALID };
+
 // Parse HTTP headers and body given a full buffer and the position of "\r\n\r\n".
 // - buffer: entire HTTP message buffer.
 // - headerEnd: index of the '\r' in "\r\n\r\n" (returned by find("\r\n\r\n")).
 // - headers: target map to fill with parsed header key/value pairs.
 // - body: target string to fill with body content.
 // - consumedBytes: on success, total bytes consumed (headers + separator + body).
-// Returns true if a complete message (including body) is present; false if incomplete.
+// Returns true for a complete message; false for incomplete or invalid input.
+// status optionally distinguishes these cases. On failure, consumedBytes stays zero.
+// Only a single Content-Length is accepted; Transfer-Encoding with it is rejected.
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     std::unordered_map<std::string, std::string>& headers, std::string& body,
-    std::size_t& consumedBytes);
+    std::size_t& consumedBytes, HttpParseStatus* status = nullptr);
 
 std::string GetHeaderValue(const HttpResponse& response, const std::string& headerName);
 

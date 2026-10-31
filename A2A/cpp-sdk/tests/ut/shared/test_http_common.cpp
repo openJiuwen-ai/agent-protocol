@@ -6,6 +6,7 @@
 #include <gmock/gmock.h>
 #include <unordered_map>
 #include <string>
+#include <limits>
 
 #include "http_common.h"
 
@@ -234,14 +235,12 @@ TEST_F(ParseHeadersAndBodyTest, InvalidContentLength)
 {
     std::string buffer = "Content-Length: invalid\r\n\r\nBody content";
     std::size_t headerEnd = buffer.find("\r\n\r\n");
-    std::size_t bodyStart = headerEnd + 4;  // 两个 \r\n 的长度
 
     bool result = ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes);
 
-    EXPECT_TRUE(result);
-    EXPECT_EQ(headers["Content-Length"], "invalid");
+    EXPECT_FALSE(result);
     EXPECT_EQ(body, "");
-    EXPECT_EQ(consumedBytes, bodyStart);
+    EXPECT_EQ(consumedBytes, 0);
 }
 
 // ===========================================================================
@@ -505,6 +504,105 @@ TEST_F(ParseHeadersAndBodyTest, VeryLargeContentLength)
 
     bool result = ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes);
     EXPECT_FALSE(result);
+}
+
+
+TEST(HttpLengthValidationTest, RejectsMalformedDecimalLengths)
+{
+    for (const auto* value : {"abc", "3junk", "+3", "-0", "-1", "1.0", "3 0", "", " \t",
+                              "184467440737095516160000"}) {
+        SCOPED_TRACE(value);
+        std::string buffer = std::string("Content-Length: ") + value + "\r\n\r\nabcdef";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body = "unchanged";
+        std::size_t consumed = 42;
+        HttpParseStatus status = HttpParseStatus::COMPLETE;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+        EXPECT_EQ(body, "unchanged");
+    }
+}
+
+TEST(HttpLengthValidationTest, RejectsAmbiguousFraming)
+{
+    for (const auto* fields : {
+            "Content-Length: 3\r\nContent-Length: 3",
+            "Content-Length: 2\r\ncontent-length: 3",
+            "content-length: 3\r\nCONTENT-LENGTH: 2",
+            "Content-Length: 3, 3",
+            "Content-Length: 3\r\nTransfer-Encoding: chunked",
+            "transfer-encoding: chunked\r\nCONTENT-LENGTH: 3"}) {
+        SCOPED_TRACE(fields);
+        std::string buffer = std::string(fields) + "\r\n\r\nabc";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body;
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+    }
+}
+
+TEST(HttpLengthValidationTest, AcceptsDecimalWithOptionalWhitespace)
+{
+    for (const auto* value : {"3", "003", "\t3 \t"}) {
+        SCOPED_TRACE(value);
+        std::string buffer = std::string("cOnTeNt-LeNgTh: ") + value + "\r\n\r\nabcNEXT";
+        const auto headerEnd = buffer.find("\r\n\r\n");
+        std::unordered_map<std::string, std::string> headers;
+        std::string body;
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::COMPLETE);
+        EXPECT_EQ(body, "abc");
+        EXPECT_EQ(consumed, headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH + 3);
+    }
+}
+
+TEST(HttpLengthValidationTest, IncompleteBodyCanBeRetried)
+{
+    std::string buffer = "Content-Length: 3\r\n\r\na";
+    const auto headerEnd = buffer.find("\r\n\r\n");
+    std::unordered_map<std::string, std::string> headers;
+    std::string body;
+    std::size_t consumed = 0;
+    HttpParseStatus status;
+    EXPECT_FALSE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumed, &status));
+    EXPECT_EQ(status, HttpParseStatus::INCOMPLETE);
+    EXPECT_EQ(consumed, 0);
+    buffer += "bc";
+    EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumed, &status));
+    EXPECT_EQ(status, HttpParseStatus::COMPLETE);
+    EXPECT_EQ(body, "abc");
+}
+
+TEST(HttpLengthValidationTest, ChecksSizeLimitsWithoutOverflow)
+{
+    const std::string maximum = std::to_string(std::numeric_limits<std::size_t>::max());
+    for (const auto& value : {maximum, maximum + "0"}) {
+        std::string buffer = "Content-Length: " + value + "\r\n\r\n";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body;
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, value == maximum ? HttpParseStatus::INCOMPLETE : HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+    }
+}
+
+TEST(HttpLengthValidationTest, HeaderBoundsCannotWrapAround)
+{
+    std::unordered_map<std::string, std::string> headers;
+    std::string body;
+    std::size_t consumed = 42;
+    HttpParseStatus status;
+    EXPECT_FALSE(ParseHeadersAndBody("short", std::numeric_limits<std::size_t>::max() - 1,
+                                    headers, body, consumed, &status));
+    EXPECT_EQ(consumed, 0);
 }
 
 } // namespace A2A::Http::Test

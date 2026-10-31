@@ -47,9 +47,11 @@ std::string BuildRawHttpRequest(const HttpRequest& request, const std::string& h
     return output.str();
 }
 
-bool ParseHttpResponse(const std::string& buffer, HttpResponse& outResponse, std::size_t& consumedBytes)
+bool ParseHttpResponse(const std::string& buffer, HttpResponse& outResponse, std::size_t& consumedBytes,
+                       HttpParseStatus& status)
 {
     consumedBytes = 0;
+    status = HttpParseStatus::INCOMPLETE;
 
     std::size_t headerEnd = buffer.find("\r\n\r\n");
     if (headerEnd == std::string::npos) {
@@ -77,7 +79,7 @@ bool ParseHttpResponse(const std::string& buffer, HttpResponse& outResponse, std
     }
 
     // Use shared helper to parse headers and body.
-    return ParseHeadersAndBody(buffer, headerEnd, outResponse.headers, outResponse.body, consumedBytes);
+    return ParseHeadersAndBody(buffer, headerEnd, outResponse.headers, outResponse.body, consumedBytes, &status);
 }
 
 } // namespace
@@ -120,6 +122,7 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
     connection->OnClose([&](const Mcp::Net::SocketPtr& /* socket */) {
         if (!done) {
             // Connection closed before a complete response was parsed
+            error = true;
             done = true;
         }
         eventSystem.Stop();
@@ -133,7 +136,13 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
         receiveBuffer += buffer.RetrieveAllAsString();
 
         std::size_t consumed = 0;
-        if (ParseHttpResponse(receiveBuffer, response, consumed)) {
+        HttpParseStatus status;
+        if (ParseHttpResponse(receiveBuffer, response, consumed, status)) {
+            done = true;
+            eventSystem.Stop();
+            connection->Close();
+        } else if (status == HttpParseStatus::INVALID) {
+            error = true;
             done = true;
             eventSystem.Stop();
             connection->Close();
