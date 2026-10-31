@@ -167,6 +167,9 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
 
 std::string getContentType(const HttpResponse& response);
 
+// Parse one line without its line ending. Data fields accumulate with trailing LF;
+// an empty line finalizes the data by removing the last LF before returning true.
+// The caller resets the event after dispatching it.
 bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent);
 
 /**
