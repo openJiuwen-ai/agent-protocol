@@ -225,7 +225,7 @@ context inside a database transaction locked by `intentId`, prevent replay of th
 ## Wire format and security
 
 The canonical JSON and Base64URL rules behind every signature are the ones documented in
-[canonical-json-spec.md](../A4P-java-sdk/docs/canonical-json-spec.md): keys sorted by
+[serialization_and_signature_rules.md](../A4P-java-sdk/docs/serialization_and_signature_rules.md): keys sorted by
 UTF-16 code units, no whitespace, finite safe integers only, `undefined` omitted,
 signing strips only the complete top-level `sign` property (nested chain signatures
 stay), UTF-8 without BOM, and RFC 4648 Base64URL without padding, with the decoder
@@ -246,7 +246,7 @@ JWT headers, cf. RFC 8725).
 The SDK bundles no cryptographic implementation. For the `RSA3072` suite, supply
 `Signer`/`SignatureVerifier` built on `@kit.CryptoArchitectureKit` using
 `SHA256withRSA` (PKCS#1 v1.5) with 3072-bit keys and unpadded Base64URL, so peers
-interoperate with the Java SDK's `Rsa3072` adapter.
+interoperate with the `Rsa3072` reference adapter in the standalone Java `examples` module (not part of the SDK public API).
 
 Caller-supplied objects are deep-cloned into intents (never aliased), and the activated
 snapshot is deep-frozen. An internal, unexported `A4pHttp` module builds and parses
@@ -285,7 +285,7 @@ compatibility is governed by the `version` field, not by the HAR version.
 
 | Document | Contents |
 | --- | --- |
-| [canonical-json-spec.md](../A4P-java-sdk/docs/canonical-json-spec.md) | Canonical JSON and Base64URL rules behind every signature (the rules this SDK implements). |
+| [serialization_and_signature_rules.md](../A4P-java-sdk/docs/serialization_and_signature_rules.md) | Canonical JSON and Base64URL rules behind every signature (the rules this SDK implements). |
 
 ## Tests
 

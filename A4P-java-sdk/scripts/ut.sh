@@ -70,9 +70,18 @@ echo ">>> Report output: $HTML"
 # ---------------------------------------------------------------------------
 cd "$JAVA_PROJECT_DIR"
 
+# Remove both modules' old Surefire XML before any Maven command can fail.
+# UtReport reads only TEST-*.xml; keep other diagnostic files intact.
+for report_dir in "$JAVA_PROJECT_DIR/target/surefire-reports" "$JAVA_PROJECT_DIR/examples/target/surefire-reports"; do
+  rm -f -- "$report_dir"/TEST-*.xml
+done
+
 started_at=$(date +%s)
 rc=0
-mvn --batch-mode --no-transfer-progress clean test 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
+mvn --batch-mode --no-transfer-progress -f examples/pom.xml clean 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
+if [ "$rc" -eq 0 ]; then
+  bash "$SCRIPT_DIR/build.sh" ut 2>&1 | tee -a "$LOG" || rc=${PIPESTATUS[0]}
+fi
 
 # ---------------------------------------------------------------------------
 # 5. 转换 Surefire 报告为标准 JUnit XML

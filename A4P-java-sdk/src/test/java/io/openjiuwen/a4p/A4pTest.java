@@ -25,7 +25,7 @@ class A4pTest {
         IntentExecutionContext futureContext = ok(A4p.activateIntent(authorized(limits), VERIFIER, future));
         fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(futureContext));
         assertEquals(IntentExecutionStatus.ACTIVE, futureContext.status());
-        A4pIntentCodec codec = A4pIntentCodec.standard();
+        A4pIntentCodec codec = new A4pIntentCodec();
         String json = codec.serializeIntentExecutionContext(context());
         for (String value : List.of("null", "-1", "9999", "\"10000\"", "10000.5")) {
             fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
@@ -39,12 +39,12 @@ class A4pTest {
     void activationTimeIsPersistedAndRejectsEarlierCallsWithoutMutation() {
         IntentExecutionContext context = context();
         assertEquals(NOW, context.activatedTime());
-        String before = A4pIntentCodec.standard().serializeIntentExecutionContext(context);
+        String before = new A4pIntentCodec().serializeIntentExecutionContext(context);
         fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(context, execution("early", 100, 1), NOW - 1));
         fails(A4P_INVALID_PARAMETER, A4p.completeExecution(context, "early", NOW - 1));
         fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(context, "early", NOW - 1));
-        assertEquals(before, A4pIntentCodec.standard().serializeIntentExecutionContext(context));
-        IntentExecutionContext restored = ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(before));
+        assertEquals(before, new A4pIntentCodec().serializeIntentExecutionContext(context));
+        IntentExecutionContext restored = ok(new A4pIntentCodec().deserializeIntentExecutionContext(before));
         assertEquals(NOW, restored.activatedTime());
         fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(restored, execution("early", 100, 1), NOW - 1));
         ok(A4p.createExecution(restored, execution("same-ms", 100, 1), NOW));
@@ -59,8 +59,8 @@ class A4pTest {
         assertEquals(oldPeriod + 1, info(context).periodIndex());
         assertEquals(2, info(context).leftPeriodExecutionCount());
         assertEquals(900, info(context).leftAmount());
-        IntentExecutionContext restored = ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(
-                A4pIntentCodec.standard().serializeIntentExecutionContext(context)));
+        IntentExecutionContext restored = ok(new A4pIntentCodec().deserializeIntentExecutionContext(
+                new A4pIntentCodec().serializeIntentExecutionContext(context)));
         assertEquals(info(context), info(restored));
     }
 
@@ -334,9 +334,9 @@ class A4pTest {
         fails(A4P_CART_MISMATCH, A4p.createExecution(context, execution("too-many", 1, 4), NOW));
         ok(A4p.createExecution(context, execution("one", 1, 3), NOW));
         ok(A4p.createExecution(context, execution("two", 1, 3), NOW));
-        String json = A4pIntentCodec.standard().serializeIntentExecutionContext(context);
+        String json = new A4pIntentCodec().serializeIntentExecutionContext(context);
         assertFalse(CanonicalJson.MAPPER.readTree(json).get("executions").get(0).has("version"));
-        assertEquals(2, ok(A4pIntentCodec.standard().deserializeIntentExecutionContext(json)).executions().size());
+        assertEquals(2, ok(new A4pIntentCodec().deserializeIntentExecutionContext(json)).executions().size());
     }
 
     @Test
@@ -444,7 +444,7 @@ class A4pTest {
                 intent.intentSummary(), intent.structuredIntent(), intent.timestamp(),
                 new SignatureInfo("HS256", intent.sign().keyIdentifier(), intent.sign().sign()));
         fails(A4P_INVALID_PARAMETER, A4p.issueIntent(relabeled, VERIFIER, issueContext(), SIGNER, NOW));
-        A4pIntentCodec codec = A4pIntentCodec.standard();
+        A4pIntentCodec codec = new A4pIntentCodec();
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL1(codec.serializeIntentL1(relabeled)));
         Signer foreign = data -> new SignatureInfo("HS256", "key", "c2ln");
         fails(A4P_SIGNING_FAIL, A4p.createIntent(request(constraints()), foreign, NOW));
@@ -577,6 +577,10 @@ class A4pTest {
     @Test
     void resultModelSeparatesProtocolFailuresFromSdkDefects() {
         A4pResult<String> success = A4pResult.ok("data");
+        assertEquals("data", new A4pResult<>(true, "data", 0, "ok").data());
+        assertEquals(A4P_INVALID_PARAMETER.code(),
+                new A4pResult<String>(false, null, A4P_INVALID_PARAMETER.code(), "invalid").code());
+        assertThrows(IllegalArgumentException.class, () -> new A4pResult<>(true, null, 0, "invalid"));
         assertTrue(success.success());
         assertEquals(0, success.code());
         A4pResult<String> failure = A4pResult.failure(A4P_AMOUNT_EXCEEDED);

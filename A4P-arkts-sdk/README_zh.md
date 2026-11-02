@@ -199,7 +199,7 @@ context，防止同一个 `intentId` 被重放，并把密钥与身份绑定。
 ## 线格式与安全
 
 每次签名背后的 canonical JSON 与 Base64URL 规则即
-[canonical-json-spec.md](../A4P-java-sdk/docs/canonical-json-spec.md) 所记录的内容：键按
+[serialization_and_signature_rules_zh.md](../A4P-java-sdk/docs/serialization_and_signature_rules_zh.md) 所记录的内容：键按
 UTF-16 码元排序、无空白、仅限有限安全整数、`undefined` 省略、签名时仅移除顶层完整的
 `sign` 属性（链上下层签名保留）、UTF-8 编码不带 BOM，以及 RFC 4648 无填充 Base64URL，
 解码端拒绝填充、非 URL 安全字符与非零的未用尾随位。JSON 字段名即接口属性名
@@ -215,7 +215,7 @@ RFC 8725 的未签名 JWT 头部）。
 
 SDK 不内置任何密码学实现。`RSA3072` 套件请基于 `@kit.CryptoArchitectureKit` 提供
 `Signer`/`SignatureVerifier`，使用 `SHA256withRSA`（PKCS#1 v1.5）、3072 位密钥与无填充
-Base64URL，以便与 Java SDK 的 `Rsa3072` 适配器互操作。
+Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配器（不属于 SDK 公共 API）互操作。
 
 调用方提供的对象会被深拷贝进意图（绝不别名引用），激活后的快照被深度冻结。内部有一个
 未导出的 `A4pHttp` 模块，为三个协议端点
@@ -250,7 +250,7 @@ Base64URL，以便与 Java SDK 的 `Rsa3072` 适配器互操作。
 
 | 文档 | 内容 |
 | --- | --- |
-| [canonical-json-spec.md](../A4P-java-sdk/docs/canonical-json-spec.md) | 每次签名背后的 canonical JSON 与 Base64URL 规则（本 SDK 实现的即该规则）。 |
+| [serialization_and_signature_rules_zh.md](../A4P-java-sdk/docs/serialization_and_signature_rules_zh.md) | 每次签名背后的 canonical JSON 与 Base64URL 规则（本 SDK 实现的即该规则）。 |
 
 ## 测试
 

@@ -29,8 +29,16 @@ import java.util.stream.Collectors;
 
 import static io.openjiuwen.a4p.A4pErrorCode.*;
 
-public final class CanonicalJson {
+/**
+ * Implements deterministic protocol JSON and signing-byte normalization.
+ * Object keys are sorted, array order is preserved, and insignificant whitespace is omitted.
+ * Only safe integer numbers are supported; strings retain their Unicode data.
+ * Parsing rejects duplicate keys and trailing tokens. Signing removes only the outer sign field.
+ */
+final class CanonicalJson {
+    /** Largest integer exactly representable by JavaScript protocol peers. */
     public static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
+    /** Strict shared mapper used for protocol JSON parsing and conversion. */
     static final JsonMapper MAPPER = JsonMapper.builder(JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build())
             .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)
@@ -40,8 +48,16 @@ public final class CanonicalJson {
             .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
             .build();
 
+    /**
+     * Prevents instantiation of this utility class.
+     */
     private CanonicalJson() {}
 
+    /**
+     * Serializes a supported protocol value as deterministic compact JSON with sorted object keys.
+     * @param value value to validate or normalize
+     * @return compact canonical JSON
+     */
     public static String stringify(Object value) {
         try {
             return render(normalize(value, new IdentityHashMap<>(), 0));
@@ -52,6 +68,12 @@ public final class CanonicalJson {
         }
     }
 
+    /**
+     * Returns canonical UTF-8 bytes after removing only the outer sign field.
+     * Embedded intent signatures remain covered by the enclosing signature.
+     * @param intent protocol intent to process
+     * @return canonical UTF-8 bytes excluding only the outer sign field
+     */
     public static byte[] toSignableBytes(Object intent) {
         Object normalized = normalize(intent, new IdentityHashMap<>(), 0);
         if (!(normalized instanceof Map<?, ?> fields)) {
@@ -62,10 +84,20 @@ public final class CanonicalJson {
         return encodeUtf8(stringify(unsigned));
     }
 
+    /**
+     * Encodes bytes as unpadded Base64URL.
+     * @param data bytes to encode
+     * @return unpadded Base64URL text
+     */
     public static String base64UrlEncode(byte[] data) {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(data);
     }
 
+    /**
+     * Decodes canonical unpadded Base64URL and rejects noncanonical or invalid encodings.
+     * @param data canonical unpadded Base64URL text
+     * @return decoded bytes
+     */
     public static byte[] base64UrlDecode(String data) {
         try {
             if (data == null || !data.matches("[A-Za-z0-9_-]*")) {
@@ -81,6 +113,11 @@ public final class CanonicalJson {
         }
     }
 
+    /**
+     * Encodes a string as UTF-8, rejecting malformed surrogate sequences.
+     * @param data Unicode string to encode
+     * @return strict UTF-8 encoding
+     */
     public static byte[] encodeUtf8(String data) {
         try {
             ByteBuffer encoded = StandardCharsets.UTF_8.newEncoder()
@@ -93,6 +130,11 @@ public final class CanonicalJson {
         }
     }
 
+    /**
+     * Decodes UTF-8 strictly and rejects malformed byte sequences.
+     * @param data UTF-8 bytes to decode
+     * @return decoded Unicode string
+     */
     public static String decodeUtf8(byte[] data) {
         try {
             return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -102,6 +144,11 @@ public final class CanonicalJson {
         }
     }
 
+    /**
+     * Parses JSON with duplicate-key and trailing-token detection.
+     * @param json JSON representation to parse
+     * @return decoded or parsed value
+     */
     static Object parse(String json) {
         try {
             return MAPPER.readValue(json, Object.class);
@@ -110,12 +157,23 @@ public final class CanonicalJson {
         }
     }
 
+    /**
+     * Creates a recursively normalized immutable snapshot of a nullable map.
+     * @param source map to snapshot, or null
+     * @return immutable normalized map, or null
+     * @throws A4pException if a value cannot be represented by canonical protocol JSON
+     */
     @SuppressWarnings("unchecked")
     static Map<String, Object> freezeMap(Map<String, Object> source) {
         return source == null ? null : (Map<String, Object>) normalize(source, new IdentityHashMap<>(), 0);
     }
 
     // Deep copy that stores every integral number as a long, so equal payloads compare equal after a round trip.
+    /**
+     * Copies a JSON tree defensively and normalizes integral nodes representable as long.
+     * @param node JSON tree to inspect or decode
+     * @return defensive JSON copy, or null
+     */
     static JsonNode freezeNode(JsonNode node) {
         if (node == null) { return null; }
         if (node.isIntegralNumber() && node.canConvertToLong()) { return LongNode.valueOf(node.longValue()); }
@@ -132,6 +190,13 @@ public final class CanonicalJson {
         return node.deepCopy();
     }
 
+    /**
+     * Converts a JSON tree to normalized protocol scalars and immutable containers.
+     * @param node JSON tree to inspect or decode
+     * @param ancestors identity set used to detect reference cycles
+     * @param depth current normalization nesting depth
+     * @return normalized scalar or immutable container
+     */
     private static Object normalizeNode(JsonNode node, IdentityHashMap<Object, Boolean> ancestors, int depth) {
         if (node.isNull()) { return null; }
         if (node.isTextual()) { return node.textValue(); }
@@ -151,6 +216,14 @@ public final class CanonicalJson {
         throw new A4pException(A4P_SERIALIZE_FAIL);
     }
 
+    /**
+     * Normalizes safe integers, protocol records and supported containers.
+     * Rejects unsupported types, cyclic object graphs and nesting deeper than 100.
+     * @param value value to validate or normalize
+     * @param ancestors identity set used to detect reference cycles
+     * @param depth current normalization nesting depth
+     * @return normalized protocol value
+     */
     private static Object normalize(Object value, IdentityHashMap<Object, Boolean> ancestors, int depth) {
         if (depth > 100) {
             throw new A4pException(A4P_SERIALIZE_FAIL);
@@ -214,6 +287,11 @@ public final class CanonicalJson {
         }
     }
 
+    /**
+     * Renders a normalized value as compact deterministic JSON.
+     * @param value value to validate or normalize
+     * @return compact JSON representation
+     */
     private static String render(Object value) {
         if (value == null) { return "null"; }
         if (value instanceof String text) { return quote(text); }
@@ -228,6 +306,11 @@ public final class CanonicalJson {
         return value.toString();
     }
 
+    /**
+     * Quotes a valid Unicode string using JSON escapes without Unicode normalization.
+     * @param text string to quote
+     * @return JSON string literal
+     */
     private static String quote(String text) {
         encodeUtf8(text);
         StringBuilder result = new StringBuilder("\"");

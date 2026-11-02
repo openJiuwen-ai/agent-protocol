@@ -34,7 +34,8 @@ class UtReport {
         for (String key : List.of("os.name", "os.version", "java.version")) {
             testEnvironment.put(key, new LinkedHashSet<>());
         }
-        Path reports = project.resolve("target/surefire-reports");
+        for (Path reports : List.of(project.resolve("target/surefire-reports"),
+                project.resolve("examples/target/surefire-reports"))) {
         if (Files.isDirectory(reports)) {
             List<Path> files;
             try (var stream = Files.list(reports)) {
@@ -90,6 +91,7 @@ class UtReport {
                     results.add(new Result(status, name, duration.isEmpty() ? "0" : duration, detail.toString()));
                 }
             }
+        }
         }
         Map<String, Long> counts = new LinkedHashMap<>();
         for (String status : List.of("Passed", "Failed", "Skipped", "Error")) {

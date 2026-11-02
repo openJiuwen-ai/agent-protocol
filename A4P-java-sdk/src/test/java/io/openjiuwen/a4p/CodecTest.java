@@ -16,7 +16,7 @@ import static io.openjiuwen.a4p.Fixtures.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CodecTest {
-    private final A4pIntentCodec codec = A4pIntentCodec.standard();
+    private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
     void canonicalVectorsMatchArkts() {
