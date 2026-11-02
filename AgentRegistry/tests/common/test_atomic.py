@@ -3,6 +3,7 @@
 import errno
 import json
 import os
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, local
@@ -10,6 +11,23 @@ from threading import Barrier, local
 import pytest
 
 from a2x_registry.common import atomic
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o644])
+def test_existing_permissions_survive_replacement(tmp_path, mode):
+    path = tmp_path / "state.json"
+    path.write_text("{}", encoding="utf-8")
+    path.chmod(mode)
+    atomic.atomic_write_json(path, {"new": True})
+    assert stat.S_IMODE(path.stat().st_mode) == mode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_new_file_has_documented_permissions(tmp_path):
+    path = tmp_path / "state.json"
+    atomic.atomic_write_json(path, {})
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
 
 
 def test_write_replaces_complete_json_and_preserves_unrelated_sidecar(tmp_path):

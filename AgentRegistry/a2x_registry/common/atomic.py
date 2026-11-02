@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -26,6 +27,8 @@ def atomic_write_json(path: Path, data: Any) -> None:
     replacement is denied, retry once after a short sleep, then propagate
     the error. Concurrent writers use separate files; the last successful
     replacement wins. Temporary-file cleanup is best effort on failure.
+    On POSIX, preserve existing permission bits; new files use 0644.
+    Windows retains the platform temporary-file ACL behavior.
     """
     path = Path(path)
     content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
@@ -38,6 +41,12 @@ def atomic_write_json(path: Path, data: Any) -> None:
             tmp_path = Path(f.name)
             f.write(content)
             f.flush()
+            if os.name == "posix":
+                try:
+                    mode = stat.S_IMODE(path.stat().st_mode)
+                except FileNotFoundError:
+                    mode = 0o644
+                os.chmod(tmp_path, mode)
             os.fsync(f.fileno())
         try:
             os.replace(str(tmp_path), str(path))
