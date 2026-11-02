@@ -80,6 +80,21 @@ def test_client_distinguishes_required_and_default_boolean_fields(
             asyncio.run(request({}))
 
 
+@pytest.mark.parametrize(("method", "field", "nested"), _BOOLEAN_RESPONSES)
+def test_boolean_validation_error_does_not_echo_response_values(
+    monkeypatch: pytest.MonkeyPatch, method: str, field: str, nested: bool,
+) -> None:
+    sensitive_value = "private-response-token-123"
+    payload = {"verificationResult": {field: sensitive_value}} if nested else {field: sensitive_value}
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *args, **kwargs: _Response(json.dumps(payload).encode("utf-8"))
+    )
+    with pytest.raises(RuntimeError) as error:
+        asyncio.run(getattr(A4PClient(base_url="http://a4p.example"), method)({}))
+    assert str(error.value) == f"A4P HTTP response field '{field}' must be a boolean"
+    assert sensitive_value not in str(error.value)
+
+
 @pytest.mark.parametrize(
     "method",
     [
