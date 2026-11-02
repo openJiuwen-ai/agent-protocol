@@ -11,7 +11,6 @@
 
 #include "event/event_system.h"
 #include "net/tcp_socket.h"
-#include "shared/common_type.h"
 #include "shared/http_common.h"
 
 namespace Mcp::Http {

@@ -486,4 +486,20 @@ TEST(HttpLengthValidationTest, HeaderBoundsCannotWrapAround)
     EXPECT_EQ(consumed, 0);
 }
 
+TEST(HttpLengthValidationTest, RejectsUnsupportedTransferEncodingWithoutLength)
+{
+    for (const auto* encoding : {"chunked", "gzip", "identity", ""}) {
+        SCOPED_TRACE(encoding);
+        std::string buffer = std::string("Transfer-Encoding: ") + encoding + "\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body = "unchanged";
+        std::size_t consumed = 42;
+        HttpParseStatus status;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+        EXPECT_EQ(body, "unchanged");
+    }
+}
+
 } // namespace Mcp::Http

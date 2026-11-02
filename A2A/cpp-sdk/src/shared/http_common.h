@@ -162,7 +162,8 @@ enum class HttpParseStatus { COMPLETE, INCOMPLETE, INVALID };
 // - consumedBytes: on success, total bytes consumed (headers + separator + body).
 // Returns true for a complete message; false for incomplete or invalid input.
 // status optionally distinguishes these cases. On failure, consumedBytes stays zero.
-// Only a single Content-Length is accepted; Transfer-Encoding with it is rejected.
+// Only a single Content-Length is accepted. Transfer-Encoding is unsupported
+// and always yields INVALID.
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     std::unordered_map<std::string, std::string>& headers, std::string& body,
     std::size_t& consumedBytes, HttpParseStatus* status = nullptr);

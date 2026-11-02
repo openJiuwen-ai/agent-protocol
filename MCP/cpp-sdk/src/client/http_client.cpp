@@ -119,31 +119,39 @@ std::optional<HttpResponse> HttpClient::SendRequest(const std::string& host, uin
         eventSystem.Stop();
     });
 
-    connection->OnClose([&](const Mcp::Net::SocketPtr& /* socket */) {
-        if (!done) {
-            // Connection closed before a complete response was parsed
+    // HandleReadable may report EOF before the OnRead callback runs. Both
+    // callbacks must drain the socket buffer before deciding completeness.
+    auto parseAvailableResponse = [&]() {
+        Mcp::Net::Buffer& buffer = connection->InputBuffer();
+        receiveBuffer += buffer.RetrieveAllAsString();
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        if (ParseHttpResponse(receiveBuffer, response, consumed, status)) {
+            done = true;
+        } else if (status == HttpParseStatus::INVALID) {
             error = true;
             done = true;
+        }
+    };
+
+    connection->OnClose([&](const Mcp::Net::SocketPtr& /* socket */) {
+        if (!done) {
+            parseAvailableResponse();
+            if (!done) {
+                // EOF with a partial response is a terminal failure.
+                error = true;
+                done = true;
+            }
         }
         eventSystem.Stop();
     });
 
     connection->OnRead([&](const Mcp::Net::SocketPtr& /* socket */) {
-        Mcp::Net::Buffer& buffer = connection->InputBuffer();
-        if (buffer.ReadableBytes() == 0) {
+        if (done) {
             return;
         }
-        receiveBuffer += buffer.RetrieveAllAsString();
-
-        std::size_t consumed = 0;
-        HttpParseStatus status;
-        if (ParseHttpResponse(receiveBuffer, response, consumed, status)) {
-            done = true;
-            eventSystem.Stop();
-            connection->Close();
-        } else if (status == HttpParseStatus::INVALID) {
-            error = true;
-            done = true;
+        parseAvailableResponse();
+        if (done) {
             eventSystem.Stop();
             connection->Close();
         }

@@ -155,7 +155,8 @@ bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
         headers[normalizedKey] = value;
     }
 
-    if (hasContentLength && hasTransferEncoding) {
+    // Transfer-coded bodies are not decoded by this helper.
+    if (hasTransferEncoding) {
         return invalid();
     }
 
