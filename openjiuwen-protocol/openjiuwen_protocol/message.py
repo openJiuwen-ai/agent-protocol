@@ -464,6 +464,14 @@ class ReqMethod(Enum):
     EXTENSIONS_DELETE = "extensions.delete"
     EXTENSIONS_TOGGLE = "extensions.toggle"
 
+    # Management-only Hub candidates for allowlist configuration: agent_template
+    # and agent_group packages, without local packages or user allowlist filtering.
+    # Excludes plugin/MCP packages and requires no user session.
+    # The existing package catalog/lifecycle family below also covers templates
+    # and plugins. The boundary is management authorization vs user-facing package
+    # discovery/lifecycle, not mutually exclusive package types.
+    HUB_EXPERT_PACKAGES_CATALOG = "hub.expert_packages.catalog"
+
     # AgentGroup selection + agent_template / plugin package catalog RPCs.
     AGENT_GROUPS_LIST = "agent_groups.list"
     AGENT_GROUPS_SHOW = "agent_groups.show"
