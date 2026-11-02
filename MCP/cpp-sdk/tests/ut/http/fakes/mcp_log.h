@@ -3,6 +3,11 @@
  */
 #pragma once
 
-// Logging is irrelevant to the scripted transport; type-check messages.
-#define MCP_LOG_LEVEL_ERROR 0
-#define MCP_LOG(level, message) static_cast<void>(message)
+#include <string>
+
+// Preserve the logging call shape without a function-like macro.
+inline constexpr int MCP_LOG_LEVEL_ERROR = 0;
+inline void MCP_LOG(int /* level */, const std::string& message)
+{
+    static_cast<void>(message);
+}

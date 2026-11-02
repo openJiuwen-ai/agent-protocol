@@ -17,6 +17,8 @@ inline bool timerFired = false;
 namespace Mcp {
 class EventSystem {
 public:
+    ~EventSystem() = default;
+
     bool Init()
     {
         HttpClientTestSupport::stopped = false;
