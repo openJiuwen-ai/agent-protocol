@@ -44,11 +44,25 @@ def _coerce_payload(value: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _boolean_from_payload(
+    payload: dict[str, Any], field: str, *, default: bool = False, required: bool = False,
+) -> bool:
+    """Reject non-booleans; only optional absent fields use the bool default."""
+    if required and field not in payload:
+        raise RuntimeError(f"A4P HTTP response field '{field}' must be a boolean")
+    value = payload.get(field, default)
+    if not isinstance(value, bool):
+        raise RuntimeError(f"A4P HTTP response field '{field}' must be a boolean")
+    return value
+
+
 def _verification_result_from_payload(payload: Any) -> VerificationResult | None:
-    if not isinstance(payload, dict):
+    if payload is None:
         return None
+    if not isinstance(payload, dict):
+        raise RuntimeError("A4P HTTP response field 'verificationResult' must be an object or null")
     return VerificationResult(
-        valid=bool(payload.get("valid")),
+        valid=_boolean_from_payload(payload, "valid", default=False, required=True),
         reason=payload.get("reason"),
         code=payload.get("code"),
         matchedScope=payload.get("matchedScope") if isinstance(payload.get("matchedScope"), dict) else None,
@@ -85,7 +99,7 @@ class A4PClient:
                 payload.get("signingOptions") if isinstance(payload.get("signingOptions"), dict) else {}
             ),
             verificationResult=_verification_result_from_payload(payload.get("verificationResult")),
-            approved=bool(payload.get("approved")),
+            approved=_boolean_from_payload(payload, "approved", default=False),
             rejectReason=payload.get("rejectReason"),
         )
 
@@ -98,7 +112,7 @@ class A4PClient:
             mandate=_intent_mandate_from_payload(payload.get("mandate")),
             intentToken=_intent_token_from_payload(payload.get("intentToken")),
             verificationResult=_verification_result_from_payload(payload.get("verificationResult")),
-            approved=bool(payload.get("approved")),
+            approved=_boolean_from_payload(payload, "approved", default=False),
             rejectReason=payload.get("rejectReason"),
         )
 
@@ -108,7 +122,7 @@ class A4PClient:
     ) -> TokenVerificationResponse:
         payload = await self._post("/a4p/v1/intent-tokens/verify", _coerce_payload(request))
         return TokenVerificationResponse(
-            valid=bool(payload.get("valid")),
+            valid=_boolean_from_payload(payload, "valid", default=False, required=True),
             reason=payload.get("reason"),
             code=payload.get("code"),
             matchedScope=payload.get("matchedScope") if isinstance(payload.get("matchedScope"), dict) else None,
@@ -136,7 +150,7 @@ class A4PClient:
         return OperationAuthorizationResult(
             operationId=str(payload.get("operationId") or "") or None,
             verificationResult=_verification_result_from_payload(payload.get("verificationResult")),
-            approved=bool(payload.get("approved")),
+            approved=_boolean_from_payload(payload, "approved", default=False),
             rejectReason=payload.get("rejectReason"),
         )
 

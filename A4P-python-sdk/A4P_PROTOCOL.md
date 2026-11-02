@@ -229,6 +229,19 @@ A4P Server 在 complete 时从 pending Mandate 重新派生同一个 challenge�
 
 ## 6. HTTP 端点
 
+### 响应布尔字段约束
+
+- 令牌验证响应的顶层 `valid` 必填，类型必须是 JSON 布尔值。
+- `verificationResult` 可以缺省或为 `null`；非空值必须是对象，其中的
+  `valid` 必填且必须是 JSON 布尔值。
+- 意图授权 prepare/complete 和操作授权 complete 响应中的 `approved`
+  可选，缺省时客户端使用 `false`；显式提供时必须是 JSON 布尔值。
+- 字符串（如 `"false"`）、数字、容器和显式 `null` 均不能替代布尔值。
+  缺失必填字段或字段类型错误时，Python HTTP 客户端抛出 `RuntimeError`，
+  错误信息只包含字段名和期望类型，不回显响应值。
+
+### 端点列表
+
 所有端点使用 JSON `POST`：
 
 | 端点 | 调用方 | 作用 |
