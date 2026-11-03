@@ -16,6 +16,15 @@ A2A::AgentCard card = cardFuture.get();
 
 默认路径为 `/.well-known/agent-card.json`（A2A 标准推荐方式）。
 
+`GetAgentCard` 可选参数：相对路径与发现超时（秒）：
+
+```cpp
+// 指定 10s 发现超时（默认 60s，0 = 默认值）
+auto cardFuture = resolver->GetAgentCard(std::nullopt, 10);
+```
+
+`GetAllAgentCards(timeout)` 同样接受发现超时形参，语义与默认值相同。
+
 ## 创建客户端
 
 ```cpp
@@ -115,6 +124,34 @@ std::variant<Message, A2AError, std::pair<Task, UpdateEvent>>
 | `supportedTransports` | 客户端支持的传输标签 |
 | `acceptedOutputModes` | 接受的输出模式 |
 | `pushNotificationConfigs` | 默认推送通知配置 |
+| `timeoutSeconds` | 非流式请求总超时（秒，默认 300；<=0 用 SDK 默认值） |
+| `streamingIdleTimeoutSeconds` | 流式空闲超时（秒，默认 60）：相邻数据到达的最大间隔；流式请求无总时长上限 |
+
+## 超时语义
+
+超时参数以**秒**为单位，`0` 表示使用默认值。所有超时共享 **1800s 上限**：配置或传入更大的值会按上限截断（记 WARN 日志），不会导致客户端创建失败。每个阶段独立控制：
+
+| 阶段 | 配置入口 | 默认值 | 语义 |
+|------|----------|--------|------|
+| AgentCard 发现 | `A2ACardResolver::GetAgentCard(path, timeout)` / `GetAllAgentCards(timeout)` | 60s | 发现请求总超时 |
+| TCP/TLS 连接 | 传输层内部（`LibcurlConn`） | 30s | 连接建立超时 |
+| 非流式请求 | `ClientConfig::timeoutSeconds`，可被每次调用的 `timeout` 形参覆盖 | 300s | 请求总超时（含等待响应） |
+| 流式空闲 | `ClientConfig::streamingIdleTimeoutSeconds`，可被 `SendMessage`/`Resubscribe` 的 `timeout` 形参覆盖 | 60s | 相邻数据到达的最大间隔，超时断开流 |
+
+超时发生时通过 `A2AClientTimeoutError`（code `-32101`）抛出，错误消息携带阶段与已耗时，例如：
+
+```
+request timed out [stage=stream-idle, idle=60023ms, elapsed=60023ms]
+request timed out [stage=waiting-response-body, elapsed=300012ms]
+```
+
+超时行为可用自带桩服务的示例直接验证（无需真实 server）：
+
+```bash
+./output/bin/timeout_client   # 退出码 = 失败场景数，0 = 全部通过
+```
+
+该示例内置"只 accept、永不回包"的 TCP 桩，覆盖发现超时、非流式 per-call/config 超时、流式空闲超时（config/per-call）共 5 个场景，见 `examples/timeout_client.cpp`。
 
 ## 日志
 

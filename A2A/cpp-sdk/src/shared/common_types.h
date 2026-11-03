@@ -50,13 +50,15 @@ constexpr size_t HTTP_QUEUE_MAX_BATCH_SIZE = 64;
 constexpr int HTTPS_READ_BUFFER_SIZE = 4096;
 constexpr int HTTP_LISTEN_BACKLOG = 128;
 
+// Public client APIs express timeouts in seconds; the HTTP transport layer
+// works in milliseconds. This is the single conversion factor between them.
+constexpr int SECONDS_TO_MS = 1000;
+
 struct UserData {
     std::string requestId = "";
     std::string method;
     bool isStream = false;
     bool valid = true;
-    int timerId = -1;
-    int timeout = 0;
 };
 
 struct BaseResponse {

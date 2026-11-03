@@ -20,15 +20,22 @@ namespace A2A::Client {
 
 class HttpCardResolver : public A2ACardResolver {
 public:
+    /**
+     * @brief Construct an HTTP card resolver.
+     * @param[in] baseUrl          Server base URL.
+     * @param[in] relativeCardPath Optional card path relative to the base URL.
+     * @param[in] httpKwargs       Extra HTTP headers or options.
+     */
     HttpCardResolver(std::string baseUrl, const std::optional<std::string>& relativeCardPath,
                     std::map<std::string, std::string> httpKwargs = {});
 
     ~HttpCardResolver() override = default;
 
-    std::future<AgentCard> GetAgentCard(
-        const std::optional<std::string>& relativeCardPath = std::nullopt) const override;
+    std::future<AgentCard> GetAgentCard(const std::optional<std::string>& relativeCardPath = std::nullopt,
+        int timeout = DEFAULT_CARD_TIMEOUT_SECONDS) const override;
 
-    std::future<std::vector<AgentCard>> GetAllAgentCards() const override;
+    std::future<std::vector<AgentCard>> GetAllAgentCards(
+        int timeout = DEFAULT_CARD_TIMEOUT_SECONDS) const override;
 
 protected:
     std::string baseUrl_;

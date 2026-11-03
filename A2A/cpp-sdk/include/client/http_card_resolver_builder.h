@@ -28,6 +28,7 @@ public:
      * @param[in] agentCardPath  Path to the agent card (default: /.well-known/agent-card.json).
      * @param[in] httpKwargs     Extra HTTP headers or options.
      * @return Shared pointer to the created resolver.
+     * @note The discovery timeout is passed per call via A2ACardResolver::GetAgentCard().
      */
     static std::shared_ptr<A2ACardResolver> Build(std::string baseUrl, std::string agentCardPath,
         const std::map<std::string, std::string>& httpKwargs = {});
