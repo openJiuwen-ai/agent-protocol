@@ -89,7 +89,7 @@ bash A4P-java-sdk/scripts/ut.sh
 ```
 
 The script requires Git, Maven, and standard shell utilities, including `grep` with `-P` support (for example, GNU grep).
-It runs `mvn clean test` and returns Maven's exit code (`0` for `PASS`, nonzero for `FAILED`).
+It runs the SDK and examples tests, generates a JaCoCo coverage report for the SDK, and returns a nonzero exit code if the tests or coverage report fail.
 Reports are written to `outputs/` under the resolved repository root (`$WORKSPACE/outputs/` when overridden):
 
 | File | Contents |
@@ -98,6 +98,7 @@ Reports are written to `outputs/` under the resolved repository root (`$WORKSPAC
 | `unit_test_report.html` | Test counts and the last 200 log lines |
 | `junit.xml` | Combined JUnit XML, generated only when Surefire XML reports exist |
 | `ut.json` | Status, Maven exit code, and report links |
+| `jacoco/index.html` | SDK unit-test coverage report; open this file in a browser |
 
 Optional environment variables `PR_ID` (default `0`) and `OBS_BUCKET` (default `openjiuwen-ci`) configure
 report links in `ut.json`. The script only generates local reports; CI must upload them separately to the linked OBS locations.

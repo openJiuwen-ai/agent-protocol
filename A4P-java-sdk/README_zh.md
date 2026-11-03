@@ -88,7 +88,7 @@ bash A4P-java-sdk/scripts/ut.sh
 ```
 
 该脚本需要 Git、Maven 和常用 Shell 工具，其中 `grep` 需要支持 `-P`（例如 GNU grep）。
-脚本执行 `mvn clean test`，并返回 Maven 的退出码（`0` 为 `PASS`，非 `0` 为 `FAILED`）。
+脚本运行 SDK 和 examples 的单元测试，并生成 SDK 的 JaCoCo 覆盖率报告；测试或覆盖率报告生成失败时返回非零退出码。
 报告输出到定位到的仓库根目录下的 `outputs/`（设置覆盖值时为 `$WORKSPACE/outputs/`）：
 
 | 文件 | 内容 |
@@ -97,6 +97,7 @@ bash A4P-java-sdk/scripts/ut.sh
 | `unit_test_report.html` | 测试数量统计及最后 200 行日志 |
 | `junit.xml` | 合并后的 JUnit XML，仅在存在 Surefire XML 报告时生成 |
 | `ut.json` | 状态、Maven 退出码及报告链接 |
+| `jacoco/index.html` | SDK 单元测试覆盖率报告，可用浏览器打开 |
 
 可选环境变量 `PR_ID`（默认 `0`）与 `OBS_BUCKET`（默认 `openjiuwen-ci`）用于配置
 `ut.json` 中的报告链接。脚本只生成本地报告，上传到链接对应的 OBS 位置需由 CI 另行完成。
