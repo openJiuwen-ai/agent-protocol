@@ -32,8 +32,16 @@ enum class ConnState {
 
 // HTTP Client constants (same as original)
 constexpr int DEFAULT_CONNECTION_TIMEOUT_MS = 30000; // 30 seconds
-constexpr int DEFAULT_REQUEST_TIMEOUT_MS = 60000; // 60 seconds
+constexpr int DEFAULT_REQUEST_TIMEOUT_MS = 300000; // 300 seconds, aligned with official A2A SDK default
+constexpr int DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60000; // 60 seconds without any stream data
 constexpr int DEFAULT_EVENT_LOOP_TIMEOUT_MS = 100; // 100 milliseconds
+constexpr int STREAM_IDLE_CHECK_INTERVAL_MS = 1000; // stream idle check tick
+
+// Shared cap (seconds) for every timeout knob (ClientConfig, per-call timeouts
+// and card discovery). Larger values are clamped to this cap instead of being
+// rejected by LibcurlConn's constructor, so an oversized-but-plausible value
+// can never fail client creation.
+constexpr int MAX_TIMEOUT_SECONDS = 30 * 60;
 
 // Forward declaration
 class LibcurlConn;
@@ -42,8 +50,9 @@ class LibcurlConn;
  * @brief Configuration for HTTP client service
  */
 struct LibcurlConnConfig {
-    int connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS; // Connection timeout in milliseconds
-    int requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS; // Request timeout in milliseconds
+    int connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS; // TCP/TLS connection timeout in milliseconds
+    int requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS; // Total timeout for non-streaming requests
+    int streamIdleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS; // Max silence between stream data arrivals
     int eventLoopTimeout = DEFAULT_EVENT_LOOP_TIMEOUT_MS; // EventSystem loop timeout
 
     // TLS configuration (effective when URL scheme is https)
@@ -70,15 +79,19 @@ struct RequestContext {
     CURL* easyHandle = nullptr;
     std::string responseData;
     std::string headerData;
+    // Non-streaming requests: total request timeout in milliseconds.
+    // Streaming requests: idle timeout in milliseconds (max gap between data arrivals).
     int timeoutMs;
     std::chrono::steady_clock::time_point startTime;
+    // Updated on every header/body byte arrival; used for stream idle detection.
+    std::chrono::steady_clock::time_point lastActivityTime;
     struct curl_slist* headers = nullptr; // Store headers for cleanup
 
     RequestContext(const HttpRequest& req, HttpCallback responseHeaderCallback, HttpCallback responseBodyCallback,
         int timeout, const UserData& userData)
         : userData(userData), request(req), responseHeaderCallback(responseHeaderCallback),
         responseBodyCallback(responseBodyCallback), timeoutMs(timeout),
-        startTime(std::chrono::steady_clock::now()), headers(nullptr)
+        startTime(std::chrono::steady_clock::now()), lastActivityTime(startTime), headers(nullptr)
     {
     }
 
@@ -123,27 +136,90 @@ struct CurlSocketContext {
 };
 
 /**
+ * @brief Convert a positive seconds-valued timeout to milliseconds, clamped to
+ *        the SDK cap (MAX_TIMEOUT_SECONDS).
+ * @param[in] seconds Timeout in seconds; the caller handles the <= 0 default
+ *            fallback before calling this helper.
+ * @return Milliseconds (seconds * SECONDS_TO_MS), never above the cap.
+ */
+int ClampTimeoutSecondsToMs(int seconds);
+
+/**
+ * @brief Map a libcurl result code to a transport-level A2AErrorCode.
+ * @param[in] result libcurl result code
+ * @return A2AErrorCode value; 0 when the code is not mapped
+ */
+int CurlErrorCode(CURLcode result);
+
+/**
+ * @brief Build a stage-aware error description for a libcurl failure.
+ *        Timeouts identify which stage (connect / response / stream idle) ran
+ *        out of time; other errors carry the libcurl description plus elapsed
+ *        time since the request started.
+ * @param[in] request Failed request context (stage hints and start time)
+ * @param[in] result libcurl result code
+ * @return Human-readable error description
+ */
+std::string DescribeCurlError(const std::shared_ptr<RequestContext>& request, CURLcode result);
+
+/**
  * @brief HTTP Client Service using libcurl multi_socket API
  */
 class LibcurlConn : public ClientConn {
 public:
+    /**
+     * @brief Construct an HTTP client connection.
+     * @param[in] url               JSON-RPC endpoint URL.
+     * @param[in] headers           Default request headers.
+     * @param[in] connectTimeoutMs  TCP/TLS connection timeout in milliseconds.
+     * @param[in] requestTimeoutMs  Total timeout for non-streaming requests in milliseconds.
+     * @param[in] streamIdleTimeoutMs Max silence between stream data arrivals in milliseconds.
+     */
     explicit LibcurlConn(
         std::string url, std::unordered_map<std::string, std::string> headers = {},
-        int timeout = DEFAULT_CONNECTION_TIMEOUT_MS, int sseReadTimeout = DEFAULT_REQUEST_TIMEOUT_MS);
+        int connectTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS, int requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+        int streamIdleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS);
 
     ~LibcurlConn() override;
 
     // Send message to server
     int SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
-        std::shared_ptr<UserData> userData, int timeout) override;
+        std::shared_ptr<UserData> userData, int timeoutSecs) override;
 
     void Terminate() override;
 
     void SetCallback(std::shared_ptr<ConnCallback> callback) override;
 
-    void FinishRequest(int timerId) override;
+protected:
+    // Test seam: the idle-check cluster is exercised white-box by
+    // tests/ut/client/test_libcurl_conn.cpp; production code only touches
+    // these members on the I/O thread.
+    CURLM* multiHandle_{nullptr}; // libcurl multi handle for concurrent transfers
+    std::atomic<ConnState> state_{ConnState::STOPPED}; // Service state
+    // activeRequests_ is only accessed in I/O thread, no lock needed
+    std::unordered_map<std::string, std::shared_ptr<RequestContext>> activeRequests_;
 
-    void RefreshRequest(int timerId, int timeout) override;
+    /**
+    * @brief Periodic stream idle check (runs on the I/O thread).
+    * Aborts streaming requests that received no data (headers/body bytes)
+    * within their idle timeout, reporting A2A_REQUEST_TIMEOUT with stage info.
+    * @note Argument-free by design: the EventCallback (fd/events/arg) shape is
+    *       adapted by the registration lambda at the AddTimer call site.
+    */
+    void OnIdleCheck();
+
+    /**
+    * @brief Abort a streaming request whose idle window elapsed (I/O thread).
+    * Removes and frees its easy handle (if any); the caller erases the request
+    * from activeRequests_ and delivers the returned error via
+    * HandleErrorResponse.
+    * @param request In-flight request to check
+    * @param now Current steady-clock time
+    * @return Timeout error description; empty when the request is not an
+    *         over-idle stream
+    */
+    std::string AbortStreamIdleRequest(const std::shared_ptr<RequestContext>& request,
+        std::chrono::steady_clock::time_point now);
 
 private:
     /**
@@ -177,10 +253,8 @@ private:
     int Send(const HttpRequest& request, UserData& userData, int timeoutMs, HttpCallback responseHeaderCallback,
         HttpCallback responseBodyCallback);
 
-private:
     std::string url_;
 
-    int sseReadTimeout_;
     std::string sessionId_ = "";
     std::string protocolVersion_ = "";
     uint64_t sseConnectionId_ = 0;
@@ -190,18 +264,15 @@ private:
 
     // Core components
     LibcurlConnConfig config_{}; // Service configuration parameters
-    CURLM* multiHandle_{nullptr}; // libcurl multi handle for concurrent transfers
-    std::atomic<ConnState> state_{ConnState::STOPPED}; // Service state
     std::unique_ptr<EventSystem> eventSystem_; // Event system for async I/O
 
     // Request queue for async submission from user threads to I/O thread
     MPSCNotifyQueue<std::shared_ptr<RequestContext>> requestQueue_;
 
-    // activeRequests_ is only accessed in I/O thread, no lock needed
-    std::unordered_map<std::string, std::shared_ptr<RequestContext>> activeRequests_;
     std::unordered_map<curl_socket_t, std::shared_ptr<CurlSocketContext>> socketContexts_;
 
     int timerEventId_{-1}; // Timer event ID
+    int idleCheckTimerId_{-1}; // Repeating stream idle check timer event ID
     int stopNotifyEventId_{-1}; // Event ID for stopping the service
     std::thread ioThread_; // I/O thread for event processing
     size_t ioThreadIndex_{0};  // Index for naming IO threads
@@ -215,8 +286,10 @@ private:
     * @brief Handle error response for HTTP requests
     * @param request Shared pointer to request context
     * @param errorMessage Error message to send in response
+    * @param errCode Transport-level error code (A2AErrorCode); 0 = unmapped
     */
-    void HandleErrorResponse(const std::shared_ptr<RequestContext>& request, const std::string& errorMessage) const;
+    void HandleErrorResponse(const std::shared_ptr<RequestContext>& request, const std::string& errorMessage,
+        int errCode = 0) const;
 
     /**
     * @brief Handle finished HTTP response
@@ -235,6 +308,12 @@ private:
     * Processes remaining queue items and cancels active requests before stopping
     */
     void HandleStopRequestInIOThread();
+
+    /**
+    * @brief Pump the multi handle until active requests finish or the
+    * graceful-stop timeout elapses (I/O thread)
+    */
+    void WaitForActiveRequestsToComplete();
 
     /**
     * @brief Check for completed HTTP requests and process results
@@ -308,6 +387,13 @@ private:
     * @param request Shared pointer to request context containing request data
     */
     void SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<RequestContext>& request);
+
+    /**
+    * @brief Apply TLS options for https:// requests (no-op for plain http)
+    * @param easyHandle CURL easy handle to configure
+    * @param url Request URL (its scheme selects the TLS path)
+    */
+    void SetupTlsOptions(CURL* easyHandle, const std::string& url);
 
     /**
     * @brief Check for completed HTTP requests and process results

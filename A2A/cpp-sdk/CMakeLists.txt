@@ -112,7 +112,7 @@ set_target_properties(a2a PROPERTIES
 )
 
 if(A2A_ENABLE_EXAMPLES)
-    foreach(_example_target helloworld_client helloworld_server streaming_client streaming_server)
+    foreach(_example_target helloworld_client helloworld_server streaming_client streaming_server timeout_client)
         if(TARGET ${_example_target})
             set_target_properties(${_example_target} PROPERTIES
                 RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/output/bin

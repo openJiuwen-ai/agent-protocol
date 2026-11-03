@@ -38,8 +38,6 @@ public:
         (override));
     MOCK_METHOD(void, SetCallback, (std::shared_ptr<ConnCallback>), (override));
     MOCK_METHOD(void, Terminate, (), (override));
-    MOCK_METHOD(void, FinishRequest, (int), (override));
-    MOCK_METHOD(void, RefreshRequest, (int timerId, int timeout), (override));
 };
 
 // ===========================================================================

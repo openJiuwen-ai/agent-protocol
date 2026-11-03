@@ -46,7 +46,7 @@ HttpCardResolver::HttpCardResolver(
 }
 
 std::future<AgentCard> HttpCardResolver::GetAgentCard([[maybe_unused]] const std::optional<std::string>&
-    relativeCardPath) const
+    relativeCardPath, int timeout) const
 {
     std::string requestId = GenerateUuid();
     std::shared_ptr<std::promise<AgentCard>> promise;
@@ -57,8 +57,9 @@ std::future<AgentCard> HttpCardResolver::GetAgentCard([[maybe_unused]] const std
             pendingPromises_[requestId] = promise;
         }
 
-        // send request
-        transport_->GetCard(requestId, nullptr, 0);
+        // send request (discovery timeout; <=0 = SDK default 60s, not the 300s
+        // transport-wide default, since discovery should fail fast)
+        transport_->GetCard(requestId, nullptr, timeout > 0 ? timeout : DEFAULT_CARD_TIMEOUT_SECONDS);
     } catch (const std::bad_alloc& e) {
         A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         std::promise<AgentCard> fallbackPromise;
@@ -75,9 +76,9 @@ std::future<AgentCard> HttpCardResolver::GetAgentCard([[maybe_unused]] const std
     return promise->get_future();
 }
 
-std::future<std::vector<AgentCard>> HttpCardResolver::GetAllAgentCards() const
+std::future<std::vector<AgentCard>> HttpCardResolver::GetAllAgentCards(int timeout) const
 {
-    auto outerCardFuture = GetAgentCard(std::nullopt);
+    auto outerCardFuture = GetAgentCard(std::nullopt, timeout);
     return std::async(std::launch::async,
         [cardFuture = std::move(outerCardFuture)]() mutable -> std::vector<AgentCard> {
             AgentCard card = cardFuture.get();

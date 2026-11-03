@@ -11,6 +11,7 @@
 #include <queue>
 #include <atomic>
 #include <vector>
+#include <limits>
 
 #include "client/connection/libcurl_conn.h"
 #include "event_system.h"
@@ -116,6 +117,40 @@ public:
 
 private:
     std::unique_ptr<ISender> sender_;
+};
+
+// ===========================================================================
+// 空闲检测白盒测试子类：暴露 protected 的空闲检测成员（测试 seam）
+// ===========================================================================
+class IdleCheckableConn : public LibcurlConn {
+public:
+    using LibcurlConn::LibcurlConn;
+
+    void SetRunningForTest()
+    {
+        state_.store(ConnState::RUNNING, std::memory_order_release);
+    }
+
+    void AddActiveRequest(const std::string& id, const std::shared_ptr<RequestContext>& request)
+    {
+        activeRequests_[id] = request;
+    }
+
+    bool HasActiveRequest(const std::string& id) const
+    {
+        return activeRequests_.find(id) != activeRequests_.end();
+    }
+
+    // 测试注入真实 multi 句柄（覆盖 easy handle 释放路径；Stop() 负责清理）
+    void AdoptMultiHandleForTest(CURLM* multi)
+    {
+        multiHandle_ = multi;
+    }
+
+    void TriggerIdleCheck()
+    {
+        OnIdleCheck();
+    }
 };
 
 // ===========================================================================
@@ -284,14 +319,6 @@ TEST_F(LibcurlConnTest, MultipleTerminate)
         conn->Terminate();
         conn->Terminate();
     });
-}
-
-// ===========================================================================
-// 基础 FinishRequest 测试
-// ===========================================================================
-TEST_F(LibcurlConnTest, FinishRequest)
-{
-    EXPECT_NO_THROW(conn->FinishRequest(1));
 }
 
 // ===========================================================================
@@ -597,6 +624,208 @@ TEST_F(LibcurlConnMockTest, TimeoutHandling)
 
     EXPECT_LE(successCount.load(), 3);
     EXPECT_GE(successCount.load(), 2);
+}
+
+// ===========================================================================
+// 空闲检测白盒测试（OnIdleCheck / AbortStreamIdleRequest）
+// ===========================================================================
+class LibcurlConnIdleCheckTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        conn = std::make_shared<IdleCheckableConn>("https://api.example.com/test");
+        // 构造函数内部会 Start()：拉起 I/O 线程、EventSystem、真实 multi 句柄和
+        // 1s 空闲检测定时器（state_ 为 RUNNING）。先完整停掉得到惰性连接：
+        // 测试在当前线程同步驱动 OnIdleCheck（SkipWhenStopped 才能真正从
+        // STOPPED 出发），同时避免真实定时器在 I/O 线程并发访问 activeRequests_
+        // （数据竞争），以及注入 multi 时覆盖丢失构造期创建的真实句柄（泄漏）。
+        conn->Terminate();
+    }
+
+    void TearDown() override
+    {
+        // state_ 为 RUNNING 时 Stop() 会清理 multiHandle_ 等注入的资源
+        if (conn) {
+            conn->Terminate();
+        }
+    }
+
+    // 创建流式请求：timeoutMs 为空闲上限，lastActivityTime 回拨 idleMs 毫秒，
+    // 错误响应经 responseBodyCallback 捕获到 captured。
+    std::shared_ptr<RequestContext> MakeStreamRequest(const std::string& id, int timeoutMs, int idleMs,
+        HttpResponse& captured)
+    {
+        auto request = CreateTestRequestContext(id, "https://api.example.com/test", "POST", "{}", true);
+        request->timeoutMs = timeoutMs;
+        if (idleMs > 0) {
+            request->lastActivityTime -= std::chrono::milliseconds(idleMs);
+        }
+        request->responseBodyCallback = [&captured](const HttpResponse& response) { captured = response; };
+        return request;
+    }
+
+    std::shared_ptr<IdleCheckableConn> conn;
+};
+
+// 静默超过空闲窗口的流式请求被中止，并回调 A2A_REQUEST_TIMEOUT 与 stage 信息
+TEST_F(LibcurlConnIdleCheckTest, AbortSilentStreamRequest)
+{
+    conn->SetRunningForTest();
+    HttpResponse captured;
+    // 已静默 100ms > 50ms 空闲上限
+    auto request = MakeStreamRequest("idle-001", 50, 100, captured);
+    conn->AddActiveRequest("idle-001", request);
+
+    conn->TriggerIdleCheck();
+
+    EXPECT_FALSE(conn->HasActiveRequest("idle-001"));
+    EXPECT_FALSE(captured.success);
+    EXPECT_EQ(captured.errCode, static_cast<int>(A2AErrorCode::A2A_REQUEST_TIMEOUT));
+    EXPECT_NE(captured.errorMessage.find("stage=stream-idle"), std::string::npos);
+    EXPECT_NE(captured.errorMessage.find("idle="), std::string::npos);
+    EXPECT_NE(captured.errorMessage.find("elapsed="), std::string::npos);
+}
+
+// 数据仍在到达（未超空闲窗口）的流式请求不受影响
+TEST_F(LibcurlConnIdleCheckTest, KeepActiveStreamWithData)
+{
+    conn->SetRunningForTest();
+    HttpResponse captured;
+    auto request = MakeStreamRequest("active-001", 60000, 0, captured);
+    conn->AddActiveRequest("active-001", request);
+
+    conn->TriggerIdleCheck();
+
+    EXPECT_TRUE(conn->HasActiveRequest("active-001"));
+    EXPECT_TRUE(captured.errorMessage.empty());
+}
+
+// timeoutMs <= 0 的流式请求不做空闲检查
+TEST_F(LibcurlConnIdleCheckTest, KeepStreamRequestWithZeroTimeout)
+{
+    conn->SetRunningForTest();
+    HttpResponse captured;
+    auto request = MakeStreamRequest("zero-001", 0, 60000, captured);
+    conn->AddActiveRequest("zero-001", request);
+
+    conn->TriggerIdleCheck();
+
+    EXPECT_TRUE(conn->HasActiveRequest("zero-001"));
+    EXPECT_TRUE(captured.errorMessage.empty());
+}
+
+// 非流式请求不参与空闲检查（总超时由 CURLOPT_TIMEOUT_MS 负责）
+TEST_F(LibcurlConnIdleCheckTest, KeepNonStreamRequest)
+{
+    conn->SetRunningForTest();
+    HttpResponse captured;
+    constexpr int timeoutMs50 = 50;
+    constexpr int lastActivityTime = 60000;
+    auto request = CreateTestRequestContext("nonstream-001", "https://api.example.com/test", "POST", "{}", false);
+    request->timeoutMs = timeoutMs50;
+    request->lastActivityTime -= std::chrono::milliseconds(lastActivityTime);
+    request->responseBodyCallback = [&captured](const HttpResponse& response) { captured = response; };
+    conn->AddActiveRequest("nonstream-001", request);
+
+    conn->TriggerIdleCheck();
+
+    EXPECT_TRUE(conn->HasActiveRequest("nonstream-001"));
+    EXPECT_TRUE(captured.errorMessage.empty());
+}
+
+// 未启动（STOPPED）的连接跳过检查
+TEST_F(LibcurlConnIdleCheckTest, SkipWhenStopped)
+{
+    HttpResponse captured;
+    auto request = MakeStreamRequest("stopped-001", 50, 100, captured);
+    conn->AddActiveRequest("stopped-001", request);
+
+    conn->TriggerIdleCheck();
+
+    EXPECT_TRUE(conn->HasActiveRequest("stopped-001"));
+    EXPECT_TRUE(captured.errorMessage.empty());
+}
+
+// 中止路径释放 easy handle（remove + cleanup）并从在途表移除
+TEST_F(LibcurlConnIdleCheckTest, AbortReleasesEasyHandle)
+{
+    conn->SetRunningForTest();
+    // curl_easy_init 隐式完成 curl 全局初始化；multi 句柄由 Stop() 清理
+    CURL* easy = curl_easy_init();
+    ASSERT_NE(easy, nullptr);
+    CURLM* multi = curl_multi_init();
+    ASSERT_NE(multi, nullptr);
+    conn->AdoptMultiHandleForTest(multi);
+
+    HttpResponse captured;
+    auto request = MakeStreamRequest("easy-001", 50, 100, captured);
+    ASSERT_EQ(curl_multi_add_handle(multi, easy), CURLM_OK);
+    request->easyHandle = easy;
+    conn->AddActiveRequest("easy-001", request);
+
+    conn->TriggerIdleCheck();
+
+    EXPECT_EQ(request->easyHandle, nullptr);
+    EXPECT_FALSE(conn->HasActiveRequest("easy-001"));
+    EXPECT_NE(captured.errorMessage.find("stage=stream-idle"), std::string::npos);
+}
+
+// ===========================================================================
+// CurlErrorCode / DescribeCurlError 单元测试
+// ===========================================================================
+TEST(CurlErrorMappingTest, ErrorCodeMapping)
+{
+    EXPECT_EQ(CurlErrorCode(CURLE_OPERATION_TIMEDOUT), static_cast<int>(A2AErrorCode::A2A_REQUEST_TIMEOUT));
+    EXPECT_EQ(CurlErrorCode(CURLE_COULDNT_RESOLVE_PROXY), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    EXPECT_EQ(CurlErrorCode(CURLE_COULDNT_RESOLVE_HOST), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    EXPECT_EQ(CurlErrorCode(CURLE_COULDNT_CONNECT), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    EXPECT_EQ(CurlErrorCode(CURLE_SSL_CONNECT_ERROR), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    // 未映射的错误返回 0（上层回退到 HTTP_PARSE_ERROR）
+    EXPECT_EQ(CurlErrorCode(CURLE_OK), 0);
+    EXPECT_EQ(CurlErrorCode(CURLE_RECV_ERROR), 0);
+}
+
+TEST(CurlErrorMappingTest, DescribeCurlErrorStages)
+{
+    // 尚未收到响应头（含流式请求）：流式的空闲窗口由 OnIdleCheck 负责，
+    // curl 报出的超时只会来自连接阶段，不应误标为 stream-idle
+    auto streamNoHeaders = CreateTestRequestContext("s1", "https://api.example.com/test", "POST", "{}", true);
+    std::string desc = DescribeCurlError(streamNoHeaders, CURLE_OPERATION_TIMEDOUT);
+    EXPECT_NE(desc.find("request timed out [stage=connect-or-waiting-response-headers"), std::string::npos);
+    EXPECT_NE(desc.find("elapsed="), std::string::npos);
+
+    auto nonStreamNoHeaders = CreateTestRequestContext("s2", "https://api.example.com/test", "POST", "{}", false);
+    desc = DescribeCurlError(nonStreamNoHeaders, CURLE_OPERATION_TIMEDOUT);
+    EXPECT_NE(desc.find("stage=connect-or-waiting-response-headers"), std::string::npos);
+
+    // 非流式且已收到响应头：等待响应体阶段
+    auto nonStreamWithHeaders = CreateTestRequestContext("s3", "https://api.example.com/test", "POST", "{}", false);
+    nonStreamWithHeaders->headerData = "HTTP/1.1 200 OK\r\n";
+    desc = DescribeCurlError(nonStreamWithHeaders, CURLE_OPERATION_TIMEDOUT);
+    EXPECT_NE(desc.find("stage=waiting-response-body"), std::string::npos);
+
+    // 流式且已收到响应头：防御分支标记为 stream-idle
+    auto streamWithHeaders = CreateTestRequestContext("s4", "https://api.example.com/test", "POST", "{}", true);
+    streamWithHeaders->headerData = "HTTP/1.1 200 OK\r\n";
+    desc = DescribeCurlError(streamWithHeaders, CURLE_OPERATION_TIMEDOUT);
+    EXPECT_NE(desc.find("stage=stream-idle"), std::string::npos);
+
+    // 非超时错误：libcurl 描述 + elapsed
+    desc = DescribeCurlError(nonStreamNoHeaders, CURLE_COULDNT_RESOLVE_HOST);
+    EXPECT_NE(desc.find("[elapsed="), std::string::npos);
+    EXPECT_NE(desc.find("resolve"), std::string::npos);
+}
+
+// ===========================================================================
+// 超时上限截断（ClampTimeoutSecondsToMs）单元测试
+// ===========================================================================
+TEST(TimeoutClampTest, ClampTimeoutSecondsToMs)
+{
+    EXPECT_EQ(ClampTimeoutSecondsToMs(1), SECONDS_TO_MS);
+    EXPECT_EQ(ClampTimeoutSecondsToMs(MAX_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS * SECONDS_TO_MS);
+    // 超过上限按上限截断，而不是让秒转毫秒乘法溢出
+    EXPECT_EQ(ClampTimeoutSecondsToMs(MAX_TIMEOUT_SECONDS + 1), MAX_TIMEOUT_SECONDS * SECONDS_TO_MS);
+    EXPECT_EQ(ClampTimeoutSecondsToMs(std::numeric_limits<int>::max()), MAX_TIMEOUT_SECONDS * SECONDS_TO_MS);
 }
 
 } // namespace A2A::Http::Test
