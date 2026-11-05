@@ -229,6 +229,10 @@ Code 4003 is retained for ArkTS compatibility; Java uses 4004 for per-period exe
 1. Create or restore all Intent and Context structures through SDK APIs. Hand-assembled lifecycle structures may cause undefined behavior. Applications may construct the documented request, identity, environment and order input models.
 2. Follow the lifecycle: createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution or cancelExecution. An ACTIVE Context may be revoked.
 3. Do not repeat the same lifecycle step for an Intent, activation/revocation for a Context, or reservation/finalization for an Execution. An ACTIVE Context may process distinct Executions; reads and serialization may be repeated.
-4. Persist the Context after activateIntent and every other API returning a Context. A failed createExecution may change its status to EXPIRED, so persist the current Context as well. Persistence is the caller's responsibility.
+4. Persist the Context object returned by activateIntent and other APIs returning a Context. Even if createExecution fails, it may change the status to EXPIRED; persist the current Context in that case as well. Persistence is not performed automatically by the SDK.
 5. The SDK does not protect persisted Contexts against tampering or verify their integrity. Add caller-side verification where required; structural checks during deserialization are not security integrity checks.
 6. Serialized Contexts are for local persistence only and must not be transmitted as network messages.
+7. Authorization APIs (Intent-related APIs) do not enforce chronological ordering of L1/L2/L3 timestamps; these timestamps are used for auditing.
+8. Implementations of the signing and signature-verification interfaces must conform to the specification.
+9. The caller must enforce idempotency for Intent and Context operations.
+10. Prevent concurrent API calls.
