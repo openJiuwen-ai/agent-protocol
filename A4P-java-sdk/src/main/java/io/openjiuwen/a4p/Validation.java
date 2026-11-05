@@ -219,7 +219,7 @@ final class Validation {
     }
 
     /**
-     * Validates L2 and nested L1 structure, identities and nondecreasing timestamps.
+     * Validates L2 and nested L1 structure, identities and timestamp formats.
      * @param intent protocol intent to process
      */
     static void intentL2(IntentL2 intent) {
@@ -229,12 +229,11 @@ final class Validation {
         issueContext(new IntentIssueContext(intent.userIdentity(), intent.agentIdentity(),
                 intent.serviceProviderIdentity()));
         integer(intent.timestamp(), false);
-        timeAtOrAfter(intent.timestamp(), intent.intentL1().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
         signature(intent.sign());
     }
 
     /**
-     * Validates L3 and nested layers, signing environment and nondecreasing timestamps.
+     * Validates L3 and nested layers, signing environment and timestamp formats.
      * @param intent protocol intent to process
      */
     static void intentL3(IntentL3 intent) {
@@ -243,7 +242,6 @@ final class Validation {
         intentL2(intent.intentL2());
         signingEnv(intent.signingEnv());
         integer(intent.timestamp(), false);
-        timeAtOrAfter(intent.timestamp(), intent.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
         signature(intent.sign());
     }
 
