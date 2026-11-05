@@ -19,6 +19,18 @@ class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
+    void restoredActivationMustNotExceedValidUntil() throws Exception {
+        IntentL3 intent = authorized(constraints());
+        long validUntil = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent()).validUntil();
+        IntentExecutionContext boundary = ok(A4p.activateIntent(intent, VERIFIER, validUntil));
+        String json = codec.serializeIntentExecutionContext(boundary);
+        assertEquals(validUntil, ok(codec.deserializeIntentExecutionContext(json)).activatedTime());
+        ObjectNode expired = (ObjectNode) CanonicalJson.MAPPER.readTree(json);
+        expired.put("activatedTime", validUntil + 1);
+        fails(A4P_TIMESTAMP_EXPIRED, codec.deserializeIntentExecutionContext(expired.toString()));
+    }
+
+    @Test
     void deserializationRequiresSupportedVersionAtEveryLayer() throws Exception {
         IntentL3 intent = authorized(constraints());
         var l1 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL1(intent.intentL2().intentL1()));

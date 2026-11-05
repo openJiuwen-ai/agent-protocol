@@ -169,6 +169,8 @@ public class A4pIntentCodec {
         Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER, "Context intent ID does not match the authorized intent ID");
         Validation.integer(wire.activatedTime(), false);
         Validation.timeAtOrAfter(wire.activatedTime(), authorized.timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the authorized intent timestamp");
+        Validation.timeAtOrBefore(wire.activatedTime(), PaymentProfile.constraints(intent.structuredIntent()).validUntil(),
+                A4P_TIMESTAMP_EXPIRED, "Activation time is later than validUntil");
         Validation.present(wire.status());
         Validation.present(wire.executions());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
