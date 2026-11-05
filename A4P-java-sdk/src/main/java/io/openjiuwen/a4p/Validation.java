@@ -44,6 +44,16 @@ final class Validation {
         if (!condition) { throw new A4pException(code, message, cause); }
     }
 
+    static boolean timeAtOrAfter(long time, long boundary) { return time >= boundary; }
+
+    static void timeAtOrAfter(long time, long boundary, A4pErrorCode code, String message) {
+        require(timeAtOrAfter(time, boundary), code, message);
+    }
+
+    static void timeAtOrBefore(long time, long boundary, A4pErrorCode code, String message) {
+        require(timeAtOrAfter(boundary, time), code, message);
+    }
+
     /**
      * Requires a non-null protocol value.
      * @param value value to validate or normalize
@@ -119,14 +129,14 @@ final class Validation {
         text(constraints.currency());
         integer(constraints.validFrom(), false);
         integer(constraints.validUntil(), false);
-        require(constraints.validFrom() <= constraints.validUntil(), A4P_INVALID_PARAMETER, "validFrom must not be later than validUntil");
+        timeAtOrBefore(constraints.validFrom(), constraints.validUntil(), A4P_INVALID_PARAMETER, "validFrom must not be later than validUntil");
         if (constraints.singleOrderMaxAmount() != null) { integer(constraints.singleOrderMaxAmount(), true); }
         if (constraints.maxExecutionCount() != null) { integer(constraints.maxExecutionCount(), true); }
         if (constraints.anchorTime() != null || constraints.periodSeconds() != null
                 || constraints.maxExecutionCountPerPeriod() != null) {
             integer(constraints.anchorTime(), false);
             // A later anchor would give pre-anchor reservations negative periods, each with a fresh budget.
-            require(constraints.anchorTime() <= constraints.validFrom(), A4P_INVALID_PARAMETER, "anchorTime must not be later than validFrom");
+            timeAtOrBefore(constraints.anchorTime(), constraints.validFrom(), A4P_INVALID_PARAMETER, "anchorTime must not be later than validFrom");
             integer(constraints.periodSeconds(), true);
             require(constraints.periodSeconds() <= MAX_PERIOD_SECONDS, A4P_INVALID_PARAMETER, "periodSeconds exceeds the safe millisecond duration limit");
             integer(constraints.maxExecutionCountPerPeriod(), true);
@@ -219,7 +229,7 @@ final class Validation {
         issueContext(new IntentIssueContext(intent.userIdentity(), intent.agentIdentity(),
                 intent.serviceProviderIdentity()));
         integer(intent.timestamp(), false);
-        require(intent.timestamp() >= intent.intentL1().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
+        timeAtOrAfter(intent.timestamp(), intent.intentL1().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
         signature(intent.sign());
     }
 
@@ -233,7 +243,7 @@ final class Validation {
         intentL2(intent.intentL2());
         signingEnv(intent.signingEnv());
         integer(intent.timestamp(), false);
-        require(intent.timestamp() >= intent.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
+        timeAtOrAfter(intent.timestamp(), intent.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
         signature(intent.sign());
     }
 
@@ -300,8 +310,8 @@ final class Validation {
             present(record.status());
             require(record.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER, "Execution action does not match the authorized intent action");
             require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER, "Order currency does not match the intent currency");
-            require(record.reservedAt() >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
-            require(record.reservedAt() <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
+            timeAtOrAfter(record.reservedAt(), constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
+            timeAtOrBefore(record.reservedAt(), constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             require(Objects.equals(record.periodIndex(), Accounting.period(constraints, record.reservedAt())), A4P_INVALID_PARAMETER, "Ledger period index does not match the reservation time");
             finalizedAt(record.completedAt(), record.status() == ExecutionStatus.COMPLETED, record.reservedAt());
             finalizedAt(record.canceledAt(), record.status() == ExecutionStatus.CANCELED, record.reservedAt());
@@ -343,7 +353,7 @@ final class Validation {
         require((timestamp != null) == expected, A4P_INVALID_PARAMETER, "Finalization timestamp presence does not match execution status");
         if (timestamp != null) {
             integer(timestamp, false);
-            require(timestamp >= reservedAt, A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
+            timeAtOrAfter(timestamp, reservedAt, A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
         }
     }
 

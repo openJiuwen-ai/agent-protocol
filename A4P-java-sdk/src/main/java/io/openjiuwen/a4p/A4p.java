@@ -96,7 +96,7 @@ public final class A4p {
             Validation.intentL1(intent);
             Validation.version(intent.version());
             // Chain timestamps are monotonic; refuse to emit an L2 that every peer would reject.
-            require(now >= intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
+            Validation.timeAtOrAfter(now, intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
             verifyOrThrow(agentVerifier, intent, intent.sign());
             IntentL2 unsigned = new IntentL2(PROTOCOL_VERSION, intent, context.userIdentity(),
                     context.agentIdentity(), context.serviceProviderIdentity(), now, null);
@@ -142,9 +142,9 @@ public final class A4p {
             Validation.signingEnv(environment);
             Validation.intentL2(intent);
             Validation.versions(intent);
-            require(now >= intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
+            Validation.timeAtOrAfter(now, intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
             PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL1().structuredIntent());
-            require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
+            Validation.timeAtOrBefore(now, constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             verifyOrThrow(serverVerifier, intent, intent.sign());
             IntentL3 unsigned = new IntentL3(PROTOCOL_VERSION, intent, environment, now, null);
             return new IntentL3(PROTOCOL_VERSION, intent, environment, now, sign(userSigner, unsigned));
@@ -180,10 +180,10 @@ public final class A4p {
             Validation.integer(now, false);
             Validation.intentL3(intent);
             Validation.versions(intent);
-            require(now >= intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
+            Validation.timeAtOrAfter(now, intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
             // An intent past validUntil could never execute; one not yet valid is activated and waits for validFrom.
             PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent());
-            require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
+            Validation.timeAtOrBefore(now, constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             verifyOrThrow(userVerifier, intent, intent.sign());
             return new IntentExecutionContext(intent, now);
         });
@@ -233,7 +233,7 @@ public final class A4p {
             Validation.integer(now, false);
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
-                require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
+                Validation.timeAtOrAfter(now, context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
             }
@@ -355,8 +355,8 @@ public final class A4p {
             require(execution.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER, "Execution action does not match the authorized intent action");
             require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER, "Order currency does not match the intent currency");
             require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
-            require(now >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
-            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
+            Validation.timeAtOrAfter(now, constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
+            Validation.timeAtOrAfter(now, context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
             if (now > constraints.validUntil()) {
                 context.status(IntentExecutionStatus.EXPIRED);
                 throw new A4pException(A4P_TIMESTAMP_EXPIRED);
@@ -414,7 +414,7 @@ public final class A4p {
             ExecutionRecord record = entry.record();
             require(record.status() == ExecutionStatus.PENDING, A4P_INVALID_STATUS, "Only pending execution records can be finalized");
             // Record timestamps are monotonic like the chain's, so a persisted ledger can be checked for them.
-            require(now >= record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
+            Validation.timeAtOrAfter(now, record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
             ExecutionRecord updated = new ExecutionRecord(record.executionId(),
                     cancel ? ExecutionStatus.CANCELED : ExecutionStatus.COMPLETED,
                     record.action(), record.executionContent(), record.periodIndex(),
