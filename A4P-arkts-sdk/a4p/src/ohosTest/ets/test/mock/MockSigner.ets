@@ -161,6 +161,27 @@ export class ContradictoryVerifier implements SignatureVerifier {
 }
 
 /**
+ * Test verifier whose `valid` field is a truthy non-boolean ("false" as
+ * a string, or 1) carrying the success code: the consistency guard alone
+ * would endorse it, so only the boolean-type guard stops it. JSON.parse
+ * keeps the runtime value non-boolean despite the declared type.
+ */
+export class NonBooleanValidVerifier implements SignatureVerifier {
+  /** Produce the numeric spelling (1) instead of the string one ("false") */
+  private numeric: boolean;
+
+  constructor(numeric: boolean = false) {
+    this.numeric = numeric;
+  }
+
+  verify(_data: Uint8Array, _signatureInfo: SignatureInfo): VerificationResult {
+    return this.numeric
+      ? JSON.parse('{"valid":1,"code":0,"message":"numeric valid field"}') as VerificationResult
+      : JSON.parse('{"valid":"false","code":0,"message":"string valid field"}') as VerificationResult;
+  }
+}
+
+/**
  * Test signer that returns no result at all, for exercising the
  * signer-result guard: a broken signer must surface as A4P_SIGNING_FAIL,
  * never as a signed intent whose sign field fails every downstream check.

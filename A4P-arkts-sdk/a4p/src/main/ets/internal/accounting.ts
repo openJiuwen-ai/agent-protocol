@@ -32,14 +32,16 @@ export interface PeriodRule {
 /**
  * The period rule of the constraints, or null for non-periodic intents.
  * The rule is all-or-nothing: all three fields present (periodic) or all
- * three omitted (non-periodic); validation rejects partial rules.
+ * three omitted (non-periodic); validation rejects partial rules. A null
+ * field counts as omitted — in-memory null is the protocol's spelling of
+ * an absent optional field (the canonical form never carries "key":null).
  * @param constraints - The payment constraints to resolve the period rule from
  * @returns The resolved period rule, or null when the constraints are non-periodic
  */
 export function periodRuleOf(constraints: PaymentConstraints): PeriodRule | null {
-  const anchorTime: number | undefined = constraints.anchorTime;
-  const periodSeconds: number | undefined = constraints.periodSeconds;
-  const maxExecutionCountPerPeriod: number | undefined = constraints.maxExecutionCountPerPeriod;
+  const anchorTime: number | undefined = constraints.anchorTime ?? undefined;
+  const periodSeconds: number | undefined = constraints.periodSeconds ?? undefined;
+  const maxExecutionCountPerPeriod: number | undefined = constraints.maxExecutionCountPerPeriod ?? undefined;
   if (anchorTime === undefined || periodSeconds === undefined || maxExecutionCountPerPeriod === undefined) {
     return null;
   }
@@ -105,7 +107,7 @@ export function computePeriodExecutionCount(executions: ExecutionRecord[], perio
  * Canceled records are excluded because cancel is an explicit definitive
  * outcome that releases quota.
  * @param executions - The execution records ledger
- * @returns The accumulated payment amount in cents
+ * @returns The accumulated payment amount in application-defined minor currency units
  */
 export function computeAccumulatedAmount(executions: ExecutionRecord[]): number {
   let sum: number = 0;
@@ -136,7 +138,10 @@ export function computeExecutionInfo(constraints: PaymentConstraints, executions
   const info: PaymentExecutionInfo = {
     leftAmount: constraints.totalMaxAmount - computeAccumulatedAmount(executions)
   };
-  const countCap: number | undefined = constraints.maxExecutionCount;
+  // ?? undefined: a null cap is an absent cap (see periodRuleOf) — without
+  // the normalization the check below would treat null as present and the
+  // subtraction would coerce it to 0.
+  const countCap: number | undefined = constraints.maxExecutionCount ?? undefined;
   if (countCap !== undefined) {
     info.leftExecutionCount = countCap - computeExecutionCount(executions);
   }

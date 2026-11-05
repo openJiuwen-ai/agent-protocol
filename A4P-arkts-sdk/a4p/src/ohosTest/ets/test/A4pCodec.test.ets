@@ -7,7 +7,7 @@ import { A4pCodec } from '../../../main/ets/api/codec';
 import {
   A4pErrorCode,
   IntentL1, IntentL2, IntentL3, PaymentConstraints,
-  A4p, IntentExecutionContext, ExecutionStatus, AlgorithmType
+  A4p, IntentExecutionContext, ExecutionStatus, IntentExecutionStatus, AlgorithmType
 } from '../../../../Index';
 import { A4pError } from '../../../main/ets/models/common';
 import {
@@ -54,6 +54,18 @@ function createExecutionContextWithLedger(): IntentExecutionContext {
   return context;
 }
 
+/**
+ * A context whose ledger holds two PENDING reservations — no finalization
+ * timestamps, both counting toward every quota — for the restore-content
+ * tests that mutate a record's reservation instant.
+ */
+function createExecutionContextWithPendingLedger(): IntentExecutionContext {
+  const context = createExecutionContext();
+  A4p.createExecution(context, createTestExecution());
+  A4p.createExecution(context, createTestExecution());
+  return context;
+}
+
 /** A context whose constraints omit the period rule (non-periodic). */
 function createNonPeriodicExecutionContext(): IntentExecutionContext {
   const request = createTestCreateIntentRequest();
@@ -90,6 +102,31 @@ function expectThrows(code: A4pErrorCode, fn: () => void): void {
   throw new Error('Expected A4pError with code ' + code + ', but no error was thrown');
 }
 
+// Wire-form accessors for the restore-content tests: they reach nested
+// fields of the serialized context (constraints, ledger records, orders)
+// to mutate one property at a time, mirroring how a tampered persisted
+// context would arrive at deserializeIntentExecutionContext.
+
+function wireL3Of(obj: Record<string, Object>): Record<string, Object> {
+  return obj['authorizedIntent'] as Record<string, Object>;
+}
+
+function wireConstraintsOf(obj: Record<string, Object>): Record<string, Object> {
+  const l3: Record<string, Object> = wireL3Of(obj);
+  const l2: Record<string, Object> = l3['intentL2'] as Record<string, Object>;
+  const l1: Record<string, Object> = l2['intentL1'] as Record<string, Object>;
+  const structured: Record<string, Object> = l1['structuredIntent'] as Record<string, Object>;
+  return structured['constraints'] as Record<string, Object>;
+}
+
+function wireExecutionsOf(obj: Record<string, Object>): Record<string, Object>[] {
+  return obj['executions'] as Record<string, Object>[];
+}
+
+function wireOrderOf(record: Record<string, Object>): Record<string, Object> {
+  return record['executionContent'] as Record<string, Object>;
+}
+
 export default function a4pCodecTest() {
   describe('A4pCodecTest', () => {
 
@@ -100,6 +137,16 @@ export default function a4pCodecTest() {
         const json = A4pCodec.serializeIntentL1(l1);
 
         expect(json.length).assertLarger(0);
+      });
+
+      it('serialize_fails_whenNull', 0, () => {
+        // JSON.parse keeps the runtime value null despite the declared
+        // type; it must fail as invalid data, not render "null".
+        const nullIntent: IntentL1 = JSON.parse('null') as IntentL1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.serializeIntentL1(nullIntent);
+        });
       });
 
       it('serialize_deterministic', 0, () => {
@@ -232,6 +279,212 @@ export default function a4pCodecTest() {
         expect(deserialized.version).assertEqual(original.version);
         expect(deserialized.sign?.sign).assertEqual(original.sign?.sign);
       });
+
+      it('deserialize_fails_whenDuplicateKey', 0, () => {
+        // JSON.parse silently keeps the last duplicate; the strict parser
+        // rejects the document instead — the bytes a signer signed carry
+        // exactly one of each key, so a duplicated key must never
+        // deserialize as anything.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const duplicated = '{"intentId":"injected",' + serialized.substring(1);
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(duplicated);
+        });
+      });
+
+      it('deserialize_fails_whenUnknownTopLevelField', 0, () => {
+        // The closed field set rejects fields the protocol does not define.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const extended = '{"unknownField":1,' + serialized.substring(1);
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentL1(extended);
+        });
+      });
+
+      it('deserialize_fails_whenUnknownNestedField', 0, () => {
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const sign: Record<string, Object> = obj['sign'] as Record<string, Object>;
+        sign['extra'] = 'value';
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentL1(JSON.stringify(obj));
+        });
+      });
+
+      it('deserialize_fails_whenConstraintsCarryUnknownField', 0, () => {
+        // A close-but-wrong constraint name must not slip through as an
+        // ignored extra: unknown fields are rejected at every level.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const si: Record<string, Object> = obj['structuredIntent'] as Record<string, Object>;
+        const constraints: Record<string, Object> = si['constraints'] as Record<string, Object>;
+        constraints['maxAmount'] = 1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentL1(JSON.stringify(obj));
+        });
+      });
+
+      it('deserialize_fails_whenNullLiteral', 0, () => {
+        // An explicit null inside the payload is neither a value nor an
+        // absence the protocol defines: absent optional fields are omitted,
+        // never spelled null. (The bare document "null" is the one
+        // exception — see deserialize_fails_whenBodyIsNull.)
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const nulled = '{"intentSummary":null,' + serialized.substring(1);
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(nulled);
+        });
+      });
+
+      it('deserialize_fails_whenTrailingContent', 0, () => {
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(serialized + ' {}');
+        });
+      });
+
+      it('deserialize_fails_whenNumberIsNotSafeInteger', 0, () => {
+        // 9007199254740993 (2^53 + 1) silently rounds to 9007199254740992
+        // when held as a JS number: the validators would see a value the
+        // document never spelled, so the parser must reject it outright.
+        // The literal is spliced into the raw text — routing it through a
+        // JS number would round it before the parser ever saw it. A
+        // fraction and an overflowing exponent are rejected the same way.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const unsafe: string =
+          serialized.replace('"timestamp":' + l1.timestamp, '"timestamp":9007199254740993');
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(unsafe);
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1('{"timestamp":1.5,"intentId":"test"}');
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1('{"timestamp":1e999}');
+        });
+      });
+
+      it('deserialize_fails_whenNumberIsNotPlainIntegerSpelling', 0, () => {
+        // Fraction and exponent spellings are rejected even when they
+        // evaluate (or round) to an integer: the parsed value must be
+        // exactly what the bytes spelled.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const splice = (spelling: string): string =>
+          serialized.replace('"timestamp":' + l1.timestamp, '"timestamp":' + spelling);
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(splice(l1.timestamp + '.0'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(splice(l1.timestamp + 'e0'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(splice('2.5e1'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1('{"timestamp":1e-325}');
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1('{"timestamp":1.0000000000000001}');
+        });
+      });
+
+      it('deserialize_fails_whenProtoKeyPresent', 0, () => {
+        // Assigning a "__proto__" key through bracket notation replaces
+        // the target's prototype instead of creating an own property: the
+        // entry would vanish from Object.keys (invisible to the closed
+        // field set) while still leaking into property reads.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1('{"__proto__":' + serialized + '}');
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1('{"__proto__":1,' + serialized.substring(1));
+        });
+      });
+
+      it('deserialize_combinesEscapedSurrogatePair', 0, () => {
+        // A supplementary code point spelled as an escaped surrogate pair
+        // is one character: the two escapes must combine into it.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const escaped: string =
+          serialized.replace('"intentId":"test-intent-001"', '"intentId":"\\ud83d\\ude00"');
+
+        const deserialized = A4pCodec.deserializeIntentL1(escaped);
+
+        expect(deserialized.intentId).assertEqual('😀');
+      });
+
+      it('deserialize_acceptsRawSurrogatePair', 0, () => {
+        // The same code point spelled with raw UTF-16 characters — what
+        // any non-ASCII document carries.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const raw: string =
+          serialized.replace('"intentId":"test-intent-001"', '"intentId":"😀"');
+
+        const deserialized = A4pCodec.deserializeIntentL1(raw);
+
+        expect(deserialized.intentId).assertEqual('😀');
+      });
+
+      it('deserialize_fails_whenSurrogateUnpaired', 0, () => {
+        // A lone surrogate half (escaped or raw) builds a string no strict
+        // UTF-8 encoder accepts: rejected at parse time, not at signing.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const withId = (value: string): string =>
+          serialized.replace('"intentId":"test-intent-001"', '"intentId":"' + value + '"');
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\\ud800'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\\udc00'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\\ud800\\n'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\\ud800\\ud800'));
+        });
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\ud800'));
+        });
+      });
+
+      it('deserialize_readsNegativeZeroAsZero', 0, () => {
+        // "-0" reads as 0: the canonical form spells both zeros "0".
+        // === cannot tell the two zeros apart (the first assertion passes
+        // for -0 too); the reciprocal can — 1/0 is positive, 1/-0 is not.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const negativeZero: string =
+          serialized.replace('"timestamp":' + l1.timestamp, '"timestamp":-0');
+
+        const deserialized = A4pCodec.deserializeIntentL1(negativeZero);
+
+        expect(deserialized.timestamp).assertEqual(0);
+        expect(1 / deserialized.timestamp).assertLarger(0);
+      });
     });
 
     describe('IntentL2', () => {
@@ -241,6 +494,16 @@ export default function a4pCodecTest() {
         const json = A4pCodec.serializeIntentL2(l2);
 
         expect(json.length).assertLarger(0);
+      });
+
+      it('serialize_fails_whenNull', 0, () => {
+        // JSON.parse keeps the runtime value null despite the declared
+        // type; it must fail as invalid data, not render "null".
+        const nullIntent: IntentL2 = JSON.parse('null') as IntentL2;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.serializeIntentL2(nullIntent);
+        });
       });
 
       it('serialize_deterministic', 0, () => {
@@ -371,6 +634,22 @@ export default function a4pCodecTest() {
         expect(deserialized.userIdentity.id).assertEqual(original.userIdentity.id);
         expect(deserialized.sign?.sign).assertEqual(original.sign?.sign);
       });
+
+      it('roundTripsJsonTextInStringFields', 0, () => {
+        // A string field may itself carry JSON text (UserIdentity.
+        // additionalInfo is documented as a JSON string): a null inside
+        // that text is data, not a protocol null. Only a null literal at
+        // a value position is rejected (see
+        // deserialize_fails_whenNullLiteral); string contents are opaque
+        // and round-trip verbatim, inner quotes and all.
+        const original = createL2();
+        original.userIdentity.additionalInfo = '{"tag":null,"note":"a \\"quoted\\" value"}';
+
+        const serialized = A4pCodec.serializeIntentL2(original);
+        const deserialized = A4pCodec.deserializeIntentL2(serialized);
+
+        expect(deserialized.userIdentity.additionalInfo).assertEqual(original.userIdentity.additionalInfo);
+      });
     });
 
     describe('IntentL3', () => {
@@ -380,6 +659,16 @@ export default function a4pCodecTest() {
         const json = A4pCodec.serializeIntentL3(l3);
 
         expect(json.length).assertLarger(0);
+      });
+
+      it('serialize_fails_whenNull', 0, () => {
+        // JSON.parse keeps the runtime value null despite the declared
+        // type; it must fail as invalid data, not render "null".
+        const nullIntent: IntentL3 = JSON.parse('null') as IntentL3;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.serializeIntentL3(nullIntent);
+        });
       });
 
       it('serialize_deterministic', 0, () => {
@@ -479,6 +768,16 @@ export default function a4pCodecTest() {
         const json = A4pCodec.serializeIntentExecutionContext(context);
 
         expect(json.length).assertLarger(0);
+      });
+
+      it('serialize_fails_whenNull', 0, () => {
+        // JSON.parse keeps the runtime value null despite the declared
+        // type; it must fail as invalid data, not render "null".
+        const nullContext: IntentExecutionContext = JSON.parse('null') as IntentExecutionContext;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.serializeIntentExecutionContext(nullContext);
+        });
       });
 
       it('serialize_deterministic', 0, () => {
@@ -603,6 +902,56 @@ export default function a4pCodecTest() {
         });
       });
 
+      it('deserialize_roundTripsRevokedContext', 0, () => {
+        const context = createExecutionContext();
+        A4p.revokeIntent(context, context.activatedTime + 1000);
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(
+          A4pCodec.serializeIntentExecutionContext(context));
+
+        expect(restored.status).assertEqual(IntentExecutionStatus.REVOKED);
+        expect(restored.revokedTime).assertEqual(context.activatedTime + 1000);
+      });
+
+      it('deserialize_fails_whenRevokedTimeMissingOnRevokedContext', 0, () => {
+        // revokedTime is status-bound like the records' finalization
+        // stamps: a REVOKED context without it is corrupted data.
+        const context = createExecutionContext();
+        A4p.revokeIntent(context, context.activatedTime + 1000);
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(
+            JSON.stringify(withoutKey(obj, 'revokedTime')));
+        });
+      });
+
+      it('deserialize_fails_whenRevokedTimeOnActiveContext', 0, () => {
+        const context = createExecutionContext();
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        obj['revokedTime'] = (obj['activatedTime'] as number) + 1000;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('deserialize_fails_whenRevokedTimeBeforeActivatedTime', 0, () => {
+        // A revocation can never predate the activation it revokes; the
+        // violation fails with the code revokeIntent would have returned.
+        const context = createExecutionContext();
+        A4p.revokeIntent(context, context.activatedTime + 1000);
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        obj['revokedTime'] = (obj['activatedTime'] as number) - 1;
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
       it('deserialize_fails_whenExecutionsIsNotAnArray', 0, () => {
         const context = createExecutionContext();
         const serialized = A4pCodec.serializeIntentExecutionContext(context);
@@ -699,6 +1048,19 @@ export default function a4pCodecTest() {
         });
       });
 
+      it('deserialize_fails_whenRecordCarriesUnknownField', 0, () => {
+        const context = createExecutionContext();
+        A4p.createExecution(context, createTestExecution());
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
+        executions[0]['note'] = 'extra';
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
       it('deserialize_fails_whenExecutionInfoMissing', 0, () => {
         const context = createExecutionContext();
         const serialized = A4pCodec.serializeIntentExecutionContext(context);
@@ -729,6 +1091,244 @@ export default function a4pCodecTest() {
         expect(deserialized.authorizedIntent.intentL2.intentL1.intentId)
           .assertEqual(original.authorizedIntent.intentL2.intentL1.intentId);
         expect(deserialized.executionInfo.leftAmount).assertEqual(original.executionInfo.leftAmount);
+      });
+    });
+
+    // Restore-content validation: beyond the structural pass above, the
+    // deserializer replays the reachability rules the lifecycle APIs
+    // enforce (see validateRestoredContext), so a tampered persisted
+    // context fails with the code the offending operation would have
+    // returned. Each test mutates exactly one wire property.
+    describe('IntentExecutionContextRestoreContent', () => {
+      it('restore_fails_whenAuthorizedChainVersionUnsupported', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContext());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireL3Of(obj)['version'] = '0.9';
+
+        expectThrows(A4pErrorCode.A4P_UNSUPPORTED_VERSION, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenContextVersionUnsupported', 0, () => {
+        // The shape pass only checks the version non-blank; the restore
+        // pass must reject a context from a different protocol
+        // generation, as the Java codec's restore does.
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContext());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        obj['version'] = '9.9';
+
+        expectThrows(A4pErrorCode.A4P_UNSUPPORTED_VERSION, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenActivatedTimeAfterValidUntil', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContext());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const validUntil: number = wireConstraintsOf(obj)['validUntil'] as number;
+        obj['activatedTime'] = validUntil + 1;
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_succeeds_whenActivatedTimeIsExactlyValidUntil', 0, () => {
+        // activateIntent admits now == validUntil; a context activated at
+        // that boundary must keep round-tripping instead of expiring.
+        const original = createExecutionContext();
+        const serialized = A4pCodec.serializeIntentExecutionContext(original);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const validUntil: number = wireConstraintsOf(obj)['validUntil'] as number;
+        obj['activatedTime'] = validUntil;
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.activatedTime).assertEqual(validUntil);
+        expect(restored.intentId).assertEqual(original.intentId);
+      });
+
+      it('restore_fails_whenReservedAtBeforeActivatedTime', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireExecutionsOf(obj)[0]['reservedAt'] = (obj['activatedTime'] as number) - 1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenReservedAtBeforeValidFrom', 0, () => {
+        // Push validFrom past a record's reservation instant; activation
+        // before validFrom is legal, so only the record's window check
+        // fires (the activatedTime floor is satisfied).
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const reservedAt: number = wireExecutionsOf(obj)[0]['reservedAt'] as number;
+        wireConstraintsOf(obj)['validFrom'] = reservedAt + 1;
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenReservedAtAfterValidUntil', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const validUntil: number = wireConstraintsOf(obj)['validUntil'] as number;
+        wireExecutionsOf(obj)[0]['reservedAt'] = validUntil + 1;
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenRecordPeriodIndexMismatched', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireExecutionsOf(obj)[0]['periodIndex'] = 1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenExecutionIdDuplicated', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const records: Record<string, Object>[] = wireExecutionsOf(obj);
+        records[1]['executionId'] = records[0]['executionId'];
+
+        expectThrows(A4pErrorCode.A4P_DUPLICATE_ID, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenOrderIdDuplicated', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const records: Record<string, Object>[] = wireExecutionsOf(obj);
+        wireOrderOf(records[1])['orderId'] = wireOrderOf(records[0])['orderId'];
+
+        expectThrows(A4pErrorCode.A4P_DUPLICATE_ID, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenRecordCurrencyMismatches', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireOrderOf(wireExecutionsOf(obj)[0])['currency'] = 'USD';
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_reportsParameterErrorBeforeWindowError', 0, () => {
+        // A currency mismatch reports 1001 even when the record also
+        // violates validFrom, matching the Java ledger order; the
+        // window-only case is covered by
+        // restore_fails_whenReservedAtBeforeValidFrom.
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireOrderOf(wireExecutionsOf(obj)[0])['currency'] = 'USD';
+        const reservedAt: number = wireExecutionsOf(obj)[0]['reservedAt'] as number;
+        wireConstraintsOf(obj)['validFrom'] = reservedAt + 1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenRecordAmountExceedsSingleOrderCap', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireOrderOf(wireExecutionsOf(obj)[0])['amount'] = 100001;
+
+        expectThrows(A4pErrorCode.A4P_SINGLE_ORDER_AMOUNT_EXCEEDED, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenCartQuantityMismatchesTemplate', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const order: Record<string, Object> = wireOrderOf(wireExecutionsOf(obj)[0]);
+        const cartItems: Record<string, Object>[] = order['cartItems'] as Record<string, Object>[];
+        cartItems[0]['quantity'] = (cartItems[0]['quantity'] as number) + 1;
+
+        expectThrows(A4pErrorCode.A4P_CART_MISMATCH, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenLedgerExceedsTotalAmount', 0, () => {
+        // The ledger holds one COMPLETED order of 5000 (the CANCELED one
+        // is excluded); a totalMaxAmount below that is not a cap the
+        // ledger could have been produced under.
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireConstraintsOf(obj)['totalMaxAmount'] = 4999;
+
+        expectThrows(A4pErrorCode.A4P_AMOUNT_EXCEEDED, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenLedgerExceedsExecutionCount', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireConstraintsOf(obj)['maxExecutionCount'] = 1;
+
+        expectThrows(A4pErrorCode.A4P_EXECUTION_COUNT_EXCEEDED, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenLedgerExceedsPeriodExecutionCount', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        wireConstraintsOf(obj)['maxExecutionCountPerPeriod'] = 1;
+
+        expectThrows(A4pErrorCode.A4P_PERIOD_EXECUTION_COUNT_EXCEEDED, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenStatusContradictsLedger', 0, () => {
+        // Two PENDING records leave the ledger unexhausted: a CONSUMED
+        // status is not one completeExecution could have produced.
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        obj['status'] = 'CONSUMED';
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenLeftAmountDisagreesWithLedger', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const info: Record<string, Object> = obj['executionInfo'] as Record<string, Object>;
+        info['leftAmount'] = (info['leftAmount'] as number) - 1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
+      });
+
+      it('restore_fails_whenLeftPeriodCountDisagreesWithLedger', 0, () => {
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContextWithPendingLedger());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const info: Record<string, Object> = obj['executionInfo'] as Record<string, Object>;
+        info['leftPeriodExecutionCount'] = (info['leftPeriodExecutionCount'] as number) - 1;
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+        });
       });
     });
 
@@ -767,8 +1367,8 @@ export default function a4pCodecTest() {
 
         // L1 structuredIntent: action, order template, constraints. The
         // resources key is asserted both positively and negatively: the
-        // wire name (Java-compatible) must never drift back to the old
-        // singular form this SDK once signed.
+        // wire name must never drift back to the old singular form this
+        // SDK once signed.
         expect(j1).assertContain('"action":"AI_PAY"');
         expect(j1).assertContain('"resources":{');
         expect(j1).assertContain('"itemsWhiteList":[');
@@ -822,6 +1422,13 @@ export default function a4pCodecTest() {
         expect(jc).assertContain('"leftPeriodExecutionCount":10');
         expect(jc).assertContain('"leftExecutionCount":10');
         expect(jc).assertContain('"leftAmount":500000');
+        // revokedTime appears exactly when the status is REVOKED: absent on
+        // the ACTIVE form, stamped on the wire by the revoked one.
+        expect(jc.indexOf('"revokedTime"')).assertEqual(-1);
+        const revoked: IntentExecutionContext = A4p.revokeIntent(ctx, now + 4000);
+        const jr: string = A4pCodec.serializeIntentExecutionContext(revoked);
+        expect(jr).assertContain('"status":"REVOKED"');
+        expect(jr).assertContain('"revokedTime":1700000004000');
       });
     });
   });

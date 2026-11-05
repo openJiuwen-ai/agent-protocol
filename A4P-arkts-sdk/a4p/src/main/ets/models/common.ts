@@ -12,6 +12,9 @@
 import { StructuredIntent } from './intent';
 import { UserIdentity, AgentIdentity, ServiceProviderIdentity } from './identity';
 
+/** The A4P Core protocol version this SDK speaks; every intent level it creates is stamped with it. */
+export const PROTOCOL_VERSION: string = '1.0';
+
 /**
  * Request payload for creating a new Level 1 intent.
  */
@@ -44,7 +47,7 @@ export interface IntentIssueContext {
 export interface VerificationResult {
   /** Whether the signature is valid */
   valid: boolean;
-  /** Verification result code (provider-specific numeric code) */
+  /** Protocol result code; zero means success (valid is true exactly when code is zero) */
   code: number;
   /** Human-readable result message */
   message?: string;

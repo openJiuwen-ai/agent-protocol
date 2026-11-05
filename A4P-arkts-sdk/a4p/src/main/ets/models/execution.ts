@@ -23,11 +23,12 @@ export interface Order {
    */
   orderId: string;
   /**
-   * Payment amount in cents; must be a positive integer. Caller-declared:
-   * validated only against the signed amount caps, never reconciled with
-   * the cart — Product carries no price — so binding the amount to the
-   * products' actual prices is the responsibility of the party holding
-   * the authoritative product catalog (see createExecution)
+   * Payment amount in application-defined minor currency units; must be a
+   * positive integer. Caller-declared: validated only against the signed
+   * amount caps, never reconciled with the cart — Product carries no
+   * price — so binding the amount to the products' actual prices is the
+   * responsibility of the party holding the authoritative product
+   * catalog (see createExecution)
    */
   amount: number;
   /** Currency code (e.g., "CNY", "USD") */
@@ -142,6 +143,8 @@ export interface IntentExecutionContext {
    * earlier than it — no execution may predate the context itself
    */
   activatedTime: number;
+  /** Timestamp when the intent was revoked (milliseconds since epoch); present only when status is REVOKED */
+  revokedTime?: number;
   /**
    * List of execution records (append-only ledger; canceled records stay in
    * it). The execution count is derived from the non-canceled records; it is
