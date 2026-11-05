@@ -82,7 +82,10 @@ public class A4pIntentCodec {
      * @return restored object or a protocol failure result
      */
     public A4pResult<IntentL1> deserializeIntentL1(String serialized) {
-        return decode(serialized, IntentL1.class, Validation::intentL1);
+        return decode(serialized, IntentL1.class, value -> {
+            Validation.intentL1(value);
+            Validation.version(value.version());
+        });
     }
 
     /**
@@ -92,7 +95,10 @@ public class A4pIntentCodec {
      * @return restored object or a protocol failure result
      */
     public A4pResult<IntentL2> deserializeIntentL2(String serialized) {
-        return decode(serialized, IntentL2.class, Validation::intentL2);
+        return decode(serialized, IntentL2.class, value -> {
+            Validation.intentL2(value);
+            Validation.versions(value);
+        });
     }
 
     /**
@@ -102,7 +108,10 @@ public class A4pIntentCodec {
      * @return restored object or a protocol failure result
      */
     public A4pResult<IntentL3> deserializeIntentL3(String serialized) {
-        return decode(serialized, IntentL3.class, Validation::intentL3);
+        return decode(serialized, IntentL3.class, value -> {
+            Validation.intentL3(value);
+            Validation.versions(value);
+        });
     }
 
     /**

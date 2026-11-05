@@ -19,6 +19,24 @@ class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
+    void deserializationRequiresSupportedVersionAtEveryLayer() throws Exception {
+        IntentL3 intent = authorized(constraints());
+        var l1 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL1(intent.intentL2().intentL1()));
+        l1.put("version", "2.0");
+        fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentL1(l1.toString()));
+        for (String path : List.of("", "/intentL1")) {
+            var l2 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL2(intent.intentL2()));
+            ((ObjectNode) l2.at(path)).put("version", "2.0");
+            fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentL2(l2.toString()));
+        }
+        for (String path : List.of("", "/intentL2", "/intentL2/intentL1")) {
+            var l3 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL3(intent));
+            ((ObjectNode) l3.at(path)).put("version", "2.0");
+            fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentL3(l3.toString()));
+        }
+    }
+
+    @Test
     void jcsPreservesNullsAndUsesEcmascriptNumbers() {
         String input = "{\"z\":null,\"a\":[null,{\"b\":null}]}";
         assertEquals("{\"a\":[null,{\"b\":null}],\"z\":null}",
