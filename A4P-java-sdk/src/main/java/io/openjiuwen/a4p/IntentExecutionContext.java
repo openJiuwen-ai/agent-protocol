@@ -20,6 +20,8 @@ public final class IntentExecutionContext {
     private final IntentL3 authorizedIntent;
     /** Activation instant in Unix epoch milliseconds. */
     private final long activatedTime;
+    /** Revocation instant in Unix epoch milliseconds, or null before revocation. */
+    private Long revokedTime;
     /** Decoded payment resource whitelist. */
     private final ShoppingItems resources;
     /** Decoded payment constraints. */
@@ -46,7 +48,7 @@ public final class IntentExecutionContext {
      * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
      */
     IntentExecutionContext(IntentL3 authorizedIntent, long now) {
-        this(now, authorizedIntent);
+        this(now, authorizedIntent, null);
         Accounting.recompute(this, now);
     }
 
@@ -59,10 +61,11 @@ public final class IntentExecutionContext {
      * @param ledger execution records paired with decoded orders
      * @param period accounting period index, or null when periodic limits are absent
      * @param activatedTime activation instant in Unix epoch milliseconds
+     * @param revokedTime revocation instant, or null when not revoked
      */
     IntentExecutionContext(IntentL3 authorizedIntent, IntentExecutionStatus status, List<Entry> ledger,
-                           Long period, long activatedTime) {
-        this(activatedTime, authorizedIntent);
+                           Long period, long activatedTime, Long revokedTime) {
+        this(activatedTime, authorizedIntent, revokedTime);
         this.status = status;
         this.ledger.addAll(ledger);
         this.executionInfo = Accounting.executionInfo(this, period);
@@ -74,13 +77,20 @@ public final class IntentExecutionContext {
      * @param activatedTime activation instant in Unix epoch milliseconds
      * @param authorizedIntent authorized L3 snapshot
      */
-    private IntentExecutionContext(long activatedTime, IntentL3 authorizedIntent) {
+    private IntentExecutionContext(long activatedTime, IntentL3 authorizedIntent, Long revokedTime) {
+        this.revokedTime = revokedTime;
         this.activatedTime = activatedTime;
         this.authorizedIntent = authorizedIntent;
         StructuredIntent intent = authorizedIntent.intentL2().intentL1().structuredIntent();
         this.resources = PaymentProfile.resources(intent);
         this.constraints = PaymentProfile.constraints(intent);
     }
+
+    /** Returns the revocation instant, or null before revocation. */
+    public synchronized Long revokedTime() { return revokedTime; }
+
+    /** Updates the revocation instant; callers must hold the context lock. */
+    void revokedTime(Long time) { this.revokedTime = time; }
 
     /**
      * Returns the activation instant in epoch milliseconds, preserved across serialization.

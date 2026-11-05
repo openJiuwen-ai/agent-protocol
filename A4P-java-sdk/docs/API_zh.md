@@ -50,8 +50,8 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 代码中储存的时间戳分为两种，一种是仅作为审计用记录的时间戳，另一种是用于业务场景的时间戳。其中作为审计用的时间戳不会进行时间先后顺序的合法性校验。
 
 下面的时间戳仅作为审计使用:
-1. L1/L2/L3.timestamp
-2. Context.activatedTime
+1. L1/L2/L3 `timestamp`
+2. Context `activatedTime`/`revokedTime`
 
 ## 函数接口
 
@@ -88,6 +88,7 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 | `A4pResult` | `String toString()` | 返回不包含业务数据的结果摘要。 |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | 构造结果；成功要求数据非空且结果码为 0，失败要求数据为空且结果码非 0。 |
 | `IntentExecutionContext` | `long activatedTime()` | 读取激活时的毫秒时间戳，序列化与恢复时保留。 |
+| `IntentExecutionContext` | `Long revokedTime()` | 读取撤销时的 Unix 毫秒时间戳，未撤销时返回 `null`。 |
 | `IntentExecutionContext` | `String version()` | 读取协议版本。 |
 | `IntentExecutionContext` | `String intentId()` | 读取关联意图标识。 |
 | `IntentExecutionContext` | `IntentL3 authorizedIntent()` | 读取已授权 L3 快照。 |
@@ -199,7 +200,7 @@ if (!restored.success()) {
 IntentExecutionContext restoredContext = restored.data();
 ```
 
-同一个编解码器支持 L1、L2、L3 的序列化与恢复。Context JSON 包含 `version`、`intentId`、`authorizedIntent`、`activatedTime`、`status`、`executionInfo`、`executions`。序列化在 Context 锁内取得一致快照。解析拒绝重复键和尾随 token；结构校验失败可能返回具体协议错误，而非统一返回 5002。Intent 反序列化检查结构；Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
+同一个编解码器支持 L1、L2、L3 的序列化与恢复。序列化在 Context 锁内取得一致快照。仅当 `status` 为 `REVOKED` 时，序列化才输出 `revokedTime`。恢复时，`REVOKED` 状态必须提供撤销时间戳，其他状态允许省略该字段或将其设为 JSON `null`。解析拒绝重复键和尾随 token；结构校验失败可能返回具体协议错误，而非统一返回 5002。Intent 反序列化检查结构；Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。缺少必填 `activatedTime` 的旧 Context 无法直接恢复；应使用应用控制的可信迁移，或启动新的授权生命周期，同时避免重置已有授权用量。
 

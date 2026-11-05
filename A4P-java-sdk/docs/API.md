@@ -52,7 +52,7 @@ Stored timestamps fall into two categories: audit timestamps and timestamps used
 The following timestamps are used only for auditing:
 
 1. L1/L2/L3 `timestamp`.
-2. Context `activatedTime`.
+2. Context `activatedTime`/`revokedTime`.
 
 ## Function reference
 
@@ -89,6 +89,7 @@ The following timestamps are used only for auditing:
 | `A4pResult` | `String toString()` | Return a result summary without business payloads. |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | Construct a result; success requires non-null data and code 0, failure requires null data and a nonzero code. |
 | `IntentExecutionContext` | `long activatedTime()` | Read the activation timestamp in epoch milliseconds, preserved across serialization. |
+| `IntentExecutionContext` | `Long revokedTime()` | Read the revocation timestamp in Unix epoch milliseconds. Returns `null` before revocation. |
 | `IntentExecutionContext` | `String version()` | Read the protocol version. |
 | `IntentExecutionContext` | `String intentId()` | Read the associated intent identifier. |
 | `IntentExecutionContext` | `IntentL3 authorizedIntent()` | Read the authorized L3 snapshot. |
@@ -200,7 +201,7 @@ if (!restored.success()) {
 IntentExecutionContext restoredContext = restored.data();
 ```
 
-The same codec supports L1, L2 and L3 serialization and restoration. Context JSON contains `version`, `intentId`, `authorizedIntent`, `activatedTime`, `status`, `executionInfo` and `executions`. Serialization takes a consistent context snapshot under its lock. Parsing rejects duplicate keys and trailing tokens; structural validation failures may return specific protocol errors rather than only 5002. Intent deserializers check structure; context restoration additionally checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
+The same codec supports L1, L2 and L3 serialization and restoration. Serialization takes a consistent context snapshot under its lock. Serialization includes `revokedTime` only when `status` is `REVOKED`. On restoration, `REVOKED` requires a timestamp, and other states accept an omitted field or JSON `null`. Parsing rejects duplicate keys and trailing tokens; structural validation failures may return specific protocol errors rather than only 5002. Intent deserializers check structure; context restoration additionally checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
 
