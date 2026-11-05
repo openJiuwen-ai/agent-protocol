@@ -236,6 +236,7 @@ public final class A4p {
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
                 Validation.timeAtOrAfter(now, context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
+                context.revokedTime(now);
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
             }

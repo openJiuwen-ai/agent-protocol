@@ -18,6 +18,24 @@ class A4pTest {
     private static final Product OTHER = new Product(new SellerInfo("seller"), new SpuSkuInfo("spu", "other"));
 
     @Test
+    void revocationTimeSurvivesSerialization() {
+        IntentExecutionContext context = context();
+        assertNull(context.revokedTime());
+        IntentExecutionContext original = context;
+        context = ok(A4p.revokeIntent(context, NOW + 1));
+        assertSame(original, context);
+        assertEquals(NOW + 1, original.revokedTime());
+        assertEquals(IntentExecutionStatus.REVOKED, original.status());
+        A4pIntentCodec codec = new A4pIntentCodec();
+        assertEquals(NOW + 1, ok(codec.deserializeIntentExecutionContext(
+                codec.serializeIntentExecutionContext(context))).revokedTime());
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+                codec.serializeIntentExecutionContext(context).replace(
+                        "\"revokedTime\":" + (NOW + 1), "\"revokedTime\":null")));
+        assertEquals(NOW + 1, context.revokedTime());
+    }
+
+    @Test
     void futureActivationCannotBeRevokedAndInvalidPersistedTimesAreRejected() {
         long future = System.currentTimeMillis() + 60_000;
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
@@ -280,6 +298,20 @@ class A4pTest {
     }
 
     @Test
+    void contextMutatorsAreNotPublic() throws Exception {
+        for (String name : List.of("revokedTime", "status", "executionInfo", "ledger")) {
+            for (java.lang.reflect.Method method : IntentExecutionContext.class.getDeclaredMethods()) {
+                if (method.getName().equals(name) && (method.getParameterCount() > 0 || name.equals("ledger"))) {
+                    assertFalse(java.lang.reflect.Modifier.isPublic(method.getModifiers()));
+                    assertFalse(java.lang.reflect.Modifier.isProtected(method.getModifiers()));
+                }
+            }
+        }
+        assertFalse(java.lang.reflect.Modifier.isFinal(
+                IntentExecutionContext.class.getDeclaredField("revokedTime").getModifiers()));
+    }
+
+    @Test
     void snapshotsCannotBeMutatedByCallers() {
         Map<String, Object> nested = new HashMap<>(Map.of("name", "original"));
         SigningEnv environment = new SigningEnv(Map.of("nested", nested), Map.of());
@@ -296,8 +328,13 @@ class A4pTest {
         StructuredIntent built = new StructuredIntent(IntentActionType.AI_PAY, raw, structured.constraints());
         raw.removeAll();
         assertEquals(1, PaymentProfile.resources(built).itemsWhiteList().size());
+        ((ObjectNode) structured.constraints()).removeAll();
+        assertEquals(1000L, PaymentProfile.constraints(structured).totalMaxAmount());
+        ok(A4p.createExecution(context, execution("defensive-record", 1, 1), NOW));
+        ((ObjectNode) context.executions().get(0).executionContent()).removeAll();
+        assertFalse(context.executions().get(0).executionContent().isEmpty());
         ((ObjectNode) context.executionInfo()).put("leftAmount", 0);
-        assertEquals(1000, info(context).leftAmount());
+        assertEquals(999, info(context).leftAmount());
     }
 
     @Test
@@ -599,3 +636,4 @@ class A4pTest {
         assertInstanceOf(IllegalStateException.class, defect.getCause());
     }
 }
+

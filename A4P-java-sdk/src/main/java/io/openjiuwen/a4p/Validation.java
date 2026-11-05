@@ -58,7 +58,7 @@ final class Validation {
      * Requires a non-null protocol value.
      * @param value value to validate or normalize
      */
-    static void present(Object value) { require(value != null, A4P_INVALID_PARAMETER); }
+    static void present(Object value) { require(value != null, A4P_INVALID_PARAMETER, "Required value must not be null"); }
     /**
      * Requires a string that is nonblank under JavaScript trim semantics.
      * @param value value to validate or normalize

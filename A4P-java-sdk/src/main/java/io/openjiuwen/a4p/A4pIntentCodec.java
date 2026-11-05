@@ -29,7 +29,7 @@ public class A4pIntentCodec {
      * @param activatedTime activation instant in Unix epoch milliseconds
      */
     record ContextJson(String version, String intentId, IntentL3 authorizedIntent, IntentExecutionStatus status,
-                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime) {}
+                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime, Long revokedTime) {}
 
     /**
      * Represents a persisted execution record; boxed reservedAt allows missing timestamps to be rejected.
@@ -121,6 +121,9 @@ public class A4pIntentCodec {
             fields.put("intentId", intentExecutionContext.intentId());
             fields.put("authorizedIntent", intentExecutionContext.authorizedIntent());
             fields.put("activatedTime", intentExecutionContext.activatedTime());
+            if (intentExecutionContext.revokedTime() != null) {
+                fields.put("revokedTime", intentExecutionContext.revokedTime());
+            }
             fields.put("status", intentExecutionContext.status());
             fields.put("executionInfo", intentExecutionContext.executionInfo());
             fields.put("executions", intentExecutionContext.executions());
@@ -156,14 +159,14 @@ public class A4pIntentCodec {
         IntentL1 intent = authorized.intentL2().intentL1();
         Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER, "Context intent ID does not match the authorized intent ID");
         Validation.integer(wire.activatedTime(), false);
-        Validation.require(wire.activatedTime() >= authorized.timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the authorized intent timestamp");
+        Validation.timeAtOrAfter(wire.activatedTime(), authorized.timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the authorized intent timestamp");
         Validation.present(wire.status());
         Validation.present(wire.executions());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
         for (RecordJson record : wire.executions()) {
             Validation.present(record);
             Validation.integer(record.reservedAt(), false);
-            Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the activation time");
+            Validation.timeAtOrAfter(record.reservedAt(), wire.activatedTime(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the activation time");
             Order order = Validation.execution(new Execution(record.action(), record.executionId(),
                     record.executionContent()));
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),
@@ -171,7 +174,13 @@ public class A4pIntentCodec {
                     record.completedAt(), record.canceledAt()), order));
         }
         Long period = period(wire.executionInfo(), PaymentProfile.constraints(intent.structuredIntent()));
-        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime());
+        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime(), wire.revokedTime());
+        if (wire.status() == IntentExecutionStatus.REVOKED) {
+            Validation.integer(wire.revokedTime(), false);
+            Validation.timeAtOrAfter(wire.revokedTime(), wire.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Revocation time is earlier than the activation time");
+        } else {
+            Validation.require(wire.revokedTime() == null, A4P_INVALID_PARAMETER, "Revocation time must be absent unless the intent is revoked");
+        }
         Validation.ledger(context);
         // executionInfo is derived state, so it must match what the restored ledger yields.
         Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())), A4P_INVALID_PARAMETER, "Serialized execution info does not match the restored ledger");
