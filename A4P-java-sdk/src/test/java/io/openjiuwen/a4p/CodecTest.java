@@ -196,7 +196,7 @@ class CodecTest {
     void executionContextKeepsTerminalStatusAndOmitsInapplicableFigures() {
         PaymentConstraints unbounded = new PaymentConstraints(null, 1000L, "CNY", 0L, 100_000L, null, null, null, null);
         IntentExecutionContext context = ok(A4p.activateIntent(authorized(unbounded), VERIFIER, NOW));
-        ok(A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
         String json = codec.serializeIntentExecutionContext(context);
         assertTrue(json.contains("\"executionInfo\":{\"leftAmount\":1000},\"executions\":[]"));
         IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(json));

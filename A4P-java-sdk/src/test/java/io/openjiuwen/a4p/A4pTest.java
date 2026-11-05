@@ -23,7 +23,7 @@ class A4pTest {
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
                 future + 60_000, null, null, null, null);
         IntentExecutionContext futureContext = ok(A4p.activateIntent(authorized(limits), VERIFIER, future));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(futureContext));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(futureContext, NOW));
         assertEquals(IntentExecutionStatus.ACTIVE, futureContext.status());
         A4pIntentCodec codec = new A4pIntentCodec();
         String json = codec.serializeIntentExecutionContext(context());
@@ -116,8 +116,8 @@ class A4pTest {
         IntentExecutionContext context = context();
         ok(A4p.createExecution(context, execution("one", 100, 1), NOW));
         ok(A4p.createExecution(context, execution("two", 100, 1), NOW));
-        ok(A4p.revokeIntent(context));
-        fails(A4P_INVALID_STATUS, A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
+        fails(A4P_INVALID_STATUS, A4p.revokeIntent(context, NOW));
         fails(A4P_INVALID_STATUS, A4p.createExecution(context, execution("three", 100, 1), NOW));
         ok(A4p.completeExecution(context, "one", NOW));
         ok(A4p.cancelExecution(context, "two", NOW));
@@ -148,7 +148,7 @@ class A4pTest {
         for (int index = 0; index < 3; index++) {
             ok(A4p.createExecution(revoked, execution("r-" + index, 100, 1), NOW + index * 10_000));
         }
-        ok(A4p.revokeIntent(revoked));
+        ok(A4p.revokeIntent(revoked, NOW));
         for (int index = 0; index < 3; index++) {
             ok(A4p.completeExecution(revoked, "r-" + index, NOW + 30_000));
         }
@@ -560,7 +560,7 @@ class A4pTest {
         Execution foreign = PaymentProfile.execution("first",
                 new Order("foreign", 200_000L, "USD", List.of(new CartItem(PRODUCT, 1L)), NOW));
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, foreign, NOW));
-        ok(A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, foreign, NOW));
         fails(A4P_INVALID_STATUS, A4p.createExecution(context, execution("first", 100, 1), NOW));
         IntentExecutionContext expiring = context();
