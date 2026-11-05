@@ -128,7 +128,7 @@ public class A4pIntentCodec {
             fields.put("executionInfo", intentExecutionContext.executionInfo());
             fields.put("executions", intentExecutionContext.executions());
         }
-        return CanonicalJson.stringify(fields);
+        return CanonicalJson.stringify(toJsonNode(fields));
     }
 
     // The user signature is not re-verified; the stored L3 is checked like activateIntent's input otherwise.
@@ -212,7 +212,38 @@ public class A4pIntentCodec {
      */
     private static String serialize(Object intent) {
         Validation.present(intent);
-        return CanonicalJson.stringify(intent);
+        return CanonicalJson.stringify(toJsonNode(intent));
+    }
+
+    /** Applies wire mapping and removes only the outer signature before JCS encoding. */
+    static byte[] toSignableBytes(Object intent) {
+        JsonNode node = toJsonNode(intent);
+        if (!node.isObject()) { throw new A4pException(A4P_SERIALIZE_FAIL); }
+        ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("sign");
+        return CanonicalJson.encodeUtf8(CanonicalJson.stringify(node));
+    }
+
+    /** Converts protocol values to JSON, omitting null object fields recursively. */
+    static JsonNode toJsonNode(Object value) {
+        return omitNullFields(CanonicalJson.MAPPER.valueToTree(value));
+    }
+
+    static JsonNode omitNullFields(JsonNode node) {
+        if (node.isObject()) {
+            var result = CanonicalJson.MAPPER.createObjectNode();
+            node.properties().forEach(entry -> {
+                if (!entry.getValue().isNull()) {
+                    result.set(entry.getKey(), omitNullFields(entry.getValue()));
+                }
+            });
+            return result;
+        }
+        if (node.isArray()) {
+            var result = CanonicalJson.MAPPER.createArrayNode();
+            node.forEach(item -> result.add(omitNullFields(item)));
+            return result;
+        }
+        return node.deepCopy();
     }
 
     /**
@@ -240,7 +271,7 @@ public class A4pIntentCodec {
      */
     private static <Value> Value parse(String json, Class<Value> type) {
         Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
-        Object parsed = CanonicalJson.parse(json);
+        Object parsed = omitNullFields(CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json)));
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {

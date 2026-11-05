@@ -19,6 +19,23 @@ class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
+    void jcsPreservesNullsAndUsesEcmascriptNumbers() {
+        String input = "{\"z\":null,\"a\":[null,{\"b\":null}]}";
+        assertEquals("{\"a\":[null,{\"b\":null}],\"z\":null}",
+                CanonicalJson.stringify(CanonicalJson.parse(input)));
+        assertEquals("{\"a\":[null,{}]}", CanonicalJson.stringify(
+                A4pIntentCodec.toJsonNode(CanonicalJson.parse(input))));
+        assertEquals("[333333333.3333333,1e+30,4.5,0.002,1e-27]",
+                CanonicalJson.stringify(CanonicalJson.parse(
+                        "[333333333.33333329,1E30,4.50,2e-3,1e-27]")));
+        assertEquals("0", CanonicalJson.stringify(-0.0));
+        assertEquals("null", CanonicalJson.stringify(CanonicalJson.parse("null")));
+        assertEquals("9007199254740992", CanonicalJson.stringify(9007199254740992L));
+        thrown(A4P_DESERIALIZE_FAIL, () -> CanonicalJson.parse("1e400"));
+        thrown(A4P_DESERIALIZE_FAIL, () -> CanonicalJson.parse("\"" + (char) 0xd800 + "\""));
+    }
+
+    @Test
     void canonicalVectorsMatchArkts() {
         assertEquals("{\"a\":2,\"b\":1}", CanonicalJson.stringify(Map.of("b", 1, "a", 2)));
         assertEquals("[3,1,2]", CanonicalJson.stringify(List.of(3, 1, 2)));
@@ -43,11 +60,11 @@ class CodecTest {
 
     @Test
     void rejectsNonCanonicalNumbersCyclesAndObjects() {
-        for (Number number : List.of(1.5, Double.NaN, Double.POSITIVE_INFINITY, 9_007_199_254_740_992L)) {
+        for (Number number : List.of(Double.NaN, Double.POSITIVE_INFINITY)) {
             thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(number));
         }
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(new Object()));
-        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(JsonNodeFactory.instance.numberNode(1.5)));
+        assertEquals("1.5", CanonicalJson.stringify(JsonNodeFactory.instance.numberNode(1.5)));
         List<Object> cycle = new ArrayList<>();
         cycle.add(cycle);
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(cycle));
@@ -61,9 +78,9 @@ class CodecTest {
         Map<String, Object> value = Map.of("sign", Map.of("alg", "RSA3072", "sign", "outer"),
                 "nested", Map.of("sign", "inner"));
         assertEquals("{\"nested\":{\"sign\":\"inner\"}}",
-                new String(CanonicalJson.toSignableBytes(value), StandardCharsets.UTF_8));
+                new String(A4pIntentCodec.toSignableBytes(value), StandardCharsets.UTF_8));
         IntentL3 intent = authorized(constraints());
-        assertTrue(new String(CanonicalJson.toSignableBytes(intent), StandardCharsets.UTF_8)
+        assertTrue(new String(A4pIntentCodec.toSignableBytes(intent), StandardCharsets.UTF_8)
                 .contains(intent.intentL2().sign().sign()));
     }
 
@@ -72,8 +89,8 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         IntentL3 relabeled = new IntentL3(intent.version(), intent.intentL2(), intent.signingEnv(), intent.timestamp(),
                 new SignatureInfo(AlgorithmType.RSA3072, "other-key", intent.sign().sign()));
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent), CanonicalJson.toSignableBytes(relabeled));
-        String signed = new String(CanonicalJson.toSignableBytes(intent), StandardCharsets.UTF_8);
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent), A4pIntentCodec.toSignableBytes(relabeled));
+        String signed = new String(A4pIntentCodec.toSignableBytes(intent), StandardCharsets.UTF_8);
         assertTrue(signed.contains("\"keyIdentifier\":\"key\""));
     }
 
@@ -117,7 +134,7 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         IntentL3 decoded = ok(codec.deserializeIntentL3(codec.serializeIntentL3(intent)));
         assertEquals(intent, decoded);
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent), CanonicalJson.toSignableBytes(decoded));
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent), A4pIntentCodec.toSignableBytes(decoded));
         assertEquals(intent.intentL2(), ok(codec.deserializeIntentL2(codec.serializeIntentL2(intent.intentL2()))));
         assertEquals(intent.intentL2().intentL1(), ok(codec.deserializeIntentL1(
                 codec.serializeIntentL1(intent.intentL2().intentL1()))));
@@ -146,8 +163,6 @@ class CodecTest {
                 json.replace("\"resources\"", "\"resource\""),
                 json.replace("\"totalMaxAmount\":1000", "\"totalMaxAmount\":1000.5"),
                 json.replace("\"totalMaxAmount\":1000", "\"totalMaxAmount\":null"),
-                // An explicit null on an optional field is rejected rather than read as "absent".
-                json.replace("\"singleOrderMaxAmount\":500", "\"singleOrderMaxAmount\":null"),
                 json.replace("\"quantity\":1", "\"quantity\":1,\"extra\":true"));
         for (String input : tampered) {
             assertNotEquals(json, input);
@@ -205,7 +220,7 @@ class CodecTest {
         // Without a period constraint there is no current period.
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":0")));
-        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":null")));
     }
 
@@ -286,3 +301,4 @@ class CodecTest {
                 consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\",\"revokedTime\":20000"))).status());
     }
 }
+

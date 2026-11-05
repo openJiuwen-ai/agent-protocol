@@ -11,7 +11,7 @@ import static io.openjiuwen.a4p.A4pErrorCode.*;
  * Constructs and decodes the AI_PAY payloads of the action-selected protocol union.
  * Resources contain ShoppingItems, constraints contain PaymentConstraints, and execution content contains Order.
  * These helpers do not replace the validation performed by lifecycle operations.
- * Missing optional fields are omitted; explicit JSON null values are rejected when decoding payment payloads.
+ * Null object fields are treated as absent when encoding and decoding payment payloads.
  * @see Models
  */
 public final class PaymentProfile {
@@ -111,33 +111,21 @@ public final class PaymentProfile {
         return value == null ? null : CanonicalJson.freezeNode(PAYLOAD_MAPPER.valueToTree(value));
     }
 
-    // Explicit nulls are rejected like the ArkTS validators do; absent fields are the only way to omit a value.
+    // Null object fields have the same meaning as absent fields.
     /**
-     * Decodes a payment payload, rejecting explicit JSON null values and incompatible field types.
+     * Decodes a payment payload, treating null object fields as absent and rejecting incompatible field types.
      * @param <Value> decoded or copied value type
      * @param node JSON tree to inspect or decode
      * @param type target decoded value type
      * @return decoded or parsed value
      */
     private static <Value> Value parse(JsonNode node, Class<Value> type) {
-        Validation.require(node != null && !containsNull(node), A4P_INVALID_PARAMETER, "Payment payload must not be null or contain null fields");
+        Validation.require(node != null && !node.isNull(), A4P_INVALID_PARAMETER, "Payment payload must not be null");
         try {
-            return CanonicalJson.MAPPER.treeToValue(node, type);
+            return CanonicalJson.MAPPER.treeToValue(A4pIntentCodec.omitNullFields(node), type);
         } catch (Exception error) {
             throw new A4pException(A4P_INVALID_PARAMETER);
         }
     }
 
-    /**
-     * Checks recursively whether a JSON payload contains an explicit null value.
-     * @param node JSON tree to inspect or decode
-     * @return true if any node is an explicit JSON null
-     */
-    private static boolean containsNull(JsonNode node) {
-        if (node.isNull()) { return true; }
-        for (JsonNode child : node) {
-            if (containsNull(child)) { return true; }
-        }
-        return false;
-    }
 }
