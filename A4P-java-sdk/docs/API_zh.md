@@ -229,6 +229,10 @@ IntentExecutionContext restoredContext = restored.data();
 1. 所有 Intent 和 Context 结构必须通过 SDK 接口创建或恢复，禁止自行组装，否则可能产生未定义行为。请求、身份、环境与订单等输入模型可按下文构造。
 2. 必须按生命周期顺序调用：createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution 或 cancelExecution；可撤销 ACTIVE Context。
 3. 同一个 Intent 的同一生命周期步骤、同一个 Context 的激活/撤销步骤以及同一执行的预留/终结步骤不得重复调用。一个 ACTIVE Context 可处理多个不同执行；只读查询与序列化可以重复。
-4. activateIntent 及其他返回 Context 的接口返回后必须持久化 Context。createExecution 失败时也可能把状态改为 EXPIRED，仍须持久化当前 Context。持久化不是 SDK 自动完成的。
+4. activateIntent 及其他返回 Context 的接口返回的 Context 对象需要被持久化储存。即使 createExecution 执行失败，也可能把状态改为 EXPIRED，此时仍须持久化当前 Context。持久化不是 SDK 自动完成的。
 5. SDK 不负责持久化 Context 的防篡改或完整性验证；需要该能力时由调用方自行校验。反序列化中的格式检查不代表安全完整性校验。
 6. 序列化 Context 只能用于本地持久化，不应作为消息通过网络传输。
+7. 授权阶段（Intent 相关接口）不会校验 L1/L2/L3 Intent 的先后顺序，只作为审计使用
+8. 签名/验签接口的实现需要确保其符合规范
+9. 调用方需要校验 Intent/Context 的幂等
+10. 防止并发调用接口
