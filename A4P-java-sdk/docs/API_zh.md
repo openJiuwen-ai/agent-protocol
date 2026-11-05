@@ -35,7 +35,7 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 ## 时间戳规则
 
-所有时间戳和显式 `now` 参数均为 Unix epoch 毫秒。省略 `now` 的重载使用 `System.currentTimeMillis()`；显式时间必须来自可信时钟。协议数值为 ±9007199254740991 范围内的整数；时间戳非负，金额与数量为正整数。金额使用应用约定的货币最小单位。
+所有时间戳和显式 `now` 参数均为 Unix epoch 毫秒。生命周期操作必须显式传入 `now`；显式时间必须来自可信时钟。协议数值为 ±9007199254740991 范围内的整数；时间戳非负，金额与数量为正整数。金额使用应用约定的货币最小单位。
 
 | 操作 | 时间要求 |
 | --- | --- |
@@ -52,22 +52,14 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 | 类型 | 签名 | 说明 |
 | --- | --- | --- |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）。 |
 | `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）。 |
-| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。验签前要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L1.timestamp。 |
 | `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。验签前要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L1.timestamp。 |
-| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。省略 `now` 时使用系统时间。 |
 | `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier)` | 要求 `L2.timestamp <= now <= validUntil`，再验证 L3 用户签名并创建 ACTIVE Context，记录 `activatedTime = now`。过早返回 `A4P_INVALID_PARAMETER`，过期返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L3.timestamp。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | 要求 `L2.timestamp <= now <= validUntil`，再验证 L3 用户签名并创建 ACTIVE Context，记录 `activatedTime = now`。过早返回 `A4P_INVALID_PARAMETER`，过期返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L3.timestamp。 |
 | `A4p` | `static A4pResult<VerificationResult> verifyIntentAuthenticity(IntentL3 intent, SignatureVerifier issuerVerifier)` | 验证意图链结构、版本和 L2 签发方签名，返回验证结果；不验证用户签名。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context)` | 将 ACTIVE Context 撤销为 REVOKED；已有 PENDING Execution仍可完成或取消。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now)` | 将 ACTIVE Context 撤销为 REVOKED；已有 PENDING Execution仍可完成或取消。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution)` | 校验有效期、状态、唯一 ID、订单及额度，追加 PENDING 预留并刷新额度。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution, long now)` | 校验有效期、状态、唯一 ID、订单及额度，追加 PENDING 预留并刷新额度。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context, String executionId)` | 完成指定 PENDING Execution，刷新当前周期 executionInfo；额度耗尽且无待处理Execution时变为 CONSUMED。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context, String executionId, long now)` | 完成指定 PENDING Execution，刷新当前周期 executionInfo；额度耗尽且无待处理Execution时变为 CONSUMED。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context, String executionId)` | 取消指定 PENDING Execution，释放其占用额度并刷新信息；账本记录保留。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context, String executionId, long now)` | 取消指定 PENDING Execution，释放其占用额度并刷新信息；账本记录保留。 |
 | `A4pErrorCode` | `int code()` | 读取结果码或异常对应的错误码。 |
 | `A4pErrorCode` | `String message()` | 读取诊断说明（SDK 生成的结果使用固定英文消息）。 |

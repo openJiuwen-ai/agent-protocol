@@ -14,7 +14,7 @@ import static io.openjiuwen.a4p.Validation.require;
  * Applications must persist returned contexts, including a failed reservation that marks a context EXPIRED,
  * and serialize updates to each intent in their database transaction.
  * All timestamps are Unix epoch milliseconds within the JavaScript safe integer range.
- * Overloads without a clock use System.currentTimeMillis().
+ * Lifecycle operations require an explicit now argument.
  * Protocol failures are returned as A4pResult; unexpected SDK defects may throw A4pException.
  * @see A4pIntentCodec
  */
@@ -26,19 +26,6 @@ public final class A4p {
      * Prevents instantiation of this utility class.
      */
     private A4p() {}
-
-    /**
-     * Validates a creation request, requires now at or before validUntil, and signs L1 with the agent key.
-     * Generates a UUID when intentId is omitted. The agent must filter sensitive conversation data
-     * and enforce conversation length limits before calling this method.
-     * Uses the system clock.
-     * @param request creation request including the conversation, summary and structured intent
-     * @param agentSigner agent signing callback
-     * @return signed L1 or a validation/signing failure
-     */
-    public static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner) {
-        return createIntent(request, agentSigner, System.currentTimeMillis());
-    }
 
     /**
      * Validates a creation request, requires now at or before validUntil, and signs L1 with the agent key.
@@ -62,21 +49,6 @@ public final class A4p {
             return new IntentL1(unsigned.version(), intentId, unsigned.intentConversation(), unsigned.intentSummary(),
                     unsigned.structuredIntent(), now, sign(agentSigner, unsigned));
         });
-    }
-
-    /**
-     * Validates L1 and its agent signature, binds trusted identities, and signs L2 with the intent center key.
-     * Requires now at or before validUntil; does not compare now with L1.timestamp.
-     * Uses the system clock.
-     * @param intent protocol intent to process
-     * @param agentVerifier verifier for the agent signature
-     * @param context trusted identities bound into L2
-     * @param serverSigner intent center signing callback
-     * @return signed L2 or a validation/verification/signing failure
-     */
-    public static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier,
-                                                 IntentIssueContext context, Signer serverSigner) {
-        return issueIntent(intent, agentVerifier, context, serverSigner, System.currentTimeMillis());
     }
 
     /**
@@ -111,22 +83,6 @@ public final class A4p {
      * Validates L2 and L1 versions, verifies the intent center signature, and user-signs L3 with the signing environment.
      * Does not compare now with L2.timestamp or validUntil.
      * Signing before validFrom is allowed; reservations before validFrom are rejected.
-     * Uses the system clock.
-     * @param intent protocol intent to process
-     * @param serverVerifier verifier for the intent center signature
-     * @param environment device and application signing environment
-     * @param userSigner user-device signing callback
-     * @return user-signed L3 or a protocol failure
-     */
-    public static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier,
-                                                SigningEnv environment, Signer userSigner) {
-        return signIntent(intent, serverVerifier, environment, userSigner, System.currentTimeMillis());
-    }
-
-    /**
-     * Validates L2 and L1 versions, verifies the intent center signature, and user-signs L3 with the signing environment.
-     * Does not compare now with L2.timestamp or validUntil.
-     * Signing before validFrom is allowed; reservations before validFrom are rejected.
      * Uses the supplied evaluation instant.
      * @param intent protocol intent to process
      * @param serverVerifier verifier for the intent center signature
@@ -147,19 +103,6 @@ public final class A4p {
             IntentL3 unsigned = new IntentL3(PROTOCOL_VERSION, intent, environment, now, null);
             return new IntentL3(PROTOCOL_VERSION, intent, environment, now, sign(userSigner, unsigned));
         });
-    }
-
-    /**
-     * Validates the L3 chain and user signature and creates an ACTIVE context with its activation time.
-     * Activation before L2.timestamp returns A4P_INVALID_PARAMETER; after validUntil it returns A4P_TIMESTAMP_EXPIRED.
-     * Activation before validFrom is allowed, but execution must wait. Persist the resulting context.
-     * Uses the system clock.
-     * @param intent protocol intent to process
-     * @param userVerifier verifier for the user signature
-     * @return new ACTIVE context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier) {
-        return activateIntent(intent, userVerifier, System.currentTimeMillis());
     }
 
     /**
@@ -208,18 +151,6 @@ public final class A4p {
      * Changes an ACTIVE context to REVOKED without restricting revocation to the authorization validity window.
      * Evaluation before activation returns A4P_TIMESTAMP_TOO_EARLY. Pending executions may still be finalized.
      * Persist the updated context and do not repeat revocation.
-     * Uses the system clock.
-     * @param context activated intent and mutable execution ledger
-     * @return updated context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context) {
-        return revokeIntent(context, System.currentTimeMillis());
-    }
-
-    /**
-     * Changes an ACTIVE context to REVOKED without restricting revocation to the authorization validity window.
-     * Evaluation before activation returns A4P_TIMESTAMP_TOO_EARLY. Pending executions may still be finalized.
-     * Persist the updated context and do not repeat revocation.
      * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
      * @param now non-negative Unix epoch milliseconds within the safe integer range
@@ -244,21 +175,6 @@ public final class A4p {
      * Omitted execution IDs are generated. Order and execution IDs remain unavailable for reuse after cancellation.
      * PENDING and COMPLETED records occupy quota. The evaluation instant determines the reservation period.
      * An expired reservation attempt can mark the context EXPIRED even when the result is a failure; persist it in either case.
-     * Uses the system clock.
-     * @param context activated intent and mutable execution ledger
-     * @param execution action-specific execution request
-     * @return updated context or a protocol failure; failure may still mutate context status
-     */
-    public static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context,
-                                                                    Execution execution) {
-        return createExecution(context, execution, System.currentTimeMillis());
-    }
-
-    /**
-     * Checks status, validity, action, currency, unique IDs, cart shape and payment quotas, then reserves a PENDING execution.
-     * Omitted execution IDs are generated. Order and execution IDs remain unavailable for reuse after cancellation.
-     * PENDING and COMPLETED records occupy quota. The evaluation instant determines the reservation period.
-     * An expired reservation attempt can mark the context EXPIRED even when the result is a failure; persist it in either case.
      * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
      * @param execution action-specific execution request
@@ -276,22 +192,6 @@ public final class A4p {
      * An ACTIVE context becomes CONSUMED only when global quota is exhausted and no execution is pending.
      * REVOKED and EXPIRED contexts may finalize existing reservations and retain their status.
      * Evaluation must not precede reservation. Persist the context and never finalize the same record twice.
-     * Uses the system clock.
-     * @param context activated intent and mutable execution ledger
-     * @param executionId execution identifier, retained even after cancellation
-     * @return updated context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context,
-                                                                      String executionId) {
-        return completeExecution(context, executionId, System.currentTimeMillis());
-    }
-
-    /**
-     * Changes a PENDING execution to COMPLETED while retaining its occupied quotas.
-     * Refreshes the accounting snapshot for the evaluation period without moving the reservation period.
-     * An ACTIVE context becomes CONSUMED only when global quota is exhausted and no execution is pending.
-     * REVOKED and EXPIRED contexts may finalize existing reservations and retain their status.
-     * Evaluation must not precede reservation. Persist the context and never finalize the same record twice.
      * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
      * @param executionId execution identifier, retained even after cancellation
@@ -301,21 +201,6 @@ public final class A4p {
     public static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context,
                                                                       String executionId, long now) {
         return A4pResult.capture(() -> finalizeExecution(context, executionId, now, false));
-    }
-
-    /**
-     * Changes a PENDING execution to CANCELED, releases its quota and retains the ledger record and IDs.
-     * Refreshes accounting for the evaluation period; canceling an old-period order does not change current-period usage.
-     * REVOKED and EXPIRED contexts may cancel existing reservations. Evaluation must not precede reservation.
-     * Persist the context and never finalize the same record twice.
-     * Uses the system clock.
-     * @param context activated intent and mutable execution ledger
-     * @param executionId execution identifier, retained even after cancellation
-     * @return updated context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context,
-                                                                    String executionId) {
-        return cancelExecution(context, executionId, System.currentTimeMillis());
     }
 
     /**
