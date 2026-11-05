@@ -1,9 +1,36 @@
 package io.openjiuwen.a4p;
 
-import io.openjiuwen.a4p.Models.*;
 import java.util.List;
 import java.util.UUID;
-import static io.openjiuwen.a4p.A4pErrorCode.*;
+
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_AMOUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_DUPLICATE_ID;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_EXECUTION_COUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_INVALID_PARAMETER;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_INVALID_STATUS;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_PERIOD_EXECUTION_COUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SIGNING_FAIL;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SINGLE_ORDER_AMOUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SUCCESS;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_TIMESTAMP_EXPIRED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_VERIFY_FAIL;
+import io.openjiuwen.a4p.Models.CartItem;
+import io.openjiuwen.a4p.Models.CreateIntentRequest;
+import io.openjiuwen.a4p.Models.Execution;
+import io.openjiuwen.a4p.Models.ExecutionRecord;
+import io.openjiuwen.a4p.Models.ExecutionStatus;
+import io.openjiuwen.a4p.Models.IntentExecutionStatus;
+import io.openjiuwen.a4p.Models.IntentIssueContext;
+import io.openjiuwen.a4p.Models.IntentL1;
+import io.openjiuwen.a4p.Models.IntentL2;
+import io.openjiuwen.a4p.Models.IntentL3;
+import io.openjiuwen.a4p.Models.ItemWhiteList;
+import io.openjiuwen.a4p.Models.Order;
+import io.openjiuwen.a4p.Models.PaymentConstraints;
+import io.openjiuwen.a4p.Models.SignatureInfo;
+import io.openjiuwen.a4p.Models.SigningEnv;
+import io.openjiuwen.a4p.Models.VerificationResult;
 import static io.openjiuwen.a4p.Validation.require;
 
 /**
@@ -161,6 +188,7 @@ public final class A4p {
             Validation.integer(now, false);
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
+                context.revokedTime(now);
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
             }
