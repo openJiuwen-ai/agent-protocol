@@ -434,9 +434,9 @@ class A4pTest {
 
     @Test
     void periodAnchorMustNotFollowValidFrom() {
-        PaymentConstraints late = new PaymentConstraints(null, 100L, "CNY", 0L, 100L, null, 1L, 10L, 1L);
+        PaymentConstraints late = new PaymentConstraints(null, 100L, "CNY", NOW + 0L, NOW + 100L, null, NOW + 1L, 10L, 1L);
         fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(late), SIGNER, NOW));
-        PaymentConstraints same = new PaymentConstraints(null, 100L, "CNY", 1L, 100L, null, 1L, 10L, 1L);
+        PaymentConstraints same = new PaymentConstraints(null, 100L, "CNY", NOW + 1L, NOW + 100L, null, NOW + 1L, 10L, 1L);
         ok(A4p.createIntent(request(same), SIGNER, NOW));
     }
 

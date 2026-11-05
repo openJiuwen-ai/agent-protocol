@@ -54,6 +54,7 @@ public final class A4p {
         return A4pResult.capture(() -> {
             Validation.integer(now, false);
             Validation.request(request);
+            Validation.timeAtOrBefore(now, PaymentProfile.constraints(request.structuredIntent()).validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             String intentId = request.intentId() == null ? UUID.randomUUID().toString() : request.intentId();
             IntentL1 unsigned = new IntentL1(PROTOCOL_VERSION, intentId, request.intentConversation(),
                     request.intentSummary(), request.structuredIntent(), now, null);
@@ -95,6 +96,7 @@ public final class A4p {
             Validation.issueContext(context);
             Validation.intentL1(intent);
             Validation.version(intent.version());
+            Validation.timeAtOrBefore(now, PaymentProfile.constraints(intent.structuredIntent()).validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             // Chain timestamps are monotonic; refuse to emit an L2 that every peer would reject.
             Validation.timeAtOrAfter(now, intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
             verifyOrThrow(agentVerifier, intent, intent.sign());
