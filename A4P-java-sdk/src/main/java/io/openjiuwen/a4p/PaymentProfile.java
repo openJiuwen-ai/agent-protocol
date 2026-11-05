@@ -99,7 +99,7 @@ public final class PaymentProfile {
      * @param action protocol action selecting the payload schema
      */
     private static void requireAction(IntentActionType action) {
-        Validation.require(action == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER);
+        Validation.require(action == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER, "Action must be AI_PAY");
     }
 
     /**
@@ -120,7 +120,7 @@ public final class PaymentProfile {
      * @return decoded or parsed value
      */
     private static <Value> Value parse(JsonNode node, Class<Value> type) {
-        Validation.require(node != null && !containsNull(node), A4P_INVALID_PARAMETER);
+        Validation.require(node != null && !containsNull(node), A4P_INVALID_PARAMETER, "Payment payload must not be null or contain null fields");
         try {
             return CanonicalJson.MAPPER.treeToValue(node, type);
         } catch (Exception error) {

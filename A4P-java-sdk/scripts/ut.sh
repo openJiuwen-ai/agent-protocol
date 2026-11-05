@@ -90,8 +90,13 @@ if [ -f "$JAVA_PROJECT_DIR/target/jacoco.exec" ]; then
   coverage_rc=0
   mvn --batch-mode --no-transfer-progress -f pom.xml jacoco:report 2>&1 | tee -a "$LOG" || coverage_rc=${PIPESTATUS[0]}
   if [ "$coverage_rc" -eq 0 ]; then
-    cp -R "$JAVA_PROJECT_DIR/target/site/jacoco" "$JACOCO"
-    echo ">>> Generated coverage report: $JACOCO/index.html"
+    cp -R "$JAVA_PROJECT_DIR/target/site/jacoco" "$JACOCO" || coverage_rc=$?
+    if [ "$coverage_rc" -eq 0 ]; then
+      echo ">>> Generated coverage report: $JACOCO/index.html"
+    else
+      echo ">>> ERROR: Failed to copy coverage report" >&2
+      if [ "$rc" -eq 0 ]; then rc=$coverage_rc; fi
+    fi
   elif [ "$rc" -eq 0 ]; then
     rc=$coverage_rc
   fi

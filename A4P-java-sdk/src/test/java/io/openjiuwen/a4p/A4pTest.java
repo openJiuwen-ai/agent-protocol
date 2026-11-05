@@ -224,7 +224,10 @@ class A4pTest {
         fails(A4P_VERIFY_FAIL, A4p.activateIntent(intent, (data, sign) -> { throw new Exception("secret"); }, NOW));
         fails(A4P_VERIFY_FAIL, A4p.verifyIntentAuthenticity(intent, (data, sign) -> null));
         fails(A4P_SIGNING_FAIL, A4p.createIntent(request(constraints()), data -> { throw new Exception(); }, NOW));
-        fails(A4P_SIGNING_FAIL, A4p.createIntent(request(constraints()), data -> null, NOW));
+        fails(A4P_SIGNING_FAIL, A4p.createIntent(request(constraints()),
+                data -> { throw new A4pException(A4P_INVALID_PARAMETER); }, NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), data -> null, NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), data -> { return new SignatureInfo("RSA3072", "", "abc"); }, NOW));
         // valid and code must agree, otherwise the callback result is not trusted either way.
         SignatureVerifier validButFailed = (data, sign) -> new VerificationResult(true, A4P_VERIFY_FAIL.code(), null);
         SignatureVerifier invalidButSucceeded = (data, sign) -> new VerificationResult(false, A4P_SUCCESS.code(), null);
@@ -447,7 +450,7 @@ class A4pTest {
         A4pIntentCodec codec = new A4pIntentCodec();
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL1(codec.serializeIntentL1(relabeled)));
         Signer foreign = data -> new SignatureInfo("HS256", "key", "c2ln");
-        fails(A4P_SIGNING_FAIL, A4p.createIntent(request(constraints()), foreign, NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), foreign, NOW));
     }
 
     @Test

@@ -13,7 +13,8 @@ public interface Signer {
     /**
      * Signs SDK-provided canonical UTF-8 intent bytes.
      * Return a supported algorithm, trusted key identifier and unpadded Base64URL signature.
-     * Invalid metadata or callback exceptions become A4P_SIGNING_FAIL in lifecycle operations.
+     * All callback exceptions (including A4pException) become A4P_SIGNING_FAIL in lifecycle operations.
+     * Invalid returned metadata becomes A4P_INVALID_PARAMETER.
      * @param data canonical UTF-8 intent bytes excluding the current layer signature
      * @return signature metadata
      * @throws Exception if the application signing or verification infrastructure fails
