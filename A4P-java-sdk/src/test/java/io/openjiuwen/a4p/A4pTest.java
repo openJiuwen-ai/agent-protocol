@@ -18,6 +18,19 @@ class A4pTest {
     private static final Product OTHER = new Product(new SellerInfo("seller"), new SpuSkuInfo("spu", "other"));
 
     @Test
+    void revocationMustFollowEveryReservation() {
+        IntentExecutionContext context = context();
+        ok(A4p.createExecution(context, execution("later", 100, 1), NOW + 2));
+        ok(A4p.createExecution(context, execution("earlier", 100, 1), NOW + 1));
+        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(context, NOW + 1));
+        assertEquals(IntentExecutionStatus.ACTIVE, context.status());
+        assertNull(context.revokedTime());
+        ok(A4p.revokeIntent(context, NOW + 2));
+        A4pIntentCodec codec = new A4pIntentCodec();
+        ok(codec.deserializeIntentExecutionContext(codec.serializeIntentExecutionContext(context)));
+    }
+
+    @Test
     void revocationTimeSurvivesSerialization() {
         IntentExecutionContext context = context();
         assertNull(context.revokedTime());
@@ -166,7 +179,7 @@ class A4pTest {
         for (int index = 0; index < 3; index++) {
             ok(A4p.createExecution(revoked, execution("r-" + index, 100, 1), NOW + index * 10_000));
         }
-        ok(A4p.revokeIntent(revoked, NOW));
+        ok(A4p.revokeIntent(revoked, NOW + 20_000));
         for (int index = 0; index < 3; index++) {
             ok(A4p.completeExecution(revoked, "r-" + index, NOW + 30_000));
         }

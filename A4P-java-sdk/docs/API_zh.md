@@ -198,6 +198,9 @@ IntentExecutionContext restoredContext = restored.data();
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。缺少必填 `activatedTime` 的旧 Context 无法直接恢复；应使用应用控制的可信迁移，或启动新的授权生命周期，同时避免重置已有授权用量。
 
+1. REVOKED 上下文必须包含 revokedTime，且撤销时间不得早于激活时间或任何预留时间。否则会解析失败
+2. 精确整数 JSON 值必须处于 JavaScript 安全整数范围内；浮点数保留 JCS 语义
+
 ## 结果码
 
 | 枚举 | 数值 | 消息 |

@@ -19,6 +19,36 @@ class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
+    void revokedContextsRequireRevocationTime() {
+        IntentExecutionContext context = context();
+        ok(A4p.createExecution(context, execution("pending", 100, 1), NOW));
+        ok(A4p.revokeIntent(context, NOW));
+        ObjectNode wire = (ObjectNode) CanonicalJson.MAPPER.valueToTree(
+                CanonicalJson.parse(codec.serializeIntentExecutionContext(context)));
+        ok(codec.deserializeIntentExecutionContext(wire.toString()));
+        wire.remove("revokedTime");
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(wire.toString()));
+        wire.put("revokedTime", -1);
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(wire.toString()));
+    }
+
+    @Test
+    void revokedContextRejectsReservationsAfterRevocationButAllowsLaterFinalization() {
+        IntentExecutionContext context = context();
+        ok(A4p.createExecution(context, execution("one", 100, 1), NOW));
+        ok(A4p.createExecution(context, execution("two", 100, 1), NOW));
+        ok(A4p.revokeIntent(context, NOW));
+        ok(A4p.completeExecution(context, "one", NOW + 2));
+        ok(A4p.cancelExecution(context, "two", NOW + 2));
+        String json = codec.serializeIntentExecutionContext(context);
+        assertEquals(IntentExecutionStatus.REVOKED,
+                ok(codec.deserializeIntentExecutionContext(json)).status());
+        ObjectNode tampered = (ObjectNode) CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
+        ((ObjectNode) tampered.withArray("executions").get(0)).put("reservedAt", NOW + 1);
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(tampered.toString()));
+    }
+
+    @Test
     void rejectsExplicitNullFieldsAndArrayElements() {
         String json = codec.serializeIntentL3(authorized(constraints()));
         for (String extra : List.of("\"extra\":null,", "\"extra\":{\"nested\":null},",
@@ -69,7 +99,8 @@ class CodecTest {
                         "[333333333.33333329,1E30,4.50,2e-3,1e-27]")));
         assertEquals("0", CanonicalJson.stringify(-0.0));
         assertEquals("null", CanonicalJson.stringify(CanonicalJson.parse("null")));
-        assertEquals("9007199254740992", CanonicalJson.stringify(9007199254740992L));
+        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(9007199254740992L));
+        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(new java.math.BigInteger("-9007199254740993")));
         thrown(A4P_DESERIALIZE_FAIL, () -> CanonicalJson.parse("1e400"));
         thrown(A4P_DESERIALIZE_FAIL, () -> CanonicalJson.parse("\"" + (char) 0xd800 + "\""));
     }

@@ -198,6 +198,9 @@ The same codec supports L1, L2 and L3 serialization and restoration. Context JSO
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
 
+1. REVOKED contexts must include revokedTime, which must not precede activation or any reservation.
+2. Precise integer JSON values must stay within the JavaScript safe integer range; floating-point values retain JCS semantics.
+
 ## Result codes
 
 | Enum | Code | Message |

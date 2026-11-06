@@ -163,6 +163,10 @@ public final class A4p {
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
                 Validation.timeAtOrAfter(now, context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
+                for (ExecutionRecord record : context.executions()) {
+                    Validation.timeAtOrAfter(now, record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY,
+                            "Revocation time is earlier than a reservation time");
+                }
                 context.revokedTime(now);
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;

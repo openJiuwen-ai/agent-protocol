@@ -150,6 +150,7 @@ public class A4pIntentCodec {
      * Restores IntentExecutionContext from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * Checks activation time, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
+     * REVOKED contexts must include revokedTime.
      * @param serialized serialized local JSON representation
      * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
@@ -194,6 +195,10 @@ public class A4pIntentCodec {
         if (wire.status() == IntentExecutionStatus.REVOKED) {
             Validation.integer(wire.revokedTime(), false);
             Validation.timeAtOrAfter(wire.revokedTime(), wire.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Revocation time is earlier than the activation time");
+            for (RecordJson record : wire.executions()) {
+                Validation.timeAtOrBefore(record.reservedAt(), wire.revokedTime(), A4P_INVALID_PARAMETER,
+                        "Reservation time is later than the revocation time");
+            }
         } else {
             Validation.require(wire.revokedTime() == null, A4P_INVALID_PARAMETER, "Revocation time must be absent unless the intent is revoked");
         }
@@ -301,13 +306,6 @@ public class A4pIntentCodec {
         });
     }
 
-    /**
-     * Strictly parses JSON and converts it to the requested protocol representation.
-     * @param <Value> decoded or copied value type
-     * @param json JSON representation to parse
-     * @param type target decoded value type
-     * @return decoded or parsed value
-     */
     /** Rejects explicit nulls recursively, including array elements, before typed conversion. */
     private static void rejectNullValues(JsonNode node) {
         Validation.require(node != null && !node.isNull(), A4P_INVALID_PARAMETER,
@@ -317,6 +315,13 @@ public class A4pIntentCodec {
         }
     }
 
+    /**
+     * Strictly parses JSON and converts it to the requested protocol representation.
+     * @param <Value> decoded or copied value type
+     * @param json JSON representation to parse
+     * @param type target decoded value type
+     * @return decoded or parsed value
+     */
     private static <Value> Value parse(String json, Class<Value> type) {
         Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
         JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));

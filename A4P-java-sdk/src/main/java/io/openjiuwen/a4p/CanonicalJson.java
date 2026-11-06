@@ -220,6 +220,13 @@ final class CanonicalJson {
             return value;
         }
         if (value instanceof Number number) {
+            if (number instanceof Byte || number instanceof Short || number instanceof Integer
+                    || number instanceof Long || number instanceof java.math.BigInteger) {
+                java.math.BigInteger integer = new java.math.BigInteger(number.toString());
+                if (integer.abs().compareTo(java.math.BigInteger.valueOf(MAX_SAFE_INTEGER)) > 0) {
+                    throw new A4pException(A4P_SERIALIZE_FAIL);
+                }
+            }
             if (!Double.isFinite(number.doubleValue())) { throw new A4pException(A4P_SERIALIZE_FAIL); }
             return number;
         }
