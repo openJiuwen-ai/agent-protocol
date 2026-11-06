@@ -154,16 +154,16 @@ public class A4pIntentCodec {
         Validation.intentL3(authorized);
         Validation.versions(authorized);
         IntentL1 intent = authorized.intentL2().intentL1();
-        Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER);
+        Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER, "Context intent ID does not match the authorized intent ID");
         Validation.integer(wire.activatedTime(), false);
-        Validation.require(wire.activatedTime() >= authorized.timestamp(), A4P_INVALID_PARAMETER);
+        Validation.require(wire.activatedTime() >= authorized.timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the authorized intent timestamp");
         Validation.present(wire.status());
         Validation.present(wire.executions());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
         for (RecordJson record : wire.executions()) {
             Validation.present(record);
             Validation.integer(record.reservedAt(), false);
-            Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER);
+            Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the activation time");
             Order order = Validation.execution(new Execution(record.action(), record.executionId(),
                     record.executionContent()));
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),
@@ -174,8 +174,7 @@ public class A4pIntentCodec {
         IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime());
         Validation.ledger(context);
         // executionInfo is derived state, so it must match what the restored ledger yields.
-        Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())),
-                A4P_INVALID_PARAMETER);
+        Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())), A4P_INVALID_PARAMETER, "Serialized execution info does not match the restored ledger");
         return context;
     }
 
@@ -187,14 +186,13 @@ public class A4pIntentCodec {
      * @return computed or stored accounting period, or null without periodic limits
      */
     private static Long period(JsonNode info, PaymentConstraints constraints) {
-        Validation.require(info != null && info.isObject(), A4P_INVALID_PARAMETER);
+        Validation.require(info != null && info.isObject(), A4P_INVALID_PARAMETER, "Execution info must be a non-null JSON object");
         JsonNode period = info.get("periodIndex");
         if (period == null || period.isNull()) {
-            Validation.require(constraints.anchorTime() == null, A4P_INVALID_PARAMETER);
+            Validation.require(constraints.anchorTime() == null, A4P_INVALID_PARAMETER, "Periodic intent requires a period index");
             return null;
         }
-        Validation.require(constraints.anchorTime() != null && period.isIntegralNumber() && period.canConvertToLong(),
-                A4P_INVALID_PARAMETER);
+        Validation.require(constraints.anchorTime() != null && period.isIntegralNumber() && period.canConvertToLong(), A4P_INVALID_PARAMETER, "Period index requires periodic constraints and must be a long integer");
         return period.longValue();
     }
 
@@ -232,7 +230,7 @@ public class A4pIntentCodec {
      * @return decoded or parsed value
      */
     private static <Value> Value parse(String json, Class<Value> type) {
-        Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER);
+        Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
         Object parsed = CanonicalJson.parse(json);
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);

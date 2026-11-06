@@ -36,16 +36,15 @@ final class CartMatching {
     static void requireOneToOne(List<CartItem> items, List<ItemWhiteList> groups) {
         // Scope is checked before template shape, matching ArkTS error precedence.
         for (CartItem item : items) {
-            Validation.require(groups.stream().anyMatch(group -> matches(group, item.product())),
-                    A4P_PRODUCT_NOT_AUTHORIZED);
+            Validation.require(groups.stream().anyMatch(group -> matches(group, item.product())), A4P_PRODUCT_NOT_AUTHORIZED, "Cart product is not in any authorized whitelist group");
         }
-        Validation.require(items.size() == groups.size(), A4P_CART_MISMATCH);
+        Validation.require(items.size() == groups.size(), A4P_CART_MISMATCH, "Cart must contain one item for each whitelist group");
         Set<Integer> matched = new HashSet<>();
         for (CartItem item : items) {
             int index = 0;
             while (!matches(groups.get(index), item.product())) { index++; }
-            Validation.require(matched.add(index), A4P_CART_MISMATCH);
-            Validation.require(item.quantity().equals(groups.get(index).quantity()), A4P_CART_MISMATCH);
+            Validation.require(matched.add(index), A4P_CART_MISMATCH, "Multiple cart items match the same whitelist group");
+            Validation.require(item.quantity().equals(groups.get(index).quantity()), A4P_CART_MISMATCH, "Cart quantity differs from the whitelist quantity");
         }
     }
 }

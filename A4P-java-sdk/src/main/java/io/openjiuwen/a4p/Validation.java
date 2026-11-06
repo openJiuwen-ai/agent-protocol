@@ -24,24 +24,36 @@ final class Validation {
     private Validation() {}
 
     /**
-     * Throws the supplied protocol error when a required condition is false.
+     * Throws the supplied protocol error with a message and no underlying cause.
      * @param condition required condition
      * @param code protocol result code; zero means success
+     * @param message error message; can be null
      */
-    static void require(boolean condition, A4pErrorCode code) {
-        if (!condition) { throw new A4pException(code); }
+    static void require(boolean condition, A4pErrorCode code, String message) {
+        require(condition, code, message, null);
+    }
+
+    /**
+     * Throws the supplied protocol error with message and cause when a required condition is false.
+     * @param condition required condition
+     * @param code protocol result code; zero means success
+     * @param message error message; can be null
+     * @param cause error cause; can be null
+     */
+    static void require(boolean condition, A4pErrorCode code, String message, Throwable cause) {
+        if (!condition) { throw new A4pException(code, message, cause); }
     }
 
     /**
      * Requires a non-null protocol value.
      * @param value value to validate or normalize
      */
-    static void present(Object value) { require(value != null, A4P_INVALID_PARAMETER); }
+    static void present(Object value) { require(value != null, A4P_INVALID_PARAMETER, "Required value must not be null"); }
     /**
      * Requires a string that is nonblank under JavaScript trim semantics.
      * @param value value to validate or normalize
      */
-    static void text(String value) { require(value != null && !blank(value), A4P_INVALID_PARAMETER); }
+    static void text(String value) { require(value != null && !blank(value), A4P_INVALID_PARAMETER, "String must not be null or blank"); }
     /**
      * Validates a nonblank string when an optional value is present.
      * @param value value to validate or normalize
@@ -68,7 +80,7 @@ final class Validation {
      */
     static void integer(Long value, boolean positive) {
         require(value != null && value >= (positive ? 1 : 0)
-                && value <= CanonicalJson.MAX_SAFE_INTEGER, A4P_INVALID_PARAMETER);
+                && value <= CanonicalJson.MAX_SAFE_INTEGER, A4P_INVALID_PARAMETER, "Value must be a non-null safe integer within the required positive or non-negative range");
     }
 
     /**
@@ -89,7 +101,7 @@ final class Validation {
      */
     private static void structured(StructuredIntent intent) {
         present(intent);
-        require(intent.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER);
+        require(intent.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER, "Action must be AI_PAY");
         ShoppingItems resources = PaymentProfile.resources(intent);
         nonempty(resources.itemsWhiteList());
         Set<Product> products = new HashSet<>();
@@ -99,7 +111,7 @@ final class Validation {
             nonempty(group.whiteList());
             for (Product item : group.whiteList()) {
                 product(item);
-                require(products.add(item), A4P_INVALID_PARAMETER);
+                require(products.add(item), A4P_INVALID_PARAMETER, "Product appears in multiple whitelist groups");
             }
         }
         PaymentConstraints constraints = PaymentProfile.constraints(intent);
@@ -107,16 +119,16 @@ final class Validation {
         text(constraints.currency());
         integer(constraints.validFrom(), false);
         integer(constraints.validUntil(), false);
-        require(constraints.validFrom() <= constraints.validUntil(), A4P_INVALID_PARAMETER);
+        require(constraints.validFrom() <= constraints.validUntil(), A4P_INVALID_PARAMETER, "validFrom must not be later than validUntil");
         if (constraints.singleOrderMaxAmount() != null) { integer(constraints.singleOrderMaxAmount(), true); }
         if (constraints.maxExecutionCount() != null) { integer(constraints.maxExecutionCount(), true); }
         if (constraints.anchorTime() != null || constraints.periodSeconds() != null
                 || constraints.maxExecutionCountPerPeriod() != null) {
             integer(constraints.anchorTime(), false);
             // A later anchor would give pre-anchor reservations negative periods, each with a fresh budget.
-            require(constraints.anchorTime() <= constraints.validFrom(), A4P_INVALID_PARAMETER);
+            require(constraints.anchorTime() <= constraints.validFrom(), A4P_INVALID_PARAMETER, "anchorTime must not be later than validFrom");
             integer(constraints.periodSeconds(), true);
-            require(constraints.periodSeconds() <= MAX_PERIOD_SECONDS, A4P_INVALID_PARAMETER);
+            require(constraints.periodSeconds() <= MAX_PERIOD_SECONDS, A4P_INVALID_PARAMETER, "periodSeconds exceeds the safe millisecond duration limit");
             integer(constraints.maxExecutionCountPerPeriod(), true);
         }
     }
@@ -133,7 +145,7 @@ final class Validation {
         present(product.spusku());
         optionalText(product.spusku().spuId());
         optionalText(product.spusku().skuId());
-        require(product.spusku().spuId() != null || product.spusku().skuId() != null, A4P_INVALID_PARAMETER);
+        require(product.spusku().spuId() != null || product.spusku().skuId() != null, A4P_INVALID_PARAMETER, "Product must specify at least one SPU or SKU ID");
     }
 
     /**
@@ -141,7 +153,7 @@ final class Validation {
      * @param values list to snapshot or validate
      */
     private static void nonempty(List<?> values) {
-        require(values != null && !values.isEmpty(), A4P_INVALID_PARAMETER);
+        require(values != null && !values.isEmpty(), A4P_INVALID_PARAMETER, "List must not be null or empty");
     }
 
     /**
@@ -177,7 +189,7 @@ final class Validation {
      */
     static void signature(SignatureInfo signature) {
         present(signature);
-        require(AlgorithmType.RSA3072.name().equals(signature.alg()), A4P_INVALID_PARAMETER);
+        require(AlgorithmType.RSA3072.name().equals(signature.alg()), A4P_INVALID_PARAMETER, "Signature algorithm must be RSA3072");
         text(signature.keyIdentifier());
         text(signature.sign());
     }
@@ -207,7 +219,7 @@ final class Validation {
         issueContext(new IntentIssueContext(intent.userIdentity(), intent.agentIdentity(),
                 intent.serviceProviderIdentity()));
         integer(intent.timestamp(), false);
-        require(intent.timestamp() >= intent.intentL1().timestamp(), A4P_INVALID_PARAMETER);
+        require(intent.timestamp() >= intent.intentL1().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
         signature(intent.sign());
     }
 
@@ -221,7 +233,7 @@ final class Validation {
         intentL2(intent.intentL2());
         signingEnv(intent.signingEnv());
         integer(intent.timestamp(), false);
-        require(intent.timestamp() >= intent.intentL2().timestamp(), A4P_INVALID_PARAMETER);
+        require(intent.timestamp() >= intent.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
         signature(intent.sign());
     }
 
@@ -233,7 +245,7 @@ final class Validation {
      */
     static Order execution(Execution execution) {
         present(execution);
-        require(execution.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER);
+        require(execution.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER, "Action must be AI_PAY");
         optionalText(execution.id());
         Order order = PaymentProfile.order(execution);
         text(order.orderId());
@@ -286,18 +298,17 @@ final class Validation {
             Order order = entry.order();
             text(record.executionId());
             present(record.status());
-            require(record.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER);
-            require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER);
-            require(record.reservedAt() >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY);
-            require(record.reservedAt() <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED);
-            require(Objects.equals(record.periodIndex(), Accounting.period(constraints, record.reservedAt())),
-                    A4P_INVALID_PARAMETER);
+            require(record.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER, "Execution action does not match the authorized intent action");
+            require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER, "Order currency does not match the intent currency");
+            require(record.reservedAt() >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
+            require(record.reservedAt() <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
+            require(Objects.equals(record.periodIndex(), Accounting.period(constraints, record.reservedAt())), A4P_INVALID_PARAMETER, "Ledger period index does not match the reservation time");
             finalizedAt(record.completedAt(), record.status() == ExecutionStatus.COMPLETED, record.reservedAt());
             finalizedAt(record.canceledAt(), record.status() == ExecutionStatus.CANCELED, record.reservedAt());
-            require(executionIds.add(record.executionId()), A4P_DUPLICATE_ID);
-            require(orderIds.add(order.orderId()), A4P_DUPLICATE_ID);
+            require(executionIds.add(record.executionId()), A4P_DUPLICATE_ID, "Duplicate execution ID");
+            require(orderIds.add(order.orderId()), A4P_DUPLICATE_ID, "Duplicate order ID");
             if (constraints.singleOrderMaxAmount() != null) {
-                require(order.amount() <= constraints.singleOrderMaxAmount(), A4P_SINGLE_ORDER_AMOUNT_EXCEEDED);
+                require(order.amount() <= constraints.singleOrderMaxAmount(), A4P_SINGLE_ORDER_AMOUNT_EXCEEDED, "Order amount exceeds the single-order limit");
             }
             CartMatching.requireOneToOne(order.cartItems(), groups);
             if (Accounting.counted(entry)) {
@@ -306,18 +317,17 @@ final class Validation {
             }
         }
         if (constraints.maxExecutionCount() != null) {
-            require(Accounting.count(context) <= constraints.maxExecutionCount(), A4P_EXECUTION_COUNT_EXCEEDED);
+            require(Accounting.count(context) <= constraints.maxExecutionCount(), A4P_EXECUTION_COUNT_EXCEEDED, "Execution count exceeds the total limit");
         }
-        require(amount.compareTo(BigInteger.valueOf(constraints.totalMaxAmount())) <= 0, A4P_AMOUNT_EXCEEDED);
+        require(amount.compareTo(BigInteger.valueOf(constraints.totalMaxAmount())) <= 0, A4P_AMOUNT_EXCEEDED, "Order amounts exceed the total available budget");
         if (constraints.maxExecutionCountPerPeriod() != null) {
-            require(periodCounts.values().stream().allMatch(count -> count <= constraints.maxExecutionCountPerPeriod()),
-                    A4P_PERIOD_EXECUTION_COUNT_EXCEEDED);
+            require(periodCounts.values().stream().allMatch(count -> count <= constraints.maxExecutionCountPerPeriod()), A4P_PERIOD_EXECUTION_COUNT_EXCEEDED, "Execution count exceeds the per-period limit");
         }
         // Completing the last pending record of an exhausted ACTIVE intent always yields CONSUMED, and nothing
         // else does; REVOKED and EXPIRED are reachable with any ledger.
         IntentExecutionStatus status = context.status();
         if (status == IntentExecutionStatus.ACTIVE || status == IntentExecutionStatus.CONSUMED) {
-            require((status == IntentExecutionStatus.CONSUMED) == Accounting.exhausted(context), A4P_INVALID_PARAMETER);
+            require((status == IntentExecutionStatus.CONSUMED) == Accounting.exhausted(context), A4P_INVALID_PARAMETER, "Consumption status does not match exhausted quotas");
         }
     }
 
@@ -330,10 +340,10 @@ final class Validation {
      * @param reservedAt reservation instant in Unix epoch milliseconds
      */
     private static void finalizedAt(Long timestamp, boolean expected, long reservedAt) {
-        require((timestamp != null) == expected, A4P_INVALID_PARAMETER);
+        require((timestamp != null) == expected, A4P_INVALID_PARAMETER, "Finalization timestamp presence does not match execution status");
         if (timestamp != null) {
             integer(timestamp, false);
-            require(timestamp >= reservedAt, A4P_TIMESTAMP_TOO_EARLY);
+            require(timestamp >= reservedAt, A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
         }
     }
 
@@ -342,6 +352,6 @@ final class Validation {
      * @param version A4P Core protocol version
      */
     static void version(String version) {
-        require(A4p.PROTOCOL_VERSION.equals(version), A4P_UNSUPPORTED_VERSION);
+        require(A4p.PROTOCOL_VERSION.equals(version), A4P_UNSUPPORTED_VERSION, "Unsupported protocol version");
     }
 }

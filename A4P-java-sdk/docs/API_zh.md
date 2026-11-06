@@ -175,7 +175,7 @@ record 提供规范构造器和标准 `equals`、`hashCode`、`toString`。`Sign
 
 使用应用自身的密钥设施实现 `Signer` 和 `SignatureVerifier`。SDK 提供规范 UTF-8 JSON 字节：对象键排序、数组顺序保留、不含无意义空白。仅去除当前层最外侧 `sign` 字段，内嵌层签名仍被覆盖；应直接签署 SDK 提供的字节。
 
-返回的 `SignatureInfo` 应包含 `alg`、可信密钥标识和无填充 Base64URL 签名。验签时应通过可信注册表解析密钥及其绑定算法；最外层签名元数据不被本层签名覆盖。签名回调异常或签名元数据无效映射为 `A4P_SIGNING_FAIL`。验签回调异常、返回 null 或 `valid` 与 `code == 0` 不一致映射为 `A4P_VERIFY_FAIL`。要求验签通过的生命周期方法也会将否定结论映射为 `A4P_VERIFY_FAIL`。
+返回的 `SignatureInfo` 应包含 `alg`、可信密钥标识和无填充 Base64URL 签名。验签时应通过可信注册表解析密钥及其绑定算法；最外层签名元数据不被本层签名覆盖。所有签名回调异常（包括 `A4pException`）均映射为 `A4P_SIGNING_FAIL`。返回的签名元数据无效映射为 `A4P_INVALID_PARAMETER`。验签回调异常、返回 null 或 `valid` 与 `code == 0` 不一致映射为 `A4P_VERIFY_FAIL`。要求验签通过的生命周期方法也会将否定结论映射为 `A4P_VERIFY_FAIL`。
 
 | API | 密码学验证 |
 | --- | --- |
