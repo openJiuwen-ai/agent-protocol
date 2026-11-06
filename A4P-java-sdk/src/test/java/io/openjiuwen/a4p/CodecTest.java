@@ -19,6 +19,15 @@ class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
+    void rejectsExplicitNullFieldsAndArrayElements() {
+        String json = codec.serializeIntentL3(authorized(constraints()));
+        for (String extra : List.of("\"extra\":null,", "\"extra\":{\"nested\":null},",
+                "\"extra\":[null],")) {
+            fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL3("{" + extra + json.substring(1)));
+        }
+    }
+
+    @Test
     void restoredActivationMustNotExceedValidUntil() throws Exception {
         IntentL3 intent = authorized(constraints());
         long validUntil = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent()).validUntil();
@@ -27,7 +36,7 @@ class CodecTest {
         assertEquals(validUntil, ok(codec.deserializeIntentExecutionContext(json)).activatedTime());
         ObjectNode expired = (ObjectNode) CanonicalJson.MAPPER.readTree(json);
         expired.put("activatedTime", validUntil + 1);
-        fails(A4P_TIMESTAMP_EXPIRED, codec.deserializeIntentExecutionContext(expired.toString()));
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(expired.toString()));
     }
 
     @Test
@@ -35,23 +44,23 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         var l1 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL1(intent.intentL2().intentL1()));
         l1.put("version", "2.0");
-        fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentL1(l1.toString()));
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1(l1.toString()));
         for (String path : List.of("", "/intentL1")) {
             var l2 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL2(intent.intentL2()));
             ((ObjectNode) l2.at(path)).put("version", "2.0");
-            fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentL2(l2.toString()));
+            fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL2(l2.toString()));
         }
         for (String path : List.of("", "/intentL2", "/intentL2/intentL1")) {
             var l3 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL3(intent));
             ((ObjectNode) l3.at(path)).put("version", "2.0");
-            fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentL3(l3.toString()));
+            fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL3(l3.toString()));
         }
     }
 
     @Test
-    void jcsPreservesNullsAndUsesEcmascriptNumbers() {
+    void canonicalJsonOmitsNullObjectFieldsAndUsesEcmascriptNumbers() {
         String input = "{\"z\":null,\"a\":[null,{\"b\":null}]}";
-        assertEquals("{\"a\":[null,{\"b\":null}],\"z\":null}",
+        assertEquals("{\"a\":[null,{}]}",
                 CanonicalJson.stringify(CanonicalJson.parse(input)));
         assertEquals("{\"a\":[null,{}]}", CanonicalJson.stringify(
                 A4pIntentCodec.toJsonNode(CanonicalJson.parse(input))));
@@ -100,7 +109,7 @@ class CodecTest {
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(cycle));
         Map<String, Object> nullable = new LinkedHashMap<>();
         nullable.put("null", null);
-        assertEquals("{\"null\":null}", CanonicalJson.stringify(nullable));
+        assertEquals("{}", CanonicalJson.stringify(nullable));
     }
 
     @Test
@@ -170,7 +179,7 @@ class CodecTest {
                 codec.serializeIntentL1(intent.intentL2().intentL1()))));
         assertTrue(ok(A4p.verifyIntentAuthenticity(decoded, VERIFIER)).valid());
         ok(A4p.activateIntent(decoded, VERIFIER, NOW));
-        thrown(A4P_INVALID_PARAMETER, () -> codec.serializeIntentL1(null));
+        thrown(A4P_SERIALIZE_FAIL, () -> codec.serializeIntentL1(null));
     }
 
     @Test
@@ -234,7 +243,7 @@ class CodecTest {
         ok(A4p.createExecution(restored, execution("four", 100, 1), NOW + 10_000));
         fails(A4P_EXECUTION_COUNT_EXCEEDED, A4p.createExecution(restored, execution("five", 100, 1), NOW + 10_000));
         ok(A4p.completeExecution(restored, "three", NOW + 10_000));
-        thrown(A4P_INVALID_PARAMETER, () -> codec.serializeIntentExecutionContext(null));
+        thrown(A4P_SERIALIZE_FAIL, () -> codec.serializeIntentExecutionContext(null));
     }
 
     @Test
@@ -250,7 +259,7 @@ class CodecTest {
         // Without a period constraint there is no current period.
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":0")));
-        ok(codec.deserializeIntentExecutionContext(
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":null")));
     }
 
@@ -264,7 +273,7 @@ class CodecTest {
         String json = codec.serializeIntentExecutionContext(ledgerContext());
         String version = "\"version\":\"1.0\"}";
         assertTrue(json.endsWith(version));
-        fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 json.substring(0, json.length() - version.length()) + "\"version\":\"2.0\"}"));
         Map<String, A4pErrorCode> tampered = new LinkedHashMap<>();
         tampered.put(json.replaceFirst("\\{", "{\"extra\":1,"), A4P_INVALID_PARAMETER);
@@ -288,7 +297,7 @@ class CodecTest {
         tampered.put(json.replace("\"quantity\":1}", "\"quantity\":3}"), A4P_CART_MISMATCH);
         tampered.forEach((input, code) -> {
             assertNotEquals(json, input);
-            fails(code, codec.deserializeIntentExecutionContext(input));
+            fails(code == A4P_INVALID_PARAMETER ? A4P_INVALID_PARAMETER : A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(input));
         });
     }
 
@@ -301,14 +310,14 @@ class CodecTest {
         String pending = codec.serializeIntentExecutionContext(context);
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 pending.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
-        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 pending.replace("\"reservedAt\":20000", "\"reservedAt\":19999")));
-        fails(A4P_TIMESTAMP_EXPIRED, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 pending.replace("\"reservedAt\":20000", "\"reservedAt\":100001")));
 
         ok(A4p.completeExecution(context, "one", 20_000));
         String completed = codec.serializeIntentExecutionContext(context);
-        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 completed.replace("\"completedAt\":20000", "\"completedAt\":19999")));
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 completed.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
@@ -316,7 +325,7 @@ class CodecTest {
         ok(A4p.createExecution(context, execution("two", 100, 1), 20_000));
         ok(A4p.cancelExecution(context, "two", 20_000));
         String canceled = codec.serializeIntentExecutionContext(context);
-        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 canceled.replace("\"canceledAt\":20000", "\"canceledAt\":19999")));
 
         ok(A4p.createExecution(context, execution("three", 100, 1), 20_000));

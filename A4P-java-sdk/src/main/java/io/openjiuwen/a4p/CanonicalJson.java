@@ -276,6 +276,7 @@ final class CanonicalJson {
         if (value instanceof String text) { return quote(text); }
         if (value instanceof Map<?, ?> fields) {
             return fields.entrySet().stream()
+                    .filter(entry -> entry.getValue() != null)
                     .map(entry -> quote((String) entry.getKey()) + ":" + render(entry.getValue()))
                     .collect(Collectors.joining(",", "{", "}"));
         }

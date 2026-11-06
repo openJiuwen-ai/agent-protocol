@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import static io.openjiuwen.a4p.A4pErrorCode.*;
 
 // Serializes to canonical JSON; deserialization parses strictly and validates the whole chain.
@@ -55,7 +56,7 @@ public class A4pIntentCodec {
      * Serializes the SDK-created IntentL1 as canonical JSON.
      * @param intentL1 SDK-created first-layer intent
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentL1(IntentL1 intentL1) { return serialize(intentL1); }
 
@@ -63,7 +64,7 @@ public class A4pIntentCodec {
      * Serializes the SDK-created IntentL2 as canonical JSON.
      * @param intentL2 SDK-issued second-layer intent
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentL2(IntentL2 intentL2) { return serialize(intentL2); }
 
@@ -71,7 +72,7 @@ public class A4pIntentCodec {
      * Serializes the SDK-created IntentL3 as canonical JSON.
      * @param intentL3 SDK-authorized third-layer intent
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentL3(IntentL3 intentL3) { return serialize(intentL3); }
 
@@ -79,7 +80,7 @@ public class A4pIntentCodec {
      * Restores IntentL1 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentL1> deserializeIntentL1(String serialized) {
         return decode(serialized, IntentL1.class, value -> {
@@ -92,7 +93,7 @@ public class A4pIntentCodec {
      * Restores IntentL2 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentL2> deserializeIntentL2(String serialized) {
         return decode(serialized, IntentL2.class, value -> {
@@ -105,7 +106,7 @@ public class A4pIntentCodec {
      * Restores IntentL3 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentL3> deserializeIntentL3(String serialized) {
         return decode(serialized, IntentL3.class, value -> {
@@ -119,9 +120,13 @@ public class A4pIntentCodec {
      * Context output is for local persistence only; callers provide storage integrity protection.
      * @param intentExecutionContext context for local persistence only
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentExecutionContext(IntentExecutionContext intentExecutionContext) {
+        return serializeSafely(() -> serializeContext(intentExecutionContext));
+    }
+
+    private static String serializeContext(IntentExecutionContext intentExecutionContext) {
         Validation.present(intentExecutionContext);
         Map<String, Object> fields = new LinkedHashMap<>();
         // One lock for every field, so the ledger and executionInfo come from the same state.
@@ -146,10 +151,10 @@ public class A4pIntentCodec {
      * Does not verify cryptographic signatures or authenticate persisted data.
      * Checks activation time, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentExecutionContext> deserializeIntentExecutionContext(String serialized) {
-        return A4pResult.capture(() -> restore(parse(serialized, ContextJson.class)));
+        return deserializeSafely(() -> restore(parse(serialized, ContextJson.class)));
     }
 
     /**
@@ -222,8 +227,31 @@ public class A4pIntentCodec {
      * @return canonical JSON representation
      */
     private static String serialize(Object intent) {
-        Validation.present(intent);
-        return CanonicalJson.stringify(toJsonNode(intent));
+        return serializeSafely(() -> {
+            Validation.present(intent);
+            return CanonicalJson.stringify(toJsonNode(intent));
+        });
+    }
+
+    /** Maps all serialization failures to the codec error while preserving the diagnostic cause. */
+    private static String serializeSafely(Supplier<String> action) {
+        try {
+            return action.get();
+        } catch (RuntimeException error) {
+            throw new A4pException(A4P_SERIALIZE_FAIL, A4P_SERIALIZE_FAIL.message(), error);
+        }
+    }
+
+    /** Preserves structural errors (1001), mapping other decoding failures to 5002. */
+    private static <T> A4pResult<T> deserializeSafely(Supplier<T> action) {
+        try {
+            return A4pResult.ok(action.get());
+        } catch (A4pException error) {
+            return A4pResult.failure(error.code() == A4P_INVALID_PARAMETER
+                    ? A4P_INVALID_PARAMETER : A4P_DESERIALIZE_FAIL);
+        } catch (RuntimeException error) {
+            return A4pResult.failure(A4P_DESERIALIZE_FAIL);
+        }
     }
 
     /** Applies wire mapping and removes only the outer signature before JCS encoding. */
@@ -266,7 +294,7 @@ public class A4pIntentCodec {
      * @return validated value or a protocol failure
      */
     private static <Value> A4pResult<Value> decode(String json, Class<Value> type, Consumer<Value> validate) {
-        return A4pResult.capture(() -> {
+        return deserializeSafely(() -> {
             Value value = parse(json, type);
             validate.accept(value);
             return value;
@@ -280,9 +308,19 @@ public class A4pIntentCodec {
      * @param type target decoded value type
      * @return decoded or parsed value
      */
+    /** Rejects explicit nulls recursively, including array elements, before typed conversion. */
+    private static void rejectNullValues(JsonNode node) {
+        Validation.require(node != null && !node.isNull(), A4P_INVALID_PARAMETER,
+                "JSON values must not be null; omit absent object fields");
+        if (node.isContainerNode()) {
+            node.forEach(A4pIntentCodec::rejectNullValues);
+        }
+    }
+
     private static <Value> Value parse(String json, Class<Value> type) {
         Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
-        Object parsed = omitNullFields(CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json)));
+        JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
+        rejectNullValues(parsed);
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {
