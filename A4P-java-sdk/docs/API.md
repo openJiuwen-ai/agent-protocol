@@ -35,13 +35,13 @@ Serialization, payment helpers and model normalization can throw `A4pException`;
 
 ## Timestamp rules
 
-All timestamps and explicit `now` arguments are Unix epoch milliseconds. Overloads without `now` use `System.currentTimeMillis()`; explicit clocks must be trusted. Numeric protocol values are integers within ±9007199254740991; timestamps are non-negative. Amounts and quantities are positive integers. Amount units are application-defined minor currency units.
+All timestamps and explicit `now` arguments are Unix epoch milliseconds. Lifecycle operations require an explicit `now` argument; explicit clocks must be trusted. Numeric protocol values are integers within ±9007199254740991; timestamps are non-negative. Amounts and quantities are positive integers. Amount units are application-defined minor currency units.
 
 | Operation | Time requirements |
 | --- | --- |
-| `issueIntent` | `now >= L1.timestamp`; otherwise `A4P_INVALID_PARAMETER`. |
-| `signIntent` | `now >= L2.timestamp` and `now <= validUntil`; otherwise invalid parameter or expired. These checks precede verification and signing. |
-| `activateIntent` | `now >= L3.timestamp` and `now <= validUntil`; otherwise invalid parameter or expired. Stores `activatedTime = now`. |
+| `createIntent`, `issueIntent` | `now <= validUntil`; otherwise `A4P_TIMESTAMP_EXPIRED` (3002), before signing or verification. `issueIntent` does not compare now with L1.timestamp. |
+| `signIntent` | Validates the timestamp format only; does not compare now with L2.timestamp or validUntil. |
+| `activateIntent` | `now >= L2.timestamp` and `now <= validUntil`; otherwise invalid parameter or expired. Stores `activatedTime = now`. |
 | `createExecution` | `now >= activatedTime` and `validFrom <= now <= validUntil`. Too early returns 3003; expiration returns 3002 and can mark the context EXPIRED. |
 | `completeExecution`, `cancelExecution` | `now >= reservedAt`; otherwise 3003. Existing reservations can be finalized after expiry or revocation. |
 | `revokeIntent` | `now >= activatedTime`; otherwise 3003. No authorization validity-window restriction. |
@@ -52,22 +52,14 @@ Signing and activation before `validFrom` are allowed. Equal timestamps and both
 
 | Type | Signature | Behavior |
 | --- | --- | --- |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner)` | Create and agent-sign L1; generate intentId when omitted. |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | Create and agent-sign L1; generate intentId when omitted. |
-| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner)` | Validate L1 and its agent signature, bind identities and server-sign L2. |
-| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | Validate L1 and its agent signature, bind identities and server-sign L2. |
-| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner)` | Verify the L2 server signature, attach the signing environment and user-sign L3. Checks both L2 and L1 versions. Requires `now >= L2.timestamp` (`A4P_INVALID_PARAMETER` if earlier) and `now <= validUntil` (`A4P_TIMESTAMP_EXPIRED`, 3002, if later) before verification or user signing. Signing before `validFrom` is allowed; `createExecution` rejects early reservations with `A4P_TIMESTAMP_TOO_EARLY` (3003). Uses the system clock for `now`. |
-| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | Verify the L2 server signature, attach the signing environment and user-sign L3. Checks both L2 and L1 versions. Requires `now >= L2.timestamp` (`A4P_INVALID_PARAMETER` if earlier) and `now <= validUntil` (`A4P_TIMESTAMP_EXPIRED`, 3002, if later) before verification or user signing. Signing before `validFrom` is allowed; `createExecution` rejects early reservations with `A4P_TIMESTAMP_TOO_EARLY` (3003). |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier)` | Verify the L3 user signature and create an ACTIVE context with activatedTime. |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | Verify the L3 user signature and create an ACTIVE context with activatedTime. |
+| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | Create and agent-sign L1; generate intentId when omitted. Requires `now <= validUntil`; otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). |
+| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | Validate L1 and its agent signature, bind identities and server-sign L2. Requires `now <= validUntil` before verification; otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L1.timestamp. |
+| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | Verify the L2 server signature, attach the signing environment and user-sign L3. Checks both L2 and L1 versions. Validates the timestamp format but does not compare now with L2.timestamp or validUntil. Signing before `validFrom` is allowed; `createExecution` rejects early reservations with `A4P_TIMESTAMP_TOO_EARLY` (3003). |
+| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | Require `L2.timestamp <= now <= validUntil`, then verify the L3 user signature and create an ACTIVE context with `activatedTime = now`. An earlier time returns `A4P_INVALID_PARAMETER`; expiration returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L3.timestamp. |
 | `A4p` | `static A4pResult<VerificationResult> verifyIntentAuthenticity(IntentL3 intent, SignatureVerifier issuerVerifier)` | Check chain structure, versions and the L2 issuer signature; return the verification verdict without checking the user signature. |
-| `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context)` | Revoke an ACTIVE context; existing pending executions may still be completed or canceled. |
 | `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now)` | Revoke an ACTIVE context; existing pending executions may still be completed or canceled. |
-| `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution)` | Check validity, status, unique IDs, order and quotas; append a PENDING reservation and refresh accounting. |
 | `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution, long now)` | Check validity, status, unique IDs, order and quotas; append a PENDING reservation and refresh accounting. |
-| `A4p` | `static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context, String executionId)` | Complete a pending execution and refresh current-period executionInfo; consume an active context when global quota is exhausted and no execution is pending. |
 | `A4p` | `static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context, String executionId, long now)` | Complete a pending execution and refresh current-period executionInfo; consume an active context when global quota is exhausted and no execution is pending. |
-| `A4p` | `static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context, String executionId)` | Cancel a pending execution, release its quotas and refresh accounting while retaining the ledger record. |
 | `A4p` | `static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context, String executionId, long now)` | Cancel a pending execution, release its quotas and refresh accounting while retaining the ledger record. |
 | `A4pErrorCode` | `int code()` | Read the result code or exception error code. |
 | `A4pErrorCode` | `String message()` | Read the diagnostic message (SDK-generated results use fixed English messages). |
@@ -175,7 +167,7 @@ Periodic accounting uses `floor((now - anchorTime) / (periodSeconds * 1000))`. `
 
 Implement `Signer` and `SignatureVerifier` using application-owned key infrastructure. The SDK supplies canonical UTF-8 JSON bytes: object keys are sorted, array order is preserved and insignificant whitespace is omitted. Only the current layer's outer `sign` field is removed; embedded layer signatures remain covered. Sign the supplied bytes directly.
 
-Return `SignatureInfo` with `alg`, a trusted key identifier and an unpadded Base64URL signature. Resolve verification keys and their bound algorithm through a trusted registry: the outer signature metadata is not covered by its own layer's signature. Callback exceptions or invalid signer metadata map to `A4P_SIGNING_FAIL`. Verifier exceptions, null verdicts, or disagreement between `valid` and `code == 0` map to `A4P_VERIFY_FAIL`. Lifecycle operations requiring a positive verdict also map a negative verdict to `A4P_VERIFY_FAIL`.
+Return `SignatureInfo` with `alg`, a trusted key identifier and an unpadded Base64URL signature. Resolve verification keys and their bound algorithm through a trusted registry: the outer signature metadata is not covered by its own layer's signature. All signer callback exceptions (including `A4pException`) map to `A4P_SIGNING_FAIL`. Invalid returned signature metadata maps to `A4P_INVALID_PARAMETER`. Verifier exceptions, null verdicts, or disagreement between `valid` and `code == 0` map to `A4P_VERIFY_FAIL`. Lifecycle operations requiring a positive verdict also map a negative verdict to `A4P_VERIFY_FAIL`.
 
 | API | Cryptographic verification performed |
 | --- | --- |
@@ -205,6 +197,9 @@ IntentExecutionContext restoredContext = restored.data();
 The same codec supports L1, L2 and L3 serialization and restoration. Context JSON contains `version`, `intentId`, `authorizedIntent`, `activatedTime`, `status`, `executionInfo` and `executions`. Serialization takes a consistent context snapshot under its lock. Parsing rejects duplicate keys and trailing tokens; structural validation failures may return specific protocol errors rather than only 5002. Intent deserializers check structure; context restoration additionally checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
+
+1. REVOKED contexts must include revokedTime, which must not precede activation or any reservation.
+2. Precise integer JSON values must stay within the JavaScript safe integer range; floating-point values retain JCS semantics.
 
 ## Result codes
 
@@ -237,6 +232,10 @@ Code 4003 is retained for ArkTS compatibility; Java uses 4004 for per-period exe
 1. Create or restore all Intent and Context structures through SDK APIs. Hand-assembled lifecycle structures may cause undefined behavior. Applications may construct the documented request, identity, environment and order input models.
 2. Follow the lifecycle: createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution or cancelExecution. An ACTIVE Context may be revoked.
 3. Do not repeat the same lifecycle step for an Intent, activation/revocation for a Context, or reservation/finalization for an Execution. An ACTIVE Context may process distinct Executions; reads and serialization may be repeated.
-4. Persist the Context after activateIntent and every other API returning a Context. A failed createExecution may change its status to EXPIRED, so persist the current Context as well. Persistence is the caller's responsibility.
+4. Persist the Context object returned by activateIntent and other APIs returning a Context. Even if createExecution fails, it may change the status to EXPIRED; persist the current Context in that case as well. Persistence is not performed automatically by the SDK.
 5. The SDK does not protect persisted Contexts against tampering or verify their integrity. Add caller-side verification where required; structural checks during deserialization are not security integrity checks.
 6. Serialized Contexts are for local persistence only and must not be transmitted as network messages.
+7. Authorization APIs (Intent-related APIs) do not enforce chronological ordering of L1/L2/L3 timestamps; these timestamps are used for auditing.
+8. Implementations of the signing and signature-verification interfaces must conform to the specification.
+9. The caller must enforce idempotency for Intent and Context operations.
+10. Prevent concurrent API calls.

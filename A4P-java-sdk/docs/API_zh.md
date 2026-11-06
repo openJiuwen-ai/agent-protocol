@@ -35,13 +35,13 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 ## 时间戳规则
 
-所有时间戳和显式 `now` 参数均为 Unix epoch 毫秒。省略 `now` 的重载使用 `System.currentTimeMillis()`；显式时间必须来自可信时钟。协议数值为 ±9007199254740991 范围内的整数；时间戳非负，金额与数量为正整数。金额使用应用约定的货币最小单位。
+所有时间戳和显式 `now` 参数均为 Unix epoch 毫秒。生命周期操作必须显式传入 `now`；显式时间必须来自可信时钟。协议数值为 ±9007199254740991 范围内的整数；时间戳非负，金额与数量为正整数。金额使用应用约定的货币最小单位。
 
 | 操作 | 时间要求 |
 | --- | --- |
-| `issueIntent` | `now >= L1.timestamp`，否则返回 `A4P_INVALID_PARAMETER`。 |
-| `signIntent` | `now >= L2.timestamp` 且 `now <= validUntil`，否则返回参数无效或过期；时间检查先于验签和签名。 |
-| `activateIntent` | `now >= L3.timestamp` 且 `now <= validUntil`，否则返回参数无效或过期；保存 `activatedTime = now`。 |
+| `createIntent`、`issueIntent` | 要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；先于签名或验签检查。`issueIntent` 不比较 now 与 L1.timestamp。 |
+| `signIntent` | 仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。 |
+| `activateIntent` | `now >= L2.timestamp` 且 `now <= validUntil`，否则返回参数无效或过期；保存 `activatedTime = now`。 |
 | `createExecution` | `now >= activatedTime` 且 `validFrom <= now <= validUntil`；过早返回 3003，过期返回 3002，并可能将 Context 置为 EXPIRED。 |
 | `completeExecution`、`cancelExecution` | `now >= reservedAt`，否则返回 3003；过期或撤销后仍可终结已有预留。 |
 | `revokeIntent` | `now >= activatedTime`，否则返回 3003；不受授权有效期窗口限制。 |
@@ -52,22 +52,14 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 | 类型 | 签名 | 说明 |
 | --- | --- | --- |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。 |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。 |
-| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。 |
-| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。 |
-| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；要求 `now >= L2.timestamp`（否则返回 `A4P_INVALID_PARAMETER`）且 `now <= validUntil`（否则返回 `A4P_TIMESTAMP_EXPIRED`，3002），时间校验先于验签和用户签名。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。省略 `now` 时使用系统时间。 |
-| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；要求 `now >= L2.timestamp`（否则返回 `A4P_INVALID_PARAMETER`）且 `now <= validUntil`（否则返回 `A4P_TIMESTAMP_EXPIRED`，3002），时间校验先于验签和用户签名。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier)` | 验证 L3 用户签名并创建 ACTIVE Context，记录 activatedTime。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | 验证 L3 用户签名并创建 ACTIVE Context，记录 activatedTime。 |
+| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）。 |
+| `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。验签前要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L1.timestamp。 |
+| `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。 |
+| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | 要求 `L2.timestamp <= now <= validUntil`，再验证 L3 用户签名并创建 ACTIVE Context，记录 `activatedTime = now`。过早返回 `A4P_INVALID_PARAMETER`，过期返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L3.timestamp。 |
 | `A4p` | `static A4pResult<VerificationResult> verifyIntentAuthenticity(IntentL3 intent, SignatureVerifier issuerVerifier)` | 验证意图链结构、版本和 L2 签发方签名，返回验证结果；不验证用户签名。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context)` | 将 ACTIVE Context 撤销为 REVOKED；已有 PENDING Execution仍可完成或取消。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now)` | 将 ACTIVE Context 撤销为 REVOKED；已有 PENDING Execution仍可完成或取消。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution)` | 校验有效期、状态、唯一 ID、订单及额度，追加 PENDING 预留并刷新额度。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution, long now)` | 校验有效期、状态、唯一 ID、订单及额度，追加 PENDING 预留并刷新额度。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context, String executionId)` | 完成指定 PENDING Execution，刷新当前周期 executionInfo；额度耗尽且无待处理Execution时变为 CONSUMED。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context, String executionId, long now)` | 完成指定 PENDING Execution，刷新当前周期 executionInfo；额度耗尽且无待处理Execution时变为 CONSUMED。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context, String executionId)` | 取消指定 PENDING Execution，释放其占用额度并刷新信息；账本记录保留。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context, String executionId, long now)` | 取消指定 PENDING Execution，释放其占用额度并刷新信息；账本记录保留。 |
 | `A4pErrorCode` | `int code()` | 读取结果码或异常对应的错误码。 |
 | `A4pErrorCode` | `String message()` | 读取诊断说明（SDK 生成的结果使用固定英文消息）。 |
@@ -175,7 +167,7 @@ record 提供规范构造器和标准 `equals`、`hashCode`、`toString`。`Sign
 
 使用应用自身的密钥设施实现 `Signer` 和 `SignatureVerifier`。SDK 提供规范 UTF-8 JSON 字节：对象键排序、数组顺序保留、不含无意义空白。仅去除当前层最外侧 `sign` 字段，内嵌层签名仍被覆盖；应直接签署 SDK 提供的字节。
 
-返回的 `SignatureInfo` 应包含 `alg`、可信密钥标识和无填充 Base64URL 签名。验签时应通过可信注册表解析密钥及其绑定算法；最外层签名元数据不被本层签名覆盖。签名回调异常或签名元数据无效映射为 `A4P_SIGNING_FAIL`。验签回调异常、返回 null 或 `valid` 与 `code == 0` 不一致映射为 `A4P_VERIFY_FAIL`。要求验签通过的生命周期方法也会将否定结论映射为 `A4P_VERIFY_FAIL`。
+返回的 `SignatureInfo` 应包含 `alg`、可信密钥标识和无填充 Base64URL 签名。验签时应通过可信注册表解析密钥及其绑定算法；最外层签名元数据不被本层签名覆盖。所有签名回调异常（包括 `A4pException`）均映射为 `A4P_SIGNING_FAIL`。返回的签名元数据无效映射为 `A4P_INVALID_PARAMETER`。验签回调异常、返回 null 或 `valid` 与 `code == 0` 不一致映射为 `A4P_VERIFY_FAIL`。要求验签通过的生命周期方法也会将否定结论映射为 `A4P_VERIFY_FAIL`。
 
 | API | 密码学验证 |
 | --- | --- |
@@ -205,6 +197,9 @@ IntentExecutionContext restoredContext = restored.data();
 同一个编解码器支持 L1、L2、L3 的序列化与恢复。Context JSON 包含 `version`、`intentId`、`authorizedIntent`、`activatedTime`、`status`、`executionInfo`、`executions`。序列化在 Context 锁内取得一致快照。解析拒绝重复键和尾随 token；结构校验失败可能返回具体协议错误，而非统一返回 5002。Intent 反序列化检查结构；Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。缺少必填 `activatedTime` 的旧 Context 无法直接恢复；应使用应用控制的可信迁移，或启动新的授权生命周期，同时避免重置已有授权用量。
+
+1. REVOKED 上下文必须包含 revokedTime，且撤销时间不得早于激活时间或任何预留时间。否则会解析失败
+2. 精确整数 JSON 值必须处于 JavaScript 安全整数范围内；浮点数保留 JCS 语义
 
 ## 结果码
 
@@ -237,6 +232,10 @@ IntentExecutionContext restoredContext = restored.data();
 1. 所有 Intent 和 Context 结构必须通过 SDK 接口创建或恢复，禁止自行组装，否则可能产生未定义行为。请求、身份、环境与订单等输入模型可按下文构造。
 2. 必须按生命周期顺序调用：createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution 或 cancelExecution；可撤销 ACTIVE Context。
 3. 同一个 Intent 的同一生命周期步骤、同一个 Context 的激活/撤销步骤以及同一执行的预留/终结步骤不得重复调用。一个 ACTIVE Context 可处理多个不同执行；只读查询与序列化可以重复。
-4. activateIntent 及其他返回 Context 的接口返回后必须持久化 Context。createExecution 失败时也可能把状态改为 EXPIRED，仍须持久化当前 Context。持久化不是 SDK 自动完成的。
+4. activateIntent 及其他返回 Context 的接口返回的 Context 对象需要被持久化储存。即使 createExecution 执行失败，也可能把状态改为 EXPIRED，此时仍须持久化当前 Context。持久化不是 SDK 自动完成的。
 5. SDK 不负责持久化 Context 的防篡改或完整性验证；需要该能力时由调用方自行校验。反序列化中的格式检查不代表安全完整性校验。
 6. 序列化 Context 只能用于本地持久化，不应作为消息通过网络传输。
+7. 授权阶段（Intent 相关接口）不会校验 L1/L2/L3 Intent 的先后顺序，只作为审计使用
+8. 签名/验签接口的实现需要确保其符合规范
+9. 调用方需要校验 Intent/Context 的幂等
+10. 防止并发调用接口

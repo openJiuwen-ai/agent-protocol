@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import static io.openjiuwen.a4p.A4pErrorCode.*;
 
 // Serializes to canonical JSON; deserialization parses strictly and validates the whole chain.
@@ -29,7 +30,7 @@ public class A4pIntentCodec {
      * @param activatedTime activation instant in Unix epoch milliseconds
      */
     record ContextJson(String version, String intentId, IntentL3 authorizedIntent, IntentExecutionStatus status,
-                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime) {}
+                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime, Long revokedTime) {}
 
     /**
      * Represents a persisted execution record; boxed reservedAt allows missing timestamps to be rejected.
@@ -55,7 +56,7 @@ public class A4pIntentCodec {
      * Serializes the SDK-created IntentL1 as canonical JSON.
      * @param intentL1 SDK-created first-layer intent
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentL1(IntentL1 intentL1) { return serialize(intentL1); }
 
@@ -63,7 +64,7 @@ public class A4pIntentCodec {
      * Serializes the SDK-created IntentL2 as canonical JSON.
      * @param intentL2 SDK-issued second-layer intent
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentL2(IntentL2 intentL2) { return serialize(intentL2); }
 
@@ -71,7 +72,7 @@ public class A4pIntentCodec {
      * Serializes the SDK-created IntentL3 as canonical JSON.
      * @param intentL3 SDK-authorized third-layer intent
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentL3(IntentL3 intentL3) { return serialize(intentL3); }
 
@@ -79,30 +80,39 @@ public class A4pIntentCodec {
      * Restores IntentL1 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentL1> deserializeIntentL1(String serialized) {
-        return decode(serialized, IntentL1.class, Validation::intentL1);
+        return decode(serialized, IntentL1.class, value -> {
+            Validation.intentL1(value);
+            Validation.version(value.version());
+        });
     }
 
     /**
      * Restores IntentL2 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentL2> deserializeIntentL2(String serialized) {
-        return decode(serialized, IntentL2.class, Validation::intentL2);
+        return decode(serialized, IntentL2.class, value -> {
+            Validation.intentL2(value);
+            Validation.versions(value);
+        });
     }
 
     /**
      * Restores IntentL3 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentL3> deserializeIntentL3(String serialized) {
-        return decode(serialized, IntentL3.class, Validation::intentL3);
+        return decode(serialized, IntentL3.class, value -> {
+            Validation.intentL3(value);
+            Validation.versions(value);
+        });
     }
 
     /**
@@ -110,9 +120,13 @@ public class A4pIntentCodec {
      * Context output is for local persistence only; callers provide storage integrity protection.
      * @param intentExecutionContext context for local persistence only
      * @return canonical JSON representation
-     * @throws A4pException if the input cannot be serialized
+     * @throws A4pException with code 5001 if the input cannot be serialized
      */
     public String serializeIntentExecutionContext(IntentExecutionContext intentExecutionContext) {
+        return serializeSafely(() -> serializeContext(intentExecutionContext));
+    }
+
+    private static String serializeContext(IntentExecutionContext intentExecutionContext) {
         Validation.present(intentExecutionContext);
         Map<String, Object> fields = new LinkedHashMap<>();
         // One lock for every field, so the ledger and executionInfo come from the same state.
@@ -121,11 +135,14 @@ public class A4pIntentCodec {
             fields.put("intentId", intentExecutionContext.intentId());
             fields.put("authorizedIntent", intentExecutionContext.authorizedIntent());
             fields.put("activatedTime", intentExecutionContext.activatedTime());
+            if (intentExecutionContext.revokedTime() != null) {
+                fields.put("revokedTime", intentExecutionContext.revokedTime());
+            }
             fields.put("status", intentExecutionContext.status());
             fields.put("executionInfo", intentExecutionContext.executionInfo());
             fields.put("executions", intentExecutionContext.executions());
         }
-        return CanonicalJson.stringify(fields);
+        return CanonicalJson.stringify(toJsonNode(fields));
     }
 
     // The user signature is not re-verified; the stored L3 is checked like activateIntent's input otherwise.
@@ -133,11 +150,12 @@ public class A4pIntentCodec {
      * Restores IntentExecutionContext from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * Checks activation time, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
+     * REVOKED contexts must include revokedTime.
      * @param serialized serialized local JSON representation
-     * @return restored object or a protocol failure result
+     * @return restored object, code 1001 for invalid structure, or code 5002 for other decoding failures
      */
     public A4pResult<IntentExecutionContext> deserializeIntentExecutionContext(String serialized) {
-        return A4pResult.capture(() -> restore(parse(serialized, ContextJson.class)));
+        return deserializeSafely(() -> restore(parse(serialized, ContextJson.class)));
     }
 
     /**
@@ -154,16 +172,18 @@ public class A4pIntentCodec {
         Validation.intentL3(authorized);
         Validation.versions(authorized);
         IntentL1 intent = authorized.intentL2().intentL1();
-        Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER);
+        Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER, "Context intent ID does not match the authorized intent ID");
         Validation.integer(wire.activatedTime(), false);
-        Validation.require(wire.activatedTime() >= authorized.timestamp(), A4P_INVALID_PARAMETER);
+        Validation.timeAtOrAfter(wire.activatedTime(), authorized.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the issuance time");
+        Validation.timeAtOrBefore(wire.activatedTime(), PaymentProfile.constraints(intent.structuredIntent()).validUntil(),
+                A4P_TIMESTAMP_EXPIRED, "Activation time is later than validUntil");
         Validation.present(wire.status());
         Validation.present(wire.executions());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
         for (RecordJson record : wire.executions()) {
             Validation.present(record);
             Validation.integer(record.reservedAt(), false);
-            Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER);
+            Validation.timeAtOrAfter(record.reservedAt(), wire.activatedTime(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the activation time");
             Order order = Validation.execution(new Execution(record.action(), record.executionId(),
                     record.executionContent()));
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),
@@ -171,11 +191,20 @@ public class A4pIntentCodec {
                     record.completedAt(), record.canceledAt()), order));
         }
         Long period = period(wire.executionInfo(), PaymentProfile.constraints(intent.structuredIntent()));
-        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime());
+        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime(), wire.revokedTime());
+        if (wire.status() == IntentExecutionStatus.REVOKED) {
+            Validation.integer(wire.revokedTime(), false);
+            Validation.timeAtOrAfter(wire.revokedTime(), wire.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Revocation time is earlier than the activation time");
+            for (RecordJson record : wire.executions()) {
+                Validation.timeAtOrBefore(record.reservedAt(), wire.revokedTime(), A4P_INVALID_PARAMETER,
+                        "Reservation time is later than the revocation time");
+            }
+        } else {
+            Validation.require(wire.revokedTime() == null, A4P_INVALID_PARAMETER, "Revocation time must be absent unless the intent is revoked");
+        }
         Validation.ledger(context);
         // executionInfo is derived state, so it must match what the restored ledger yields.
-        Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())),
-                A4P_INVALID_PARAMETER);
+        Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())), A4P_INVALID_PARAMETER, "Serialized execution info does not match the restored ledger");
         return context;
     }
 
@@ -187,14 +216,13 @@ public class A4pIntentCodec {
      * @return computed or stored accounting period, or null without periodic limits
      */
     private static Long period(JsonNode info, PaymentConstraints constraints) {
-        Validation.require(info != null && info.isObject(), A4P_INVALID_PARAMETER);
+        Validation.require(info != null && info.isObject(), A4P_INVALID_PARAMETER, "Execution info must be a non-null JSON object");
         JsonNode period = info.get("periodIndex");
         if (period == null || period.isNull()) {
-            Validation.require(constraints.anchorTime() == null, A4P_INVALID_PARAMETER);
+            Validation.require(constraints.anchorTime() == null, A4P_INVALID_PARAMETER, "Periodic intent requires a period index");
             return null;
         }
-        Validation.require(constraints.anchorTime() != null && period.isIntegralNumber() && period.canConvertToLong(),
-                A4P_INVALID_PARAMETER);
+        Validation.require(constraints.anchorTime() != null && period.isIntegralNumber() && period.canConvertToLong(), A4P_INVALID_PARAMETER, "Period index requires periodic constraints and must be a long integer");
         return period.longValue();
     }
 
@@ -204,8 +232,62 @@ public class A4pIntentCodec {
      * @return canonical JSON representation
      */
     private static String serialize(Object intent) {
-        Validation.present(intent);
-        return CanonicalJson.stringify(intent);
+        return serializeSafely(() -> {
+            Validation.present(intent);
+            return CanonicalJson.stringify(toJsonNode(intent));
+        });
+    }
+
+    /** Maps all serialization failures to the codec error while preserving the diagnostic cause. */
+    private static String serializeSafely(Supplier<String> action) {
+        try {
+            return action.get();
+        } catch (RuntimeException error) {
+            throw new A4pException(A4P_SERIALIZE_FAIL, A4P_SERIALIZE_FAIL.message(), error);
+        }
+    }
+
+    /** Preserves structural errors (1001), mapping other decoding failures to 5002. */
+    private static <T> A4pResult<T> deserializeSafely(Supplier<T> action) {
+        try {
+            return A4pResult.ok(action.get());
+        } catch (A4pException error) {
+            return A4pResult.failure(error.code() == A4P_INVALID_PARAMETER
+                    ? A4P_INVALID_PARAMETER : A4P_DESERIALIZE_FAIL);
+        } catch (RuntimeException error) {
+            return A4pResult.failure(A4P_DESERIALIZE_FAIL);
+        }
+    }
+
+    /** Applies wire mapping and removes only the outer signature before JCS encoding. */
+    static byte[] toSignableBytes(Object intent) {
+        JsonNode node = toJsonNode(intent);
+        if (!node.isObject()) { throw new A4pException(A4P_SERIALIZE_FAIL); }
+        ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("sign");
+        return CanonicalJson.encodeUtf8(CanonicalJson.stringify(node));
+    }
+
+    /** Converts protocol values to JSON, omitting null object fields recursively. */
+    static JsonNode toJsonNode(Object value) {
+        return omitNullFields(CanonicalJson.MAPPER.valueToTree(value));
+    }
+
+    static JsonNode omitNullFields(JsonNode node) {
+        if (node.isObject()) {
+            var result = CanonicalJson.MAPPER.createObjectNode();
+            node.properties().forEach(entry -> {
+                if (!entry.getValue().isNull()) {
+                    result.set(entry.getKey(), omitNullFields(entry.getValue()));
+                }
+            });
+            return result;
+        }
+        if (node.isArray()) {
+            var result = CanonicalJson.MAPPER.createArrayNode();
+            node.forEach(item -> result.add(omitNullFields(item)));
+            return result;
+        }
+        return node.deepCopy();
     }
 
     /**
@@ -217,11 +299,20 @@ public class A4pIntentCodec {
      * @return validated value or a protocol failure
      */
     private static <Value> A4pResult<Value> decode(String json, Class<Value> type, Consumer<Value> validate) {
-        return A4pResult.capture(() -> {
+        return deserializeSafely(() -> {
             Value value = parse(json, type);
             validate.accept(value);
             return value;
         });
+    }
+
+    /** Rejects explicit nulls recursively, including array elements, before typed conversion. */
+    private static void rejectNullValues(JsonNode node) {
+        Validation.require(node != null && !node.isNull(), A4P_INVALID_PARAMETER,
+                "JSON values must not be null; omit absent object fields");
+        if (node.isContainerNode()) {
+            node.forEach(A4pIntentCodec::rejectNullValues);
+        }
     }
 
     /**
@@ -232,8 +323,9 @@ public class A4pIntentCodec {
      * @return decoded or parsed value
      */
     private static <Value> Value parse(String json, Class<Value> type) {
-        Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER);
-        Object parsed = CanonicalJson.parse(json);
+        Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
+        JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
+        rejectNullValues(parsed);
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {

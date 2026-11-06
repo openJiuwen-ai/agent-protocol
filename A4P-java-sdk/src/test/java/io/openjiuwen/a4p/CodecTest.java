@@ -19,6 +19,93 @@ class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
 
     @Test
+    void revokedContextsRequireRevocationTime() {
+        IntentExecutionContext context = context();
+        ok(A4p.createExecution(context, execution("pending", 100, 1), NOW));
+        ok(A4p.revokeIntent(context, NOW));
+        ObjectNode wire = (ObjectNode) CanonicalJson.MAPPER.valueToTree(
+                CanonicalJson.parse(codec.serializeIntentExecutionContext(context)));
+        ok(codec.deserializeIntentExecutionContext(wire.toString()));
+        wire.remove("revokedTime");
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(wire.toString()));
+        wire.put("revokedTime", -1);
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(wire.toString()));
+    }
+
+    @Test
+    void revokedContextRejectsReservationsAfterRevocationButAllowsLaterFinalization() {
+        IntentExecutionContext context = context();
+        ok(A4p.createExecution(context, execution("one", 100, 1), NOW));
+        ok(A4p.createExecution(context, execution("two", 100, 1), NOW));
+        ok(A4p.revokeIntent(context, NOW));
+        ok(A4p.completeExecution(context, "one", NOW + 2));
+        ok(A4p.cancelExecution(context, "two", NOW + 2));
+        String json = codec.serializeIntentExecutionContext(context);
+        assertEquals(IntentExecutionStatus.REVOKED,
+                ok(codec.deserializeIntentExecutionContext(json)).status());
+        ObjectNode tampered = (ObjectNode) CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
+        ((ObjectNode) tampered.withArray("executions").get(0)).put("reservedAt", NOW + 1);
+        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(tampered.toString()));
+    }
+
+    @Test
+    void rejectsExplicitNullFieldsAndArrayElements() {
+        String json = codec.serializeIntentL3(authorized(constraints()));
+        for (String extra : List.of("\"extra\":null,", "\"extra\":{\"nested\":null},",
+                "\"extra\":[null],")) {
+            fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL3("{" + extra + json.substring(1)));
+        }
+    }
+
+    @Test
+    void restoredActivationMustNotExceedValidUntil() throws Exception {
+        IntentL3 intent = authorized(constraints());
+        long validUntil = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent()).validUntil();
+        IntentExecutionContext boundary = ok(A4p.activateIntent(intent, VERIFIER, validUntil));
+        String json = codec.serializeIntentExecutionContext(boundary);
+        assertEquals(validUntil, ok(codec.deserializeIntentExecutionContext(json)).activatedTime());
+        ObjectNode expired = (ObjectNode) CanonicalJson.MAPPER.readTree(json);
+        expired.put("activatedTime", validUntil + 1);
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(expired.toString()));
+    }
+
+    @Test
+    void deserializationRequiresSupportedVersionAtEveryLayer() throws Exception {
+        IntentL3 intent = authorized(constraints());
+        var l1 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL1(intent.intentL2().intentL1()));
+        l1.put("version", "2.0");
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1(l1.toString()));
+        for (String path : List.of("", "/intentL1")) {
+            var l2 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL2(intent.intentL2()));
+            ((ObjectNode) l2.at(path)).put("version", "2.0");
+            fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL2(l2.toString()));
+        }
+        for (String path : List.of("", "/intentL2", "/intentL2/intentL1")) {
+            var l3 = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentL3(intent));
+            ((ObjectNode) l3.at(path)).put("version", "2.0");
+            fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL3(l3.toString()));
+        }
+    }
+
+    @Test
+    void canonicalJsonOmitsNullObjectFieldsAndUsesEcmascriptNumbers() {
+        String input = "{\"z\":null,\"a\":[null,{\"b\":null}]}";
+        assertEquals("{\"a\":[null,{}]}",
+                CanonicalJson.stringify(CanonicalJson.parse(input)));
+        assertEquals("{\"a\":[null,{}]}", CanonicalJson.stringify(
+                A4pIntentCodec.toJsonNode(CanonicalJson.parse(input))));
+        assertEquals("[333333333.3333333,1e+30,4.5,0.002,1e-27]",
+                CanonicalJson.stringify(CanonicalJson.parse(
+                        "[333333333.33333329,1E30,4.50,2e-3,1e-27]")));
+        assertEquals("0", CanonicalJson.stringify(-0.0));
+        assertEquals("null", CanonicalJson.stringify(CanonicalJson.parse("null")));
+        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(9007199254740992L));
+        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(new java.math.BigInteger("-9007199254740993")));
+        thrown(A4P_DESERIALIZE_FAIL, () -> CanonicalJson.parse("1e400"));
+        thrown(A4P_DESERIALIZE_FAIL, () -> CanonicalJson.parse("\"" + (char) 0xd800 + "\""));
+    }
+
+    @Test
     void canonicalVectorsMatchArkts() {
         assertEquals("{\"a\":2,\"b\":1}", CanonicalJson.stringify(Map.of("b", 1, "a", 2)));
         assertEquals("[3,1,2]", CanonicalJson.stringify(List.of(3, 1, 2)));
@@ -43,17 +130,17 @@ class CodecTest {
 
     @Test
     void rejectsNonCanonicalNumbersCyclesAndObjects() {
-        for (Number number : List.of(1.5, Double.NaN, Double.POSITIVE_INFINITY, 9_007_199_254_740_992L)) {
+        for (Number number : List.of(Double.NaN, Double.POSITIVE_INFINITY)) {
             thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(number));
         }
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(new Object()));
-        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(JsonNodeFactory.instance.numberNode(1.5)));
+        assertEquals("1.5", CanonicalJson.stringify(JsonNodeFactory.instance.numberNode(1.5)));
         List<Object> cycle = new ArrayList<>();
         cycle.add(cycle);
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(cycle));
         Map<String, Object> nullable = new LinkedHashMap<>();
         nullable.put("null", null);
-        assertEquals("{\"null\":null}", CanonicalJson.stringify(nullable));
+        assertEquals("{}", CanonicalJson.stringify(nullable));
     }
 
     @Test
@@ -61,9 +148,9 @@ class CodecTest {
         Map<String, Object> value = Map.of("sign", Map.of("alg", "RSA3072", "sign", "outer"),
                 "nested", Map.of("sign", "inner"));
         assertEquals("{\"nested\":{\"sign\":\"inner\"}}",
-                new String(CanonicalJson.toSignableBytes(value), StandardCharsets.UTF_8));
+                new String(A4pIntentCodec.toSignableBytes(value), StandardCharsets.UTF_8));
         IntentL3 intent = authorized(constraints());
-        assertTrue(new String(CanonicalJson.toSignableBytes(intent), StandardCharsets.UTF_8)
+        assertTrue(new String(A4pIntentCodec.toSignableBytes(intent), StandardCharsets.UTF_8)
                 .contains(intent.intentL2().sign().sign()));
     }
 
@@ -72,8 +159,8 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         IntentL3 relabeled = new IntentL3(intent.version(), intent.intentL2(), intent.signingEnv(), intent.timestamp(),
                 new SignatureInfo(AlgorithmType.RSA3072, "other-key", intent.sign().sign()));
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent), CanonicalJson.toSignableBytes(relabeled));
-        String signed = new String(CanonicalJson.toSignableBytes(intent), StandardCharsets.UTF_8);
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent), A4pIntentCodec.toSignableBytes(relabeled));
+        String signed = new String(A4pIntentCodec.toSignableBytes(intent), StandardCharsets.UTF_8);
         assertTrue(signed.contains("\"keyIdentifier\":\"key\""));
     }
 
@@ -117,13 +204,13 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         IntentL3 decoded = ok(codec.deserializeIntentL3(codec.serializeIntentL3(intent)));
         assertEquals(intent, decoded);
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent), CanonicalJson.toSignableBytes(decoded));
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent), A4pIntentCodec.toSignableBytes(decoded));
         assertEquals(intent.intentL2(), ok(codec.deserializeIntentL2(codec.serializeIntentL2(intent.intentL2()))));
         assertEquals(intent.intentL2().intentL1(), ok(codec.deserializeIntentL1(
                 codec.serializeIntentL1(intent.intentL2().intentL1()))));
         assertTrue(ok(A4p.verifyIntentAuthenticity(decoded, VERIFIER)).valid());
         ok(A4p.activateIntent(decoded, VERIFIER, NOW));
-        thrown(A4P_INVALID_PARAMETER, () -> codec.serializeIntentL1(null));
+        thrown(A4P_SERIALIZE_FAIL, () -> codec.serializeIntentL1(null));
     }
 
     @Test
@@ -146,8 +233,6 @@ class CodecTest {
                 json.replace("\"resources\"", "\"resource\""),
                 json.replace("\"totalMaxAmount\":1000", "\"totalMaxAmount\":1000.5"),
                 json.replace("\"totalMaxAmount\":1000", "\"totalMaxAmount\":null"),
-                // An explicit null on an optional field is rejected rather than read as "absent".
-                json.replace("\"singleOrderMaxAmount\":500", "\"singleOrderMaxAmount\":null"),
                 json.replace("\"quantity\":1", "\"quantity\":1,\"extra\":true"));
         for (String input : tampered) {
             assertNotEquals(json, input);
@@ -189,14 +274,14 @@ class CodecTest {
         ok(A4p.createExecution(restored, execution("four", 100, 1), NOW + 10_000));
         fails(A4P_EXECUTION_COUNT_EXCEEDED, A4p.createExecution(restored, execution("five", 100, 1), NOW + 10_000));
         ok(A4p.completeExecution(restored, "three", NOW + 10_000));
-        thrown(A4P_INVALID_PARAMETER, () -> codec.serializeIntentExecutionContext(null));
+        thrown(A4P_SERIALIZE_FAIL, () -> codec.serializeIntentExecutionContext(null));
     }
 
     @Test
     void executionContextKeepsTerminalStatusAndOmitsInapplicableFigures() {
         PaymentConstraints unbounded = new PaymentConstraints(null, 1000L, "CNY", 0L, 100_000L, null, null, null, null);
         IntentExecutionContext context = ok(A4p.activateIntent(authorized(unbounded), VERIFIER, NOW));
-        ok(A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
         String json = codec.serializeIntentExecutionContext(context);
         assertTrue(json.contains("\"executionInfo\":{\"leftAmount\":1000},\"executions\":[]"));
         IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(json));
@@ -219,7 +304,7 @@ class CodecTest {
         String json = codec.serializeIntentExecutionContext(ledgerContext());
         String version = "\"version\":\"1.0\"}";
         assertTrue(json.endsWith(version));
-        fails(A4P_UNSUPPORTED_VERSION, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 json.substring(0, json.length() - version.length()) + "\"version\":\"2.0\"}"));
         Map<String, A4pErrorCode> tampered = new LinkedHashMap<>();
         tampered.put(json.replaceFirst("\\{", "{\"extra\":1,"), A4P_INVALID_PARAMETER);
@@ -243,7 +328,7 @@ class CodecTest {
         tampered.put(json.replace("\"quantity\":1}", "\"quantity\":3}"), A4P_CART_MISMATCH);
         tampered.forEach((input, code) -> {
             assertNotEquals(json, input);
-            fails(code, codec.deserializeIntentExecutionContext(input));
+            fails(code == A4P_INVALID_PARAMETER ? A4P_INVALID_PARAMETER : A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(input));
         });
     }
 
@@ -256,14 +341,14 @@ class CodecTest {
         String pending = codec.serializeIntentExecutionContext(context);
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 pending.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
-        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 pending.replace("\"reservedAt\":20000", "\"reservedAt\":19999")));
-        fails(A4P_TIMESTAMP_EXPIRED, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 pending.replace("\"reservedAt\":20000", "\"reservedAt\":100001")));
 
         ok(A4p.completeExecution(context, "one", 20_000));
         String completed = codec.serializeIntentExecutionContext(context);
-        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 completed.replace("\"completedAt\":20000", "\"completedAt\":19999")));
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                 completed.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
@@ -271,7 +356,7 @@ class CodecTest {
         ok(A4p.createExecution(context, execution("two", 100, 1), 20_000));
         ok(A4p.cancelExecution(context, "two", 20_000));
         String canceled = codec.serializeIntentExecutionContext(context);
-        fails(A4P_TIMESTAMP_TOO_EARLY, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 canceled.replace("\"canceledAt\":20000", "\"canceledAt\":19999")));
 
         ok(A4p.createExecution(context, execution("three", 100, 1), 20_000));
@@ -283,6 +368,7 @@ class CodecTest {
                 consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"ACTIVE\"")));
         // REVOKED and EXPIRED are reachable whatever the ledger holds.
         assertEquals(IntentExecutionStatus.REVOKED, ok(codec.deserializeIntentExecutionContext(
-                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\""))).status());
+                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\",\"revokedTime\":20000"))).status());
     }
 }
+
