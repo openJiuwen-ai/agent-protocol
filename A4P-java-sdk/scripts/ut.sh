@@ -8,6 +8,7 @@
 #   - outputs/unit_test_report.html (HTML 报告)
 #   - outputs/junit.xml (JUnit XML, 供 CI 解析)
 #   - outputs/ut.json (状态汇总)
+#   - outputs/jacoco/index.html (JaCoCo 覆盖率报告)
 #
 # 判定: mvn 退出码 0=PASS, 非0=FAILED。
 set -eu
@@ -56,8 +57,11 @@ HTML="$BASE_DIR/outputs/unit_test_report.html"
 JUNIT="$BASE_DIR/outputs/junit.xml"
 LOG="$BASE_DIR/outputs/ut.log"
 JSON="$BASE_DIR/outputs/ut.json"
+JACOCO="$BASE_DIR/outputs/jacoco"
 # 清除上次运行或随仓库检出的报告，避免失败时上传旧产物。
 rm -f -- "$HTML" "$JUNIT" "$LOG" "$JSON"
+rm -rf -- "$JACOCO"
+rm -f -- "$JAVA_PROJECT_DIR/target/jacoco.exec"
 m=""
 for t in git mvn java; do
   command -v "$t" >/dev/null || m="$m $t"
@@ -81,6 +85,16 @@ rc=0
 mvn --batch-mode --no-transfer-progress -f examples/pom.xml clean 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
 if [ "$rc" -eq 0 ]; then
   bash "$SCRIPT_DIR/build.sh" ut 2>&1 | tee -a "$LOG" || rc=${PIPESTATUS[0]}
+fi
+if [ -f "$JAVA_PROJECT_DIR/target/jacoco.exec" ]; then
+  coverage_rc=0
+  mvn --batch-mode --no-transfer-progress -f pom.xml jacoco:report 2>&1 | tee -a "$LOG" || coverage_rc=${PIPESTATUS[0]}
+  if [ "$coverage_rc" -eq 0 ]; then
+    cp -R "$JAVA_PROJECT_DIR/target/site/jacoco" "$JACOCO"
+    echo ">>> Generated coverage report: $JACOCO/index.html"
+  elif [ "$rc" -eq 0 ]; then
+    rc=$coverage_rc
+  fi
 fi
 
 # ---------------------------------------------------------------------------
