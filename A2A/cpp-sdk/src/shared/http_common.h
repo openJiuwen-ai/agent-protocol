@@ -110,6 +110,7 @@ struct HttpResponse {
     bool success = false;
     A2A::UserData userData;
     int statusCode = 0;
+    int errCode = 0; // Transport-level error code (A2AErrorCode); 0 = not mapped
     std::string errorMessage; // Error message (when success is false)
     std::string statusText;
     ServerSentEvent sseEvent;

@@ -13,6 +13,9 @@
 
 namespace A2A::Client {
 
+/** @brief Default AgentCard discovery timeout in seconds. */
+constexpr int DEFAULT_CARD_TIMEOUT_SECONDS = 60;
+
 /**
  * @brief Resolves AgentCard documents from a remote or local source.
  * @note 代理卡片解析器抽象接口。
@@ -25,19 +28,23 @@ public:
     /**
      * @brief Fetch an agent card from a relative path.
      * @param[in] relativeCardPath Optional path relative to the resolver base URL.
+     * @param[in] timeout Discovery request timeout in seconds (0 = SDK default 60s).
      * @return Future that completes with the resolved AgentCard.
      * @throws A2AClientHTTPError on non-2xx HTTP status.
      * @throws A2AClientJSONError on invalid card JSON.
      */
     virtual std::future<AgentCard> GetAgentCard(
-        const std::optional<std::string>& relativeCardPath = std::nullopt) const = 0;
+        const std::optional<std::string>& relativeCardPath = std::nullopt,
+        int timeout = DEFAULT_CARD_TIMEOUT_SECONDS) const = 0;
 
     /**
      * @brief Fetch all agent cards from the resolver source.
+     * @param[in] timeout Discovery request timeout in seconds (0 = SDK default 60s).
      * @return Future that completes with a vector of AgentCard objects.
      * @throws A2AClientHTTPError on transport failure.
      */
-    virtual std::future<std::vector<AgentCard>> GetAllAgentCards() const = 0;
+    virtual std::future<std::vector<AgentCard>> GetAllAgentCards(
+        int timeout = DEFAULT_CARD_TIMEOUT_SECONDS) const = 0;
 };
 
 } // namespace A2A::Client

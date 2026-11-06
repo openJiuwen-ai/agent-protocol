@@ -99,6 +99,11 @@ std::variant<Message, A2AError, std::pair<Task, UpdateEvent>>
 | 任务不存在 | code 常为 `TASK_NOT_FOUND`（-32001） | 校验 taskId |
 | HTTP 连接失败 | `A2AClientHTTPError` | 检查网络与 `LD_LIBRARY_PATH` |
 | Card 解析失败 | `A2AClientJSONError` | 检查 `/.well-known/agent-card.json` |
+| 请求超时 | `A2AClientTimeoutError`（`A2A_REQUEST_TIMEOUT` -32101），消息含 `stage` 与 `elapsed` | 按阶段定位：`connect-or-waiting-response-headers` / `waiting-response-body` / `stream-idle` |
+
+> **超时错误信息**：传输层超时会携带阶段与已消耗时间，例如
+> `request timed out [stage=stream-idle, idle=60023ms, elapsed=60023ms]`。
+> 分阶段超时配置见 [client.md - 超时语义](api/client.md#超时语义)。
 
 ## Server 侧
 

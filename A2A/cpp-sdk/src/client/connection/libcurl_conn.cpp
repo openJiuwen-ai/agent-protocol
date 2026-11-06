@@ -22,8 +22,8 @@ constexpr int GRACEFUL_STOP_SLEEP_TIME = 10;
 constexpr int DEFAULT_QUEUE_CAPACITY = 1024;
 constexpr int DEFAULT_QUEUE_MAX_BATCH_SIZE = 16;
 
-// SSE field prefix lengths
-constexpr int MAX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes in milliseconds
+// 30 minutes in milliseconds; same limit as the public MAX_TIMEOUT_SECONDS cap
+constexpr int MAX_TIMEOUT_MS = MAX_TIMEOUT_SECONDS * SECONDS_TO_MS;
 
 class CurlGlobal {
 public:
@@ -54,22 +54,80 @@ static bool EnsureCurlGlobal()
     return instance.Init();
 }
 
+// Map libcurl transfer failures to A2A client error codes.
+// Returns 0 when no specific mapping applies (falls back to HTTP_PARSE_ERROR).
+int CurlErrorCode(CURLcode result)
+{
+    if (result == CURLE_OPERATION_TIMEDOUT) {
+        return static_cast<int>(A2AErrorCode::A2A_REQUEST_TIMEOUT);
+    }
+    switch (result) {
+        case CURLE_COULDNT_RESOLVE_PROXY:
+        case CURLE_COULDNT_RESOLVE_HOST:
+        case CURLE_COULDNT_CONNECT:
+        case CURLE_SSL_CONNECT_ERROR:
+            return static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION);
+        default:
+            return 0;
+    }
+}
+
+// Map a libcurl failure to a stage-aware description; timeouts identify which
+// stage (connect / response / stream idle) ran out of time.
+std::string DescribeCurlError(const std::shared_ptr<RequestContext>& request, CURLcode result)
+{
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - request->startTime).count();
+    const std::string elapsed = std::to_string(elapsedMs);
+    if (result == CURLE_OPERATION_TIMEDOUT) {
+        std::string stage;
+        if (request->headerData.empty()) {
+            // No response headers yet: TCP connect / TLS handshake / server not
+            // responding. Applies to streaming requests too - their idle window
+            // is enforced by OnIdleCheck, so a curl-reported timeout here is a
+            // connect-phase timeout, not "stream idle".
+            stage = "connect-or-waiting-response-headers";
+        } else if (request->userData.isStream) {
+            stage = "stream-idle";
+        } else {
+            stage = "waiting-response-body";
+        }
+        return "request timed out [stage=" + stage + ", elapsed=" + elapsed + "ms]";
+    }
+    return std::string(curl_easy_strerror(result)) + " [elapsed=" + elapsed + "ms]";
+}
+
+int ClampTimeoutSecondsToMs(int seconds)
+{
+    if (seconds > MAX_TIMEOUT_SECONDS) {
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "Timeout " + std::to_string(seconds) + "s exceeds the " +
+            std::to_string(MAX_TIMEOUT_SECONDS) + "s cap, clamped");
+        return MAX_TIMEOUT_SECONDS * SECONDS_TO_MS;
+    }
+    return seconds * SECONDS_TO_MS;
+}
+
 LibcurlConn::LibcurlConn(std::string url, std::unordered_map<std::string, std::string> headers,
-    int timeout, int sseReadTimeout)
-    : url_(std::move(url)), sseReadTimeout_(sseReadTimeout),
+    int connectTimeoutMs, int requestTimeoutMs, int streamIdleTimeoutMs)
+    : url_(std::move(url)),
     requestQueue_(DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_MAX_BATCH_SIZE)
 {
-    if (timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
-        throw std::invalid_argument("Invalid timeout value");
+    if (connectTimeoutMs <= 0 || connectTimeoutMs > MAX_TIMEOUT_MS) {
+        throw std::invalid_argument("Invalid connect timeout value");
     }
 
-    if (sseReadTimeout_ <= 0 || sseReadTimeout_ > MAX_TIMEOUT_MS) {
-        throw std::invalid_argument("Invalid SSE read timeout value");
+    if (requestTimeoutMs <= 0 || requestTimeoutMs > MAX_TIMEOUT_MS) {
+        throw std::invalid_argument("Invalid request timeout value");
+    }
+
+    if (streamIdleTimeoutMs <= 0 || streamIdleTimeoutMs > MAX_TIMEOUT_MS) {
+        throw std::invalid_argument("Invalid stream idle timeout value");
     }
 
     // Create LibcurlConnConfig with timeout settings
-    config_.connectionTimeoutMs = timeout;
-    config_.requestTimeoutMs = sseReadTimeout;
+    config_.connectionTimeoutMs = connectTimeoutMs;
+    config_.requestTimeoutMs = requestTimeoutMs;
+    config_.streamIdleTimeoutMs = streamIdleTimeoutMs;
 
     // Initialize request headers with Accept and Content-Type, then merge user headers
     requestHeaders_[Http::CONTENT_TYPE_HEADER] = Http::CONTENT_TYPE_JSON;
@@ -131,16 +189,8 @@ void LibcurlConn::SetCallback(std::shared_ptr<ConnCallback> callback)
     callback_ = std::move(callback);
 }
 
-void LibcurlConn::FinishRequest([[maybe_unused]] int timerId)
-{
-}
-
-void LibcurlConn::RefreshRequest([[maybe_unused]] int timerId, [[maybe_unused]] int timeout)
-{
-}
-
 int LibcurlConn::SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
-    std::shared_ptr<UserData> userData, [[maybe_unused]] int timeout)
+    std::shared_ptr<UserData> userData, int timeoutSecs)
 {
     // Prepare HTTP request for LibcurlConn
     HttpRequest httpRequest{};
@@ -178,7 +228,18 @@ int LibcurlConn::SendMessage(const std::string& message, const std::map<std::str
         }
     };
 
-    return this->Send(httpRequest, *userData, sseReadTimeout_, nullptr, callback);
+    // Resolve the per-request timeout (seconds -> milliseconds). A value of 0
+    // falls back to the connection defaults. Non-streaming requests get a total
+    // timeout; streaming requests get an idle timeout between data arrivals.
+    // Values above the SDK cap are clamped (see MAX_TIMEOUT_SECONDS).
+    int timeoutMs;
+    if (userData->isStream) {
+        timeoutMs = timeoutSecs > 0 ? ClampTimeoutSecondsToMs(timeoutSecs) : config_.streamIdleTimeoutMs;
+    } else {
+        timeoutMs = timeoutSecs > 0 ? ClampTimeoutSecondsToMs(timeoutSecs) : config_.requestTimeoutMs;
+    }
+
+    return this->Send(httpRequest, *userData, timeoutMs, nullptr, callback);
 }
 
 void LibcurlConn::HandleResponse(const HttpResponse& response)
@@ -189,7 +250,10 @@ void LibcurlConn::HandleResponse(const HttpResponse& response)
         if (!response.errorMessage.empty()) {
             reason += ": " + response.errorMessage;
         }
-        SendError(reason, HTTP_PARSE_ERROR, response.userData);
+        // Use the transport-level error code when mapped (e.g. A2A_REQUEST_TIMEOUT
+        // with stage/elapsed info), otherwise fall back to the generic parse error.
+        int errCode = response.errCode != 0 ? response.errCode : HTTP_PARSE_ERROR;
+        SendError(reason, errCode, response.userData);
         if (callback_ != nullptr) {
             callback_->OnDisconnected(reason);
         }
@@ -332,6 +396,16 @@ bool LibcurlConn::Start()
         return false;
     }
 
+    // Create repeating timer for stream idle checks (runs on the I/O thread).
+    // Failure is non-fatal: SetupCurlHandle falls back to curl's low-speed
+    // abort for streaming requests so silent streams cannot hang forever.
+    idleCheckTimerId_ = eventSystem_->AddTimer(
+        STREAM_IDLE_CHECK_INTERVAL_MS,
+        [this](int, short, void*) { OnIdleCheck(); }, nullptr, true);
+    if (idleCheckTimerId_ == -1) {
+        A2A_LOG(A2A_LOG_LEVEL::WARN, "Failed to create stream idle check timer; falling back to curl low-speed abort");
+    }
+
     state_.store(ConnState::RUNNING, std::memory_order_release);
 
     ioThread_ = std::thread(&LibcurlConn::IoThreadMain, this);
@@ -431,12 +505,13 @@ void LibcurlConn::IoThreadMain()
 }
 
 void LibcurlConn::HandleErrorResponse(const std::shared_ptr<RequestContext>& request,
-    const std::string& errorMessage) const
+    const std::string& errorMessage, int errCode) const
 {
     HttpResponse errorResponse;
     errorResponse.success = false;
     errorResponse.userData = request->userData;
     errorResponse.statusCode = 0;
+    errorResponse.errCode = errCode;
     errorResponse.errorMessage = errorMessage;
     if (request->responseHeaderCallback != nullptr) {
         request->responseHeaderCallback(errorResponse);
@@ -528,25 +603,9 @@ void LibcurlConn::HandleStopRequestInIOThread()
         }
         A2A_LOG(A2A_LOG_LEVEL::INFO, "Processed " + std::to_string(processed) + " requests from queue during stop");
     }
-    // 3. Wait for active requests to complete (max 3 seconds)
+    // 3. Wait for active requests to complete (max GRACEFUL_STOP_TIMEOUT)
     if (!activeRequests_.empty()) {
-        A2A_LOG(A2A_LOG_LEVEL::INFO, "Waiting for " + std::to_string(activeRequests_.size()) +
-            " active requests to complete");
-        auto start = std::chrono::steady_clock::now();
-        while (!activeRequests_.empty()) {
-            // Trigger socket action to allow requests to complete
-            int running = 0;
-            curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &running);
-            CheckMultiInfo();
-            // Check timeout
-            auto elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            if (elapsed > GRACEFUL_STOP_TIMEOUT) {
-                break;
-            }
-            // Short sleep to avoid busy waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(GRACEFUL_STOP_SLEEP_TIME));
-        }
+        WaitForActiveRequestsToComplete();
     }
     // 4. Force cancel remaining active requests
     if (!activeRequests_.empty()) {
@@ -567,11 +626,37 @@ void LibcurlConn::HandleStopRequestInIOThread()
         }
     }
     socketContexts_.clear();
+    // Remove the stream idle check timer before stopping the event loop
+    if (idleCheckTimerId_ != -1 && eventSystem_ != nullptr) {
+        eventSystem_->RemoveEvent(idleCheckTimerId_);
+        idleCheckTimerId_ = -1;
+    }
     // 6. Set state to stopped before stopping event loop
     state_.store(ConnState::STOPPED, std::memory_order_release);
     // 7. Stop event loop
     A2A_LOG(A2A_LOG_LEVEL::INFO, "Stopping event loop");
     eventSystem_->Stop();
+}
+
+void LibcurlConn::WaitForActiveRequestsToComplete()
+{
+    A2A_LOG(A2A_LOG_LEVEL::INFO, "Waiting for " + std::to_string(activeRequests_.size()) +
+        " active requests to complete");
+    auto start = std::chrono::steady_clock::now();
+    while (!activeRequests_.empty()) {
+        // Trigger socket action to allow requests to complete
+        int running = 0;
+        curl_multi_socket_action(multiHandle_, CURL_SOCKET_TIMEOUT, 0, &running);
+        CheckMultiInfo();
+        // Check timeout
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed > GRACEFUL_STOP_TIMEOUT) {
+            break;
+        }
+        // Short sleep to avoid busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(GRACEFUL_STOP_SLEEP_TIME));
+    }
 }
 
 void LibcurlConn::CheckMultiInfo()
@@ -619,7 +704,7 @@ void LibcurlConn::CheckMultiInfo()
         if (result == CURLE_OK) {
             HandleFinishedResponse(request);
         } else {
-            HandleErrorResponse(request, curl_easy_strerror(result));
+            HandleErrorResponse(request, DescribeCurlError(request, result), CurlErrorCode(result));
         }
     }
 }
@@ -754,6 +839,56 @@ void LibcurlConn::OnTimeout([[maybe_unused]] int fd, [[maybe_unused]] short even
     CheckMultiInfo();
 }
 
+void LibcurlConn::OnIdleCheck()
+{
+    if (state_.load(std::memory_order_acquire) == ConnState::STOPPED) {
+        return;
+    }
+
+    // Runs on the I/O thread: activeRequests_ and lastActivityTime (updated in
+    // the write/header callbacks, which execute inside curl_multi_socket_action
+    // on this same thread) are accessed without locking.
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = activeRequests_.begin(); it != activeRequests_.end();) {
+        // Hold by value: the map node (and its shared_ptr) is destroyed by erase
+        // below, and request must stay alive through HandleErrorResponse.
+        std::shared_ptr<RequestContext> request = it->second;
+        const std::string timeoutError = AbortStreamIdleRequest(request, now);
+        if (!timeoutError.empty()) {
+            it = activeRequests_.erase(it);
+            HandleErrorResponse(request, timeoutError, static_cast<int>(A2AErrorCode::A2A_REQUEST_TIMEOUT));
+            continue;
+        }
+        ++it;
+    }
+}
+
+std::string LibcurlConn::AbortStreamIdleRequest(const std::shared_ptr<RequestContext>& request,
+    std::chrono::steady_clock::time_point now)
+{
+    if (!request->userData.isStream || request->timeoutMs <= 0) {
+        return "";
+    }
+    const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - request->lastActivityTime).count();
+    if (idleMs < request->timeoutMs) {
+        return "";
+    }
+    A2A_LOG(A2A_LOG_LEVEL::WARN, "Stream request " + request->userData.requestId + " idle for " +
+        std::to_string(idleMs) + "ms (limit " + std::to_string(request->timeoutMs) + "ms), aborting");
+    // Abort like CheckMultiInfo: remove and free the easy handle before
+    // invoking user callbacks so exceptions cannot skip cleanup.
+    if (request->easyHandle != nullptr) {
+        curl_multi_remove_handle(multiHandle_, request->easyHandle);
+        curl_easy_cleanup(request->easyHandle);
+        request->easyHandle = nullptr;
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - request->startTime).count();
+    return "request timed out [stage=stream-idle, idle=" + std::to_string(idleMs) + "ms, elapsed=" +
+        std::to_string(elapsedMs) + "ms]";
+}
+
 void LibcurlConn::OnSocketEvent(int fd, short events, void* arg)
 {
     auto currentState = state_.load(std::memory_order_acquire);
@@ -846,40 +981,18 @@ void LibcurlConn::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<Reques
     curl_easy_setopt(easyHandle, CURLOPT_HEADERFUNCTION, HeaderCallback);
     curl_easy_setopt(easyHandle, CURLOPT_HEADERDATA, request.get());
 
-    // Set timeouts
-    curl_easy_setopt(easyHandle, CURLOPT_TIMEOUT_MS, request->timeoutMs);
+    // Set timeouts. Connection establishment (TCP + TLS) is capped for every request.
     curl_easy_setopt(easyHandle, CURLOPT_CONNECTTIMEOUT_MS, config_.connectionTimeoutMs);
+    if (!request->userData.isStream) {
+        // Total timeout covering the whole request/response exchange. Streaming
+        // requests have no total-duration cap: OnIdleCheck aborts the transfer
+        // when nothing has arrived for request->timeoutMs (the idle timeout);
+        // the TCP keepalive options below only detect dead peers at the TCP level.
+        curl_easy_setopt(easyHandle, CURLOPT_TIMEOUT_MS, request->timeoutMs);
+    }
 
     // Set TLS options
-    if (req.url.rfind("https://", 0) == 0) {
-        curl_easy_setopt(easyHandle, CURLOPT_SSL_VERIFYPEER, config_.tlsVerifyPeer ? 1L : 0L);
-        curl_easy_setopt(easyHandle, CURLOPT_SSL_VERIFYHOST, config_.tlsVerifyHost ? 2L : 0L);
-        curl_easy_setopt(easyHandle, CURLOPT_SSLVERSION, config_.tlsMinVersion);
-
-        if (!config_.tlsCipherList.empty()) {
-            curl_easy_setopt(easyHandle, CURLOPT_SSL_CIPHER_LIST, config_.tlsCipherList.c_str());
-        }
-
-        if (!config_.tlsCaFile.empty()) {
-            curl_easy_setopt(easyHandle, CURLOPT_CAINFO, config_.tlsCaFile.c_str());
-        }
-
-        if (!config_.tlsCaPath.empty()) {
-            curl_easy_setopt(easyHandle, CURLOPT_CAPATH, config_.tlsCaPath.c_str());
-        }
-
-        if (!config_.tlsClientCertFile.empty()) {
-            curl_easy_setopt(easyHandle, CURLOPT_SSLCERT, config_.tlsClientCertFile.c_str());
-        }
-
-        if (!config_.tlsClientKeyFile.empty()) {
-            curl_easy_setopt(easyHandle, CURLOPT_SSLKEY, config_.tlsClientKeyFile.c_str());
-        }
-
-        if (!config_.tlsClientKeyPassword.empty()) {
-            curl_easy_setopt(easyHandle, CURLOPT_KEYPASSWD, config_.tlsClientKeyPassword.c_str());
-        }
-    }
+    SetupTlsOptions(easyHandle, req.url);
 
     // Set request headers
     request->headers = nullptr;
@@ -896,10 +1009,52 @@ void LibcurlConn::SetupCurlHandle(CURL* easyHandle, const std::shared_ptr<Reques
         curl_easy_setopt(easyHandle, CURLOPT_TCP_KEEPALIVE, HTTP_TCP_KEEP_ALIVE_S);
         curl_easy_setopt(easyHandle, CURLOPT_TCP_KEEPIDLE, HTTP_TCP_KEEP_IDLE_S);
         curl_easy_setopt(easyHandle, CURLOPT_TCP_KEEPINTVL, HTTP_TCP_KEEP_INTVL_S);
+        if (idleCheckTimerId_ == -1) {
+            // Degraded mode: the idle check timer could not be created, so fall
+            // back to curl's low-speed abort (average rate below 1 byte/s for
+            // the idle window) to keep silent streams from hanging forever.
+            curl_easy_setopt(easyHandle, CURLOPT_LOW_SPEED_LIMIT, 1L);
+            curl_easy_setopt(easyHandle, CURLOPT_LOW_SPEED_TIME,
+                std::max(1L, static_cast<long>(request->timeoutMs / SECONDS_TO_MS)));
+        }
     }
 
     // Store request context for retrieval in callbacks
     curl_easy_setopt(easyHandle, CURLOPT_PRIVATE, request.get());
+}
+
+void LibcurlConn::SetupTlsOptions(CURL* easyHandle, const std::string& url)
+{
+    if (url.rfind("https://", 0) != 0) {
+        return;
+    }
+    curl_easy_setopt(easyHandle, CURLOPT_SSL_VERIFYPEER, config_.tlsVerifyPeer ? 1L : 0L);
+    curl_easy_setopt(easyHandle, CURLOPT_SSL_VERIFYHOST, config_.tlsVerifyHost ? 2L : 0L);
+    curl_easy_setopt(easyHandle, CURLOPT_SSLVERSION, config_.tlsMinVersion);
+
+    if (!config_.tlsCipherList.empty()) {
+        curl_easy_setopt(easyHandle, CURLOPT_SSL_CIPHER_LIST, config_.tlsCipherList.c_str());
+    }
+
+    if (!config_.tlsCaFile.empty()) {
+        curl_easy_setopt(easyHandle, CURLOPT_CAINFO, config_.tlsCaFile.c_str());
+    }
+
+    if (!config_.tlsCaPath.empty()) {
+        curl_easy_setopt(easyHandle, CURLOPT_CAPATH, config_.tlsCaPath.c_str());
+    }
+
+    if (!config_.tlsClientCertFile.empty()) {
+        curl_easy_setopt(easyHandle, CURLOPT_SSLCERT, config_.tlsClientCertFile.c_str());
+    }
+
+    if (!config_.tlsClientKeyFile.empty()) {
+        curl_easy_setopt(easyHandle, CURLOPT_SSLKEY, config_.tlsClientKeyFile.c_str());
+    }
+
+    if (!config_.tlsClientKeyPassword.empty()) {
+        curl_easy_setopt(easyHandle, CURLOPT_KEYPASSWD, config_.tlsClientKeyPassword.c_str());
+    }
 }
 
 void LibcurlConn::ExecuteCallback(const std::shared_ptr<RequestContext>& request, const HttpResponse& response) const
@@ -918,6 +1073,9 @@ size_t LibcurlConn::WriteCallback(char* contents, size_t size, size_t nmemb, voi
     if (request == nullptr) {
         return totalSize;
     }
+
+    // Any body bytes count as stream activity for idle detection.
+    request->lastActivityTime = std::chrono::steady_clock::now();
 
     std::string contentType = GetHeaderValue(request->response, Http::CONTENT_TYPE_HEADER);
     const bool isSse = (contentType.find(CONTENT_TYPE_SSE) != std::string::npos);
@@ -961,6 +1119,9 @@ size_t LibcurlConn::HeaderCallback(char* contents, size_t size, size_t nmemb, vo
     if (request == nullptr) {
         return totalSize;
     }
+
+    // Header bytes also count as stream activity for idle detection.
+    request->lastActivityTime = std::chrono::steady_clock::now();
     request->headerData.append(contents, totalSize);
 
     // check header finish
