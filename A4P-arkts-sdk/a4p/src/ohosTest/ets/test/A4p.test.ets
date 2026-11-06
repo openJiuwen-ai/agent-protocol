@@ -8,12 +8,12 @@ import {
   IntentL1, IntentL2, IntentL3,
   IntentExecutionContext, IntentExecutionStatus, ExecutionStatus, Execution,
   CreateIntentRequest, PaymentConstraints, Product, AlgorithmType, IntentActionType,
-  IntentIssueContext, SigningEnv, VerificationResult
+  IntentIssueContext, SigningEnv, VerificationResult, ItemWhiteList, ExecutionRecord, CartItem
 } from '../../../../Index';
 import { A4pError } from '../../../main/ets/models/common';
 import {
   MockSigner, MockVerifier, FailingSigner, FailingVerifier, NoResultVerifier, NoResultSigner, BlankSignatureSigner,
-  ContradictoryVerifier
+  ContradictoryVerifier, NonBooleanValidVerifier
 } from './mock/MockSigner';
 import {
   createTestCreateIntentRequest,
@@ -55,8 +55,8 @@ class FullLifecycle {
  * Builds a full lifecycle around the fixed clock so validity windows and
  * period rollovers are deterministic. Callers may customize the request
  * before it is signed. The whole chain (and the activation) is stamped at
- * FIXED_NOW by default — the monotonic checks are non-strict, so one
- * shared instant is a valid chain, and the fixed default keeps the
+ * FIXED_NOW by default — the chain's stamps carry no cross-level ordering,
+ * so one shared instant is a valid chain, and the fixed default keeps the
  * context's activatedTime at or before every FIXED_NOW reservation the
  * execution tests make. Pass another instant to shift the chain.
  */
@@ -224,6 +224,32 @@ export default function a4pTest() {
         });
       });
 
+      it('createIntent_fails_whenNowAfterValidUntil', 0, () => {
+        // Creation judges the window's upper bound like every later step:
+        // an L1 stamped after its own validUntil could never be issued,
+        // signed, or activated, so it is refused here instead of being
+        // signed into a dead end.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validFrom = FIXED_NOW - 60000;
+        request.structuredIntent.constraints.validUntil = FIXED_NOW + 60000;
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
+          A4p.createIntent(request, new MockSigner(), FIXED_NOW + 60001);
+        });
+      });
+
+      it('createIntent_succeeds_whenNowIsExactlyValidUntil', 0, () => {
+        // The bound is inclusive, matching signIntent/activateIntent: the
+        // last in-window instant may still create.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validFrom = FIXED_NOW - 60000;
+        request.structuredIntent.constraints.validUntil = FIXED_NOW + 60000;
+
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 60000);
+
+        expect(l1.timestamp).assertEqual(FIXED_NOW + 60000);
+      });
+
       it('createIntent_fails_whenMaxExecuteCountIsZero', 0, () => {
         const request = createTestCreateIntentRequest();
         request.structuredIntent.constraints.maxExecutionCount = 0;
@@ -378,6 +404,37 @@ export default function a4pTest() {
             whiteList: [],
             quantity: 1
           }]
+        };
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.createIntent(request, new MockSigner());
+        });
+      });
+
+      it('createIntent_fails_whenGroupWhiteListIsNotAnArray', 0, () => {
+        // The exact shape bug that used to pass: a group whose whiteList is
+        // an empty object (not an array) sailed through validation and only
+        // blew up later — or matched nothing silently. Array-ness is part
+        // of the shape contract now.
+        const request = createTestCreateIntentRequest();
+        const notAnArray: Record<string, Object> = {};
+        request.structuredIntent.resources = {
+          itemsWhiteList: [{
+            whiteList: notAnArray as Object as Product[],
+            quantity: 1
+          }]
+        };
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.createIntent(request, new MockSigner());
+        });
+      });
+
+      it('createIntent_fails_whenItemsWhiteListIsNotAnArray', 0, () => {
+        const request = createTestCreateIntentRequest();
+        const notAnArray: Record<string, Object> = {};
+        request.structuredIntent.resources = {
+          itemsWhiteList: notAnArray as Object as ItemWhiteList[]
         };
 
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
@@ -549,12 +606,35 @@ export default function a4pTest() {
 
       it('createIntent_succeeds_whenOptionalConstraintsOmitted', 0, () => {
         // Optional caps absent and non-periodic: the required fields alone
-        // make a valid constraint set.
+        // make a valid constraint set. The clock is injected because the
+        // request is FIXED_NOW-anchored and creation judges validUntil.
         const request = createOptionalFieldsOmittedRequest();
 
-        const intentL1 = A4p.createIntent(request, new MockSigner());
+        const intentL1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
 
         expect(intentL1.intentId).assertEqual('test-intent-001');
+      });
+
+      it('createIntent_omitsNullOptionalFields_fromSerializedForm', 0, () => {
+        // In-memory null is the protocol's spelling of an absent optional
+        // field: the canonical form omits the pair entirely — no
+        // "key":null bytes — and the result round-trips through the strict
+        // deserializer. The JSON.parse typed-null escape builds the
+        // null-valued optional fields.
+        const request = createOptionalFieldsOmittedRequest();
+        request.structuredIntent.constraints = JSON.parse(
+          '{"totalMaxAmount":500000,"currency":"CNY",' +
+          '"validFrom":' + (FIXED_NOW - 60000) + ',"validUntil":' + (FIXED_NOW + 3600000) + ',' +
+          '"singleOrderMaxAmount":null,"maxExecutionCount":null}') as PaymentConstraints;
+
+        const intentL1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+        const serialized = A4pCodec.serializeIntentL1(intentL1);
+
+        expect(serialized.indexOf(':null')).assertEqual(-1);
+        expect(serialized.indexOf('"singleOrderMaxAmount"')).assertEqual(-1);
+        expect(serialized.indexOf('"maxExecutionCount"')).assertEqual(-1);
+        const restored = A4pCodec.deserializeIntentL1(serialized);
+        expect(restored.intentId).assertEqual(intentL1.intentId);
       });
 
       it('createIntent_fails_whenPeriodRulePartiallyProvided_anchorTimeMissing', 0, () => {
@@ -694,8 +774,8 @@ export default function a4pTest() {
 
       it('issueIntent_usesInjectedClock_forTimestamp', 0, () => {
         // The chain is anchored on the fixed clock so the issuance stamp
-        // stays monotonic with the L1 stamp (issueIntent rejects a now
-        // earlier than the embedded L1's timestamp).
+        // is deterministic (the chain's stamps carry no cross-level
+        // ordering — each level's interface runs in a different process).
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
 
@@ -706,16 +786,32 @@ export default function a4pTest() {
         expect(l2.timestamp).assertEqual(FIXED_NOW);
       });
 
-      it('issueIntent_fails_whenNowEarlierThanL1Timestamp', 0, () => {
-        // The issuance stamp must not predate the intent it endorses: a
-        // skewed clock is rejected here, instead of producing an L2 whose
-        // regressive timestamp every later validation step would refuse.
+      it('issueIntent_succeeds_whenNowEarlierThanL1Timestamp', 0, () => {
+        // Creation and issuance run in different processes whose clocks
+        // cannot be compared, so the chain's stamps carry no cross-level
+        // ordering: an issuance instant earlier than the L1's timestamp is
+        // accepted — only the validity window is judged.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 1000);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+
+        expect(l2.timestamp).assertEqual(FIXED_NOW);
+      });
+
+      it('issueIntent_fails_whenNowAfterValidUntil', 0, () => {
+        // Issuance judges the window's upper bound like creation and every
+        // later step: endorsing an already-closed window would only produce
+        // an L2 no one could sign or activate.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validFrom = FIXED_NOW - 60000;
+        request.structuredIntent.constraints.validUntil = FIXED_NOW + 60000;
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
           A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
-            new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+            new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW + 60001);
         });
       });
 
@@ -1000,8 +1096,8 @@ export default function a4pTest() {
 
       it('signIntent_usesInjectedClock_forTimestamp', 0, () => {
         // The chain is anchored on the fixed clock so the user's signing
-        // stamp stays monotonic with the L2 stamp (signIntent rejects a now
-        // earlier than the embedded L2's timestamp).
+        // stamp is deterministic (the chain's stamps carry no cross-level
+        // ordering — each level's interface runs in a different process).
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
         const l2 = A4p.issueIntent(l1, new MockVerifier(),
@@ -1015,19 +1111,20 @@ export default function a4pTest() {
         expect(l3.timestamp).assertEqual(FIXED_NOW);
       });
 
-      it('signIntent_fails_whenNowEarlierThanL2Timestamp', 0, () => {
-        // The user's signing stamp must not predate the issuance it
-        // authorizes: a skewed clock is rejected here, instead of producing
-        // an L3 whose regressive timestamp activation would always refuse.
+      it('signIntent_succeeds_whenNowEarlierThanL2Timestamp', 0, () => {
+        // Issuance and user signing run in different processes whose clocks
+        // cannot be compared, so the chain's stamps carry no cross-level
+        // ordering: a signing instant earlier than the L2's timestamp is
+        // accepted — only the validity window is judged.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 2000);
         const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
           new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW + 2000);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
-            new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
-        });
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+
+        expect(l3.timestamp).assertEqual(FIXED_NOW);
       });
 
       it('signIntent_fails_whenNowAfterValidUntil', 0, () => {
@@ -1130,22 +1227,23 @@ export default function a4pTest() {
         });
       });
 
-      it('signIntent_fails_whenReceivedL2TimestampEarlierThanL1', 0, () => {
-        // issueIntent refuses to produce a regressive L2 itself (see
-        // issueIntent_fails_whenNowEarlierThanL1Timestamp), but a
-        // non-compliant issuer can still hand one over: the user-signing
-        // step validates the received L2 and rejects it before endorsing.
-        // (Tampering breaks the signature, but structural validation fires
-        // first, so the INVALID_PARAMETER path is what runs.)
+      it('signIntent_succeeds_whenReceivedL2StampEarlierThanL1', 0, () => {
+        // Creation and issuance run in different processes whose clocks
+        // cannot be compared, so the chain's stamps carry no cross-level
+        // ordering: a received L2 whose stamp precedes its L1's (properly
+        // signed by a compliant issuer on a skewed clock) is endorsed —
+        // only the validity window is judged.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
-        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 1000);
         const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
           new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
-        l2.timestamp = FIXED_NOW - 1;
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(), new MockSigner(), FIXED_NOW);
-        });
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+
+        expect(l3.timestamp).assertEqual(FIXED_NOW);
+        expect(l3.intentL2.timestamp).assertEqual(FIXED_NOW);
+        expect(l3.intentL2.intentL1.timestamp).assertEqual(FIXED_NOW + 1000);
       });
 
       it('signIntent_fails_whenNestedL1VersionUnsupported', 0, () => {
@@ -1277,6 +1375,20 @@ export default function a4pTest() {
         });
       });
 
+      it('activateIntent_fails_whenVerifierValidFieldNotBoolean', 0, () => {
+        // A truthy non-boolean `valid` ("false" string, 1) carrying the
+        // success code would pass the consistency guard and activate the
+        // intent; only the boolean-type guard stops it.
+        const lifecycle = createFullLifecycle();
+
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.activateIntent(lifecycle.l3, new NonBooleanValidVerifier(false), FIXED_NOW);
+        });
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.activateIntent(lifecycle.l3, new NonBooleanValidVerifier(true), FIXED_NOW);
+        });
+      });
+
       it('activateIntent_fails_whenIntentL3HasNoSignature', 0, () => {
         const lifecycle = createFullLifecycle();
         lifecycle.l3.sign = undefined;
@@ -1299,44 +1411,37 @@ export default function a4pTest() {
         });
       });
 
-      it('activateIntent_fails_whenReceivedL3TimestampEarlierThanL2', 0, () => {
-        // signIntent refuses to produce a regressive L3 itself (see
-        // signIntent_fails_whenNowEarlierThanL2Timestamp), but a
-        // non-compliant signer can still hand one over: activation
-        // validates the received chain and rejects it before freezing the
-        // snapshot. (Tampering breaks the signature, but structural
-        // validation fires first.)
-        const lifecycle = createFullLifecycle();
-        lifecycle.l3.timestamp = lifecycle.l3.intentL2.timestamp - 1;
+      it('activateIntent_succeeds_whenReceivedL3StampEarlierThanL2', 0, () => {
+        // Signing and activation run in different processes whose clocks
+        // cannot be compared, so the chain's stamps carry no cross-level
+        // ordering: a received L3 whose stamp precedes its L2's (properly
+        // signed by a compliant signer on a skewed clock) is activated —
+        // only the validity window is judged.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 2000);
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW + 1000);
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
-        });
-      });
-
-      it('activateIntent_fails_whenNowEarlierThanL3Timestamp', 0, () => {
-        // The chain's monotonic rule extends to the activation step: an
-        // activation instant before the L3's signing timestamp would create
-        // a context for an authorization that did not exist yet (also the
-        // default-clock guard against a wall clock stepped back past the
-        // L3 stamp).
-        const lifecycle = createFullLifecycle(createTestCreateIntentRequestAround(FIXED_NOW), FIXED_NOW);
-
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW - 1);
-        });
-      });
-
-      it('activateIntent_allowsNowEqualToL3Timestamp', 0, () => {
-        // Equality is allowed, matching the non-strict monotonic stamps of
-        // issueIntent/signIntent: activating in the same millisecond the
-        // L3 was signed is legitimate.
-        const lifecycle = createFullLifecycle(createTestCreateIntentRequestAround(FIXED_NOW), FIXED_NOW);
-
-        const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
+        const ctx = A4p.activateIntent(l3, new MockVerifier(), FIXED_NOW);
 
         expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
-        expect(ctx.intentId).assertEqual('test-intent-001');
+        expect(ctx.activatedTime).assertEqual(FIXED_NOW);
+      });
+
+      it('activateIntent_succeeds_whenNowEarlierThanL3Timestamp', 0, () => {
+        // Activation runs in yet another process whose clock cannot be
+        // compared with the signer's, so the chain's stamps carry no
+        // cross-level ordering: an activation instant before the L3's
+        // signing timestamp is accepted — only the validity window is
+        // judged.
+        const lifecycle = createFullLifecycle(createTestCreateIntentRequestAround(FIXED_NOW), FIXED_NOW);
+
+        const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW - 1);
+
+        expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+        expect(ctx.activatedTime).assertEqual(FIXED_NOW - 1);
       });
 
       it('activateIntent_fails_whenNowAfterValidUntil', 0, () => {
@@ -1460,6 +1565,19 @@ export default function a4pTest() {
         });
       });
 
+      it('verifyIntentAuthenticity_throws_whenVerifierValidFieldNotBoolean', 0, () => {
+        // The query path goes through the same boolean-type guard as the
+        // lifecycle path (runVerifier).
+        const lifecycle = createFullLifecycle();
+
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.verifyIntentAuthenticity(lifecycle.l3, new NonBooleanValidVerifier(false));
+        });
+        expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
+          A4p.verifyIntentAuthenticity(lifecycle.l3, new NonBooleanValidVerifier(true));
+        });
+      });
+
       it('verifyIntentAuthenticity_returnsInvalidResult_whenL2ContentTampered', 0, () => {
         const lifecycle = createFullLifecycle();
 
@@ -1505,7 +1623,7 @@ export default function a4pTest() {
       });
 
       it('verifyIntentAuthenticity_fails_whenL3CarrierFieldsInvalid', 0, () => {
-        // The carrier must be structurally sound: a negative or regressive
+        // The carrier must be structurally sound: a negative
         // timestamp and a missing signingEnv each fail the structural
         // check before the L2's signature is verified, independent of the
         // verifier's verdict.
@@ -1515,12 +1633,6 @@ export default function a4pTest() {
           A4p.verifyIntentAuthenticity(negativeTs.l3, new MockVerifier());
         });
 
-        const regressiveTs = createFullLifecycle();
-        regressiveTs.l3.timestamp = regressiveTs.l3.intentL2.timestamp - 1;
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.verifyIntentAuthenticity(regressiveTs.l3, new MockVerifier());
-        });
-
         const noEnv = createFullLifecycle();
         noEnv.l3.signingEnv = JSON.parse('null') as SigningEnv;
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
@@ -1528,17 +1640,29 @@ export default function a4pTest() {
         });
       });
 
+      it('verifyIntentAuthenticity_succeeds_whenL3StampEarlierThanL2', 0, () => {
+        // The chain's stamps carry no cross-level ordering (each level's
+        // interface runs in a different process), so a carrier stamp that
+        // precedes its L2's plays no role in authenticity: the L2 signature
+        // — what this query verifies — is intact, so the verdict is true.
+        const regressiveTs = createFullLifecycle();
+        regressiveTs.l3.timestamp = regressiveTs.l3.intentL2.timestamp - 1;
+
+        const result = A4p.verifyIntentAuthenticity(regressiveTs.l3, new MockVerifier());
+
+        expect(result.valid).assertTrue();
+      });
+
       it('verifyIntentAuthenticity_succeeds_whenL3CarrierSignatureTampered', 0, () => {
         // Structure is checked, not the signature's value: a garbage (but
-        // non-blank) L3 signature string and a foreign carrier version do
-        // not touch the verdict — the user signature is activateIntent's
-        // to verify, and the carrier's version plays no role in it.
+        // non-blank) L3 signature string does not touch the verdict — the
+        // user signature is activateIntent's to verify. (The carrier's own
+        // version is judged — see the unsupported-version test below.)
         const lifecycle = createFullLifecycle();
         if (!lifecycle.l3.sign) {
           throw new Error('Expected sign to be present on the L3');
         }
         lifecycle.l3.sign.sign = 'tampered-signature';
-        lifecycle.l3.version = '0.9';
 
         const result: VerificationResult =
           A4p.verifyIntentAuthenticity(lifecycle.l3, new MockVerifier());
@@ -1576,6 +1700,19 @@ export default function a4pTest() {
           A4p.verifyIntentAuthenticity(lifecycle.l3, new MockVerifier());
         });
       });
+
+      it('verifyIntentAuthenticity_fails_whenL3VersionUnsupported', 0, () => {
+        // The carrier's own version is judged too, exactly like
+        // activateIntent's chain check: this query must not vouch for a
+        // mixed-version chain, whatever the signature says about the L2
+        // bytes themselves.
+        const lifecycle = createFullLifecycle();
+        lifecycle.l3.version = '0.9';
+
+        expectThrows(A4pErrorCode.A4P_UNSUPPORTED_VERSION, () => {
+          A4p.verifyIntentAuthenticity(lifecycle.l3, new MockVerifier());
+        });
+      });
     });
 
     describe('revokeIntent', () => {
@@ -1587,9 +1724,21 @@ export default function a4pTest() {
         expect(ctx.status).assertEqual(IntentExecutionStatus.REVOKED);
       });
 
+      it('revokeIntent_stampsRevokedTime', 0, () => {
+        // The flip records its instant: revokedTime is stamped only on
+        // success and only then — an ACTIVE context carries none.
+        const lifecycle = createFullLifecycle();
+        expect(lifecycle.ctx.revokedTime).assertUndefined();
+
+        const ctx = A4p.revokeIntent(lifecycle.ctx, FIXED_NOW + 5000);
+
+        expect(ctx.revokedTime).assertEqual(FIXED_NOW + 5000);
+      });
+
       it('revokeIntent_fails_whenNotActive', 0, () => {
         const lifecycle = createFullLifecycle();
         lifecycle.ctx.status = IntentExecutionStatus.REVOKED;
+        lifecycle.ctx.revokedTime = FIXED_NOW;
 
         expectThrows(A4pErrorCode.A4P_INVALID_STATUS, () => {
           A4p.revokeIntent(lifecycle.ctx);
@@ -1599,16 +1748,16 @@ export default function a4pTest() {
       it('revokeIntent_fails_whenNowBeforeActivatedTime', 0, () => {
         // The revocation instant is floored by the context's creation, like
         // every reservation: a clock stepped back past activatedTime is
-        // refused and the context stays active. Equality is allowed. The
-        // instant is validated only — the flip records no timestamp — and
-        // the validity window is deliberately not judged (an intent whose
-        // window closed is revoked, not reported as expired).
+        // refused and the context stays active — no stamp either. Equality
+        // is allowed. The validity window is deliberately not judged (an
+        // intent whose window closed is revoked, not reported as expired).
         const lifecycle = createFullLifecycle();
 
         expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
           A4p.revokeIntent(lifecycle.ctx, FIXED_NOW - 1);
         });
         expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+        expect(lifecycle.ctx.revokedTime).assertUndefined();
 
         const ctx = A4p.revokeIntent(lifecycle.ctx, FIXED_NOW);
 
@@ -1730,6 +1879,27 @@ export default function a4pTest() {
         });
         expect(execRejected.id === undefined).assertTrue();
         expect(lifecycle.ctx.executions.length).assertEqual(1);
+      });
+
+      it('createExecution_fails_whenCartItemsIsNotAnArray', 0, () => {
+        // The order's cart template is shape-checked like the intent's
+        // resources: a non-array cartItems must fail validation instead of
+        // reaching the whitelist scope match.
+        const lifecycle = createFullLifecycle();
+        const notAnArray: Record<string, Object> = {};
+        const execution = createTestExecution();
+        execution.executionContent = {
+          orderId: 'order-shape',
+          amount: 5000,
+          currency: 'CNY',
+          cartItems: notAnArray as Object as CartItem[],
+          timestamp: FIXED_NOW
+        };
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.createExecution(lifecycle.ctx, execution, FIXED_NOW);
+        });
+        expect(lifecycle.ctx.executions.length).assertEqual(0);
       });
 
       it('createExecution_fails_whenDuplicateOrderId', 0, () => {
@@ -1982,6 +2152,7 @@ export default function a4pTest() {
       it('createExecution_fails_whenIntentNotActive', 0, () => {
         const lifecycle = createFullLifecycle();
         lifecycle.ctx.status = IntentExecutionStatus.REVOKED;
+        lifecycle.ctx.revokedTime = FIXED_NOW;
 
         expectThrows(A4pErrorCode.A4P_INVALID_STATUS, () => {
           A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW);
@@ -2394,6 +2565,7 @@ export default function a4pTest() {
         const exec = createTestExecution();
         A4p.createExecution(lifecycle.ctx, exec, FIXED_NOW);
         lifecycle.ctx.status = IntentExecutionStatus.REVOKED;
+        lifecycle.ctx.revokedTime = FIXED_NOW;
         const ctx = A4p.completeExecution(lifecycle.ctx, exec.id, FIXED_NOW);
 
         expect(ctx.executions[0].status).assertEqual(ExecutionStatus.COMPLETED);
@@ -2444,6 +2616,7 @@ export default function a4pTest() {
         const exec = createTestExecution();
         A4p.createExecution(lifecycle.ctx, exec, FIXED_NOW);
         lifecycle.ctx.status = IntentExecutionStatus.REVOKED;
+        lifecycle.ctx.revokedTime = FIXED_NOW;
 
         const ctx = A4p.completeExecution(lifecycle.ctx, exec.id, FIXED_NOW);
 
@@ -2482,7 +2655,7 @@ export default function a4pTest() {
       });
 
       it('completeExecution_fails_whenNowBeforeReservedAt', 0, () => {
-        // Record timestamps are monotonic like the chain's: a completion
+        // Record timestamps are monotonic: a completion
         // predating its own reservation would rewrite history, so a clock
         // stepped back past reservedAt is refused and the record stays
         // pending (equality is allowed — the floor is non-strict).
@@ -2717,6 +2890,55 @@ export default function a4pTest() {
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.cancelExecution(nullContext, 'some-exec', FIXED_NOW);
         });
+        // The valid context is untouched by the rejected calls.
+        expect(lifecycle.ctx.executions.length).assertEqual(0);
+        expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+      });
+
+      it('executionApis_failAsA4pError_whenContextShapeInvalid', 0, () => {
+        // A non-null context with corrupted internals is the harder guard:
+        // the execution APIs dereference authorizedIntent, executions, and
+        // executionInfo directly, so without full structural validation a
+        // malformed context would surface as a raw TypeError (property
+        // read on null, .find on a non-array) instead of an A4pError. The
+        // JSON.parse typed-null escape builds the malformed values.
+        const lifecycle = createFullLifecycle();
+
+        // authorizedIntent missing: every API reads the chain through it.
+        const noAuthorizedIntent: IntentExecutionContext = JSON.parse(
+          '{"version":"1.0","intentId":"i","status":"ACTIVE","activatedTime":1,' +
+          '"executions":[],"executionInfo":{"leftAmount":1}}') as IntentExecutionContext;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.revokeIntent(noAuthorizedIntent);
+        });
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.createExecution(noAuthorizedIntent, createTestExecution(), 1);
+        });
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.completeExecution(noAuthorizedIntent, 'some-exec', 1);
+        });
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.cancelExecution(noAuthorizedIntent, 'some-exec', 1);
+        });
+
+        // executions not an array: completeExecution/cancelExecution run
+        // .find on it and createExecution runs .some — the round-tripped
+        // real context keeps every other field valid so the array check is
+        // what fires.
+        const brokenLedger: IntentExecutionContext = JSON.parse(
+          JSON.stringify(lifecycle.ctx)) as IntentExecutionContext;
+        const notAnArray: Record<string, Object> = {};
+        brokenLedger.executions = notAnArray as Object as ExecutionRecord[];
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.createExecution(brokenLedger, createTestExecution(), FIXED_NOW);
+        });
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.completeExecution(brokenLedger, 'some-exec', FIXED_NOW);
+        });
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.cancelExecution(brokenLedger, 'some-exec', FIXED_NOW);
+        });
+
         // The valid context is untouched by the rejected calls.
         expect(lifecycle.ctx.executions.length).assertEqual(0);
         expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
