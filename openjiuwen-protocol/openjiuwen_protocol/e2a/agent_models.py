@@ -21,6 +21,9 @@ from typing import Any
 from openjiuwen_protocol.message import ReqMethod
 
 
+ReqMethodValue = ReqMethod | str
+
+
 @dataclass
 class PermissionContext:
     """权限上下文 - 统一承载权限判定所需的身份与场景信息.
@@ -106,7 +109,11 @@ class AgentRequest:
     channel_id: str = ""
     session_id: str | None = None
     chat_id: str | None = None
-    req_method: ReqMethod | None = None
+    # Known methods use ReqMethod for existing dispatch code.  A method added
+    # by a newer AgentServer may arrive as a string while an older Gateway is
+    # still running; preserving that string is part of the E2A compatibility
+    # contract.
+    req_method: ReqMethodValue | None = None
     params: dict = field(default_factory=dict)
     is_stream: bool = False
     timestamp: float = 0.0

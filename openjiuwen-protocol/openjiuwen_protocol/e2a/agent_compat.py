@@ -45,17 +45,21 @@ def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
 
     metadata = ctx if ctx else None
     method_str = env.method
-    req_method: ReqMethod | None = None
+    req_method: ReqMethod | str | None = None
     if method_str:
         try:
             req_method = ReqMethod(method_str)
         except ValueError:
-            logger.error(
-                "[E2A][compat] unknown E2A method=%r request_id=%s",
+            # E2A carries method names as strings.  Keep an unknown method
+            # intact so a newer AgentServer can receive it through an older
+            # Gateway; the AgentServer remains responsible for deciding
+            # whether the method is implemented.
+            req_method = method_str
+            logger.debug(
+                "[E2A][compat] preserving extension method=%r request_id=%s",
                 method_str,
                 env.request_id,
             )
-            raise
 
     return AgentRequest(
         request_id=env.request_id or "",

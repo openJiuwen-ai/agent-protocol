@@ -37,6 +37,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def method_value(method: Any) -> str:
+    """Return the wire value for a known or extension method."""
+    value = getattr(method, "value", method)
+    return str(value or "")
+
+
 # chat.delta 在线上被拆成 delta + 白名单字段，再在网关侧按同一份名单还原。
 # chat.final 走整包透传，不经过这份名单。主动推荐标记若只留在 final 上，
 # 流式增量会被前端当成上一轮普通回复，卡片正文出现两遍，上一轮结束时间也被藏掉。
@@ -163,7 +170,7 @@ def message_to_e2a(msg: "Message") -> E2AEnvelope:
         "timestamp": msg.timestamp,
     }
     if msg.req_method is not None:
-        d["method"] = msg.req_method.value
+        d["method"] = method_value(msg.req_method)
     # 合并 metadata 和独立字段（enable_memory, group_digital_avatar 等）
     metadata: dict[str, Any] = dict(msg.metadata or {})
 
@@ -251,10 +258,7 @@ def e2a_from_agent_fields(
         "timestamp": timestamp,
     }
     if req_method is not None:
-        if hasattr(req_method, "value"):
-            d["method"] = req_method.value
-        else:
-            d["method"] = str(req_method)
+        d["method"] = method_value(req_method)
     if metadata:
         d["metadata"] = dict(metadata)
     return E2AEnvelope.from_dict(d)
