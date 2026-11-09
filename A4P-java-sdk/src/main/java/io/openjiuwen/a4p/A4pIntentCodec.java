@@ -132,7 +132,8 @@ public class A4pIntentCodec {
     /**
      * Restores IntentExecutionContext from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
-     * Checks activation time, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
+     * Checks integer timestamp formats, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
+     * Audit timestamps are not compared with each other, execution times or authorization validity boundaries.
      * @param serialized serialized local JSON representation
      * @return restored object or a protocol failure result
      */
@@ -156,16 +157,12 @@ public class A4pIntentCodec {
         IntentL1 intent = authorized.intentL2().intentL1();
         Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER, "Context intent ID does not match the authorized intent ID");
         Validation.integer(wire.activatedTime(), false);
-        Validation.timeAtOrAfter(wire.activatedTime(), authorized.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the issuance time");
-        Validation.timeAtOrBefore(wire.activatedTime(), PaymentProfile.constraints(intent.structuredIntent()).validUntil(),
-                A4P_TIMESTAMP_EXPIRED, "Activation time is later than validUntil");
         Validation.present(wire.status());
         Validation.present(wire.executions());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
         for (RecordJson record : wire.executions()) {
             Validation.present(record);
             Validation.integer(record.reservedAt(), false);
-            Validation.require(record.reservedAt() >= wire.activatedTime(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the activation time");
             Order order = Validation.execution(new Execution(record.action(), record.executionId(),
                     record.executionContent()));
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),

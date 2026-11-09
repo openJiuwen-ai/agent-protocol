@@ -41,12 +41,17 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 | --- | --- |
 | `createIntent`、`issueIntent` | 要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；先于签名或验签检查。`issueIntent` 不比较 now 与 L1.timestamp。 |
 | `signIntent` | 仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。 |
-| `activateIntent` | `now >= L2.timestamp` 且 `now <= validUntil`，否则返回参数无效或过期；保存 `activatedTime = now`。 |
-| `createExecution` | `now >= activatedTime` 且 `validFrom <= now <= validUntil`；过早返回 3003，过期返回 3002，并可能将 Context 置为 EXPIRED。 |
+| `activateIntent` | `now <= validUntil`，否则返回参数无效或过期；保存 `activatedTime = now`。 |
+| `createExecution` | `validFrom <= now <= validUntil`；过早返回 3003，过期返回 3002，并可能将 Context 置为 EXPIRED。 |
 | `completeExecution`、`cancelExecution` | `now >= reservedAt`，否则返回 3003；过期或撤销后仍可终结已有预留。 |
-| `revokeIntent` | `now >= activatedTime`，否则返回 3003；不受授权有效期窗口限制。 |
 
 允许在 `validFrom` 前签名和激活，允许相同时间戳，有效期两端均包含在内。`Order.timestamp` 会作为时间戳校验，但不决定预留有效性或额度周期。读取 Context 状态不会自动判断是否过期。
+
+代码中储存的时间戳分为两种，一种是仅作为审计用记录的时间戳，另一种是用于业务场景的时间戳。其中作为审计用的时间戳不会进行时间先后顺序的合法性校验。
+
+下面的时间戳仅作为审计使用:
+1. L1/L2/L3.timestamp
+2. Context.activatedTime
 
 ## 函数接口
 
@@ -55,7 +60,7 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 | `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）。 |
 | `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。验签前要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L1.timestamp。 |
 | `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。 |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | 要求 `L2.timestamp <= now <= validUntil`，再验证 L3 用户签名并创建 ACTIVE Context，记录 `activatedTime = now`。过早返回 `A4P_INVALID_PARAMETER`，过期返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L3.timestamp。 |
+| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | 要求 `now <= validUntil`，再验证 L3 用户签名并创建 ACTIVE Context，记录 `activatedTime = now`。过期返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L3.timestamp。 |
 | `A4p` | `static A4pResult<VerificationResult> verifyIntentAuthenticity(IntentL3 intent, SignatureVerifier issuerVerifier)` | 验证意图链结构、版本和 L2 签发方签名，返回验证结果；不验证用户签名。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now)` | 将 ACTIVE Context 撤销为 REVOKED；已有 PENDING Execution仍可完成或取消。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution, long now)` | 校验有效期、状态、唯一 ID、订单及额度，追加 PENDING 预留并刷新额度。 |

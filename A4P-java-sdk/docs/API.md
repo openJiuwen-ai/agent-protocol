@@ -41,12 +41,18 @@ All timestamps and explicit `now` arguments are Unix epoch milliseconds. Lifecyc
 | --- | --- |
 | `createIntent`, `issueIntent` | `now <= validUntil`; otherwise `A4P_TIMESTAMP_EXPIRED` (3002), before signing or verification. `issueIntent` does not compare now with L1.timestamp. |
 | `signIntent` | Validates the timestamp format only; does not compare now with L2.timestamp or validUntil. |
-| `activateIntent` | `now >= L2.timestamp` and `now <= validUntil`; otherwise invalid parameter or expired. Stores `activatedTime = now`. |
-| `createExecution` | `now >= activatedTime` and `validFrom <= now <= validUntil`. Too early returns 3003; expiration returns 3002 and can mark the context EXPIRED. |
+| `activateIntent` | `now <= validUntil`; otherwise invalid parameter or expired. Stores `activatedTime = now`. |
+| `createExecution` | `validFrom <= now <= validUntil`. Too early returns 3003; expiration returns 3002 and can mark the context EXPIRED. |
 | `completeExecution`, `cancelExecution` | `now >= reservedAt`; otherwise 3003. Existing reservations can be finalized after expiry or revocation. |
-| `revokeIntent` | `now >= activatedTime`; otherwise 3003. No authorization validity-window restriction. |
 
 Signing and activation before `validFrom` are allowed. Equal timestamps and both validity boundaries are allowed. `Order.timestamp` is validated as a timestamp but does not determine reservation validity or quota periods. Reading context status does not automatically evaluate expiry.
+
+Stored timestamps fall into two categories: audit timestamps and timestamps used for business rules. Audit timestamps are not validated for chronological ordering.
+
+The following timestamps are used only for auditing:
+
+1. L1/L2/L3 `timestamp`.
+2. Context `activatedTime`.
 
 ## Function reference
 
@@ -55,7 +61,7 @@ Signing and activation before `validFrom` are allowed. Equal timestamps and both
 | `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | Create and agent-sign L1; generate intentId when omitted. Requires `now <= validUntil`; otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). |
 | `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | Validate L1 and its agent signature, bind identities and server-sign L2. Requires `now <= validUntil` before verification; otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L1.timestamp. |
 | `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | Verify the L2 server signature, attach the signing environment and user-sign L3. Checks both L2 and L1 versions. Validates the timestamp format but does not compare now with L2.timestamp or validUntil. Signing before `validFrom` is allowed; `createExecution` rejects early reservations with `A4P_TIMESTAMP_TOO_EARLY` (3003). |
-| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | Require `L2.timestamp <= now <= validUntil`, then verify the L3 user signature and create an ACTIVE context with `activatedTime = now`. An earlier time returns `A4P_INVALID_PARAMETER`; expiration returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L3.timestamp. |
+| `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | Require `now <= validUntil`, then verify the L3 user signature and create an ACTIVE context with `activatedTime = now`. Expiration returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L3.timestamp. |
 | `A4p` | `static A4pResult<VerificationResult> verifyIntentAuthenticity(IntentL3 intent, SignatureVerifier issuerVerifier)` | Check chain structure, versions and the L2 issuer signature; return the verification verdict without checking the user signature. |
 | `A4p` | `static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now)` | Revoke an ACTIVE context; existing pending executions may still be completed or canceled. |
 | `A4p` | `static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context, Execution execution, long now)` | Check validity, status, unique IDs, order and quotas; append a PENDING reservation and refresh accounting. |
