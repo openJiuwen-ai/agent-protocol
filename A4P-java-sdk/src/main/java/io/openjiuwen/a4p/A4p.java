@@ -107,7 +107,7 @@ public final class A4p {
 
     /**
      * Validates the L3 chain and user signature and creates an ACTIVE context with its activation time.
-     * Activation before L2.timestamp returns A4P_INVALID_PARAMETER; after validUntil it returns A4P_TIMESTAMP_EXPIRED.
+     * Activation after validUntil returns A4P_TIMESTAMP_EXPIRED; audit timestamps are not compared.
      * Activation before validFrom is allowed, but execution must wait. Persist the resulting context.
      * Uses the supplied evaluation instant.
      * @param intent protocol intent to process
@@ -121,7 +121,6 @@ public final class A4p {
             Validation.integer(now, false);
             Validation.intentL3(intent);
             Validation.versions(intent);
-            Validation.timeAtOrAfter(now, intent.intentL2().timestamp(), A4P_INVALID_PARAMETER, "Activation time is earlier than the issuance time");
             // An intent past validUntil could never execute; one not yet valid is activated and waits for validFrom.
             PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent());
             Validation.timeAtOrBefore(now, constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
@@ -149,7 +148,7 @@ public final class A4p {
 
     /**
      * Changes an ACTIVE context to REVOKED without restricting revocation to the authorization validity window.
-     * Evaluation before activation returns A4P_TIMESTAMP_TOO_EARLY. Pending executions may still be finalized.
+     * Revocation time is audit-only. Pending executions may still be finalized.
      * Persist the updated context and do not repeat revocation.
      * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
@@ -162,7 +161,6 @@ public final class A4p {
             Validation.integer(now, false);
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
-                Validation.timeAtOrAfter(now, context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
             }
@@ -239,7 +237,6 @@ public final class A4p {
             require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER, "Order currency does not match the intent currency");
             require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
             Validation.timeAtOrAfter(now, constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
-            Validation.timeAtOrAfter(now, context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
             if (now > constraints.validUntil()) {
                 context.status(IntentExecutionStatus.EXPIRED);
                 throw new A4pException(A4P_TIMESTAMP_EXPIRED);

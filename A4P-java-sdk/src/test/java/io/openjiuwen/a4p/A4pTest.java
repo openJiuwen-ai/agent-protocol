@@ -23,11 +23,11 @@ class A4pTest {
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
                 future + 60_000, null, null, null, null);
         IntentExecutionContext futureContext = ok(A4p.activateIntent(authorized(limits), VERIFIER, future));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(futureContext, NOW));
-        assertEquals(IntentExecutionStatus.ACTIVE, futureContext.status());
+        ok(A4p.revokeIntent(futureContext, NOW));
+        assertEquals(IntentExecutionStatus.REVOKED, futureContext.status());
         A4pIntentCodec codec = new A4pIntentCodec();
         String json = codec.serializeIntentExecutionContext(context());
-        for (String value : List.of("null", "-1", "9999", "\"10000\"", "10000.5")) {
+        for (String value : List.of("null", "\"10000\"", "10000.5")) {
             fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                     json.replace("\"activatedTime\":10000", "\"activatedTime\":" + value)));
         }
@@ -36,18 +36,14 @@ class A4pTest {
     }
 
     @Test
-    void activationTimeIsPersistedAndRejectsEarlierCallsWithoutMutation() {
+    void activationAuditTimeDoesNotRestrictReservations() {
         IntentExecutionContext context = context();
         assertEquals(NOW, context.activatedTime());
-        String before = new A4pIntentCodec().serializeIntentExecutionContext(context);
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(context, execution("early", 100, 1), NOW - 1));
-        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(context, "early", NOW - 1));
-        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(context, "early", NOW - 1));
-        assertEquals(before, new A4pIntentCodec().serializeIntentExecutionContext(context));
-        IntentExecutionContext restored = ok(new A4pIntentCodec().deserializeIntentExecutionContext(before));
-        assertEquals(NOW, restored.activatedTime());
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(restored, execution("early", 100, 1), NOW - 1));
-        ok(A4p.createExecution(restored, execution("same-ms", 100, 1), NOW));
+        A4pIntentCodec codec = new A4pIntentCodec();
+        IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(
+                codec.serializeIntentExecutionContext(context)));
+        ok(A4p.createExecution(restored, execution("early", 100, 1), NOW - 1));
+        ok(codec.deserializeIntentExecutionContext(codec.serializeIntentExecutionContext(restored)));
     }
 
     @Test
@@ -343,12 +339,11 @@ class A4pTest {
     }
 
     @Test
-    void revocationUsesOptionalClockAndArkTsErrorPrecedence() {
+    void revocationUsesExplicitClockAndArkTsErrorPrecedence() {
         IntentExecutionContext context = context();
         fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(context, -1));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(context, NOW - 1));
-        assertEquals(IntentExecutionStatus.ACTIVE, context.status());
-        ok(A4p.revokeIntent(context, NOW));
+        ok(A4p.revokeIntent(context, NOW - 1));
+        assertEquals(IntentExecutionStatus.REVOKED, context.status());
         fails(A4P_INVALID_STATUS, A4p.revokeIntent(context, NOW - 1));
         assertEquals(4005, A4P_CART_MISMATCH.code());
     }
@@ -517,10 +512,10 @@ class A4pTest {
                     codec.serializeIntentExecutionContext(context)));
             assertEquals(NOW, restored.activatedTime());
             ok(A4p.createExecution(restored, execution("skew", 100, 1), NOW));
-            fails(A4P_INVALID_PARAMETER, A4p.activateIntent(signed, VERIFIER, NOW - 1));
+            ok(A4p.activateIntent(signed, VERIFIER, NOW - 1));
             String invalid = codec.serializeIntentExecutionContext(context)
                     .replace("\"activatedTime\":" + NOW, "\"activatedTime\":" + (NOW - 1));
-            fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(invalid));
+            ok(codec.deserializeIntentExecutionContext(invalid));
             fails(A4P_TIMESTAMP_EXPIRED, A4p.activateIntent(signed, VERIFIER, 100_001));
         }
         fails(A4P_TIMESTAMP_EXPIRED, A4p.createIntent(request(constraints()), SIGNER, 100_001));
