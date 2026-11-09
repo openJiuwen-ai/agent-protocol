@@ -68,11 +68,6 @@
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
         <version>0.8.13</version>
-        <configuration>
-          <includes>
-            <include>io/openjiuwen/a4p/*</include>
-          </includes>
-        </configuration>
         <executions>
           <execution>
             <goals>
@@ -82,6 +77,11 @@
           <execution>
             <id>report</id>
             <phase>verify</phase>
+            <configuration>
+              <includes>
+                <include>io/openjiuwen/a4p/*</include>
+              </includes>
+            </configuration>
             <goals>
               <goal>report</goal>
             </goals>

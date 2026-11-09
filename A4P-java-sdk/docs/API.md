@@ -175,7 +175,7 @@ Periodic accounting uses `floor((now - anchorTime) / (periodSeconds * 1000))`. `
 
 Implement `Signer` and `SignatureVerifier` using application-owned key infrastructure. The SDK supplies canonical UTF-8 JSON bytes: object keys are sorted, array order is preserved and insignificant whitespace is omitted. Only the current layer's outer `sign` field is removed; embedded layer signatures remain covered. Sign the supplied bytes directly.
 
-Return `SignatureInfo` with `alg`, a trusted key identifier and an unpadded Base64URL signature. Resolve verification keys and their bound algorithm through a trusted registry: the outer signature metadata is not covered by its own layer's signature. Callback exceptions or invalid signer metadata map to `A4P_SIGNING_FAIL`. Verifier exceptions, null verdicts, or disagreement between `valid` and `code == 0` map to `A4P_VERIFY_FAIL`. Lifecycle operations requiring a positive verdict also map a negative verdict to `A4P_VERIFY_FAIL`.
+Return `SignatureInfo` with `alg`, a trusted key identifier and an unpadded Base64URL signature. Resolve verification keys and their bound algorithm through a trusted registry: the outer signature metadata is not covered by its own layer's signature. All signer callback exceptions (including `A4pException`) map to `A4P_SIGNING_FAIL`. Invalid returned signature metadata maps to `A4P_INVALID_PARAMETER`. Verifier exceptions, null verdicts, or disagreement between `valid` and `code == 0` map to `A4P_VERIFY_FAIL`. Lifecycle operations requiring a positive verdict also map a negative verdict to `A4P_VERIFY_FAIL`.
 
 | API | Cryptographic verification performed |
 | --- | --- |
