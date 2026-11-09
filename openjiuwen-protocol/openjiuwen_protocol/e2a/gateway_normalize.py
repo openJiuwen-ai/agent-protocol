@@ -8,6 +8,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from openjiuwen_protocol.message import ReqMethod
 from openjiuwen_protocol.e2a.constants import (
     E2A_RESPONSE_KIND_ACP_OUTPUT_REQUEST,
     E2A_RESPONSE_KIND_CRON,
@@ -31,17 +32,27 @@ from openjiuwen_protocol.e2a.models import (
 
 if TYPE_CHECKING:
     from openjiuwen_protocol.e2a.agent_models import AgentResponse, AgentResponseChunk
-    # Message/ReqMethod 定义在 jiuwenswarm 侧（耦合 Mode 产品逻辑），仅类型注解使用。
+    # Message is only needed for type annotations in this module.
     Message = Any
-    ReqMethod = Any
 
 logger = logging.getLogger(__name__)
 
 
-def method_value(method: Any) -> str:
-    """Return the wire value for a known or extension method."""
-    value = getattr(method, "value", method)
-    return str(value or "")
+def method_value(method: ReqMethod | str | None) -> str:
+    """Return a method name, using an empty string only for an absent method.
+
+    Raises:
+        TypeError: The method is neither a ReqMethod nor a string nor None.
+        ValueError: A supplied method name is empty or whitespace-only.
+    """
+    if method is None:
+        return ""
+    value = method.value if isinstance(method, ReqMethod) else method
+    if not isinstance(value, str):
+        raise TypeError("method must be ReqMethod, str, or None")
+    if not value.strip():
+        raise ValueError("method must be a non-empty string")
+    return value
 
 
 # chat.delta 在线上被拆成 delta + 白名单字段，再在网关侧按同一份名单还原。
@@ -89,14 +100,7 @@ MAX_LEGACY_AGENT_REQUEST_JSON_BYTES = 512_000
 
 def message_to_legacy_agent_dict(msg: "Message") -> dict[str, Any]:
     """从 Message 生成与历史 WebSocket 一致的 dict（用于兜底 legacy_agent_request）。"""
-    rm = msg.req_method
-    rm_val: str | None
-    if rm is None:
-        rm_val = None
-    elif hasattr(rm, "value"):
-        rm_val = str(rm.value)
-    else:
-        rm_val = str(rm)
+    rm_val = None if msg.req_method is None else method_value(msg.req_method)
     out: dict[str, Any] = {
         "request_id": msg.id,
         "channel_id": msg.channel_id,
