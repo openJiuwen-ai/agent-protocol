@@ -772,7 +772,9 @@ class Message:
     app_id: str | None = None  # 应用实例标识，从 bot_id 拆出
     agent_ref: Any = None      # AgentRef(mode, id)，后端智能体标识
     payload: dict | None = None
-    req_method: ReqMethod | None = None
+    # Extension methods are kept as strings until AgentServer decides whether
+    # they are implemented.  Known methods continue to use ReqMethod.
+    req_method: ReqMethod | str | None = None
     event_type: EventType | None = None
     # 与 Mode.from_raw 的 fallback 对齐：客户端不传 mode 时落到 canonical
     # ``agent.work.normal``，避免 schema 默认值与 from_raw 不一致导致

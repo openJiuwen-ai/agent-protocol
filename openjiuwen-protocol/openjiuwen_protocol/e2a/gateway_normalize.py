@@ -8,6 +8,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from openjiuwen_protocol.message import ReqMethod
 from openjiuwen_protocol.e2a.constants import (
     E2A_RESPONSE_KIND_ACP_OUTPUT_REQUEST,
     E2A_RESPONSE_KIND_CRON,
@@ -31,11 +32,26 @@ from openjiuwen_protocol.e2a.models import (
 
 if TYPE_CHECKING:
     from openjiuwen_protocol.e2a.agent_models import AgentResponse, AgentResponseChunk
-    # Message/ReqMethod 定义在 jiuwenswarm 侧（耦合 Mode 产品逻辑），仅类型注解使用。
+    # Message is only needed for type annotations in this module.
     Message = Any
-    ReqMethod = Any
 
 logger = logging.getLogger(__name__)
+
+
+def method_value(method: ReqMethod | str) -> str:
+    """Return a non-empty method name. Callers handle absent methods.
+
+    Raises:
+        TypeError: The method is neither a ReqMethod nor a string.
+        ValueError: A supplied method name is empty or whitespace-only.
+    """
+    value = method.value if isinstance(method, ReqMethod) else method
+    if not isinstance(value, str):
+        raise TypeError("method must be ReqMethod or str")
+    if not value.strip():
+        raise ValueError("method must be a non-empty string")
+    return value
+
 
 # chat.delta 在线上被拆成 delta + 白名单字段，再在网关侧按同一份名单还原。
 # chat.final 走整包透传，不经过这份名单。主动推荐标记若只留在 final 上，
@@ -82,14 +98,7 @@ MAX_LEGACY_AGENT_REQUEST_JSON_BYTES = 512_000
 
 def message_to_legacy_agent_dict(msg: "Message") -> dict[str, Any]:
     """从 Message 生成与历史 WebSocket 一致的 dict（用于兜底 legacy_agent_request）。"""
-    rm = msg.req_method
-    rm_val: str | None
-    if rm is None:
-        rm_val = None
-    elif hasattr(rm, "value"):
-        rm_val = str(rm.value)
-    else:
-        rm_val = str(rm)
+    rm_val = None if msg.req_method is None else method_value(msg.req_method)
     out: dict[str, Any] = {
         "request_id": msg.id,
         "channel_id": msg.channel_id,
@@ -163,7 +172,7 @@ def message_to_e2a(msg: "Message") -> E2AEnvelope:
         "timestamp": msg.timestamp,
     }
     if msg.req_method is not None:
-        d["method"] = msg.req_method.value
+        d["method"] = method_value(msg.req_method)
     # 合并 metadata 和独立字段（enable_memory, group_digital_avatar 等）
     metadata: dict[str, Any] = dict(msg.metadata or {})
 
@@ -251,10 +260,7 @@ def e2a_from_agent_fields(
         "timestamp": timestamp,
     }
     if req_method is not None:
-        if hasattr(req_method, "value"):
-            d["method"] = req_method.value
-        else:
-            d["method"] = str(req_method)
+        d["method"] = method_value(req_method)
     if metadata:
         d["metadata"] = dict(metadata)
     return E2AEnvelope.from_dict(d)
