@@ -43,11 +43,15 @@ def test_valid_method_names_are_preserved(method, expected):
     assert e2a_from_agent_fields(request_id="method-test", req_method=method).method == expected
 
 
-def test_none_is_the_only_absent_method_value():
-    assert method_value(None) == ""
+def test_callers_handle_absent_methods():
     assert message_to_e2a(_message(None)).method is None
     assert message_to_legacy_agent_dict(_message(None))["req_method"] is None
     assert e2a_from_agent_fields(request_id="method-test").method is None
+
+
+def test_method_value_rejects_none():
+    with pytest.raises(TypeError):
+        method_value(None)
 
 
 @pytest.mark.parametrize(

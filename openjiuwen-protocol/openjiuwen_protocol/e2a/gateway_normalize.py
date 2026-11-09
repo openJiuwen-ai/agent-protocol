@@ -38,18 +38,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def method_value(method: ReqMethod | str | None) -> str:
-    """Return a method name, using an empty string only for an absent method.
+def method_value(method: ReqMethod | str) -> str:
+    """Return a non-empty method name. Callers handle absent methods.
 
     Raises:
-        TypeError: The method is neither a ReqMethod nor a string nor None.
+        TypeError: The method is neither a ReqMethod nor a string.
         ValueError: A supplied method name is empty or whitespace-only.
     """
-    if method is None:
-        return ""
     value = method.value if isinstance(method, ReqMethod) else method
     if not isinstance(value, str):
-        raise TypeError("method must be ReqMethod, str, or None")
+        raise TypeError("method must be ReqMethod or str")
     if not value.strip():
         raise ValueError("method must be a non-empty string")
     return value
