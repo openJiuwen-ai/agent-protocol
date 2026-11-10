@@ -108,7 +108,11 @@ presence matching the intent's periodicity) and the accounting snapshot (period 
 `leftExecutionCount` present exactly when their caps apply) — and re-freezes the
 authorization snapshot.
 
-Optional fields are `undefined`; absent optional fields are omitted from signed JSON.
+Optional fields are `undefined`; absent optional fields are omitted from signed JSON,
+and an in-memory `null` optional field is treated exactly like an absent one, so the
+canonical form never carries a `"key":null` pair. Null array items (and a null root)
+have no acceptable spelling: serialization fails with `A4P_SERIALIZE_FAIL`, symmetric
+with the strict parser's rejection of explicit nulls at every value position.
 Monetary amounts are positive integers in the application's agreed minor unit. All
 protocol numbers must be integers within the JavaScript safe-integer range; values that
 are not integers must be carried as strings. Values handed to the SDK must be plain
@@ -226,9 +230,10 @@ context inside a database transaction locked by `intentId`, prevent replay of th
 
 The canonical JSON and Base64URL rules behind every signature are the ones documented in
 [serialization_and_signature_rules.md](../A4P-java-sdk/docs/serialization_and_signature_rules.md): keys sorted by
-UTF-16 code units, no whitespace, finite safe integers only, `undefined` omitted,
-signing strips only the complete top-level `sign` property (nested chain signatures
-stay), UTF-8 without BOM, and RFC 4648 Base64URL without padding, with the decoder
+UTF-16 code units, no whitespace, safe integers only, `undefined` and `null` omitted
+(a null optional field is an absent field), signing strips only the top-level `sign`
+property (nested chain signatures stay), UTF-8 without BOM, and RFC 4648 Base64URL
+without padding, with the decoder
 rejecting padding, non-URL-safe characters and nonzero unused trailing bits. JSON field
 names are the interface property names (`intentConversation`, `structuredIntent.resources`,
 `userIdentity.id`), every enum is serialized by name (`"AI_PAY"`, `"CONSUMED"`,

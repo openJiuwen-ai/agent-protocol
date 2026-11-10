@@ -298,6 +298,27 @@ export default function utilsTest() {
         });
       });
 
+      it('unsupportedValueTypesThrow', 0, () => {
+        // bigint and function have no canonical JSON spelling: they must
+        // fail loudly, not render as null — including as property values
+        // inside an object. (symbol cannot be spelled in ArkTS source at
+        // all — arkts-no-symbol — so it is unreachable from typed code.)
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(BigInt(10) as Object);
+        });
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(((): number => 1) as Object);
+        });
+        const withBigInt: Record<string, Object> = { 'v': BigInt(10) };
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(withBigInt as Object);
+        });
+        const withFunction: Record<string, Object> = { 'f': (): number => 1 };
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(withFunction as Object);
+        });
+      });
+
       it('maxSafeIntegerRoundTrips', 0, () => {
         expect(canonicalStringify(9007199254740991 as Object)).assertEqual('9007199254740991');
         expect(canonicalStringify(-9007199254740991 as Object)).assertEqual('-9007199254740991');
@@ -317,6 +338,31 @@ export default function utilsTest() {
 
         expect(canonicalStringify(obj as Object)).assertEqual('{"b":1}');
         expect(canonicalStringify(obj2 as Object)).assertEqual('{"b":1}');
+      });
+
+      it('omitsNullProperties', 0, () => {
+        // A null optional field is an absent field in the canonical form —
+        // a "key":null pair is bytes the protocol neither produces nor
+        // accepts.
+        const obj: Record<string, Object | null> = { 'a': null, 'b': 1, 'c': null };
+        const inner: Record<string, Object | null> = { 'x': null, 'y': 2 };
+        const nested: Record<string, Object | null> = { 'outer': inner as Object };
+
+        expect(canonicalStringify(obj as Object)).assertEqual('{"b":1}');
+        expect(canonicalStringify(nested as Object)).assertEqual('{"outer":{"y":2}}');
+      });
+
+      it('nullRootAndNullArrayItemsThrow', 0, () => {
+        // The strict parser rejects explicit nulls at every value position,
+        // so the serializer must not emit them: a null root or a null array
+        // item would be bytes this SDK cannot parse back.
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(JSON.parse('null') as Object);
+        });
+        const withNullItem: Record<string, Object> = { 'arr': [1, null, 3] };
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(withNullItem as Object);
+        });
       });
 
       it('keepsArrayOrder', 0, () => {
