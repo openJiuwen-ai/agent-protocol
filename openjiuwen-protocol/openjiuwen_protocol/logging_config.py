@@ -1,21 +1,22 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""logging_config 领域：整段 ``/logging``。"""
+# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
+"""日志级别配置的请求体字段契约（``logging`` 段）。
+
+来源：``gateway/config/logging/repository.py`` 与 ``jiuwenswarm/common/utils.py``。
+字段名同时被 common 层（``apply_logging_config_payload`` / ``_logging_config_row_to_dict``）
+与 gateway 层（repository / access / 管理面 receiver）使用；因分层规则禁止 common
+import gateway，字段清单收口到本包作为唯一中立来源。
+
+边界：本模块只固化**字段名与操作字面量**；``update_log_levels`` 等热更新行为、
+DB 行到 payload 的映射函数均属实现逻辑，留在各仓实现侧。
+"""
 
 from __future__ import annotations
 
-from typing import Any
+#: 配置文件中的日志段名（``config.yaml`` 的 ``logging`` 键）。
+LOGGING_CONFIG_SECTION: str = "logging"
 
-from gateway.config.section import (
-    DbFlatSectionCodec,
-    SectionDocument,
-    SectionDocumentRepository,
-    YamlSectionCodec,
-)
-from gateway.storage.protocols.persistent import PersistentStore
-
-LOGGING_CONFIG_STORE_NAME = "logging_config"
-
-LOGGING_LEVEL_FIELDS = (
+#: 日志级别字段（顺序即管理面/前端展示顺序）。
+LOGGING_LEVEL_FIELDS: tuple[str, ...] = (
     "level",
     "console_level",
     "gateway",
@@ -24,47 +25,14 @@ LOGGING_LEVEL_FIELDS = (
     "full",
 )
 
-
-class LoggingConfigRepository:
-    """``logging_config`` 读写；不判断 edition。"""
-
-    def __init__(
-        self,
-        store: PersistentStore,
-        codec: YamlSectionCodec | DbFlatSectionCodec,
-        *,
-        instance_id: str = "",
-    ) -> None:
-        self._inner = SectionDocumentRepository(
-            store,
-            codec,
-            LOGGING_CONFIG_STORE_NAME,
-            instance_id=instance_id,
-        )
-
-    async def get(self) -> SectionDocument | None:
-        return await self._inner.get()
-
-    async def get_body(self) -> dict[str, Any]:
-        return await self._inner.get_body()
-
-    async def replace(self, body: dict[str, Any]) -> SectionDocument:
-        return await self._inner.replace(body)
-
-    async def merge_levels(self, updates: dict[str, Any]) -> SectionDocument:
-        cleaned = {
-            key: value
-            for key, value in updates.items()
-            if key in LOGGING_LEVEL_FIELDS and value is not None
-        }
-        return await self._inner.merge(cleaned)
-
-    async def delete(self) -> bool:
-        return await self._inner.delete()
-
+#: payload 中的操作字段名。
+LOG_CONFIG_OP_FIELD: str = "op"
+#: 删除日志配置、恢复代码默认级别。
+LOG_CONFIG_OP_DELETE: str = "delete"
 
 __all__ = [
-    "LOGGING_CONFIG_STORE_NAME",
+    "LOGGING_CONFIG_SECTION",
     "LOGGING_LEVEL_FIELDS",
-    "LoggingConfigRepository",
+    "LOG_CONFIG_OP_DELETE",
+    "LOG_CONFIG_OP_FIELD",
 ]
