@@ -21,12 +21,21 @@ void SessionTransportCallback::OnMessageReceived(const ConnEventData& message, c
 }
 
 JsonRpcTransportImpl::JsonRpcTransportImpl(const std::string& url, const AgentCard& agentCard,
-    [[maybe_unused]] const ClientConfig& config,
+    const ClientConfig& config,
     const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors)
     : url_(url), interceptors_(interceptors)
 {
     agentCard_ = std::make_shared<AgentCard>(agentCard);
-    conn_ = std::make_shared<Http::LibcurlConn>(url);
+    // ClientConfig timeouts are expressed in seconds; LibcurlConn works in
+    // milliseconds. Non-positive values fall back to the SDK defaults, values
+    // above the SDK cap are clamped (ClampTimeoutSecondsToMs) so connection
+    // creation cannot fail on an oversized-but-plausible timeout.
+    int requestTimeoutMs = config.timeoutSeconds > 0 ? Http::ClampTimeoutSecondsToMs(config.timeoutSeconds)
+        : Http::DEFAULT_REQUEST_TIMEOUT_MS;
+    int streamIdleTimeoutMs = config.streamingIdleTimeoutSeconds > 0
+        ? Http::ClampTimeoutSecondsToMs(config.streamingIdleTimeoutSeconds) : Http::DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+    conn_ = std::make_shared<Http::LibcurlConn>(url, std::unordered_map<std::string, std::string>{},
+        Http::DEFAULT_CONNECTION_TIMEOUT_MS, requestTimeoutMs, streamIdleTimeoutMs);
     conn_->SetCallback(std::make_shared<SessionTransportCallback>(this));
 }
 
@@ -136,7 +145,15 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
         }
 
         if (message.errCode != 0) {
-            conn_->FinishRequest(udata.timerId);
+            // Transport errors carry a JSON-RPC envelope; surface its message text
+            // so callers see e.g. "request timed out [stage=..., elapsed=...ms]"
+            // instead of the raw envelope.
+            std::string errInfo = message.data;
+            if (j.contains(JSON_FIELD_ERROR) && j[JSON_FIELD_ERROR].is_object() &&
+                j[JSON_FIELD_ERROR].contains(JSON_FIELD_MESSAGE) &&
+                j[JSON_FIELD_ERROR][JSON_FIELD_MESSAGE].is_string()) {
+                errInfo = j[JSON_FIELD_ERROR][JSON_FIELD_MESSAGE].get<std::string>();
+            }
             {
                 std::lock_guard<std::mutex> lock(requestMutex_);
                 if (requestData_.find(udata.requestId) == requestData_.end()) {
@@ -144,18 +161,14 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
                 }
                 requestData_.erase(udata.requestId);
             }
-            transportEventCb_(udata.requestId, TransportError{message.errCode, message.data});
+            transportEventCb_(udata.requestId, TransportError{message.errCode, errInfo});
             return;
         }
 
         if (udata.isStream) {
-            if (!j.contains(JSON_FIELD_ERROR)) {
-                conn_->RefreshRequest(udata.timerId, udata.timeout);
-            }
             OnStreamResp(message, udata);
             return;
         } else {
-            conn_->FinishRequest(udata.timerId);
             {
                 std::lock_guard<std::mutex> lock(requestMutex_);
                 if (requestData_.find(udata.requestId) == requestData_.end()) {
@@ -169,7 +182,6 @@ void JsonRpcTransportImpl::OnTransportMessage(const ConnEventData& message, cons
         A2A_LOG(A2A_LOG_LEVEL::WARN, "invalid data from transport layer");
         if (udata.valid) {
             TransportEvent ev = TransportError{static_cast<int>(A2AErrorCode::JSONRPC_PARSE_ERROR), e.what()};
-            conn_->FinishRequest(udata.timerId);
             {
                 std::lock_guard<std::mutex> lock(requestMutex_);
                 if (requestData_.find(udata.requestId) == requestData_.end()) {
@@ -196,7 +208,6 @@ void JsonRpcTransportImpl::Close()
     }
 
     for (auto it = tmp.begin(); it != tmp.end();) {
-        conn_->FinishRequest(it->second->timerId);
         transportEventCb_(it->second->requestId, ev);
         it = tmp.erase(it);
     }
@@ -241,7 +252,6 @@ int JsonRpcTransportImpl::Send(const std::string& requestId, const std::string& 
     std::shared_ptr<UserData> userData = std::make_shared<UserData>();
     userData->requestId = requestId;
     userData->method = method;
-    userData->timeout = timeout;
     if (method == METHOD_MESSAGE_STREAM || method == METHOD_TASK_RESUBSCRIBE) {
         userData->isStream = true;
     }
@@ -264,7 +274,6 @@ void JsonRpcTransportImpl::OnStreamResp(const ConnEventData& message, const User
     if (message.isStreamFin) {
         TransportError err;
         err.errorCode = 0;
-        conn_->FinishRequest(userData.timerId);
         {
             std::lock_guard<std::mutex> lock(requestMutex_);
             if (requestData_.find(userData.requestId) == requestData_.end()) {
@@ -281,7 +290,6 @@ void JsonRpcTransportImpl::OnStreamResp(const ConnEventData& message, const User
     if (data.contains(JSON_FIELD_ERROR)) {
         auto err = data[JSON_FIELD_ERROR].get<A2AError>();
         ev = TransportError{err.code, err.message.value_or("")};
-        conn_->FinishRequest(userData.timerId);
         {
             std::lock_guard<std::mutex> lock(requestMutex_);
             if (requestData_.find(userData.requestId) == requestData_.end()) {
@@ -295,7 +303,6 @@ void JsonRpcTransportImpl::OnStreamResp(const ConnEventData& message, const User
     if (data.contains(JSON_FIELD_ID) && data[JSON_FIELD_ID].get<std::string>() != userData.requestId) {
         ev = TransportError{static_cast<int>(A2AErrorCode::INVALID_AGENT_RESPONSE),
             "RequestId in response data does not match with requestId in request"};
-        conn_->FinishRequest(userData.timerId);
         {
             std::lock_guard<std::mutex> lock(requestMutex_);
             if (requestData_.find(userData.requestId) == requestData_.end()) {
@@ -318,12 +325,10 @@ void JsonRpcTransportImpl::OnStreamResp(const ConnEventData& message, const User
             m.status.state == TaskState::REJECTED ||
             m.status.state == TaskState::INPUT_REQUIRED ||
             m.status.state == TaskState::AUTH_REQUIRED) {
-            conn_->FinishRequest(userData.timerId);
             {
                 std::lock_guard<std::mutex> lock(requestMutex_);
                 if (requestData_.find(userData.requestId) == requestData_.end()) {
-                    // try to find requestData in lock first.
-                    // if cannot find, means other thread(e.g. timeout thread) has already handled it, thus do nothing.
+                    // already handled elsewhere (e.g. transport error), do nothing.
                     return;
                 }
                 requestData_.erase(userData.requestId);
