@@ -29,7 +29,7 @@ class A4pTest {
         A4pIntentCodec codec = new A4pIntentCodec();
         assertEquals(NOW + 1, ok(codec.deserializeIntentExecutionContext(
                 codec.serializeIntentExecutionContext(context))).revokedTime());
-        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 codec.serializeIntentExecutionContext(context).replace(
                         "\"revokedTime\":" + (NOW + 1), "\"revokedTime\":null")));
         assertEquals(NOW + 1, context.revokedTime());
@@ -46,10 +46,10 @@ class A4pTest {
         A4pIntentCodec codec = new A4pIntentCodec();
         String json = codec.serializeIntentExecutionContext(context());
         for (String value : List.of("null", "\"10000\"", "10000.5")) {
-            fails(value.equals("10000.5") ? A4P_DESERIALIZE_FAIL : A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+            fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                     json.replace("\"activatedTime\":10000", "\"activatedTime\":" + value)));
         }
-        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 json.replace("\"activatedTime\":10000,", "")));
     }
 
@@ -480,7 +480,7 @@ class A4pTest {
                 new SignatureInfo("HS256", intent.sign().keyIdentifier(), intent.sign().sign()));
         fails(A4P_INVALID_PARAMETER, A4p.issueIntent(relabeled, VERIFIER, issueContext(), SIGNER, NOW));
         A4pIntentCodec codec = new A4pIntentCodec();
-        fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL1(codec.serializeIntentL1(relabeled)));
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1(codec.serializeIntentL1(relabeled)));
         Signer foreign = data -> new SignatureInfo("HS256", "key", "c2ln");
         fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), foreign, NOW));
     }

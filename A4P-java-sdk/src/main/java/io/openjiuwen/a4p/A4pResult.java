@@ -6,7 +6,7 @@ import static io.openjiuwen.a4p.A4pErrorCode.*;
 /**
  * Represents a successful value or a protocol failure.
  * Check success() before accessing data(). Success has non-null data and code zero;
- * failure has null data and a nonzero code. SDK-generated messages are fixed diagnostics.
+ * failure has null data and a nonzero code. Codec failure messages include diagnostic details.
  * @param <T> successful payload type
  * @see A4pErrorCode
  */
@@ -71,6 +71,12 @@ public final class A4pResult<T> {
      */
     static <T> A4pResult<T> failure(A4pErrorCode code) {
         return new A4pResult<>(false, null, code == null || code == A4P_SUCCESS ? A4P_INTERNAL_ERROR : code);
+    }
+
+    /** Builds a failure with operation-specific diagnostic details. */
+    static <T> A4pResult<T> failure(A4pErrorCode code, String message) {
+        A4pErrorCode actual = code == null || code == A4P_SUCCESS ? A4P_INTERNAL_ERROR : code;
+        return new A4pResult<>(false, null, actual.code(), message);
     }
 
     /**

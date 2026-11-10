@@ -34,7 +34,8 @@ final class Fixtures {
         assertFalse(result.success(), () -> "expected " + code + ", got success");
         assertNull(result.data());
         assertEquals(code.code(), result.code());
-        assertEquals(code.message(), result.message());
+        if (code == A4pErrorCode.A4P_DESERIALIZE_FAIL) { assertTrue(result.message().startsWith(code.message())); }
+        else { assertEquals(code.message(), result.message()); }
     }
 
     static void thrown(A4pErrorCode code, Executable action) {
