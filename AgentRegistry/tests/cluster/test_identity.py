@@ -48,6 +48,29 @@ def test_init_writes_file(tmp_path):
     }
 
 
+def test_failed_save_keeps_last_loadable_state(tmp_path, monkeypatch):
+    from a2x_registry.common import atomic
+
+    path = tmp_path / "cluster_state.json"
+    state = ClusterState.init(node_id="reg-preserved", path=path)
+    original = path.read_bytes()
+    state.version_clock = 42
+
+    def deny_replace(source, target):
+        raise PermissionError("state file locked")
+
+    monkeypatch.setattr(atomic.os, "replace", deny_replace)
+    monkeypatch.setattr(atomic.time, "sleep", lambda _: None)
+    with pytest.raises(PermissionError, match="state file locked"):
+        state.save()
+
+    assert path.read_bytes() == original
+    loaded = ClusterState.load(path=path)
+    assert loaded.node_id == "reg-preserved"
+    assert loaded.version_clock == 0
+    assert set(tmp_path.iterdir()) == {path}
+
+
 def test_init_twice_raises(tmp_path):
     p = tmp_path / "cluster_state.json"
     ClusterState.init(node_id="reg-1", path=p)
