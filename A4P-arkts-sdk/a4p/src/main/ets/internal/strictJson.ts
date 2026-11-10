@@ -23,9 +23,9 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  *   the protocol defines;
  * - numbers that are not plain decimal safe integers: fraction and
  *   exponent spellings are rejected even when they evaluate to an
- *   integer, as are overflow (1e999) and silent rounding
- *   (9007199254740993) — the parsed value must be exactly what the
- *   bytes spelled;
+ *   integer, as are overflow (1e999), silent rounding
+ *   (9007199254740993) and negative zero — the parsed value must be
+ *   exactly what the bytes spelled;
  * - the "__proto__" object key: assigning it through bracket notation
  *   replaces the object's prototype instead of creating an own property,
  *   which would hide the entry from enumeration while it still leaks
@@ -42,9 +42,6 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  *   (leading zeros, bare '.', truncated exponents), raw control
  *   characters in strings, invalid escapes, and nesting deeper than
  *   MAX_JSON_DEPTH.
- *
- * The one normalized spelling is "-0", which reads as 0: the canonical
- * form spells both zeros "0", and Java's long has no negative zero.
  *
  * The one admitted null is the bare document "null": it parses to a null
  * root so the structural validators reject it as invalid data — which
@@ -377,10 +374,10 @@ class StrictJsonParser {
       this.fail('number is not a safe integer at position ' + start +
         ' (protocol numbers are safe integers; non-integer values are carried as strings)');
     }
-    // -0 reads as 0: the canonical form spells both zeros "0", and Java's
-    // long has no negative zero.
-    if (value === 0) {
-      return 0;
+    // Negative zero is rejected: the canonical form spells zero only "0"
+    // (the serializer renders -0 as 0).
+    if (value === 0 && literal[0] === '-') {
+      this.fail('negative zero is not part of the canonical protocol JSON at position ' + start);
     }
     return value;
   }

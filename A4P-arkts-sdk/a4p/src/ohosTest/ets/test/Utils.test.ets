@@ -325,6 +325,13 @@ export default function utilsTest() {
         expect(canonicalStringify(0 as Object)).assertEqual('0');
       });
 
+      it('serializesNegativeZeroAsZero', 0, () => {
+        // Zero has a single canonical spelling; the parser rejects "-0".
+        const negativeZero: number = -0;
+
+        expect(canonicalStringify(negativeZero as Object)).assertEqual('0');
+      });
+
       it('sortsKeysByCodePoint', 0, () => {
         const obj: Record<string, Object> = { 'b': 1, 'a': 2 };
 

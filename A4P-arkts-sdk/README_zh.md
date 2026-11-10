@@ -96,17 +96,37 @@ try {
 
 失败的 `createExecution` 仍可能已把 context 置为 `EXPIRED`（见下文的惰性翻转），因此
 每次调用后都要持久化 context。`A4pCodec.serializeIntentExecutionContext` /
-`deserializeIntentExecutionContext` 提供持久化形式；反序列化会重新校验存储的完整结构
-——已授权的 L3 链、`intentId` 的推导、每一条账本记录（与状态绑定的终结时间戳、
-结构合法的扁平 `action`/`executionContent`、`periodIndex` 的有无与意图周期性一致）以及记账快照
-（周期数值与 `leftExecutionCount` 恰在对应上限存在时出现）——并重新冻结授权快照。
+`deserializeIntentExecutionContext` 提供持久化形式；序列化对 null 输入以
+`A4P_SERIALIZE_FAIL` 拒绝，且任何底层失败一律以 5001 抛出；
+反序列化先做严格解析，再校验结构。
+
+解析是严格的：重复 JSON 键、显式 `null` 字面量、非规范数字拼写（分数、指数、超出安全
+整数范围、负零 `-0`）、空格（规范化形式不含任何空格——输入必须是序列化器输出的确切
+字节，带填充或美化排版的文档会被拒绝）、尾部多余内容与非法字面量都以
+`A4P_DESERIALIZE_FAIL` 拒绝。
+结构校验按封闭字段集进行，任意层级的未知字段都会被拒绝，且任何拒绝（输入缺失、解析失败
+或结构不符）一律以 `A4P_DESERIALIZE_FAIL`（5002）抛出——无法解析或不符合协议形状的
+文档就是反序列化失败，无论具体缺陷是什么（具体原因会记入 hilog 日志）：已授权的
+L3 链、`intentId` 的推导、`activatedTime`/`revokedTime`（校验为非负整数，但不做先后
+顺序或状态绑定检查）、每一条账本记录（与状态绑定且不早于
+`reservedAt` 的终结时间戳、结构合法的扁平 `action`/`executionContent`、`periodIndex`
+的有无与意图周期性一致）以及记账快照（周期
+数值与 `leftExecutionCount` 恰在对应上限存在时出现）。反序列化只判定格式：版本号按
+原样恢复，账本内容——窗口、周期索引、id 唯一性、与签名快照的参数一致性、累计上限、
+状态与记账数值——一律原样恢复。执行类 API 在每次调用时重新执行账本规则，因此恢复的
+context 的账本在使用时才被判定，而不是在解析时；版本则从不重新判定——只有面向链路的
+API（`issueIntent`、`signIntent`、`activateIntent`、`verifyIntentAuthenticity`）会比较
+版本，执行类 API（`revokeIntent`、`createExecution`、`completeExecution`、
+`cancelExecution`）不比较版本，外来版本的 context 恢复后可直接操作。需要校验签名的
+调用方在恢复后自行执行 `verifyIntentAuthenticity`（其判定同时拒绝不支持的 L2/L1
+版本）。最后重新冻结授权快照。
 
 可选字段用 `undefined` 表示；未提供的可选字段不会出现在签名 JSON 中，内存中的 `null`
 可选字段同样视为未提供，规范化形式绝不会出现 `"key":null` 键值对。数组元素或根为
 null 时，序列化直接以 `A4P_SERIALIZE_FAIL` 失败，不会输出 `null` 字面量，与解析端
 在所有值位置拒绝显式 null 的规则保持一致。金额是正整数，以
 应用约定的最小货币单位计。所有协议数值都必须是 JavaScript 安全整数范围内的整数；
-不是整数的值必须以字符串承载。传给 SDK 的值必须是普通对象（对象字面量），不能是
+不是整数的值必须以字符串承载；零只有一种拼写——`-0` 序列化为 `0`。传给 SDK 的值必须是普通对象（对象字面量），不能是
 类实例——规范化序列化会以 `A4P_SERIALIZE_FAIL` 拒绝类实例。
 
 生命周期与执行函数都接受可选的显式时钟（`now`，epoch 毫秒），缺省使用 `Date.now()`。
@@ -176,6 +196,10 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
 - 预留检查按固定顺序执行：请求结构；动作与币种是否与已授权意图一致；context 状态；
   有效期窗口（`validFrom`、惰性置为 EXPIRED）；执行/订单 ID 重复；
   执行次数上限、单笔上限、剩余金额；白名单范围与模板；周期配额。
+- 执行类 API 不比较版本：`revokeIntent`、`createExecution`、`completeExecution`、
+  `cancelExecution` 只判定 context 的状态、窗口、ID 与配额，从不比较其 `version`
+  字段或内嵌链路的版本——外来版本的 context 恢复后会被照常操作。预留前的版本把关由
+  调用方负责（`verifyIntentAuthenticity` 拒绝不支持的 L2/L1 版本）。
 - `amount` 由调用方声明：SDK 只校验其不超过签名的金额上限，不与购物车对账（`Product`
   不含价格）。将金额绑定到真实价格是持有权威商品目录一方的职责。
 - 撤销要求 context 处于 ACTIVE 并阻止新的预留，但待处理执行仍可完成或取消。
@@ -232,9 +256,14 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
 
 ## 版本与兼容性
 
-协议版本为 `1.0`。本 SDK 创建的每一层都写入该常量，每一步都会校验所收到的各层，不一致
-（包括混合版本的链）时以 `A4P_UNSUPPORTED_VERSION` 拒绝。HAR 版本为 `1.0.0`；协议兼容
-性由 `version` 字段决定，而不是由 HAR 版本决定。
+协议版本为 `1.0`。本 SDK 创建的每一层都写入该常量，面向链路的 API 会校验所收到的
+各层——不一致（包括混合版本的链）时以 `A4P_UNSUPPORTED_VERSION` 拒绝。编解码器有意
+不判定版本：`deserializeIntentL1/L2/L3` 与 `deserializeIntentExecutionContext` 按原样
+恢复文档所携带的任何版本。执行类 API（`revokeIntent`、`createExecution`、
+`completeExecution`、`cancelExecution`）接收的是 context 而非各层，同样不比较版本：
+外来版本的 context 恢复后会被照常撤销、预留与终结，预留前的版本把关由调用方负责
+（`verifyIntentAuthenticity` 覆盖 L2/L1 版本）。协议兼容性由 `version` 字段决定，
+而不是由 HAR 版本决定。
 
 ## 已知限制
 
@@ -245,10 +274,10 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
 - HTTP 绑定为内部实现且未导出，待规范确定后再开放；公共能力仅限进程内调用与 canonical
   JSON 序列化。
 - `verifyIntentAuthenticity` 有意不校验用户签名。
-- 反序列化是结构性的（JSON.parse 语义）：不拒绝未知字段与重复 JSON 键，这一点不如
-  Java 移植版严格。
-- 签发与激活只判定窗口上界（`validUntil`），签名不判定任何时钟；窗口的开启（`validFrom`）与惰性的 EXPIRED
-  翻转都留给预留阶段。
+- 有效期窗口只在签发、激活与预留时判定；创建与签名只记录时间戳、不判定任何时钟。记录级
+  时间戳（`reservedAt`、`completedAt`、`canceledAt`）保留单调性与状态绑定校验；
+  `activatedTime`、`revokedTime` 与链上各层时间戳仅校验为非负整数，不做先后顺序或
+  状态绑定检查。
 - context 操作无同步保护：仅在 ArkTS 单线程运行时中安全，不覆盖多进程或各自独立激活的
   副本。
 
@@ -266,7 +295,8 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
   验证器失败防护、执行记账、配额上限与回滚、订单幂等、购物车模板匹配、周期边界、检查
   顺序、过期终结与终态。
 - `A4pCodec.test.ets`——确定性与键序无关的序列化、固定时钟下的 golden 线格式、往返
-  编解码，以及 context 恢复（包括重新冻结授权快照）。
+  编解码，以及 context 恢复（包括重新冻结授权快照与原样恢复契约：篡改的版本号、
+  激活/预留时间窗口、周期索引、重复 id、购物车与上限数值、状态与记账不一致均按原样恢复）。
 - `A4pHttp.test.ets`——封套构建与解析、完整的错误码 → HTTP 状态映射表，以及
   proposal → authorization → submission 全流程。
 - `Utils.test.ets`——base64url、UTF-8 与 canonical JSON 的边界用例，包括对非规范编码的

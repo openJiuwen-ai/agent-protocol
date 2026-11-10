@@ -101,12 +101,35 @@ try {
 A failed `createExecution` can still have moved the context to `EXPIRED` (the lazy flip
 described below), so persist the context after every call.
 `A4pCodec.serializeIntentExecutionContext` / `deserializeIntentExecutionContext` provide
-the persisted form; deserialization re-validates the whole stored structure — the
-authorized L3 chain, the `intentId` derivation, every ledger record (status-bound
-finalization timestamps, a well-formed flat `action`/`executionContent`, `periodIndex`
-presence matching the intent's periodicity) and the accounting snapshot (period figures and
-`leftExecutionCount` present exactly when their caps apply) — and re-freezes the
-authorization snapshot.
+the persisted form; serialization fails with the uniform `A4P_SERIALIZE_FAIL` (5001) wrapping any
+underlying failure, and deserialization parses strictly, then validates the stored structure.
+
+Parsing is strict: duplicate JSON keys, explicit `null` literals, non-canonical number
+spellings (fractions, exponents, unsafe integers, negative zero), whitespace (the
+canonical form carries none — the input must be the exact bytes the serializer emits,
+so padded or pretty-printed documents fail), trailing content and malformed literals
+fail with `A4P_DESERIALIZE_FAIL`. The structural pass checks closed field sets — an unknown field, at any level, is rejected —
+and any rejection (a missing input, a parse rejection or a structural one) fails with
+the uniform `A4P_DESERIALIZE_FAIL` (5002): a document that does not parse or hold the
+protocol's shape is a deserialization failure, whatever specific defect it carries
+(the specific cause is recorded via hilog). It checks: the authorized L3 chain, the
+`intentId` derivation, the `activatedTime`/`revokedTime` stamps (validated as
+non-negative integers, with no ordering or status-binding check), every
+ledger record (status-bound finalization timestamps never preceding `reservedAt`,
+a well-formed flat `action`/`executionContent`, `periodIndex` presence matching the intent's periodicity)
+and the accounting snapshot (period figures and `leftExecutionCount` present exactly
+when their caps apply). The format is all deserialization judges: the versions are
+restored as given, and the ledger's content — windows, period indexes, id uniqueness,
+parameter consistency with the signed snapshot, the accumulated caps, the status and
+the accounting figures — is restored verbatim. The execution APIs replay the ledger
+rules on every call, so a restored context's ledger is judged when used, not when
+parsed. Versions are never replayed: only the chain-facing APIs — `issueIntent`,
+`signIntent`, `activateIntent`, `verifyIntentAuthenticity` — compare versions; the
+execution-class APIs (`revokeIntent`, `createExecution`, `completeExecution`,
+`cancelExecution`) operate on the context without comparing versions, so a restored
+context of a foreign version is operable as-is. Callers wanting signature checks run
+`verifyIntentAuthenticity` after the restore — its verdict also rejects unsupported
+L2/L1 versions. Finally the authorization snapshot is re-frozen.
 
 Optional fields are `undefined`; absent optional fields are omitted from signed JSON,
 and an in-memory `null` optional field is treated exactly like an absent one, so the
@@ -115,7 +138,8 @@ have no acceptable spelling: serialization fails with `A4P_SERIALIZE_FAIL`, symm
 with the strict parser's rejection of explicit nulls at every value position.
 Monetary amounts are positive integers in the application's agreed minor unit. All
 protocol numbers must be integers within the JavaScript safe-integer range; values that
-are not integers must be carried as strings. Values handed to the SDK must be plain
+are not integers must be carried as strings, and zero has a single spelling: `-0`
+serializes as `0`. Values handed to the SDK must be plain
 objects (object literals), not class instances — canonical serialization rejects class
 instances with `A4P_SERIALIZE_FAIL`.
 
@@ -197,6 +221,11 @@ by the SDK, so raw exceptions never leak through the lifecycle APIs.
   lazy EXPIRED flip); duplicate execution/order ids; the
   execution-count cap, the single-order cap, the remaining amount; whitelist scope and
   template; period quota.
+- No execution-class API compares versions: `revokeIntent`, `createExecution`,
+  `completeExecution` and `cancelExecution` judge the context's status, window, ids
+  and quota but never its `version` field nor the embedded chain's — a restored
+  foreign-version context is operated on as-is. A version gate before reserving is
+  the caller's (`verifyIntentAuthenticity` rejects unsupported L2/L1 versions).
 - `amount` is caller-declared: the SDK validates it against the signed caps but never
   reconciles it with the cart (`Product` carries no price). Binding the amount to actual
   prices is the responsibility of the party holding the authoritative product catalog.
@@ -266,10 +295,17 @@ by tests but not part of the public API until the specification settles the bind
 
 ## Version and compatibility
 
-The protocol version is `1.0`. Every level this SDK creates is stamped with it, and each
-step validates the levels it receives, rejecting a mismatch (including mixed-version
-chains) with `A4P_UNSUPPORTED_VERSION`. The HAR version is `1.0.0`; protocol
-compatibility is governed by the `version` field, not by the HAR version.
+The protocol version is `1.0`. Every level this SDK creates is stamped with it, and
+the chain-facing APIs validate the levels they receive — rejecting a mismatch
+(including mixed-version chains) with `A4P_UNSUPPORTED_VERSION`. The codec is
+deliberately version-blind: `deserializeIntentL1/L2/L3` and
+`deserializeIntentExecutionContext` restore whatever versions the document carries,
+as given. The execution-class APIs (`revokeIntent`, `createExecution`,
+`completeExecution`, `cancelExecution`) receive the context rather than the levels
+and compare no versions either: a restored foreign-version context is revoked,
+reserved against and finalized as-is, so a version gate before reserving is the
+caller's to build (`verifyIntentAuthenticity` covers the L2/L1 versions).
+Protocol compatibility is governed by the `version` field, not by the HAR version.
 
 ## Known limitations
 
@@ -281,12 +317,11 @@ compatibility is governed by the `version` field, not by the HAR version.
 - HTTP bindings are internal and unexported until the specification settles them; only
   in-process calls and canonical JSON serialization are public.
 - `verifyIntentAuthenticity` deliberately does not verify the user signature.
-- Deserialization is structural (JSON.parse semantics): unknown fields and duplicate
-  JSON keys are not rejected, unlike the stricter Java port.
-- Issuance and activation judge only the window's upper bound (`validUntil`); signing
-  judges no clock; the
-  window's opening (`validFrom`) and the lazy EXPIRED flip are left to reservation
-  time.
+- The validity window is judged only at issuance, activation and reservation; creation
+  and signing record their stamps without judging any clock. The record-level stamps
+  (`reservedAt`, `completedAt`, `canceledAt`) keep their monotonic and status-bound
+  validation; `activatedTime`, `revokedTime` and the chain's timestamps are validated
+  as non-negative integers only, never ordered or status-bound.
 - Context operations are unsynchronized: safe in the single-threaded ArkTS runtime
   only, not across processes or independently activated copies.
 
@@ -306,7 +341,9 @@ On-device hypium suites under `a4p/src/ohosTest` (300+ cases):
   check ordering, expiry finalization and terminal states.
 - `A4pCodec.test.ets` — deterministic and key-order-independent serialization, the
   golden wire form at a fixed clock, round-trips, and context restore (including
-  re-freezing the authorized snapshot).
+  re-freezing the authorized snapshot and the verbatim-restore contract: tampered
+  versions, activation/reservation windows, period indexes, duplicate ids, cart and
+  cap figures, status and accounting disagreements all restore as given).
 - `A4pHttp.test.ets` — envelope builders and parsers, the complete error-code →
   HTTP-status table, and the proposal → authorization → submission flow.
 - `Utils.test.ets` — base64url, UTF-8 and canonical JSON edge cases, including

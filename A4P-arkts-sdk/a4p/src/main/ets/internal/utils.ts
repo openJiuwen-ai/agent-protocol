@@ -233,6 +233,10 @@ export function canonicalStringify(value: Object): string {
       value > Number.MAX_SAFE_INTEGER || value < -Number.MAX_SAFE_INTEGER) {
       a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL, 'canonicalStringify only supports finite safe integers, got: ' + value);
     }
+    // Zero has a single spelling: -0 renders as 0 (the parser rejects "-0").
+    if (value === 0) {
+      return '0';
+    }
     return value.toString();
   }
   if (typeof value === 'string') {
