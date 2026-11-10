@@ -128,7 +128,7 @@ public class A4pIntentCodec {
             fields.put("executionInfo", intentExecutionContext.executionInfo());
             fields.put("executions", intentExecutionContext.executions());
         }
-        return CanonicalJson.stringify(fields);
+        return CanonicalJson.stringify(toJsonNode(fields));
     }
 
     // The user signature is not re-verified; the stored L3 is checked like activateIntent's input otherwise.
@@ -210,7 +210,30 @@ public class A4pIntentCodec {
      */
     private static String serialize(Object intent) {
         Validation.present(intent);
-        return CanonicalJson.stringify(intent);
+        return CanonicalJson.stringify(toJsonNode(intent));
+    }
+
+    /** Converts protocol values to JSON, omitting null object fields recursively. */
+    static JsonNode toJsonNode(Object value) {
+        return omitNullFields(CanonicalJson.MAPPER.valueToTree(value));
+    }
+
+    static JsonNode omitNullFields(JsonNode node) {
+        if (node.isObject()) {
+            var result = CanonicalJson.MAPPER.createObjectNode();
+            node.properties().forEach(entry -> {
+                if (!entry.getValue().isNull()) {
+                    result.set(entry.getKey(), omitNullFields(entry.getValue()));
+                }
+            });
+            return result;
+        }
+        if (node.isArray()) {
+            var result = CanonicalJson.MAPPER.createArrayNode();
+            node.forEach(item -> result.add(omitNullFields(item)));
+            return result;
+        }
+        return node.deepCopy();
     }
 
     /**
@@ -229,6 +252,15 @@ public class A4pIntentCodec {
         });
     }
 
+    /** Rejects explicit nulls recursively, including array elements, before typed conversion. */
+    private static void rejectNullValues(JsonNode node) {
+        Validation.require(node != null && !node.isNull(), A4P_INVALID_PARAMETER,
+                "JSON values must not be null; omit absent object fields");
+        if (node.isContainerNode()) {
+            node.forEach(A4pIntentCodec::rejectNullValues);
+        }
+    }
+
     /**
      * Strictly parses JSON and converts it to the requested protocol representation.
      * @param <Value> decoded or copied value type
@@ -238,7 +270,8 @@ public class A4pIntentCodec {
      */
     private static <Value> Value parse(String json, Class<Value> type) {
         Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
-        Object parsed = CanonicalJson.parse(json);
+        JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
+        rejectNullValues(parsed);
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {

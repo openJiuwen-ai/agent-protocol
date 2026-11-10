@@ -75,7 +75,7 @@ final class CanonicalJson {
      * @return canonical UTF-8 bytes excluding only the outer sign field
      */
     public static byte[] toSignableBytes(Object intent) {
-        Object normalized = normalize(intent, new IdentityHashMap<>(), 0);
+        Object normalized = normalize(A4pIntentCodec.toJsonNode(intent), new IdentityHashMap<>(), 0);
         if (!(normalized instanceof Map<?, ?> fields)) {
             throw new A4pException(A4P_SERIALIZE_FAIL);
         }
