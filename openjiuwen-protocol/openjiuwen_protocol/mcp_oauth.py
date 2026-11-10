@@ -1,41 +1,27 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
 
-"""MCP OAuth 回调入口（AgentServer 进程）。
+"""MCP OAuth 回调的共享契约（不含 provider 实现与 provider 查找）。
 
-异常类型与 provider 域名取自 ``openjiuwen_protocol.mcp_oauth``（跨进程契约单一
-来源）；本文件只绑定母仓进程自己的 provider 注册表。
+来源：``jiuwenswarm/common/mcp_oauth.py``。两仓都会把 OAuth 回调交给当前进程
+注册的 ``mcp_registry`` provider 执行，失败语义必须一致：
+
+- 异常类型 ``McpOAuthError`` 是"可展示给用户的预期失败"与"内部崩溃"的分界，
+  Gateway 侧回调路由据此选择 400 / 500 落地页；
+- provider 域名常量避免两侧字面量漂移。
+
+provider 查找依赖各进程自己的 ``external_providers`` 注册表，故
+``complete_oauth_flow`` / ``complete_oauth_flow_async`` 仍在两仓实现侧各持一份
+薄封装（``~6`` 行），只引用本模块的常量与异常类型。
 """
 
 from __future__ import annotations
 
-from typing import Any
 
-from openjiuwen_protocol.mcp_oauth import (
-    MCP_REGISTRY_PROVIDER_DOMAIN,
-    McpOAuthError,  # noqa: F401 — 旧 import 路径兼容
-)
-
-from jiuwenswarm.common.external_providers import provider
-
-__all__ = ["McpOAuthError", "complete_oauth_flow", "complete_oauth_flow_async"]
+class McpOAuthError(RuntimeError):
+    """An expected authorization failure safe to display on the callback page."""
 
 
-def complete_oauth_flow(query: dict[str, Any]) -> bool:
-    """Complete a callback through the process's registered MCP provider."""
-    return provider(MCP_REGISTRY_PROVIDER_DOMAIN).complete_oauth_callback(query)
+#: 当前进程注册 MCP OAuth 回调实现所用的 provider 域名。
+MCP_REGISTRY_PROVIDER_DOMAIN = "mcp_registry"
 
-
-async def complete_oauth_flow_async(query: dict[str, Any]) -> bool:
-    """Async twin of :func:`complete_oauth_flow` for the unified provider entry.
-
-    The remote provider (gateway split mode) is async-only; async consumers
-    such as the web callback handler use this entry directly instead of a
-    threadpool hop around the sync path.
-    """
-    completed = await provider(
-        MCP_REGISTRY_PROVIDER_DOMAIN
-    ).complete_oauth_callback_async(query)
-    if not completed:
-        # handler 不检查返回值：不抛会把失败渲染成"授权成功"
-        raise McpOAuthError("授权回调未完成，请重试连接")
-    return True
+__all__ = ["MCP_REGISTRY_PROVIDER_DOMAIN", "McpOAuthError"]
