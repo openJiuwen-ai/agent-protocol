@@ -196,7 +196,7 @@ class CodecTest {
     void executionContextKeepsTerminalStatusAndOmitsInapplicableFigures() {
         PaymentConstraints unbounded = new PaymentConstraints(null, 1000L, "CNY", 0L, 100_000L, null, null, null, null);
         IntentExecutionContext context = ok(A4p.activateIntent(authorized(unbounded), VERIFIER, NOW));
-        ok(A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
         String json = codec.serializeIntentExecutionContext(context);
         assertTrue(json.contains("\"executionInfo\":{\"leftAmount\":1000},\"executions\":[]"));
         IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(json));
@@ -283,6 +283,6 @@ class CodecTest {
                 consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"ACTIVE\"")));
         // REVOKED and EXPIRED are reachable whatever the ledger holds.
         assertEquals(IntentExecutionStatus.REVOKED, ok(codec.deserializeIntentExecutionContext(
-                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\""))).status());
+                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\",\"revokedTime\":20000"))).status());
     }
 }

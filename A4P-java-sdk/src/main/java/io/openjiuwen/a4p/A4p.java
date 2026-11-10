@@ -1,9 +1,36 @@
 package io.openjiuwen.a4p;
 
-import io.openjiuwen.a4p.Models.*;
 import java.util.List;
 import java.util.UUID;
-import static io.openjiuwen.a4p.A4pErrorCode.*;
+
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_AMOUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_DUPLICATE_ID;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_EXECUTION_COUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_INVALID_PARAMETER;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_INVALID_STATUS;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_PERIOD_EXECUTION_COUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SIGNING_FAIL;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SINGLE_ORDER_AMOUNT_EXCEEDED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SUCCESS;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_TIMESTAMP_EXPIRED;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_VERIFY_FAIL;
+import io.openjiuwen.a4p.Models.CartItem;
+import io.openjiuwen.a4p.Models.CreateIntentRequest;
+import io.openjiuwen.a4p.Models.Execution;
+import io.openjiuwen.a4p.Models.ExecutionRecord;
+import io.openjiuwen.a4p.Models.ExecutionStatus;
+import io.openjiuwen.a4p.Models.IntentExecutionStatus;
+import io.openjiuwen.a4p.Models.IntentIssueContext;
+import io.openjiuwen.a4p.Models.IntentL1;
+import io.openjiuwen.a4p.Models.IntentL2;
+import io.openjiuwen.a4p.Models.IntentL3;
+import io.openjiuwen.a4p.Models.ItemWhiteList;
+import io.openjiuwen.a4p.Models.Order;
+import io.openjiuwen.a4p.Models.PaymentConstraints;
+import io.openjiuwen.a4p.Models.SignatureInfo;
+import io.openjiuwen.a4p.Models.SigningEnv;
+import io.openjiuwen.a4p.Models.VerificationResult;
 import static io.openjiuwen.a4p.Validation.require;
 
 /**
@@ -14,7 +41,7 @@ import static io.openjiuwen.a4p.Validation.require;
  * Applications must persist returned contexts, including a failed reservation that marks a context EXPIRED,
  * and serialize updates to each intent in their database transaction.
  * All timestamps are Unix epoch milliseconds within the JavaScript safe integer range.
- * Explicit clocks must be trusted; overloads without a clock use System.currentTimeMillis().
+ * Lifecycle operations require an explicit now argument.
  * Protocol failures are returned as A4pResult; unexpected SDK defects may throw A4pException.
  * @see A4pIntentCodec
  */
@@ -28,32 +55,21 @@ public final class A4p {
     private A4p() {}
 
     /**
-     * Validates a creation request and signs the resulting L1 with the agent key.
+     * Validates a creation request, requires now at or before validUntil, and signs L1 with the agent key.
      * Generates a UUID when intentId is omitted. The agent must filter sensitive conversation data
      * and enforce conversation length limits before calling this method.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param request creation request including the conversation, summary and structured intent
      * @param agentSigner agent signing callback
-     * @return signed L1 or a validation/signing failure
-     */
-    public static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner) {
-        return createIntent(request, agentSigner, System.currentTimeMillis());
-    }
-
-    /**
-     * Validates a creation request and signs the resulting L1 with the agent key.
-     * Generates a UUID when intentId is omitted. The agent must filter sensitive conversation data
-     * and enforce conversation length limits before calling this method.
-     * Uses the supplied trusted evaluation instant.
-     * @param request creation request including the conversation, summary and structured intent
-     * @param agentSigner agent signing callback
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return signed L1 or a validation/signing failure
      */
     public static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now) {
         return A4pResult.capture(() -> {
             Validation.integer(now, false);
             Validation.request(request);
+            // Require now at or before validUntil.
+            Validation.timeAtOrBefore(now, PaymentProfile.constraints(request.structuredIntent()).validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             String intentId = request.intentId() == null ? UUID.randomUUID().toString() : request.intentId();
             IntentL1 unsigned = new IntentL1(PROTOCOL_VERSION, intentId, request.intentConversation(),
                     request.intentSummary(), request.structuredIntent(), now, null);
@@ -64,28 +80,13 @@ public final class A4p {
 
     /**
      * Validates L1 and its agent signature, binds trusted identities, and signs L2 with the intent center key.
-     * The issuance time must not precede the L1 timestamp; an earlier time returns A4P_INVALID_PARAMETER.
-     * Uses the system clock.
+     * Requires now at or before validUntil; does not compare now with L1.timestamp.
+     * Uses the supplied evaluation instant.
      * @param intent protocol intent to process
      * @param agentVerifier verifier for the agent signature
      * @param context trusted identities bound into L2
      * @param serverSigner intent center signing callback
-     * @return signed L2 or a validation/verification/signing failure
-     */
-    public static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier,
-                                                 IntentIssueContext context, Signer serverSigner) {
-        return issueIntent(intent, agentVerifier, context, serverSigner, System.currentTimeMillis());
-    }
-
-    /**
-     * Validates L1 and its agent signature, binds trusted identities, and signs L2 with the intent center key.
-     * The issuance time must not precede the L1 timestamp; an earlier time returns A4P_INVALID_PARAMETER.
-     * Uses the supplied trusted evaluation instant.
-     * @param intent protocol intent to process
-     * @param agentVerifier verifier for the agent signature
-     * @param context trusted identities bound into L2
-     * @param serverSigner intent center signing callback
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return signed L2 or a validation/verification/signing failure
      */
     public static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier,
@@ -95,8 +96,8 @@ public final class A4p {
             Validation.issueContext(context);
             Validation.intentL1(intent);
             Validation.version(intent.version());
-            // Chain timestamps are monotonic; refuse to emit an L2 that every peer would reject.
-            require(now >= intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
+            // Require now at or before validUntil.
+            Validation.timeAtOrBefore(now, PaymentProfile.constraints(intent.structuredIntent()).validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             verifyOrThrow(agentVerifier, intent, intent.sign());
             IntentL2 unsigned = new IntentL2(PROTOCOL_VERSION, intent, context.userIdentity(),
                     context.agentIdentity(), context.serviceProviderIdentity(), now, null);
@@ -107,32 +108,14 @@ public final class A4p {
 
     /**
      * Validates L2 and L1 versions, verifies the intent center signature, and user-signs L3 with the signing environment.
-     * Before verification or signing, requires now at or after L2.timestamp and at or before validUntil.
-     * An earlier time returns A4P_INVALID_PARAMETER; expiration returns A4P_TIMESTAMP_EXPIRED.
+     * Does not compare now with L2.timestamp or validUntil.
      * Signing before validFrom is allowed; reservations before validFrom are rejected.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param intent protocol intent to process
      * @param serverVerifier verifier for the intent center signature
      * @param environment device and application signing environment
      * @param userSigner user-device signing callback
-     * @return user-signed L3 or a protocol failure
-     */
-    public static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier,
-                                                SigningEnv environment, Signer userSigner) {
-        return signIntent(intent, serverVerifier, environment, userSigner, System.currentTimeMillis());
-    }
-
-    /**
-     * Validates L2 and L1 versions, verifies the intent center signature, and user-signs L3 with the signing environment.
-     * Before verification or signing, requires now at or after L2.timestamp and at or before validUntil.
-     * An earlier time returns A4P_INVALID_PARAMETER; expiration returns A4P_TIMESTAMP_EXPIRED.
-     * Signing before validFrom is allowed; reservations before validFrom are rejected.
-     * Uses the supplied trusted evaluation instant.
-     * @param intent protocol intent to process
-     * @param serverVerifier verifier for the intent center signature
-     * @param environment device and application signing environment
-     * @param userSigner user-device signing callback
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return user-signed L3 or a protocol failure
      */
     public static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier,
@@ -142,9 +125,7 @@ public final class A4p {
             Validation.signingEnv(environment);
             Validation.intentL2(intent);
             Validation.versions(intent);
-            require(now >= intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
-            PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL1().structuredIntent());
-            require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
+            // Do not compare now with L2.timestamp or validUntil.
             verifyOrThrow(serverVerifier, intent, intent.sign());
             IntentL3 unsigned = new IntentL3(PROTOCOL_VERSION, intent, environment, now, null);
             return new IntentL3(PROTOCOL_VERSION, intent, environment, now, sign(userSigner, unsigned));
@@ -153,25 +134,12 @@ public final class A4p {
 
     /**
      * Validates the L3 chain and user signature and creates an ACTIVE context with its activation time.
-     * Activation before L3.timestamp returns A4P_INVALID_PARAMETER; after validUntil it returns A4P_TIMESTAMP_EXPIRED.
+     * Activation after validUntil returns A4P_TIMESTAMP_EXPIRED; audit timestamps are not compared.
      * Activation before validFrom is allowed, but execution must wait. Persist the resulting context.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param intent protocol intent to process
      * @param userVerifier verifier for the user signature
-     * @return new ACTIVE context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier) {
-        return activateIntent(intent, userVerifier, System.currentTimeMillis());
-    }
-
-    /**
-     * Validates the L3 chain and user signature and creates an ACTIVE context with its activation time.
-     * Activation before L3.timestamp returns A4P_INVALID_PARAMETER; after validUntil it returns A4P_TIMESTAMP_EXPIRED.
-     * Activation before validFrom is allowed, but execution must wait. Persist the resulting context.
-     * Uses the supplied trusted evaluation instant.
-     * @param intent protocol intent to process
-     * @param userVerifier verifier for the user signature
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return new ACTIVE context or a protocol failure
      */
     public static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier,
@@ -180,10 +148,9 @@ public final class A4p {
             Validation.integer(now, false);
             Validation.intentL3(intent);
             Validation.versions(intent);
-            require(now >= intent.timestamp(), A4P_INVALID_PARAMETER, "Timestamp is earlier than the preceding intent timestamp");
             // An intent past validUntil could never execute; one not yet valid is activated and waits for validFrom.
             PaymentConstraints constraints = PaymentProfile.constraints(intent.intentL2().intentL1().structuredIntent());
-            require(now <= constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
+            Validation.timeAtOrBefore(now, constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             verifyOrThrow(userVerifier, intent, intent.sign());
             return new IntentExecutionContext(intent, now);
         });
@@ -208,23 +175,11 @@ public final class A4p {
 
     /**
      * Changes an ACTIVE context to REVOKED without restricting revocation to the authorization validity window.
-     * Evaluation before activation returns A4P_TIMESTAMP_TOO_EARLY. Pending executions may still be finalized.
+     * Revocation time is audit-only. Pending executions may still be finalized.
      * Persist the updated context and do not repeat revocation.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
-     * @return updated context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context) {
-        return revokeIntent(context, System.currentTimeMillis());
-    }
-
-    /**
-     * Changes an ACTIVE context to REVOKED without restricting revocation to the authorization validity window.
-     * Evaluation before activation returns A4P_TIMESTAMP_TOO_EARLY. Pending executions may still be finalized.
-     * Persist the updated context and do not repeat revocation.
-     * Uses the supplied trusted evaluation instant.
-     * @param context activated intent and mutable execution ledger
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return updated context or a protocol failure
      */
     public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now) {
@@ -233,7 +188,7 @@ public final class A4p {
             Validation.integer(now, false);
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
-                require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
+                context.revokedTime(now);
                 context.status(IntentExecutionStatus.REVOKED);
                 return context;
             }
@@ -243,27 +198,12 @@ public final class A4p {
     /**
      * Checks status, validity, action, currency, unique IDs, cart shape and payment quotas, then reserves a PENDING execution.
      * Omitted execution IDs are generated. Order and execution IDs remain unavailable for reuse after cancellation.
-     * PENDING and COMPLETED records occupy quota. The trusted clock determines the reservation period, not the order timestamp.
+     * PENDING and COMPLETED records occupy quota. The evaluation instant determines the reservation period.
      * An expired reservation attempt can mark the context EXPIRED even when the result is a failure; persist it in either case.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
      * @param execution action-specific execution request
-     * @return updated context or a protocol failure; failure may still mutate context status
-     */
-    public static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context,
-                                                                    Execution execution) {
-        return createExecution(context, execution, System.currentTimeMillis());
-    }
-
-    /**
-     * Checks status, validity, action, currency, unique IDs, cart shape and payment quotas, then reserves a PENDING execution.
-     * Omitted execution IDs are generated. Order and execution IDs remain unavailable for reuse after cancellation.
-     * PENDING and COMPLETED records occupy quota. The trusted clock determines the reservation period, not the order timestamp.
-     * An expired reservation attempt can mark the context EXPIRED even when the result is a failure; persist it in either case.
-     * Uses the supplied trusted evaluation instant.
-     * @param context activated intent and mutable execution ledger
-     * @param execution action-specific execution request
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return updated context or a protocol failure; failure may still mutate context status
      */
     public static A4pResult<IntentExecutionContext> createExecution(IntentExecutionContext context,
@@ -277,26 +217,10 @@ public final class A4p {
      * An ACTIVE context becomes CONSUMED only when global quota is exhausted and no execution is pending.
      * REVOKED and EXPIRED contexts may finalize existing reservations and retain their status.
      * Evaluation must not precede reservation. Persist the context and never finalize the same record twice.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
      * @param executionId execution identifier, retained even after cancellation
-     * @return updated context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context,
-                                                                      String executionId) {
-        return completeExecution(context, executionId, System.currentTimeMillis());
-    }
-
-    /**
-     * Changes a PENDING execution to COMPLETED while retaining its occupied quotas.
-     * Refreshes the accounting snapshot for the evaluation period without moving the reservation period.
-     * An ACTIVE context becomes CONSUMED only when global quota is exhausted and no execution is pending.
-     * REVOKED and EXPIRED contexts may finalize existing reservations and retain their status.
-     * Evaluation must not precede reservation. Persist the context and never finalize the same record twice.
-     * Uses the supplied trusted evaluation instant.
-     * @param context activated intent and mutable execution ledger
-     * @param executionId execution identifier, retained even after cancellation
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return updated context or a protocol failure
      */
     public static A4pResult<IntentExecutionContext> completeExecution(IntentExecutionContext context,
@@ -309,25 +233,10 @@ public final class A4p {
      * Refreshes accounting for the evaluation period; canceling an old-period order does not change current-period usage.
      * REVOKED and EXPIRED contexts may cancel existing reservations. Evaluation must not precede reservation.
      * Persist the context and never finalize the same record twice.
-     * Uses the system clock.
+     * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
      * @param executionId execution identifier, retained even after cancellation
-     * @return updated context or a protocol failure
-     */
-    public static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context,
-                                                                    String executionId) {
-        return cancelExecution(context, executionId, System.currentTimeMillis());
-    }
-
-    /**
-     * Changes a PENDING execution to CANCELED, releases its quota and retains the ledger record and IDs.
-     * Refreshes accounting for the evaluation period; canceling an old-period order does not change current-period usage.
-     * REVOKED and EXPIRED contexts may cancel existing reservations. Evaluation must not precede reservation.
-     * Persist the context and never finalize the same record twice.
-     * Uses the supplied trusted evaluation instant.
-     * @param context activated intent and mutable execution ledger
-     * @param executionId execution identifier, retained even after cancellation
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return updated context or a protocol failure
      */
     public static A4pResult<IntentExecutionContext> cancelExecution(IntentExecutionContext context,
@@ -340,7 +249,7 @@ public final class A4p {
      * Checks expiry before duplicate IDs and may mark the context EXPIRED before throwing.
      * @param context activated intent and mutable execution ledger
      * @param execution action-specific execution request
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @return context containing the pending reservation
      */
     private static IntentExecutionContext reserve(IntentExecutionContext context, Execution execution, long now) {
@@ -355,8 +264,7 @@ public final class A4p {
             require(execution.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER, "Execution action does not match the authorized intent action");
             require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER, "Order currency does not match the intent currency");
             require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
-            require(now >= constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
-            require(now >= context.activatedTime(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than the activation time");
+            Validation.timeAtOrAfter(now, constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
             if (now > constraints.validUntil()) {
                 context.status(IntentExecutionStatus.EXPIRED);
                 throw new A4pException(A4P_TIMESTAMP_EXPIRED);
@@ -389,7 +297,7 @@ public final class A4p {
      * Preserves terminal context states and changes an exhausted ACTIVE context to CONSUMED only after completion.
      * @param context activated intent and mutable execution ledger
      * @param executionId execution identifier, retained even after cancellation
-     * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
+     * @param now non-negative Unix epoch milliseconds within the safe integer range
      * @param cancel true to cancel and release quota, false to complete
      * @return context containing the finalized record
      */
@@ -414,7 +322,7 @@ public final class A4p {
             ExecutionRecord record = entry.record();
             require(record.status() == ExecutionStatus.PENDING, A4P_INVALID_STATUS, "Only pending execution records can be finalized");
             // Record timestamps are monotonic like the chain's, so a persisted ledger can be checked for them.
-            require(now >= record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
+            Validation.timeAtOrAfter(now, record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
             ExecutionRecord updated = new ExecutionRecord(record.executionId(),
                     cancel ? ExecutionStatus.CANCELED : ExecutionStatus.COMPLETED,
                     record.action(), record.executionContent(), record.periodIndex(),
