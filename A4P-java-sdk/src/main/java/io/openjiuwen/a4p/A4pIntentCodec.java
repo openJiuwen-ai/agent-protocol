@@ -213,6 +213,14 @@ public class A4pIntentCodec {
         return CanonicalJson.stringify(toJsonNode(intent));
     }
 
+    /** Removes only the outer signature after applying protocol wire mapping. */
+    static byte[] toSignableBytes(Object intent) {
+        JsonNode node = toJsonNode(intent);
+        if (!node.isObject()) { throw new A4pException(A4P_SERIALIZE_FAIL); }
+        ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("sign");
+        return CanonicalJson.encodeUtf8(CanonicalJson.stringify(node));
+    }
+
     /** Converts protocol values to JSON, omitting null object fields recursively. */
     static JsonNode toJsonNode(Object value) {
         return omitNullFields(CanonicalJson.MAPPER.valueToTree(value));
@@ -261,6 +269,16 @@ public class A4pIntentCodec {
         }
     }
 
+    /** Enforces protocol safe integers recursively before typed conversion. */
+    private static void rejectUnsafeIntegers(JsonNode node) {
+        if (node.isIntegralNumber()) {
+            Validation.require(node.bigIntegerValue().abs().compareTo(
+                    java.math.BigInteger.valueOf(CanonicalJson.MAX_SAFE_INTEGER)) <= 0,
+                    A4P_DESERIALIZE_FAIL, "Integer exceeds the interoperable safe range");
+        }
+        if (node.isContainerNode()) { node.forEach(A4pIntentCodec::rejectUnsafeIntegers); }
+    }
+
     /** Rejects floating-point tokens before typed conversion, including arbitrary payloads. */
     private static void rejectFloatingPointValues(JsonNode node, String path) {
         Validation.require(!node.isFloatingPointNumber(), A4P_DESERIALIZE_FAIL,
@@ -287,6 +305,7 @@ public class A4pIntentCodec {
         JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
         rejectNullValues(parsed);
         rejectFloatingPointValues(parsed, "$");
+        rejectUnsafeIntegers(parsed);
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {

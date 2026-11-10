@@ -43,11 +43,11 @@ class CodecTest {
 
     @Test
     void rejectsNonCanonicalNumbersCyclesAndObjects() {
-        for (Number number : List.of(1.5, Double.NaN, Double.POSITIVE_INFINITY, 9_007_199_254_740_992L)) {
+        for (Number number : List.of(Double.NaN, Double.POSITIVE_INFINITY)) {
             thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(number));
         }
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(new Object()));
-        thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(JsonNodeFactory.instance.numberNode(1.5)));
+        assertEquals("1.5", CanonicalJson.stringify(JsonNodeFactory.instance.numberNode(1.5)));
         List<Object> cycle = new ArrayList<>();
         cycle.add(cycle);
         thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(cycle));
@@ -61,9 +61,9 @@ class CodecTest {
         Map<String, Object> value = Map.of("sign", Map.of("alg", "RSA3072", "sign", "outer"),
                 "nested", Map.of("sign", "inner"));
         assertEquals("{\"nested\":{\"sign\":\"inner\"}}",
-                new String(CanonicalJson.toSignableBytes(value), StandardCharsets.UTF_8));
+                new String(A4pIntentCodec.toSignableBytes(value), StandardCharsets.UTF_8));
         IntentL3 intent = authorized(constraints());
-        assertTrue(new String(CanonicalJson.toSignableBytes(intent), StandardCharsets.UTF_8)
+        assertTrue(new String(A4pIntentCodec.toSignableBytes(intent), StandardCharsets.UTF_8)
                 .contains(intent.intentL2().sign().sign()));
     }
 
@@ -72,8 +72,8 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         IntentL3 relabeled = new IntentL3(intent.version(), intent.intentL2(), intent.signingEnv(), intent.timestamp(),
                 new SignatureInfo(AlgorithmType.RSA3072, "other-key", intent.sign().sign()));
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent), CanonicalJson.toSignableBytes(relabeled));
-        String signed = new String(CanonicalJson.toSignableBytes(intent), StandardCharsets.UTF_8);
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent), A4pIntentCodec.toSignableBytes(relabeled));
+        String signed = new String(A4pIntentCodec.toSignableBytes(intent), StandardCharsets.UTF_8);
         assertTrue(signed.contains("\"keyIdentifier\":\"key\""));
     }
 
@@ -117,7 +117,7 @@ class CodecTest {
         IntentL3 intent = authorized(constraints());
         IntentL3 decoded = ok(codec.deserializeIntentL3(codec.serializeIntentL3(intent)));
         assertEquals(intent, decoded);
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent), CanonicalJson.toSignableBytes(decoded));
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent), A4pIntentCodec.toSignableBytes(decoded));
         assertEquals(intent.intentL2(), ok(codec.deserializeIntentL2(codec.serializeIntentL2(intent.intentL2()))));
         assertEquals(intent.intentL2().intentL1(), ok(codec.deserializeIntentL1(
                 codec.serializeIntentL1(intent.intentL2().intentL1()))));

@@ -259,7 +259,7 @@ class A4pTest {
             return VERIFIER.verify(data, signature);
         };
         assertTrue(ok(A4p.verifyIntentAuthenticity(intent, issuer)).valid());
-        assertArrayEquals(CanonicalJson.toSignableBytes(intent.intentL2()), seen.get(0));
+        assertArrayEquals(A4pIntentCodec.toSignableBytes(intent.intentL2()), seen.get(0));
 
         SignatureInfo forged = new SignatureInfo(AlgorithmType.RSA3072, "key", "Zm9yZ2Vk");
         IntentL3 forgedUser = new IntentL3(intent.version(), intent.intentL2(), intent.signingEnv(),

@@ -11,7 +11,6 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.LongNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.lang.reflect.RecordComponent;
-import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -30,10 +29,10 @@ import java.util.stream.Collectors;
 import static io.openjiuwen.a4p.A4pErrorCode.*;
 
 /**
- * Implements deterministic protocol JSON and signing-byte normalization.
+ * Implements RFC 8785 canonical JSON with a maximum nesting depth of 100.
  * Object keys are sorted, array order is preserved, and insignificant whitespace is omitted.
- * Only safe integer numbers are supported; strings retain their Unicode data.
- * Parsing rejects duplicate keys and trailing tokens. Signing removes only the outer sign field.
+ * Numbers use RFC 8785 ECMAScript serialization; strings retain their Unicode data.
+ * Parsing rejects duplicate keys, trailing tokens, invalid Unicode and non-finite numbers.
  */
 final class CanonicalJson {
     /** Largest integer exactly representable by JavaScript protocol peers. */
@@ -60,28 +59,13 @@ final class CanonicalJson {
      */
     public static String stringify(Object value) {
         try {
-            return render(normalize(value, new IdentityHashMap<>(), 0));
+            String wrapped = new org.erdtman.jcs.JsonCanonicalizer("[" + render(normalize(value, new IdentityHashMap<>(), 0)) + "]").getEncodedString();
+            return wrapped.substring(1, wrapped.length() - 1);
         } catch (A4pException error) {
             throw error;
         } catch (Exception error) {
-            throw new A4pException(A4P_SERIALIZE_FAIL);
+            throw new A4pException(A4P_SERIALIZE_FAIL, "Canonical JSON serialization failed: " + error.getMessage(), error);
         }
-    }
-
-    /**
-     * Returns canonical UTF-8 bytes after removing only the outer sign field.
-     * Embedded intent signatures remain covered by the enclosing signature.
-     * @param intent protocol intent to process
-     * @return canonical UTF-8 bytes excluding only the outer sign field
-     */
-    public static byte[] toSignableBytes(Object intent) {
-        Object normalized = normalize(A4pIntentCodec.toJsonNode(intent), new IdentityHashMap<>(), 0);
-        if (!(normalized instanceof Map<?, ?> fields)) {
-            throw new A4pException(A4P_SERIALIZE_FAIL);
-        }
-        Map<Object, Object> unsigned = new LinkedHashMap<>(fields);
-        unsigned.remove("sign");
-        return encodeUtf8(stringify(unsigned));
     }
 
     /**
@@ -101,15 +85,15 @@ final class CanonicalJson {
     public static byte[] base64UrlDecode(String data) {
         try {
             if (data == null || !data.matches("[A-Za-z0-9_-]*")) {
-                throw new IllegalArgumentException();
+                throw new IllegalArgumentException("Invalid or noncanonical Base64URL encoding");
             }
             byte[] decoded = Base64.getUrlDecoder().decode(data);
             if (!base64UrlEncode(decoded).equals(data)) {
-                throw new IllegalArgumentException();
+                throw new IllegalArgumentException("Invalid or noncanonical Base64URL encoding");
             }
             return decoded;
         } catch (IllegalArgumentException error) {
-            throw new A4pException(A4P_DESERIALIZE_FAIL);
+            throw new A4pException(A4P_DESERIALIZE_FAIL, "Decoding failed: " + error.getMessage(), error);
         }
     }
 
@@ -126,7 +110,7 @@ final class CanonicalJson {
             encoded.get(bytes);
             return bytes;
         } catch (CharacterCodingException | NullPointerException error) {
-            throw new A4pException(A4P_SERIALIZE_FAIL);
+            throw new A4pException(A4P_SERIALIZE_FAIL, "UTF-8 encoding failed: " + error.getMessage(), error);
         }
     }
 
@@ -140,7 +124,7 @@ final class CanonicalJson {
             return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(data)).toString();
         } catch (CharacterCodingException | NullPointerException error) {
-            throw new A4pException(A4P_DESERIALIZE_FAIL);
+            throw new A4pException(A4P_DESERIALIZE_FAIL, "Decoding failed: " + error.getMessage(), error);
         }
     }
 
@@ -151,9 +135,11 @@ final class CanonicalJson {
      */
     static Object parse(String json) {
         try {
-            return MAPPER.readValue(json, Object.class);
+            Object value = MAPPER.readValue(json, Object.class);
+            stringify(value); // Validate Unicode and finite IEEE 754 numbers without changing parsed types.
+            return value;
         } catch (Exception error) {
-            throw new A4pException(A4P_DESERIALIZE_FAIL);
+            throw new A4pException(A4P_DESERIALIZE_FAIL, "Decoding failed: " + error.getMessage(), error);
         }
     }
 
@@ -179,7 +165,9 @@ final class CanonicalJson {
         if (node.isIntegralNumber() && node.canConvertToLong()) { return LongNode.valueOf(node.longValue()); }
         if (node.isObject()) {
             ObjectNode copy = JsonNodeFactory.instance.objectNode();
-            node.properties().forEach(entry -> copy.set(entry.getKey(), freezeNode(entry.getValue())));
+            node.properties().forEach(entry -> {
+                copy.set(entry.getKey(), freezeNode(entry.getValue()));
+            });
             return copy;
         }
         if (node.isArray()) {
@@ -213,11 +201,11 @@ final class CanonicalJson {
             node.forEach(item -> result.add(normalize(item, ancestors, depth + 1)));
             return Collections.unmodifiableList(result);
         }
-        throw new A4pException(A4P_SERIALIZE_FAIL);
+        throw new A4pException(A4P_SERIALIZE_FAIL, "Unsupported JSON node type", null);
     }
 
     /**
-     * Normalizes safe integers, protocol records and supported containers.
+     * Normalizes JSON values, protocol records and supported containers.
      * Rejects unsupported types, cyclic object graphs and nesting deeper than 100.
      * @param value value to validate or normalize
      * @param ancestors identity set used to detect reference cycles
@@ -226,21 +214,14 @@ final class CanonicalJson {
      */
     private static Object normalize(Object value, IdentityHashMap<Object, Boolean> ancestors, int depth) {
         if (depth > 100) {
-            throw new A4pException(A4P_SERIALIZE_FAIL);
+            throw new A4pException(A4P_SERIALIZE_FAIL, "JSON nesting exceeds 100 levels", null);
         }
         if (value == null || value instanceof String || value instanceof Boolean) {
             return value;
         }
         if (value instanceof Number number) {
-            try {
-                long integer = new BigDecimal(number.toString()).longValueExact();
-                if (integer < -MAX_SAFE_INTEGER || integer > MAX_SAFE_INTEGER) {
-                    throw new ArithmeticException();
-                }
-                return integer;
-            } catch (ArithmeticException | NumberFormatException error) {
-                throw new A4pException(A4P_SERIALIZE_FAIL);
-            }
+            if (!Double.isFinite(number.doubleValue())) { throw new A4pException(A4P_SERIALIZE_FAIL, "Number must be finite", null); }
+            return number;
         }
         if (value instanceof Enum<?> constant && constant.getDeclaringClass().getEnclosingClass() == Models.class) {
             return constant.name();
@@ -249,14 +230,14 @@ final class CanonicalJson {
             return normalizeNode(node, ancestors, depth);
         }
         if (ancestors.put(value, true) != null) {
-            throw new A4pException(A4P_SERIALIZE_FAIL);
+            throw new A4pException(A4P_SERIALIZE_FAIL, "Cyclic object graph", null);
         }
         try {
             if (value instanceof Map<?, ?> source) {
                 Map<String, Object> result = new TreeMap<>();
                 for (Map.Entry<?, ?> entry : source.entrySet()) {
                     if (!(entry.getKey() instanceof String key)) {
-                        throw new A4pException(A4P_SERIALIZE_FAIL);
+                        throw new A4pException(A4P_SERIALIZE_FAIL, "JSON object keys must be strings", null);
                     }
                     result.put(key, normalize(entry.getValue(), ancestors, depth + 1));
                 }
@@ -273,15 +254,13 @@ final class CanonicalJson {
                 Map<String, Object> fields = new TreeMap<>();
                 for (RecordComponent component : value.getClass().getRecordComponents()) {
                     Object field = component.getAccessor().invoke(value);
-                    if (field != null) {
-                        fields.put(component.getName(), normalize(field, ancestors, depth + 1));
-                    }
+                    fields.put(component.getName(), normalize(field, ancestors, depth + 1));
                 }
                 return Collections.unmodifiableMap(fields);
             }
-            throw new A4pException(A4P_SERIALIZE_FAIL);
+            throw new A4pException(A4P_SERIALIZE_FAIL, "Unsupported canonical JSON value type", null);
         } catch (ReflectiveOperationException error) {
-            throw new A4pException(A4P_SERIALIZE_FAIL);
+            throw new A4pException(A4P_SERIALIZE_FAIL, "Record accessor invocation failed", error);
         } finally {
             ancestors.remove(value);
         }
