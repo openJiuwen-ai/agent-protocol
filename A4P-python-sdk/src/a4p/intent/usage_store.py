@@ -44,6 +44,19 @@ class SQLiteIntentTokenUsageStore:
         self.path = Path(configured_path.strip())
         self.timeout_seconds = float(timeout_seconds)
 
+    _SCHEMA_SQL = """
+        CREATE TABLE IF NOT EXISTS intent_token_usage (
+            token_id TEXT PRIMARY KEY,
+            executions_used INTEGER NOT NULL,
+            executions_limit INTEGER NOT NULL,
+            expire_at_epoch INTEGER NOT NULL
+        )
+    """
+
+    # Creating the database file concurrently makes SQLite hand a read-only handle
+    # to one of the connections; a single short retry is enough to recover.
+    _WRITE_RETRY_ATTEMPTS = 2
+
     def consume(
         self,
         *,
@@ -59,6 +72,31 @@ class SQLiteIntentTokenUsageStore:
         if isinstance(expire_at_epoch, bool) or not isinstance(expire_at_epoch, int) or expire_at_epoch <= 0:
             raise ValueError("expire_at_epoch must be a positive integer")
 
+        for attempt in range(self._WRITE_RETRY_ATTEMPTS):
+            try:
+                return self._consume_once(
+                    normalized_token_id=normalized_token_id,
+                    max_executions=max_executions,
+                    expire_at_epoch=expire_at_epoch,
+                )
+            except sqlite3.OperationalError as exc:
+                is_last_attempt = attempt + 1 >= self._WRITE_RETRY_ATTEMPTS
+                if is_last_attempt or "readonly" not in str(exc).lower():
+                    raise IntentTokenUsageStoreError("Intent token usage store unavailable") from exc
+                time.sleep(0.01)
+            except (OSError, sqlite3.Error) as exc:
+                raise IntentTokenUsageStoreError("Intent token usage store unavailable") from exc
+
+        # Unreachable: the loop either returns or raises.
+        raise IntentTokenUsageStoreError("Intent token usage store unavailable")
+
+    def _consume_once(
+        self,
+        *,
+        normalized_token_id: str,
+        max_executions: int,
+        expire_at_epoch: int,
+    ) -> tuple[bool, int]:
         connection: sqlite3.Connection | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,17 +106,12 @@ class SQLiteIntentTokenUsageStore:
                 isolation_level=None,
             )
             connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
+            # Make sure the schema exists *before* opening the write transaction.
+            # Previously "BEGIN IMMEDIATE" ran first, so when two connections raced
+            # to create a brand-new database file one of them ended up with
+            # "attempt to write a readonly database".
+            connection.execute(self._SCHEMA_SQL)
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS intent_token_usage (
-                    token_id TEXT PRIMARY KEY,
-                    executions_used INTEGER NOT NULL,
-                    executions_limit INTEGER NOT NULL,
-                    expire_at_epoch INTEGER NOT NULL
-                )
-                """
-            )
             connection.execute(
                 "DELETE FROM intent_token_usage WHERE expire_at_epoch <= ?",
                 (int(time.time()),),
@@ -133,10 +166,12 @@ class SQLiteIntentTokenUsageStore:
             if connection is not None and connection.in_transaction:
                 connection.rollback()
             raise
-        except (OSError, sqlite3.Error) as exc:
+        except (OSError, sqlite3.Error):
             if connection is not None and connection.in_transaction:
                 connection.rollback()
-            raise IntentTokenUsageStoreError("Intent token usage store unavailable") from exc
+            # Bubble up so consume() can decide whether a readonly failure is
+            # retryable and wrap the rest as "store unavailable".
+            raise
         finally:
             if connection is not None:
                 connection.close()
