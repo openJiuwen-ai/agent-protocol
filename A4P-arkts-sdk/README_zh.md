@@ -101,10 +101,13 @@ try {
 结构合法的扁平 `action`/`executionContent`、`periodIndex` 的有无与意图周期性一致）以及记账快照
 （周期数值与 `leftExecutionCount` 恰在对应上限存在时出现）——并重新冻结授权快照。
 
-可选字段用 `undefined` 表示；缺席的可选字段不会出现在签名 JSON 中。金额是应用约定的
-最小货币单位下的正整数。所有协议数值都必须是 JavaScript 安全整数范围内的整数；不是
-整数的值必须以字符串承载。传给 SDK 的值必须是普通对象（对象字面量），不能是类实例
-——规范化序列化会以 `A4P_SERIALIZE_FAIL` 拒绝类实例。
+可选字段用 `undefined` 表示；未提供的可选字段不会出现在签名 JSON 中，内存中的 `null`
+可选字段同样视为未提供，规范化形式绝不会出现 `"key":null` 键值对。数组元素或根为
+null 时，序列化直接以 `A4P_SERIALIZE_FAIL` 失败，不会输出 `null` 字面量，与解析端
+在所有值位置拒绝显式 null 的规则保持一致。金额是正整数，以
+应用约定的最小货币单位计。所有协议数值都必须是 JavaScript 安全整数范围内的整数；
+不是整数的值必须以字符串承载。传给 SDK 的值必须是普通对象（对象字面量），不能是
+类实例——规范化序列化会以 `A4P_SERIALIZE_FAIL` 拒绝类实例。
 
 生命周期与执行函数都接受可选的显式时钟（`now`，epoch 毫秒），缺省使用 `Date.now()`。
 显式 `now` 必须是非负安全整数。测试中传入固定值可让签名字节可复现，也可用于实现
@@ -200,8 +203,9 @@ context，防止同一个 `intentId` 被重放，并把密钥与身份绑定。
 
 每次签名背后的 canonical JSON 与 Base64URL 规则即
 [serialization_and_signature_rules_zh.md](../A4P-java-sdk/docs/serialization_and_signature_rules_zh.md) 所记录的内容：键按
-UTF-16 码元排序、无空白、仅限有限安全整数、`undefined` 省略、签名时仅移除顶层完整的
-`sign` 属性（链上下层签名保留）、UTF-8 编码不带 BOM，以及 RFC 4648 无填充 Base64URL，
+UTF-16 码元排序、无空白、仅限安全整数、`undefined` 与 `null` 省略（为 `null` 的可选
+字段等同于未提供）、签名时仅移除顶层的完整 `sign` 属性（链中下层级的签名均保留）、UTF-8 编码
+不带 BOM，以及 RFC 4648 无填充 Base64URL，
 解码端拒绝填充、非 URL 安全字符与非零的未用尾随位。JSON 字段名即接口属性名
 （`intentConversation`、`structuredIntent.resources`、`userIdentity.id`），每个枚举都按
 名称序列化（`"AI_PAY"`、`"CONSUMED"`、`"PENDING"`），协议版本为 `1.0`。

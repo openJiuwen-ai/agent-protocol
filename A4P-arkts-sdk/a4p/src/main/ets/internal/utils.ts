@@ -205,14 +205,21 @@ export function decodeUtf8(bytes: Uint8Array): string {
 
 /**
  * Serializes a value to canonical JSON: sorted keys, no whitespace,
- * integers only, undefined values omitted.
+ * integers only, undefined and null property values omitted (a null
+ * optional field is an absent field in the canonical form — a "key":null
+ * pair is bytes the protocol neither produces nor accepts). A null root
+ * or null array item has no acceptable spelling and fails instead: the
+ * strict parser rejects explicit nulls at every value position.
  * @param value - The value to serialize (plain objects, arrays, primitives)
  * @returns The canonical JSON string
- * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, or non-finite numbers
+ * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, or values with no JSON spelling (bigint, function, symbol)
  */
 export function canonicalStringify(value: Object): string {
+  // Null has no spelling the strict parser accepts back, and no validated
+  // protocol object contains one — emitting "null" or "[null]" would
+  // produce bytes this SDK cannot parse, so fail loudly instead.
   if (value === null || value === undefined) {
-    return 'null';
+    a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL, 'canonicalStringify does not support null or undefined values');
   }
   if (typeof value === 'boolean') {
     return value ? 'true' : 'false';
@@ -257,14 +264,22 @@ export function canonicalStringify(value: Object): string {
     for (let i = 0; i < keys.length; i++) {
       const k: string = keys[i];
       const v: Object = (value as Record<string, Object>)[k];
-      if (v === undefined) {
+      // Null is an absent optional field, exactly like undefined: the pair
+      // is omitted, never rendered as "key":null. Array items are values,
+      // not optional fields — a null item reaches the recursive call and
+      // fails there, symmetric with the parser's "[null]" rejection.
+      if (v === undefined || v === null) {
         continue;
       }
       pairs.push(escapeJsonString(k) + ':' + canonicalStringify(v));
     }
     return '{' + pairs.join(',') + '}';
   }
-  return 'null';
+  // bigint, function and symbol have no canonical JSON spelling:
+  // rendering them as null would corrupt the signed bytes, so fail
+  // loudly instead.
+  a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL,
+    'canonicalStringify does not support values of type ' + typeof value);
 }
 
 /** Escapes a string per JSON: quotes, backslash, and control characters. */
