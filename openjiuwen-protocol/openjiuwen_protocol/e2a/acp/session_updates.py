@@ -3,13 +3,32 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
-from jiuwenswarm.common.e2a.acp.acp_tool_updates import (
+from openjiuwen_protocol.e2a.acp.acp_tool_updates import (
     build_acp_todo_update,
     build_acp_tool_call_update,
     build_acp_tool_result_update,
     is_reasoning_event,
 )
-from jiuwenswarm.common.schema.message import EventType, Message
+
+# ---------------------------------------------------------------------------
+# 事件名契约（与 jiuwenswarm common.schema.message.EventType 的 value 一致）。
+# ``build_acp_session_update`` 按 ``msg.event_type`` 的**字符串值**分发；
+# 调用方传入枚举（任意 Enum，取 .value）或裸字符串均可。
+# ---------------------------------------------------------------------------
+
+EVENT_CHAT_SYMPHONY_STATUS = "chat.symphony_status"
+EVENT_CHAT_DELTA = "chat.delta"
+EVENT_CHAT_REASONING = "chat.reasoning"
+EVENT_CHAT_TOOL_CALL = "chat.tool_call"
+EVENT_CHAT_TOOL_UPDATE = "chat.tool_update"
+EVENT_CHAT_TOOL_RESULT = "chat.tool_result"
+EVENT_CHAT_SUBTASK_UPDATE = "chat.subtask_update"
+EVENT_TODO_UPDATED = "todo.updated"
+EVENT_CHAT_PROCESSING_STATUS = "chat.processing_status"
+
+
+def _event_name(event_type: Any) -> str:
+    return str(getattr(event_type, "value", event_type) or "")
 
 
 class AcpSessionUpdateState(Protocol):
@@ -82,14 +101,12 @@ def _build_incremental_text_update(
                 "messageId": ensure_message_id(state),
                 "content": {"type": "text", "text": delta_text},
             }
-
         setattr(state, text_attr, text)
         return {
             "sessionUpdate": update_kind,
             "messageId": reset_message_id(state),
             "content": {"type": "text", "text": text},
         }
-
     _append_state_text(state, text_attr, text)
     return {
         "sessionUpdate": update_kind,
@@ -99,23 +116,25 @@ def _build_incremental_text_update(
 
 
 def build_acp_session_update(
-    msg: Message,
+    msg: Any,
     payload: dict[str, Any],
     state: AcpSessionUpdateState,
 ) -> dict[str, Any] | None:
-    event_type = msg.event_type
-    if event_type == EventType.CHAT_SYMPHONY_STATUS:
+    """按消息事件构造 ACP session/update 载荷.
+
+    ``msg`` 为鸭子类型：仅需 ``event_type`` 属性（枚举或字符串，枚举取
+    ``.value`` 归一），与 jiuwenswarm ``common.schema.message.Message`` 兼容。
+    """
+    event_name = _event_name(getattr(msg, "event_type", None))
+    if event_name == EVENT_CHAT_SYMPHONY_STATUS:
         return None
 
-    if event_type in (
-        EventType.CHAT_DELTA,
-        EventType.CHAT_REASONING,
-    ):
+    if event_name in (EVENT_CHAT_DELTA, EVENT_CHAT_REASONING):
         text = str(payload.get("content", "") or "")
         if not text:
             return None
         if is_reasoning_event(
-            event_type,
+            event_name,
             payload,
         ):
             _append_state_text(state, "thought_text", text)
@@ -132,22 +151,22 @@ def build_acp_session_update(
             "content": {"type": "text", "text": text},
         }
 
-    if event_type == EventType.CHAT_TOOL_CALL:
+    if event_name == EVENT_CHAT_TOOL_CALL:
         return build_acp_tool_call_update(payload, cache=_ensure_tool_call_cache(state))
 
-    if event_type in (EventType.CHAT_TOOL_UPDATE, EventType.CHAT_TOOL_RESULT):
+    if event_name in (EVENT_CHAT_TOOL_UPDATE, EVENT_CHAT_TOOL_RESULT):
         return build_acp_tool_result_update(payload, cache=_ensure_tool_call_cache(state))
 
-    if event_type == EventType.CHAT_SUBTASK_UPDATE:
+    if event_name == EVENT_CHAT_SUBTASK_UPDATE:
         return {
             "sessionUpdate": "plan",
             "plan": dict(payload),
         }
 
-    if event_type == EventType.TODO_UPDATED:
+    if event_name == EVENT_TODO_UPDATED:
         return build_acp_todo_update(payload)
 
-    if event_type == EventType.CHAT_PROCESSING_STATUS:
+    if event_name == EVENT_CHAT_PROCESSING_STATUS:
         return {
             "sessionUpdate": "session_info_update",
             "status": "processing" if bool(payload.get("is_processing", True)) else "idle",
@@ -192,3 +211,20 @@ def build_acp_usage_update(payload: dict[str, Any]) -> dict[str, Any] | None:
         "sessionUpdate": "usage_update",
         "usage": dict(usage),
     }
+
+
+__all__ = [
+    "AcpSessionUpdateState",
+    "EVENT_CHAT_DELTA",
+    "EVENT_CHAT_PROCESSING_STATUS",
+    "EVENT_CHAT_REASONING",
+    "EVENT_CHAT_SUBTASK_UPDATE",
+    "EVENT_CHAT_SYMPHONY_STATUS",
+    "EVENT_CHAT_TOOL_CALL",
+    "EVENT_CHAT_TOOL_RESULT",
+    "EVENT_CHAT_TOOL_UPDATE",
+    "EVENT_TODO_UPDATED",
+    "build_acp_final_text_update",
+    "build_acp_session_update",
+    "build_acp_usage_update",
+]
