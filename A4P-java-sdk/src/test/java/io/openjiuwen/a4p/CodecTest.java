@@ -151,7 +151,8 @@ class CodecTest {
                 json.replace("\"quantity\":1", "\"quantity\":1,\"extra\":true"));
         for (String input : tampered) {
             assertNotEquals(json, input);
-            fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL1(input));
+            fails(input.contains("1.5") || input.contains("1000.5")
+                    ? A4P_DESERIALIZE_FAIL : A4P_INVALID_PARAMETER, codec.deserializeIntentL1(input));
         }
     }
 

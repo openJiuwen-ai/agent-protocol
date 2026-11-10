@@ -261,6 +261,20 @@ public class A4pIntentCodec {
         }
     }
 
+    /** Rejects floating-point tokens before typed conversion, including arbitrary payloads. */
+    private static void rejectFloatingPointValues(JsonNode node, String path) {
+        Validation.require(!node.isFloatingPointNumber(), A4P_DESERIALIZE_FAIL,
+                "Floating-point values are not allowed at " + path);
+        if (node.isObject()) {
+            node.properties().forEach(entry -> rejectFloatingPointValues(entry.getValue(),
+                    path + "/" + entry.getKey().replace("~", "~0").replace("/", "~1")));
+        } else if (node.isArray()) {
+            for (int index = 0; index < node.size(); index++) {
+                rejectFloatingPointValues(node.get(index), path + "/" + index);
+            }
+        }
+    }
+
     /**
      * Strictly parses JSON and converts it to the requested protocol representation.
      * @param <Value> decoded or copied value type
@@ -272,6 +286,7 @@ public class A4pIntentCodec {
         Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
         JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
         rejectNullValues(parsed);
+        rejectFloatingPointValues(parsed, "$");
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {

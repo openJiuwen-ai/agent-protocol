@@ -46,7 +46,7 @@ class A4pTest {
         A4pIntentCodec codec = new A4pIntentCodec();
         String json = codec.serializeIntentExecutionContext(context());
         for (String value : List.of("null", "\"10000\"", "10000.5")) {
-            fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
+            fails(value.equals("10000.5") ? A4P_DESERIALIZE_FAIL : A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                     json.replace("\"activatedTime\":10000", "\"activatedTime\":" + value)));
         }
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
