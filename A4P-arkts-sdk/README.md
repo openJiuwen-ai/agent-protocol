@@ -131,13 +131,16 @@ non-blank seller id and at least one non-blank `spuId`/`skuId`; seller id + spuI
 skuId is the whitelist matching key, and a product may appear at most once per group and
 in at most one group. A period rule requires all of `anchorTime`, `periodSeconds` and
 `maxExecutionCountPerPeriod`, with `anchorTime <= validFrom` and
-`periodSeconds <= 9007199254740`. Chain timestamps are monotonic:
-`L1.timestamp <= L2.timestamp <= L3.timestamp <= activation`. The validity window is
-judged progressively as the chain approaches execution: issuance applies no window
-check; signing and activation refuse an instant past `validUntil` with
+`periodSeconds <= 9007199254740`. `L1.timestamp`, `L2.timestamp`, `L3.timestamp`, the
+activation instant (`activatedTime`) and the revocation instant (`revokedTime`, when
+present) must each be a non-negative integer; none of them takes part in any
+monotonicity check (creation, issuance, signing, activation and revocation run in
+different processes whose clocks cannot be compared). The validity window is
+judged progressively as the chain approaches execution: creation and signing apply no window
+check; issuance and activation refuse an instant past `validUntil` with
 `A4P_TIMESTAMP_EXPIRED` (an L3 or a context created there could never reserve) but
 permit one before `validFrom`, the intent simply waiting for the window to open; the
-full window — both ends plus the `activatedTime` floor — is enforced at reservation
+full window — both ends — is enforced at reservation
 time, where an early reservation fails with `A4P_TIMESTAMP_TOO_EARLY` and a late one
 flips the context to EXPIRED. Length limits and sensitive-data filtering of
 `intentConversation` are the Agent's responsibility.
@@ -191,7 +194,7 @@ by the SDK, so raw exceptions never leak through the lifecycle APIs.
   is generated.
 - Reservation checks run in a fixed order: request structure; action and currency
   against the authorized intent; context status; validity window (`validFrom`, the
-  `activatedTime` floor, the lazy EXPIRED flip); duplicate execution/order ids; the
+  lazy EXPIRED flip); duplicate execution/order ids; the
   execution-count cap, the single-order cap, the remaining amount; whitelist scope and
   template; period quota.
 - `amount` is caller-declared: the SDK validates it against the signed caps but never
@@ -280,7 +283,8 @@ compatibility is governed by the `version` field, not by the HAR version.
 - `verifyIntentAuthenticity` deliberately does not verify the user signature.
 - Deserialization is structural (JSON.parse semantics): unknown fields and duplicate
   JSON keys are not rejected, unlike the stricter Java port.
-- Signing and activation judge only the window's upper bound (`validUntil`); the
+- Issuance and activation judge only the window's upper bound (`validUntil`); signing
+  judges no clock; the
   window's opening (`validFrom`) and the lazy EXPIRED flip are left to reservation
   time.
 - Context operations are unsynchronized: safe in the single-threaded ArkTS runtime

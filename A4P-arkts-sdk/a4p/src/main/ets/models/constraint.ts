@@ -18,11 +18,12 @@
  */
 export interface PaymentConstraints {
   /**
-   * Maximum amount allowed per single order (in cents); must be a positive
-   * integer when present — absent means no per-order amount cap
+   * Maximum amount allowed per single order (in application-defined minor
+   * currency units); must be a positive integer when present — absent
+   * means no per-order amount cap
    */
   singleOrderMaxAmount?: number;
-  /** Maximum total amount across all non-canceled executions (in cents); must be a positive integer */
+  /** Maximum total amount across all non-canceled executions (in application-defined minor currency units); must be a positive integer */
   totalMaxAmount: number;
   /** Currency code for the amounts (e.g., "CNY", "USD") */
   currency: string;

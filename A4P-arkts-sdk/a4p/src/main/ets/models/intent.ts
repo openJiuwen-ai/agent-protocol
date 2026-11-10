@@ -81,7 +81,7 @@ export interface IntentL1 {
   intentSummary: string;
   /** Structured intent data */
   structuredIntent: StructuredIntent;
-  /** Creation timestamp (milliseconds since epoch); must be a non-negative integer */
+  /** Creation timestamp (milliseconds since epoch); must be a non-negative integer, no cross-level ordering is checked */
   timestamp: number;
   /** Agent's signing information, including the signature over this intent */
   sign?: SignatureInfo;
@@ -102,7 +102,12 @@ export interface IntentL2 {
   agentIdentity: AgentIdentity;
   /** Service provider identity */
   serviceProviderIdentity: ServiceProviderIdentity;
-  /** Issuance timestamp (milliseconds since epoch); must be a non-negative integer no earlier than the embedded intentL1's timestamp */
+  /**
+   * Issuance timestamp (milliseconds since epoch); must be a non-negative
+   * integer, no cross-level ordering check applies (the only clock
+   * judgment at issuance is the validity window, on the caller-supplied
+   * now, see A4p.issueIntent)
+   */
   timestamp: number;
   /** Server's signing information, including the signature over this intent */
   sign?: SignatureInfo;
@@ -119,7 +124,11 @@ export interface IntentL3 {
   intentL2: IntentL2;
   /** Signing environment information */
   signingEnv: SigningEnv;
-  /** Signing timestamp (milliseconds since epoch); must be a non-negative integer no earlier than the embedded intentL2's timestamp */
+  /**
+   * Signing timestamp (milliseconds since epoch); must be a non-negative
+   * integer, no cross-level ordering check applies (signing deliberately
+   * judges no clock, see A4p.signIntent)
+   */
   timestamp: number;
   /** User's signing information, including the signature over this intent */
   sign?: SignatureInfo;
