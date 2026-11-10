@@ -23,11 +23,11 @@ class A4pTest {
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
                 future + 60_000, null, null, null, null);
         IntentExecutionContext futureContext = ok(A4p.activateIntent(authorized(limits), VERIFIER, future));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(futureContext));
-        assertEquals(IntentExecutionStatus.ACTIVE, futureContext.status());
+        ok(A4p.revokeIntent(futureContext, NOW));
+        assertEquals(IntentExecutionStatus.REVOKED, futureContext.status());
         A4pIntentCodec codec = new A4pIntentCodec();
         String json = codec.serializeIntentExecutionContext(context());
-        for (String value : List.of("null", "-1", "9999", "\"10000\"", "10000.5")) {
+        for (String value : List.of("null", "\"10000\"", "10000.5")) {
             fails(A4P_INVALID_PARAMETER, codec.deserializeIntentExecutionContext(
                     json.replace("\"activatedTime\":10000", "\"activatedTime\":" + value)));
         }
@@ -36,18 +36,14 @@ class A4pTest {
     }
 
     @Test
-    void activationTimeIsPersistedAndRejectsEarlierCallsWithoutMutation() {
+    void activationAuditTimeDoesNotRestrictReservations() {
         IntentExecutionContext context = context();
         assertEquals(NOW, context.activatedTime());
-        String before = new A4pIntentCodec().serializeIntentExecutionContext(context);
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(context, execution("early", 100, 1), NOW - 1));
-        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(context, "early", NOW - 1));
-        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(context, "early", NOW - 1));
-        assertEquals(before, new A4pIntentCodec().serializeIntentExecutionContext(context));
-        IntentExecutionContext restored = ok(new A4pIntentCodec().deserializeIntentExecutionContext(before));
-        assertEquals(NOW, restored.activatedTime());
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.createExecution(restored, execution("early", 100, 1), NOW - 1));
-        ok(A4p.createExecution(restored, execution("same-ms", 100, 1), NOW));
+        A4pIntentCodec codec = new A4pIntentCodec();
+        IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(
+                codec.serializeIntentExecutionContext(context)));
+        ok(A4p.createExecution(restored, execution("early", 100, 1), NOW - 1));
+        ok(codec.deserializeIntentExecutionContext(codec.serializeIntentExecutionContext(restored)));
     }
 
     @Test
@@ -116,8 +112,8 @@ class A4pTest {
         IntentExecutionContext context = context();
         ok(A4p.createExecution(context, execution("one", 100, 1), NOW));
         ok(A4p.createExecution(context, execution("two", 100, 1), NOW));
-        ok(A4p.revokeIntent(context));
-        fails(A4P_INVALID_STATUS, A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
+        fails(A4P_INVALID_STATUS, A4p.revokeIntent(context, NOW));
         fails(A4P_INVALID_STATUS, A4p.createExecution(context, execution("three", 100, 1), NOW));
         ok(A4p.completeExecution(context, "one", NOW));
         ok(A4p.cancelExecution(context, "two", NOW));
@@ -148,7 +144,7 @@ class A4pTest {
         for (int index = 0; index < 3; index++) {
             ok(A4p.createExecution(revoked, execution("r-" + index, 100, 1), NOW + index * 10_000));
         }
-        ok(A4p.revokeIntent(revoked));
+        ok(A4p.revokeIntent(revoked, NOW));
         for (int index = 0; index < 3; index++) {
             ok(A4p.completeExecution(revoked, "r-" + index, NOW + 30_000));
         }
@@ -343,12 +339,11 @@ class A4pTest {
     }
 
     @Test
-    void revocationUsesOptionalClockAndArkTsErrorPrecedence() {
+    void revocationUsesExplicitClockAndArkTsErrorPrecedence() {
         IntentExecutionContext context = context();
         fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(context, -1));
-        fails(A4P_TIMESTAMP_TOO_EARLY, A4p.revokeIntent(context, NOW - 1));
-        assertEquals(IntentExecutionStatus.ACTIVE, context.status());
-        ok(A4p.revokeIntent(context, NOW));
+        ok(A4p.revokeIntent(context, NOW - 1));
+        assertEquals(IntentExecutionStatus.REVOKED, context.status());
         fails(A4P_INVALID_STATUS, A4p.revokeIntent(context, NOW - 1));
         assertEquals(4005, A4P_CART_MISMATCH.code());
     }
@@ -434,9 +429,9 @@ class A4pTest {
 
     @Test
     void periodAnchorMustNotFollowValidFrom() {
-        PaymentConstraints late = new PaymentConstraints(null, 100L, "CNY", 0L, 100L, null, 1L, 10L, 1L);
+        PaymentConstraints late = new PaymentConstraints(null, 100L, "CNY", NOW + 0L, NOW + 100L, null, NOW + 1L, 10L, 1L);
         fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(late), SIGNER, NOW));
-        PaymentConstraints same = new PaymentConstraints(null, 100L, "CNY", 1L, 100L, null, 1L, 10L, 1L);
+        PaymentConstraints same = new PaymentConstraints(null, 100L, "CNY", NOW + 1L, NOW + 100L, null, NOW + 1L, 10L, 1L);
         ok(A4p.createIntent(request(same), SIGNER, NOW));
     }
 
@@ -451,24 +446,6 @@ class A4pTest {
         fails(A4P_INVALID_PARAMETER, codec.deserializeIntentL1(codec.serializeIntentL1(relabeled)));
         Signer foreign = data -> new SignatureInfo("HS256", "key", "c2ln");
         fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), foreign, NOW));
-    }
-
-    @Test
-    void chainTimestampsMustBeMonotonic() {
-        IntentL1 first = ok(A4p.createIntent(request(constraints()), SIGNER, NOW));
-        fails(A4P_INVALID_PARAMETER, A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, NOW - 1));
-        IntentL2 second = ok(A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, NOW + 5));
-        IntentL2 backdated = new IntentL2(second.version(), first, second.userIdentity(), second.agentIdentity(),
-                second.serviceProviderIdentity(), NOW - 1, second.sign());
-        SigningEnv environment = new SigningEnv(Map.of(), Map.of());
-        fails(A4P_INVALID_PARAMETER, A4p.signIntent(backdated, VERIFIER, environment, SIGNER, NOW + 5));
-        fails(A4P_INVALID_PARAMETER, A4p.signIntent(second, VERIFIER, environment, SIGNER, NOW));
-        IntentL3 third = ok(A4p.signIntent(second, VERIFIER, environment, SIGNER, NOW + 5));
-        IntentL3 earlier = new IntentL3(third.version(), second, environment, NOW, third.sign());
-        fails(A4P_INVALID_PARAMETER, A4p.activateIntent(earlier, VERIFIER, NOW + 5));
-        fails(A4P_INVALID_PARAMETER, A4p.verifyIntentAuthenticity(earlier, VERIFIER));
-        fails(A4P_INVALID_PARAMETER, A4p.activateIntent(third, VERIFIER, NOW + 4));
-        assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(third, VERIFIER, NOW + 5)).status());
     }
 
     @Test
@@ -498,19 +475,20 @@ class A4pTest {
     }
 
     @Test
-    void signingRejectsExpiredIntentsBeforeCallingUserSigner() {
+    void signingUsesClientTimeButStillVerifiesIssuerSignature() {
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 20_000L, 100_000L,
                 null, null, null, null);
         IntentL1 first = ok(A4p.createIntent(request(limits), SIGNER, NOW));
         IntentL2 second = ok(A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, NOW));
         SigningEnv environment = new SigningEnv(Map.of(), Map.of());
         Signer unexpectedSigner = data -> {
-            fail("Expired intents must not invoke the user signer");
+            fail("Invalid issuer signatures must not invoke the user signer");
             return null;
         };
-        fails(A4P_TIMESTAMP_EXPIRED, A4p.signIntent(second, VERIFIER, environment, unexpectedSigner, 100_001));
+        // A client clock past validUntil does not prevent signing.
+        ok(A4p.signIntent(second, VERIFIER, environment, SIGNER, 100_001));
         SignatureVerifier reject = (data, sign) -> new VerificationResult(false, A4P_VERIFY_FAIL.code(), null);
-        fails(A4P_TIMESTAMP_EXPIRED, A4p.signIntent(second, reject, environment, unexpectedSigner, 100_001));
+        fails(A4P_VERIFY_FAIL, A4p.signIntent(second, reject, environment, unexpectedSigner, 100_001));
         fails(A4P_VERIFY_FAIL, A4p.signIntent(second, reject, environment, unexpectedSigner, 19_999));
 
         // Users may authorize a task before it starts; validUntil is inclusive.
@@ -519,6 +497,29 @@ class A4pTest {
             assertEquals(now, signed.timestamp());
             assertEquals(IntentExecutionStatus.ACTIVE, ok(A4p.activateIntent(signed, VERIFIER, now)).status());
         }
+    }
+
+    @Test
+    void clientClockSkewAllowsActivationAndRestoration() {
+        IntentL1 first = ok(A4p.createIntent(request(constraints()), SIGNER, NOW + 1000));
+        IntentL2 issued = ok(A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, NOW));
+        A4pIntentCodec codec = new A4pIntentCodec();
+        for (long clientTime : new long[] {0, NOW - 1, NOW, 100_001}) {
+            IntentL3 signed = ok(A4p.signIntent(issued, VERIFIER,
+                    new SigningEnv(Map.of(), Map.of()), SIGNER, clientTime));
+            IntentExecutionContext context = ok(A4p.activateIntent(signed, VERIFIER, NOW));
+            IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(
+                    codec.serializeIntentExecutionContext(context)));
+            assertEquals(NOW, restored.activatedTime());
+            ok(A4p.createExecution(restored, execution("skew", 100, 1), NOW));
+            ok(A4p.activateIntent(signed, VERIFIER, NOW - 1));
+            String invalid = codec.serializeIntentExecutionContext(context)
+                    .replace("\"activatedTime\":" + NOW, "\"activatedTime\":" + (NOW - 1));
+            ok(codec.deserializeIntentExecutionContext(invalid));
+            fails(A4P_TIMESTAMP_EXPIRED, A4p.activateIntent(signed, VERIFIER, 100_001));
+        }
+        fails(A4P_TIMESTAMP_EXPIRED, A4p.createIntent(request(constraints()), SIGNER, 100_001));
+        fails(A4P_TIMESTAMP_EXPIRED, A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, 100_001));
     }
 
     @Test
@@ -554,7 +555,7 @@ class A4pTest {
         Execution foreign = PaymentProfile.execution("first",
                 new Order("foreign", 200_000L, "USD", List.of(new CartItem(PRODUCT, 1L)), NOW));
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, foreign, NOW));
-        ok(A4p.revokeIntent(context));
+        ok(A4p.revokeIntent(context, NOW));
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(context, foreign, NOW));
         fails(A4P_INVALID_STATUS, A4p.createExecution(context, execution("first", 100, 1), NOW));
         IntentExecutionContext expiring = context();
