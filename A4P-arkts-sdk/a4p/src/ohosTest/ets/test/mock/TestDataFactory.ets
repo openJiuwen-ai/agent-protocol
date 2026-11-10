@@ -178,7 +178,7 @@ export function createTestExecution(): Execution {
  * Creates an L1 intent using the default test request and mock signer.
  */
 export function createTestL1(request: CreateIntentRequest = createTestCreateIntentRequest()): IntentL1 {
-  return A4p.createIntent(request, new MockSigner());
+  return A4p.createIntent(request, new MockSigner(), Date.now());
 }
 
 /**
@@ -187,7 +187,7 @@ export function createTestL1(request: CreateIntentRequest = createTestCreateInte
 export function createTestL2(l1?: IntentL1): IntentL2 {
   const intentL1 = l1 ?? createTestL1();
   return A4p.issueIntent(intentL1, new MockVerifier(),
-    createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'));
+    createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), Date.now());
 }
 
 /**
@@ -196,5 +196,5 @@ export function createTestL2(l1?: IntentL1): IntentL2 {
 export function createTestL3(l2?: IntentL2): IntentL3 {
   const intentL2 = l2 ?? createTestL2();
   return A4p.signIntent(intentL2, new MockVerifier(),
-    createTestSigningEnv(), new MockSigner(AlgorithmType.RSA3072, 'user-key-001'));
+    createTestSigningEnv(), new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), Date.now());
 }

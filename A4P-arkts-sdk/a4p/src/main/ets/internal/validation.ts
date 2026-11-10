@@ -551,6 +551,20 @@ export function validateNow(now: number): Validation {
 }
 
 /**
+ * Validates a finalize-API execution id. The id is a required parameter, so
+ * a null or blank value is invalid input in its own right — not a lookup
+ * key that merely fails to match anything — and it has no absent spelling.
+ * @param executionId - The execution id to validate
+ * @returns A validation failure when the id is null or blank, or null when valid
+ */
+export function validateExecutionId(executionId: string): Validation {
+  if (!isNonBlankString(executionId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'executionId must not be blank');
+  }
+  return null;
+}
+
+/**
  * Validates an Execution object: a defined action, an optional non-blank id
  * (an absent id is generated during reservation),
  * and an executionContent that is a well-formed order.
@@ -1063,11 +1077,11 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'context.executionInfo.periodIndex and leftPeriodExecutionCount must be absent on a non-periodic intent');
   }
-  // Normalize a null cap to undefined so the presence rules below (and the
-  // accounting math the callers run) treat it exactly like an absent cap —
-  // otherwise `cap === undefined` would be false for null and the
-  // comparisons would coerce null to 0.
-  const countCap: number | undefined = l1.structuredIntent.constraints.maxExecutionCount ?? undefined;
+  // maxExecutionCount is optional: undefined means no count cap. A null
+  // value never reaches here — validatePaymentConstraints (part of the
+  // intent-chain validation above) rejects null; undefined is the only
+  // absent spelling.
+  const countCap: number | undefined = l1.structuredIntent.constraints.maxExecutionCount;
   if (countCap !== undefined && context.executionInfo.leftExecutionCount === undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'context.executionInfo.leftExecutionCount must be present when the intent carries maxExecutionCount');
@@ -1100,6 +1114,22 @@ export function checkChainVersions(intentL3: IntentL3): A4pValidationFailure | n
       'IntentL1 version ' + intentL3.intentL2.intentL1.version + ' is not supported');
   }
   return null;
+}
+
+/**
+ * Checks that an execution context and its authorized intent chain carry
+ * the protocol version: the context's own `version` field first, then the
+ * full chain (see checkChainVersions). Shared by the execution-class APIs
+ * (revokeIntent, createExecution, completeExecution, cancelExecution).
+ * @param context - The execution context to check
+ * @returns A validation failure if any version mismatches, or null if all match
+ */
+export function checkExecutionContextVersions(context: IntentExecutionContext): A4pValidationFailure | null {
+  if (context.version != PROTOCOL_VERSION) {
+    return new A4pValidationFailure(A4pErrorCode.A4P_UNSUPPORTED_VERSION,
+      'Context version ' + context.version + ' is not supported');
+  }
+  return checkChainVersions(context.authorizedIntent);
 }
 
 /**

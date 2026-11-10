@@ -42,6 +42,20 @@ function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
+/**
+ * Builds `levels` nested single-key objects with the scalar 1 at the
+ * bottom, for the nesting-limit test: a value inside the result sits
+ * `levels` containers deep.
+ */
+function nestedChainObject(levels: number): Record<string, Object> {
+  let value: Object = 1;
+  for (let i = 0; i < levels; i++) {
+    const next: Record<string, Object> = { 'v': value };
+    value = next as Object;
+  }
+  return value as Record<string, Object>;
+}
+
 export default function utilsTest() {
   describe('UtilsTest', () => {
 
@@ -133,9 +147,9 @@ export default function utilsTest() {
           base64UrlDecode('YR');
         });
 
-        // Two-character tail with non-zero padding bits: 'YWJ' encodes
-        // 'ab' (0x61 0x62); 'YWJ' + trailing-bit variants like 'YWK' must
-        // also be rejected.
+        // Three-character tail with non-zero padding bits: 'ab' (0x61 0x62)
+        // canonically encodes as 'YWI'; variants with non-zero trailing
+        // bits like 'YWK' must also be rejected.
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           base64UrlDecode('YWK');
         });
@@ -332,7 +346,7 @@ export default function utilsTest() {
         expect(canonicalStringify(negativeZero as Object)).assertEqual('0');
       });
 
-      it('sortsKeysByCodePoint', 0, () => {
+      it('sortsKeysByUtf16CodeUnits', 0, () => {
         const obj: Record<string, Object> = { 'b': 1, 'a': 2 };
 
         expect(canonicalStringify(obj as Object)).assertEqual('{"a":2,"b":1}');
@@ -348,9 +362,9 @@ export default function utilsTest() {
       });
 
       it('omitsNullProperties', 0, () => {
-        // A null optional field is an absent field in the canonical form —
-        // a "key":null pair is bytes the protocol neither produces nor
-        // accepts.
+        // Null properties are omitted as a last-resort fallback — the
+        // input validators reject null, and no "key":null pair is ever
+        // emitted.
         const obj: Record<string, Object | null> = { 'a': null, 'b': 1, 'c': null };
         const inner: Record<string, Object | null> = { 'x': null, 'y': 2 };
         const nested: Record<string, Object | null> = { 'outer': inner as Object };
@@ -369,6 +383,19 @@ export default function utilsTest() {
         const withNullItem: Record<string, Object> = { 'arr': [1, null, 3] };
         expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
           canonicalStringify(withNullItem as Object);
+        });
+      });
+
+      it('fails_whenNestingExceeds100Levels', 0, () => {
+        // A value may sit at most 100 containers deep — the same limit
+        // the strict parser (strictJson.ts) and the Java SDK enforce, so
+        // every serialization this SDK emits is one its own parser
+        // accepts back. The scalar inside nestedChainObject(n) sits n
+        // containers deep: 100 is the boundary, 101 one past it.
+        expect(canonicalStringify(nestedChainObject(100) as Object).length)
+          .assertLarger(0);
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(nestedChainObject(101) as Object);
         });
       });
 

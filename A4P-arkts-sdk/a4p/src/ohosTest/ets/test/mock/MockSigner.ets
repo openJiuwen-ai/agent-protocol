@@ -161,9 +161,29 @@ export class ContradictoryVerifier implements SignatureVerifier {
 }
 
 /**
+ * Test verifier whose `valid` field is a truthy non-boolean ("false" or 1)
+ * carrying the success code: only the boolean-type guard stops it.
+ * JSON.parse keeps the runtime value non-boolean despite the declared type.
+ */
+export class NonBooleanValidVerifier implements SignatureVerifier {
+  /** Produce the numeric spelling (1) instead of the string one ("false") */
+  private numeric: boolean;
+
+  constructor(numeric: boolean = false) {
+    this.numeric = numeric;
+  }
+
+  verify(_data: Uint8Array, _signatureInfo: SignatureInfo): VerificationResult {
+    return this.numeric
+      ? JSON.parse('{"valid":1,"code":0,"message":"numeric valid field"}') as VerificationResult
+      : JSON.parse('{"valid":"false","code":0,"message":"string valid field"}') as VerificationResult;
+  }
+}
+
+/**
  * Test signer that returns no result at all, for exercising the
- * signer-result guard: a broken signer must surface as A4P_SIGNING_FAIL,
- * never as a signed intent whose sign field fails every downstream check.
+ * signer-result guard: a signer that returns bad data must surface as
+ * A4P_INVALID_PARAMETER, never a signed intent whose sign fails checks.
  */
 export class NoResultSigner implements Signer {
   sign(_data: Uint8Array): SignatureInfo {
@@ -176,7 +196,7 @@ export class NoResultSigner implements Signer {
 /**
  * Test signer returning a malformed SignatureInfo (blank signature), for
  * exercising the non-null branch of the signer-result guard: the result
- * must fail validation as A4P_SIGNING_FAIL instead of landing on the
+ * must fail validation as A4P_INVALID_PARAMETER instead of landing on the
  * intent.
  */
 export class BlankSignatureSigner implements Signer {

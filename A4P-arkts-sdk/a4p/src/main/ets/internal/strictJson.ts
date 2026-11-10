@@ -5,8 +5,15 @@
 import { A4pErrorCode } from '../models/common';
 import { a4pThrow } from './result';
 
-/** Nesting limit for parsed documents, a guard against stack exhaustion. */
-const MAX_JSON_DEPTH: number = 1000;
+/**
+ * Nesting limit shared by this parser and the canonical serializer (utils.ts
+ * imports it): a value may sit at most this many containers deep. The Java
+ * SDK enforces the same 100-level limit on both directions (its CanonicalJson
+ * normalize rejects deeper documents), so a deeper document fails
+ * deserialization there — accepting it here would let the two SDKs disagree
+ * about the same bytes.
+ */
+export const MAX_JSON_DEPTH: number = 100;
 
 /** Protocol numbers must round-trip exactly; anything else is malformed. */
 const MAX_SAFE_INTEGER: number = 9007199254740991;
@@ -17,6 +24,13 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  * - duplicate object keys (JSON.parse silently keeps the last one, so a
  *   payload like {"a":1,"a":2} would otherwise deserialize differently
  *   than it reads, and never identically to the bytes a signer signed);
+ * - object keys out of canonical order: the canonical serializer emits
+ *   every object's keys sorted by UTF-16 code units, and the input must
+ *   be those exact bytes, so each key must be strictly greater than the
+ *   one before it — a reordered but otherwise well-formed document is
+ *   rejected rather than silently re-canonicalized (key order carries
+ *   no protocol meaning, but bytes no signer signed must not pass as
+ *   though they had been);
  * - explicit null literals inside objects and arrays: canonical protocol
  *   JSON carries no nulls — an absent optional field is omitted, not
  *   spelled null — so a present null is neither a value nor an absence
@@ -30,9 +44,19 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  *   replaces the object's prototype instead of creating an own property,
  *   which would hide the entry from enumeration while it still leaks
  *   into property reads;
- * - unpaired surrogate halves, raw or escaped: a lone half builds a
- *   string no strict UTF-8 encoder accepts, so it fails at parse time
- *   rather than at signing;
+ * - unpaired surrogate halves, raw: a lone half builds a string no strict
+ *   UTF-8 encoder accepts, so it fails at parse time rather than at signing
+ *   (escaped halves, paired or not, fail as non-canonical spellings below);
+ * - non-canonical escape spellings: the canonical serializer emits exactly
+ *   one spelling per character — `\"`, `\\`, `\b`, `\f`, `\n`, `\r`, `\t`,
+ *   lowercase `\u00xx` for the remaining control characters below 0x20,
+ *   and every other character raw — so `\/` (the solidus is spelled raw),
+ *   a `\uXXXX` escape of any character at or above 0x20 (astral characters
+ *   included: an escaped surrogate pair is rejected, not combined), a
+ *   `\uXXXX` spelling of one of the five short-escape characters, and
+ *   uppercase hex digits are all rejected rather than silently
+ *   re-canonicalized, matching the Java SDK, which accepts a document only
+ *   when it equals its canonical re-serialization byte for byte;
  * - whitespace, anywhere: the canonical form carries none — no space,
  *   tab, newline or carriage return before, between or after tokens —
  *   so the input must be the exact bytes the canonical serializer
@@ -41,7 +65,7 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  * - trailing content after the top-level value, malformed numbers
  *   (leading zeros, bare '.', truncated exponents), raw control
  *   characters in strings, invalid escapes, and nesting deeper than
- *   MAX_JSON_DEPTH.
+ *   MAX_JSON_DEPTH (100 levels, the Java SDK's shared limit).
  *
  * The one admitted null is the bare document "null": it parses to a null
  * root so the structural validators reject it as invalid data — which
@@ -128,7 +152,10 @@ class StrictJsonParser {
 
   /**
    * Parses an object: string keys, unique (duplicates rejected), each
-   * followed by ':' and a value.
+   * followed by ':' and a value. Keys must arrive in canonical order —
+   * strictly increasing by UTF-16 code units, the comparison
+   * canonicalStringify's key sort uses — so a document that reorders
+   * them is rejected instead of being silently re-canonicalized.
    */
   private parseObject(depth: number): Record<string, Object> {
     this.pos++; // opening '{'
@@ -137,10 +164,12 @@ class StrictJsonParser {
       this.pos++;
       return result;
     }
+    let prevKey: string | null = null;
     while (true) {
       if (this.peekChar() !== '"') {
         this.fail('expected an object key at position ' + this.pos);
       }
+      const keyStart: number = this.pos;
       const key: string = this.parseString();
       if (key === '__proto__') {
         this.fail('\'__proto__\' is not a valid protocol field name');
@@ -148,6 +177,18 @@ class StrictJsonParser {
       if (Object.prototype.hasOwnProperty.call(result, key)) {
         this.fail('duplicate object key \'' + key + '\'');
       }
+      // Canonical order: strictly increasing by UTF-16 code units, the
+      // same comparison Array.prototype.sort (and canonicalStringify's
+      // key sort) applies. Together with the duplicate rejection above
+      // this pins the key sequence to exactly the sorted sequence; the
+      // duplicate check runs first so a repeated key still reports as a
+      // duplicate, not as an ordering violation.
+      if (prevKey !== null && key <= prevKey) {
+        this.fail('object key \'' + key + '\' at position ' + keyStart +
+          ' is out of canonical order — keys must appear in strictly increasing order' +
+          ' (previous key: \'' + prevKey + '\')');
+      }
+      prevKey = key;
       if (this.peekChar() !== ':') {
         this.fail('expected \':\' at position ' + this.pos);
       }
@@ -191,8 +232,9 @@ class StrictJsonParser {
 
   /**
    * Parses a string literal: the caller has verified the opening '"'.
-   * Escapes follow RFC 8259; raw control characters and unpaired
-   * surrogate halves are rejected.
+   * Escapes must match the canonical serializer's exact spellings (see
+   * parseEscape); raw control characters and unpaired surrogate halves
+   * are rejected.
    */
   private parseString(): string {
     this.pos++; // opening '"'
@@ -231,11 +273,27 @@ class StrictJsonParser {
     }
   }
 
-  /** Parses one escape sequence; the caller has consumed the '\'. */
+  /**
+   * Parses one escape sequence; the caller has consumed the '\'. Only the
+   * canonical spellings are admitted: the serializer emits exactly one
+   * spelling per character — `\"`, `\\`, `\b`, `\f`, `\n`, `\r`, `\t` and
+   * lowercase `\u00xx` for the remaining control characters below 0x20 —
+   * and the input must be those exact bytes. Any other escape is a
+   * spelling the canonical form never carries — `\/` (the solidus is
+   * spelled raw), a `\uXXXX` of a character at or above 0x20 (astral
+   * characters included: an escaped surrogate pair spells a character
+   * the canonical form writes raw, and a lone escaped half is rejected
+   * before the surrogate rules even apply), a `\uXXXX` spelling of one
+   * of the five short-escape characters, or uppercase hex digits — and
+   * is rejected rather than silently re-canonicalized, matching the
+   * Java SDK, which accepts a document only when it equals its own
+   * canonical re-serialization.
+   */
   private parseEscape(): string {
     if (this.pos + 1 >= this.text.length) {
       this.fail('unterminated escape at position ' + this.pos);
     }
+    const escapeStart: number = this.pos;
     const e: string = this.text[this.pos + 1];
     this.pos += 2;
     if (e === '"') {
@@ -243,9 +301,6 @@ class StrictJsonParser {
     }
     if (e === '\\') {
       return '\\';
-    }
-    if (e === '/') {
-      return '/';
     }
     if (e === 'b') {
       return '\b';
@@ -262,34 +317,38 @@ class StrictJsonParser {
     if (e === 't') {
       return '\t';
     }
+    if (e === '/') {
+      // Valid JSON, but not a spelling the canonical form carries: the
+      // serializer writes the solidus raw, so the input must too.
+      this.fail('non-canonical escape \\/ at position ' + escapeStart +
+        ' — the canonical form spells the solidus raw');
+    }
     if (e === 'u') {
-      const escapeStart: number = this.pos - 2;
       const code: number = this.readHex4(escapeStart);
-      if (code >= 0xd800 && code <= 0xdbff) {
-        // A high surrogate is half a code point: it must be completed by
-        // an immediately following \u escape spelling the low half.
-        const followedByEscape: boolean = this.pos + 2 <= this.text.length &&
-          this.text[this.pos] === '\\' && this.text[this.pos + 1] === 'u';
-        if (!followedByEscape) {
-          this.fail('lone high surrogate at position ' + escapeStart);
-        }
-        const lowStart: number = this.pos;
-        this.pos += 2;
-        const low: number = this.readHex4(lowStart);
-        if (low < 0xdc00 || low > 0xdfff) {
-          this.fail('high surrogate followed by a non-low surrogate at position ' + escapeStart);
-        }
-        return String.fromCharCode(code, low);
-      }
-      if (code >= 0xdc00 && code <= 0xdfff) {
-        this.fail('lone low surrogate at position ' + escapeStart);
+      // Canonical \u escapes exist only for the control characters with no
+      // short spelling: the serializer emits \b, \t, \n, \f and \r for
+      // those five and every character from 0x20 up raw, so any other code
+      // point — an ordinary character, a short-escape one, or a surrogate
+      // half — has a different canonical spelling and its \u form is
+      // rejected here.
+      if (code >= 0x20 || code === 0x08 || code === 0x09 || code === 0x0a ||
+        code === 0x0c || code === 0x0d) {
+        this.fail('non-canonical unicode escape at position ' + escapeStart +
+          ' — characters at or above 0x20 and the five short-escape characters ' +
+          'carry different canonical spellings (raw and \\b\\t\\n\\f\\r)');
       }
       return String.fromCharCode(code);
     }
-    this.fail('invalid escape character \'' + e + '\' at position ' + (this.pos - 2));
+    this.fail('invalid escape character \'' + e + '\' at position ' + escapeStart);
   }
 
-  /** Reads the four hex digits of a \u escape; escapeStart is the error position. */
+  /**
+   * Reads the four hex digits of a \u escape; escapeStart is the error
+   * position. Uppercase hex digits are rejected as a non-canonical
+   * spelling: the serializer renders control characters with lowercase
+   * digits only (toString(16) emits lowercase), and the input must be
+   * those exact bytes.
+   */
   private readHex4(escapeStart: number): number {
     if (this.pos + 4 > this.text.length) {
       this.fail('truncated unicode escape at position ' + escapeStart);
@@ -304,7 +363,8 @@ class StrictJsonParser {
       } else if (d >= 'a' && d <= 'f') {
         v = d.charCodeAt(0) - 87;
       } else if (d >= 'A' && d <= 'F') {
-        v = d.charCodeAt(0) - 55;
+        this.fail('non-canonical unicode escape at position ' + escapeStart +
+          ' — canonical \\u escapes spell their hex digits in lowercase');
       }
       if (v < 0) {
         this.fail('invalid unicode escape at position ' + escapeStart);

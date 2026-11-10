@@ -33,22 +33,20 @@ export interface PeriodRule {
  * The period rule of the constraints, or null for non-periodic intents.
  * The rule is all-or-nothing: all three fields present (periodic) or all
  * three omitted (non-periodic); validation rejects partial rules. A null
- * field counts as omitted — in-memory null is the protocol's spelling of
- * an absent optional field (the canonical form never carries "key":null).
+ * field never reaches here — the intent-chain validation rejects null as
+ * an invalid parameter, and undefined is the only absent spelling.
  * @param constraints - The payment constraints to resolve the period rule from
  * @returns The resolved period rule, or null when the constraints are non-periodic
  */
 export function periodRuleOf(constraints: PaymentConstraints): PeriodRule | null {
-  const anchorTime: number | undefined = constraints.anchorTime ?? undefined;
-  const periodSeconds: number | undefined = constraints.periodSeconds ?? undefined;
-  const maxExecutionCountPerPeriod: number | undefined = constraints.maxExecutionCountPerPeriod ?? undefined;
-  if (anchorTime === undefined || periodSeconds === undefined || maxExecutionCountPerPeriod === undefined) {
+  if (constraints.anchorTime === undefined || constraints.periodSeconds === undefined ||
+    constraints.maxExecutionCountPerPeriod === undefined) {
     return null;
   }
   return {
-    anchorTime: anchorTime,
-    periodSeconds: periodSeconds,
-    maxExecutionCountPerPeriod: maxExecutionCountPerPeriod,
+    anchorTime: constraints.anchorTime,
+    periodSeconds: constraints.periodSeconds,
+    maxExecutionCountPerPeriod: constraints.maxExecutionCountPerPeriod,
   };
 }
 
@@ -138,10 +136,9 @@ export function computeExecutionInfo(constraints: PaymentConstraints, executions
   const info: PaymentExecutionInfo = {
     leftAmount: constraints.totalMaxAmount - computeAccumulatedAmount(executions)
   };
-  // ?? undefined: a null cap is an absent cap (see periodRuleOf) — without
-  // the normalization the check below would treat null as present and the
-  // subtraction would coerce it to 0.
-  const countCap: number | undefined = constraints.maxExecutionCount ?? undefined;
+  // A null cap never reaches here (see periodRuleOf: the intent-chain
+  // validation rejects it); undefined is the only absent spelling.
+  const countCap: number | undefined = constraints.maxExecutionCount;
   if (countCap !== undefined) {
     info.leftExecutionCount = countCap - computeExecutionCount(executions);
   }

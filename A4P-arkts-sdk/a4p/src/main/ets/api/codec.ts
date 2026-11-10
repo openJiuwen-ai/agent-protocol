@@ -23,7 +23,8 @@ import {
  * wrap even a foreign underlying failure (a getter that throws, a cyclic
  * structure exhausting the stack) into the uniform code. Deserialization
  * validates the format only: strict parsing (see parseStrictJson:
- * duplicate keys, explicit nulls, non-canonical number spellings
+ * duplicate keys, keys out of canonical order, explicit nulls,
+ * non-canonical number spellings
  * (negative zero included), whitespace, trailing content and malformed
  * literals are rejected instead of being silently last-wins-coalesced by
  * JSON.parse) plus the structural validators, whose closed field sets
@@ -32,11 +33,12 @@ import {
  * figures are restored verbatim — deserialization returns data, it does
  * not replay the reachability rules the execution APIs enforce on every
  * call, and it passes no version verdict of its own: versions are
- * compared only by the chain-facing APIs (issueIntent, signIntent,
- * activateIntent, verifyIntentAuthenticity); the execution-class APIs
- * (revokeIntent, createExecution, completeExecution, cancelExecution)
- * operate on a context without comparing versions, so a restored
- * foreign-version context is operable as-is.
+ * compared by the chain-facing APIs (issueIntent, signIntent,
+ * activateIntent, verifyIntentAuthenticity) and by the execution-class
+ * APIs (revokeIntent, createExecution, completeExecution, cancelExecution
+ * — each checks the context's own version and its authorized chain on
+ * every call), so a restored foreign-version context parses fine but is
+ * refused by every operation on it.
  */
 export namespace A4pCodec {
 

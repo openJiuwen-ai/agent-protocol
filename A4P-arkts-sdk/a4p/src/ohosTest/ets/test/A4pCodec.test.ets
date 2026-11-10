@@ -89,6 +89,22 @@ function withoutKey(obj: Record<string, Object>, key: string): Record<string, Ob
   return result;
 }
 
+/**
+ * Rebuilds a plain object with its keys in canonical (sorted) order. The
+ * restore tests mutate a wire document and re-stringify it; a key added
+ * by bracket assignment lands at the end, which the parser's
+ * canonical-order check would reject before the defect under test is
+ * reached — resorting keeps the failure where the test aims it.
+ */
+function sortedKeysCopy(obj: Record<string, Object>): Record<string, Object> {
+  const result: Record<string, Object> = {};
+  const keys: string[] = Object.keys(obj).sort();
+  for (const k of keys) {
+    result[k] = obj[k];
+  }
+  return result;
+}
+
 function expectThrows(code: A4pErrorCode, fn: () => void): void {
   try {
     fn();
@@ -100,6 +116,33 @@ function expectThrows(code: A4pErrorCode, fn: () => void): void {
     throw new Error('Expected A4pError with code ' + code + ', got: ' + (e as Error));
   }
   throw new Error('Expected A4pError with code ' + code + ', but no error was thrown');
+}
+
+/**
+ * Builds the JSON text of `levels` nested single-key objects with the
+ * scalar 1 at the bottom, for the nesting-limit tests: a value inside
+ * the result sits `levels` containers deep.
+ */
+function nestedChainJson(levels: number): string {
+  let chain: string = '1';
+  for (let i = 0; i < levels; i++) {
+    chain = '{"a":' + chain + '}';
+  }
+  return chain;
+}
+
+/**
+ * Builds `levels` nested single-key objects with the scalar 1 at the
+ * bottom, the object form of nestedChainJson for the serializer-side
+ * nesting test.
+ */
+function nestedChainObject(levels: number): Record<string, Object> {
+  let value: Object = 1;
+  for (let i = 0; i < levels; i++) {
+    const next: Record<string, Object> = { 'v': value };
+    value = next as Object;
+  }
+  return value as Record<string, Object>;
 }
 
 // Wire-form accessors for the restore tests: they reach nested fields of
@@ -265,8 +308,10 @@ export default function a4pCodecTest() {
       });
 
       it('deserialize_fails_whenMissingIntentConversation', 0, () => {
+        // Keys in canonical order, so the missing field (not the parser's
+        // order check) is what rejects the document.
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentL1('{"version":"1.0","intentId":"test","timestamp":1}');
+          A4pCodec.deserializeIntentL1('{"intentId":"test","timestamp":1,"version":"1.0"}');
         });
       });
 
@@ -302,27 +347,88 @@ export default function a4pCodecTest() {
         expect(deserialized.intentId).assertEqual(original.intentId);
         expect(deserialized.version).assertEqual(original.version);
         expect(deserialized.sign?.sign).assertEqual(original.sign?.sign);
+        // Canonical in, canonical out: the restored object re-serializes
+        // to the exact input bytes.
+        expect(A4pCodec.serializeIntentL1(deserialized)).assertEqual(serialized);
       });
 
       it('deserialize_fails_whenDuplicateKey', 0, () => {
         // JSON.parse silently keeps the last duplicate; the strict parser
         // rejects the document instead — the bytes a signer signed carry
         // exactly one of each key, so a duplicated key must never
-        // deserialize as anything.
+        // deserialize as anything. The duplicate is appended after the
+        // final key so the failure comes from the duplicate check itself:
+        // a repeated key placed anywhere before its canonical slot would
+        // trip the canonical-order check first (see
+        // deserialize_fails_whenKeysOutOfCanonicalOrder).
         const l1 = createL1();
         const serialized = A4pCodec.serializeIntentL1(l1);
-        const duplicated = '{"intentId":"injected",' + serialized.substring(1);
+        const parsed: Record<string, Object> = JSON.parse(serialized);
+        const keys: string[] = Object.keys(parsed);
+        const lastKey: string = keys[keys.length - 1];
+        const duplicated = serialized.substring(0, serialized.length - 1) +
+          ',"' + lastKey + '":"injected"}';
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentL1(duplicated);
         });
       });
 
-      it('deserialize_fails_whenUnknownTopLevelField', 0, () => {
-        // The closed field set rejects fields the protocol does not define.
+      it('deserialize_fails_whenKeysOutOfCanonicalOrder', 0, () => {
+        // The canonical serializer emits every object's keys sorted by
+        // UTF-16 code units, and the input must be those exact bytes: a
+        // reordered but otherwise well-formed document — same pairs,
+        // different order — is rejected at parse time instead of being
+        // silently re-canonicalized. JSON.stringify emits the mutated
+        // documents compactly, so key order is the only deviation from
+        // the canonical form.
         const l1 = createL1();
         const serialized = A4pCodec.serializeIntentL1(l1);
-        const extended = '{"unknownField":1,' + serialized.substring(1);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const keys: string[] = Object.keys(obj); // canonical input → sorted
+
+        // Every top-level pair reversed.
+        const reversed: Record<string, Object> = {};
+        for (let i = keys.length - 1; i >= 0; i--) {
+          reversed[keys[i]] = obj[keys[i]];
+        }
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(JSON.stringify(reversed));
+        });
+
+        // A single adjacent transposition.
+        const swapped: Record<string, Object> = {};
+        for (let i = 0; i < keys.length; i++) {
+          const k: string = i === 0 ? keys[1] : (i === 1 ? keys[0] : keys[i]);
+          swapped[k] = obj[k];
+        }
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(JSON.stringify(swapped));
+        });
+
+        // Top level canonical, one nested object reversed.
+        const nested: Record<string, Object> = JSON.parse(serialized);
+        const structured: Record<string, Object> =
+          nested['structuredIntent'] as Record<string, Object>;
+        const structuredKeys: string[] = Object.keys(structured);
+        const structuredReversed: Record<string, Object> = {};
+        for (let i = structuredKeys.length - 1; i >= 0; i--) {
+          structuredReversed[structuredKeys[i]] = structured[structuredKeys[i]];
+        }
+        nested['structuredIntent'] = structuredReversed;
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(JSON.stringify(nested));
+        });
+      });
+
+      it('deserialize_fails_whenUnknownTopLevelField', 0, () => {
+        // The closed field set rejects fields the protocol does not
+        // define. The injected key sorts before every L1 field, so the
+        // canonical key order holds and the closed field set (not the
+        // parser's order check) does the rejecting.
+        const l1 = createL1();
+        const serialized = A4pCodec.serializeIntentL1(l1);
+        const extended = '{"extraField":1,' + serialized.substring(1);
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentL1(extended);
@@ -335,6 +441,9 @@ export default function a4pCodecTest() {
         const obj: Record<string, Object> = JSON.parse(serialized);
         const sign: Record<string, Object> = obj['sign'] as Record<string, Object>;
         sign['extra'] = 'value';
+        // Back into canonical order, so the order check stays quiet and
+        // the closed field set rejects the extra field.
+        obj['sign'] = sortedKeysCopy(sign);
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentL1(JSON.stringify(obj));
@@ -343,13 +452,16 @@ export default function a4pCodecTest() {
 
       it('deserialize_fails_whenConstraintsCarryUnknownField', 0, () => {
         // A close-but-wrong constraint name must not slip through as an
-        // ignored extra: unknown fields are rejected at every level.
+        // ignored extra: unknown fields are rejected at every level. The
+        // mutated constraints object is re-sorted so the order check
+        // stays quiet and the closed field set does the rejecting.
         const l1 = createL1();
         const serialized = A4pCodec.serializeIntentL1(l1);
         const obj: Record<string, Object> = JSON.parse(serialized);
         const si: Record<string, Object> = obj['structuredIntent'] as Record<string, Object>;
         const constraints: Record<string, Object> = si['constraints'] as Record<string, Object>;
         constraints['maxAmount'] = 1;
+        si['constraints'] = sortedKeysCopy(constraints);
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentL1(JSON.stringify(obj));
@@ -468,17 +580,48 @@ export default function a4pCodecTest() {
         });
       });
 
-      it('deserialize_combinesEscapedSurrogatePair', 0, () => {
-        // A supplementary code point spelled as an escaped surrogate pair
-        // is one character: the two escapes must combine into it.
+      it('deserialize_fails_whenEscapeSpellingNonCanonical', 0, () => {
+        // The canonical form spells each character exactly one way — \",
+        // \\, \b, \f, \n, \r, \t, lowercase \u00xx for the remaining
+        // control characters below 0x20, and every other character raw —
+        // and the input must be those exact bytes, matching the Java
+        // SDK, which accepts a document only when it equals its own
+        // canonical re-serialization. Any other spelling of a character
+        // is rejected rather than silently re-canonicalized.
         const l1 = createL1();
         const serialized = A4pCodec.serializeIntentL1(l1);
-        const escaped: string =
-          serialized.replace('"intentId":"test-intent-001"', '"intentId":"\\ud83d\\ude00"');
+        const withId = (value: string): string =>
+          serialized.replace('"intentId":"test-intent-001"', '"intentId":"' + value + '"');
 
-        const deserialized = A4pCodec.deserializeIntentL1(escaped);
+        // The boundary of the rule: a canonical \u escape — a control
+        // character with no short spelling, lowercase hex — parses.
+        const canonical = A4pCodec.deserializeIntentL1(withId('a\\u0001b'));
+        expect(canonical.intentId).assertEqual('a\u0001b');
 
-        expect(deserialized.intentId).assertEqual('😀');
+        // The solidus escaped: the canonical form writes it raw.
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('a\\/b'));
+        });
+        // An ordinary character spelled via \u: the canonical form
+        // writes it raw.
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\\u0061bc'));
+        });
+        // A control character that has a short escape, spelled via \u:
+        // the canonical form writes \b for 0x08.
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('a\\u0008b'));
+        });
+        // Uppercase hex digits: the canonical form writes lowercase.
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('a\\u001Fb'));
+        });
+        // An astral character spelled as an escaped surrogate pair: the
+        // canonical form writes the code point raw, so the pair is a
+        // non-canonical spelling, not two halves to combine.
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL1(withId('\\ud83d\\ude00'));
+        });
       });
 
       it('deserialize_acceptsRawSurrogatePair', 0, () => {
@@ -667,7 +810,7 @@ export default function a4pCodecTest() {
 
       it('deserialize_fails_whenMissingUserIdentity', 0, () => {
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentL2('{"version":"1.0","intentL1":{}}');
+          A4pCodec.deserializeIntentL2('{"intentL1":{},"version":"1.0"}');
         });
       });
 
@@ -766,6 +909,31 @@ export default function a4pCodecTest() {
           .assertLarger(0);
       });
 
+      it('serialize_fails_whenNestingExceeds100Levels', 0, () => {
+        // The 100-level nesting limit is shared with the strict parser
+        // and the Java SDK (which enforces it on both directions): a
+        // value may sit at most 100 containers deep. signingEnv.device is
+        // a free-form object, so a deep chain there reaches the
+        // serializer through a fully validated intent. The device chain
+        // sits under two containers (root, signingEnv), so a chain of 98
+        // leaves its scalar exactly 100 deep and a chain of 99 one past
+        // the limit.
+        const l3 = createL3();
+
+        // At the limit the serialization succeeds — and its output is a
+        // document the strict parser accepts back.
+        l3.signingEnv.device = nestedChainObject(98);
+        const boundary: string = A4pCodec.serializeIntentL3(l3);
+        const restored = A4pCodec.deserializeIntentL3(boundary);
+        expect(A4pCodec.serializeIntentL3(restored)).assertEqual(boundary);
+
+        // One level deeper fails with the uniform serialization error.
+        l3.signingEnv.device = nestedChainObject(99);
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          A4pCodec.serializeIntentL3(l3);
+        });
+      });
+
       it('deserialize_success', 0, () => {
         const l3 = createL3();
         const serialized = A4pCodec.serializeIntentL3(l3);
@@ -802,7 +970,7 @@ export default function a4pCodecTest() {
 
       it('deserialize_fails_whenMissingSigningEnv', 0, () => {
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentL3('{"version":"1.0","intentL2":{}}');
+          A4pCodec.deserializeIntentL3('{"intentL2":{},"version":"1.0"}');
         });
       });
 
@@ -815,6 +983,32 @@ export default function a4pCodecTest() {
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentL3(JSON.stringify(obj));
+        });
+      });
+
+      it('deserialize_fails_whenNestingExceeds100Levels', 0, () => {
+        // The parser's side of the 100-level nesting limit (see
+        // serialize_fails_whenNestingExceeds100Levels): the Java SDK
+        // rejects documents nested deeper than 100 levels, so accepting
+        // them here would let the two SDKs disagree about the same
+        // bytes. The device chain sits under two containers (root,
+        // signingEnv), so a chain of 98 leaves its scalar exactly 100
+        // deep and a chain of 99 one past the limit.
+        const l3 = createL3();
+        const serialized = A4pCodec.serializeIntentL3(l3);
+        const withDeviceChain = (levels: number): string =>
+          serialized.replace('"device":{"model":"TestDevice","os":"HarmonyOS"}',
+            '"device":' + nestedChainJson(levels));
+
+        // At the limit the document parses, and the restored intent
+        // re-serializes to the exact input bytes.
+        const boundary: string = withDeviceChain(98);
+        const restored = A4pCodec.deserializeIntentL3(boundary);
+        expect(A4pCodec.serializeIntentL3(restored)).assertEqual(boundary);
+
+        // One level deeper is rejected by the strict parser.
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL3(withDeviceChain(99));
         });
       });
 
@@ -971,7 +1165,7 @@ export default function a4pCodecTest() {
       it('deserialize_fails_whenMissingAuthorizedIntent', 0, () => {
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentExecutionContext(
-            '{"version":"1.0","intentId":"test","status":"ACTIVE"}');
+            '{"intentId":"test","status":"ACTIVE","version":"1.0"}');
         });
       });
 
@@ -1053,6 +1247,9 @@ export default function a4pCodecTest() {
         const obj: Record<string, Object> = JSON.parse(serialized);
         const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
         executions[0]['completedAt'] = 1;
+        // Back into canonical order, so the order check stays quiet and
+        // the record-shape validation does the rejecting.
+        executions[0] = sortedKeysCopy(executions[0]);
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
@@ -1098,6 +1295,9 @@ export default function a4pCodecTest() {
         const obj: Record<string, Object> = JSON.parse(serialized);
         const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
         executions[0]['periodIndex'] = 0;
+        // Back into canonical order, so the order check stays quiet and
+        // the periodicity validation does the rejecting.
+        executions[0] = sortedKeysCopy(executions[0]);
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
@@ -1111,6 +1311,9 @@ export default function a4pCodecTest() {
         const obj: Record<string, Object> = JSON.parse(serialized);
         const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
         executions[0]['note'] = 'extra';
+        // Back into canonical order, so the order check stays quiet and
+        // the closed field set does the rejecting.
+        executions[0] = sortedKeysCopy(executions[0]);
 
         expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
@@ -1481,6 +1684,13 @@ export default function a4pCodecTest() {
         expect(jc).assertContain('"leftPeriodExecutionCount":10');
         expect(jc).assertContain('"leftExecutionCount":10');
         expect(jc).assertContain('"leftAmount":500000');
+        // revokedTime is stamped by revokeIntent:
+        // absent on the ACTIVE form, present on the wire of the revoked one.
+        expect(jc.indexOf('"revokedTime"')).assertEqual(-1);
+        const revoked: IntentExecutionContext = A4p.revokeIntent(ctx, now + 4000);
+        const jr: string = A4pCodec.serializeIntentExecutionContext(revoked);
+        expect(jr).assertContain('"status":"REVOKED"');
+        expect(jr).assertContain('"revokedTime":1700000004000');
       });
     });
   });
