@@ -339,7 +339,7 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 ```
 
 **效果**：先校验无在用实例（**主键关联优先**：实例行带 `image_name` 时按 `image_name + version` 匹配；无 `image_name` 的存量行退回 `framework + framework_version` 匹配，方向保守）-> 删镜像仓文件 -> 删条目（删的是默认版本则把最新版补为默认）。
-**错误**：仍有在用实例 -> `409 {"detail":"image opencode@v0.2.0 still has N in-use instance(s); cannot deregister"}`。
+**错误**：仍有在用实例 -> `409 {"detail":{"code":"image_in_use","detail":"image opencode@v0.2.0 still has N in-use instance(s); cannot deregister","instances":[...]}}`。
 
 **数据库验证**：
 ```bash
@@ -933,7 +933,7 @@ curl -X POST http://127.0.0.1:8000/api/instances \
 
 # 3. 在用校验（主键关联）：镜像注销被拦
 curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
-# 预期：409 image_in_use
+# 预期：409 {"detail":{"code":"image_in_use","detail":"...","instances":["<service_id>", ...]}}
 
 # 4. 删除（模式 B）：先元戎后条目
 curl -X DELETE 'http://127.0.0.1:8000/api/instances/user-01+opencode?with_runtime=true' \
@@ -955,7 +955,7 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 |------|------|--------|
 | `400` | 注册镜像 spec.rootfs.imageurl 缺失 / 镜像 PATCH 一个可改字段都不给 / PATCH status 不在 运行/停止/异常 枚举 / 元戎客户端模式下，创建入参非法（name 无 `+`、workspace 非绝对路径、缺 version、runtime_spec 缺 runtime 或 rootfs.imageurl、无法判模式） | `{"detail":"..."}` |
 | `404` | 取不存在的 name launch-spec / PATCH 不存在的 service_id / 调已移除的节点心跳 `/api/nodes/{node}/heartbeat` 或 `/api/lease-config` | `{"detail":"..."}` |
-| `409` | 注销在用镜像 | `{"code":"image_in_use","detail":"...","instances":[...]}` |
+| `409` | 注销在用镜像 | `{"detail":{"code":"image_in_use","detail":"...","instances":[...]}}` |
 | `409` | 同 service_id 有在途创建 / 删除（实例模式 B，含 DELETE 单个抢锁超时；ALL 批量不整体 409、逐条记 error） | `{"detail":{"code":"in_progress","detail":"..."}}` |
 | `501` | 模式 B 请求（POST 带 runtime_spec / DELETE with_runtime=true）但注册中心未配置元戎连接 | `{"detail":{"code":"runtime_not_configured","detail":"..."}}` |
 | `502` | 元戎创建 / 删除失败（外部依赖，含元戎侧同名实例冲突透传）；注销镜像时镜像仓删除接口失败 | `{"detail":{"code":"yuanrong_failed","detail":"..."}}` 或 `{"detail":"..."}` |
@@ -963,4 +963,4 @@ curl -X DELETE http://127.0.0.1:8000/api/images/opencode/v0.2.0
 
 > `401` / `403` 鉴权错误不在 730 范围（不启鉴权），后续版本启用 `auth/` 模块后补充。
 > 注：`/api/nodes/{node}/heartbeat` 与 `/api/lease-config` 已移除，调用返回 `404`。
-> 模式 B 错误体的 `detail` 为对象 `{"code","detail"}`（FastAPI 包装在顶层 `detail` 下）；模式 A / 镜像侧错误体 `detail` 为字符串。
+> 结构化错误体的字段统一由 FastAPI 包装在顶层 `detail` 下（即 `{"detail":{"code","detail",...}}`），不会平铺到顶层：模式 B 为 `{"code","detail"}`；镜像注销在用为 `{"code":"image_in_use","detail","instances"}`。模式 A / 镜像侧其余错误体 `detail` 为字符串。
