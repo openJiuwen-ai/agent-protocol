@@ -9,7 +9,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from e2a.message import ReqMethod
-from e2a.e2a.constants import (
+from e2a.constants import (
     E2A_RESPONSE_KIND_ACP_OUTPUT_REQUEST,
     E2A_RESPONSE_KIND_CRON,
     E2A_RESPONSE_KIND_PLAN_APPROVAL_REQUIRED,
@@ -21,7 +21,7 @@ from e2a.e2a.constants import (
     E2A_RESPONSE_STATUS_SUCCEEDED,
     E2A_SOURCE_PROTOCOL_E2A,
 )
-from e2a.e2a.models import (
+from e2a.models import (
     E2AEnvelope,
     E2A_PROTOCOL_VERSION,
     E2AProvenance,
@@ -31,7 +31,7 @@ from e2a.e2a.models import (
 )
 
 if TYPE_CHECKING:
-    from e2a.e2a.agent_models import AgentResponse, AgentResponseChunk
+    from e2a.agent_models import AgentResponse, AgentResponseChunk
     # Message is only needed for type annotations in this module.
     Message = Any
 
@@ -285,7 +285,7 @@ def e2a_response_from_agent_response(
 
     非流式完整响应恒为 ``is_final=True``、``sequence`` 默认 0。
     """
-    from e2a.e2a.agent_models import AgentResponse as AgentResponseCls
+    from e2a.agent_models import AgentResponse as AgentResponseCls
 
     if not isinstance(resp, AgentResponseCls):
         raise TypeError("resp must be AgentResponse")
@@ -293,7 +293,7 @@ def e2a_response_from_agent_response(
     ts = timestamp or utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="e2a.e2a.gateway_normalize:e2a_response_from_agent_response",
+        converter="e2a.gateway_normalize:e2a_response_from_agent_response",
         converted_at=ts,
         details={"kind": "legacy_agent_response", "ok": bool(resp.ok)},
     )
@@ -349,7 +349,7 @@ def e2a_response_from_agent_chunk(
     - 终止帧（如 ``payload == {\"is_complete\": true}``）：``e2a.complete``。
     - ``chat.delta``：按 ``source_chunk_type`` 映射 ``body.delta_kind``（``llm_reasoning`` → ``reasoning``）。
     """
-    from e2a.e2a.agent_models import AgentResponseChunk as AgentResponseChunkCls
+    from e2a.agent_models import AgentResponseChunk as AgentResponseChunkCls
 
     if not isinstance(chunk, AgentResponseChunkCls):
         raise TypeError("chunk must be AgentResponseChunk")
@@ -357,7 +357,7 @@ def e2a_response_from_agent_chunk(
     ts = timestamp or utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="e2a.e2a.gateway_normalize:e2a_response_from_agent_chunk",
+        converter="e2a.gateway_normalize:e2a_response_from_agent_chunk",
         converted_at=ts,
         details={"kind": "legacy_agent_response_chunk", "is_complete": chunk.is_complete},
     )
@@ -478,7 +478,7 @@ def e2a_response_to_agent_response(e2a: E2AResponse) -> "AgentResponse":
 
     仅处理网关 unary 常见 ``response_kind``：``e2a.complete``、``e2a.error``；其它 kind 抛 ``ValueError``。
     """
-    from e2a.e2a.agent_models import AgentResponse
+    from e2a.agent_models import AgentResponse
 
     rid = str(e2a.request_id or "")
     ch = str(e2a.channel or "")
@@ -527,7 +527,7 @@ def e2a_response_to_agent_chunk(e2a: E2AResponse) -> "AgentResponseChunk":
 
     覆盖：流式 ``e2a.chunk``、终止 ``e2a.complete`` / ``e2a.error``（含 ``chat.error`` 形 ``details``）。
     """
-    from e2a.e2a.agent_models import AgentResponseChunk
+    from e2a.agent_models import AgentResponseChunk
 
     rid = str(e2a.request_id or "")
     ch = str(e2a.channel or "")
