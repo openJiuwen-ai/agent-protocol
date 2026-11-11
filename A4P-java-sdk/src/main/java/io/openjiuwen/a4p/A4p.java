@@ -55,10 +55,10 @@ public final class A4p {
     private A4p() {}
 
     /**
-     * Validates a creation request, requires now at or before validUntil, and signs L1 with the agent key.
+     * Validates a creation request and signs L1 with the agent key.
      * Generates a UUID when intentId is omitted. The agent must filter sensitive conversation data
      * and enforce conversation length limits before calling this method.
-     * Uses the supplied evaluation instant.
+     * Uses now as the L1 timestamp.
      * @param request creation request including the conversation, summary and structured intent
      * @param agentSigner agent signing callback
      * @param now non-negative Unix epoch milliseconds within the safe integer range
@@ -68,8 +68,6 @@ public final class A4p {
         return A4pResult.capture(() -> {
             Validation.integer(now, false);
             Validation.request(request);
-            // Require now at or before validUntil.
-            Validation.timeAtOrBefore(now, PaymentProfile.constraints(request.structuredIntent()).validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
             String intentId = request.intentId() == null ? UUID.randomUUID().toString() : request.intentId();
             IntentL1 unsigned = new IntentL1(PROTOCOL_VERSION, intentId, request.intentConversation(),
                     request.intentSummary(), request.structuredIntent(), now, null);
