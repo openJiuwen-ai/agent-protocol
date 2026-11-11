@@ -283,6 +283,6 @@ class CodecTest {
                 consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"ACTIVE\"")));
         // REVOKED and EXPIRED are reachable whatever the ledger holds.
         assertEquals(IntentExecutionStatus.REVOKED, ok(codec.deserializeIntentExecutionContext(
-                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\""))).status());
+                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\",\"revokedTime\":20000"))).status());
     }
 }

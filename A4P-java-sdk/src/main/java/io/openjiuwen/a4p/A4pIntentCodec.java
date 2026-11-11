@@ -29,7 +29,7 @@ public class A4pIntentCodec {
      * @param activatedTime activation instant in Unix epoch milliseconds
      */
     record ContextJson(String version, String intentId, IntentL3 authorizedIntent, IntentExecutionStatus status,
-                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime) {}
+                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime, Long revokedTime) {}
 
     /**
      * Represents a persisted execution record; boxed reservedAt allows missing timestamps to be rejected.
@@ -121,6 +121,9 @@ public class A4pIntentCodec {
             fields.put("intentId", intentExecutionContext.intentId());
             fields.put("authorizedIntent", intentExecutionContext.authorizedIntent());
             fields.put("activatedTime", intentExecutionContext.activatedTime());
+            if (intentExecutionContext.revokedTime() != null) {
+                fields.put("revokedTime", intentExecutionContext.revokedTime());
+            }
             fields.put("status", intentExecutionContext.status());
             fields.put("executionInfo", intentExecutionContext.executionInfo());
             fields.put("executions", intentExecutionContext.executions());
@@ -170,7 +173,12 @@ public class A4pIntentCodec {
                     record.completedAt(), record.canceledAt()), order));
         }
         Long period = period(wire.executionInfo(), PaymentProfile.constraints(intent.structuredIntent()));
-        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime());
+        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime(), wire.revokedTime());
+        if (wire.status() == IntentExecutionStatus.REVOKED) {
+            Validation.integer(wire.revokedTime(), false);
+        } else {
+            Validation.require(wire.revokedTime() == null, A4P_INVALID_PARAMETER, "Revocation time must be absent unless the intent is revoked");
+        }
         Validation.ledger(context);
         // executionInfo is derived state, so it must match what the restored ledger yields.
         Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())), A4P_INVALID_PARAMETER, "Serialized execution info does not match the restored ledger");
