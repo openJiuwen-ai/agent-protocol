@@ -278,6 +278,9 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
   时间戳（`reservedAt`、`completedAt`、`canceledAt`）保留单调性与状态绑定校验；
   `activatedTime`、`revokedTime` 与链上各层时间戳仅校验为非负整数，不做先后顺序或
   状态绑定检查。
+- 容器嵌套超过 100 层或存在循环引用时，以 A4P 错误码失败而不是抛出原生 `RangeError`，
+  与 Java 移植版的上限一致：生命周期 API 校验 `signingEnv` 时为 `A4P_INVALID_PARAMETER`，
+  反序列化的文档中出现时为 `A4P_DESERIALIZE_FAIL`，序列化时为 `A4P_SERIALIZE_FAIL`。
 - context 操作无同步保护：仅在 ArkTS 单线程运行时中安全，不覆盖多进程或各自独立激活的
   副本。
 

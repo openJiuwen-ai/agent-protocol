@@ -322,6 +322,11 @@ Protocol compatibility is governed by the `version` field, not by the HAR versio
   (`reservedAt`, `completedAt`, `canceledAt`) keep their monotonic and status-bound
   validation; `activatedTime`, `revokedTime` and the chain's timestamps are validated
   as non-negative integers only, never ordered or status-bound.
+- Container nesting deeper than 100 levels or a cyclic reference fails with an A4P
+  error code instead of a raw `RangeError`, matching the Java port's bound:
+  `A4P_INVALID_PARAMETER` from the lifecycle APIs' `signingEnv` check,
+  `A4P_DESERIALIZE_FAIL` when a deserialized document carries it, and
+  `A4P_SERIALIZE_FAIL` during serialization.
 - Context operations are unsynchronized: safe in the single-threaded ArkTS runtime
   only, not across processes or independently activated copies.
 

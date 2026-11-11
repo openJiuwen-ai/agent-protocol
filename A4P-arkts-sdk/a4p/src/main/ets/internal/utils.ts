@@ -204,6 +204,14 @@ export function decodeUtf8(bytes: Uint8Array): string {
 }
 
 /**
+ * Maximum container nesting depth accepted by the recursive walkers, the
+ * same bound the Java port's canonical normalizer enforces. Deeper or
+ * cyclic input must fail with an A4P error code instead of exhausting the
+ * call stack with a raw RangeError.
+ */
+export const MAX_NESTING_DEPTH: number = 100;
+
+/**
  * Serializes a value to canonical JSON: sorted keys, no whitespace,
  * integers only, undefined and null property values omitted (a null
  * optional field is an absent field in the canonical form — a "key":null
@@ -212,9 +220,24 @@ export function decodeUtf8(bytes: Uint8Array): string {
  * strict parser rejects explicit nulls at every value position.
  * @param value - The value to serialize (plain objects, arrays, primitives)
  * @returns The canonical JSON string
- * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, or values with no JSON spelling (bigint, function, symbol)
+ * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, values with no JSON spelling (bigint, function, symbol), cyclic references, or nesting deeper than MAX_NESTING_DEPTH
  */
 export function canonicalStringify(value: Object): string {
+  return stringifyNode(value, new Set<Object>(), 0);
+}
+
+/**
+ * Recursive step of canonicalStringify.
+ * @param value - The value to serialize
+ * @param ancestors - Containers on the current path, used to detect cycles
+ * @param depth - Nesting depth of value below the root
+ * @returns The canonical JSON string
+ */
+function stringifyNode(value: Object, ancestors: Set<Object>, depth: number): string {
+  if (depth > MAX_NESTING_DEPTH) {
+    a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL,
+      'canonicalStringify nesting exceeds the maximum depth of ' + MAX_NESTING_DEPTH);
+  }
   // Null has no spelling the strict parser accepts back, and no validated
   // protocol object contains one — emitting "null" or "[null]" would
   // produce bytes this SDK cannot parse, so fail loudly instead.
@@ -243,10 +266,12 @@ export function canonicalStringify(value: Object): string {
     return escapeJsonString(value);
   }
   if (Array.isArray(value)) {
+    enterContainer(value, ancestors);
     const items: string[] = [];
     for (let i = 0; i < value.length; i++) {
-      items.push(canonicalStringify(value[i] as Object));
+      items.push(stringifyNode(value[i] as Object, ancestors, depth + 1));
     }
+    ancestors.delete(value);
     return '[' + items.join(',') + ']';
   }
   if (typeof value === 'object') {
@@ -264,6 +289,7 @@ export function canonicalStringify(value: Object): string {
     // keys mixing astral characters with BMP characters above U+D7FF,
     // so a code-point sort would diverge from the reference.
     const keys: string[] = Object.keys(value as Record<string, Object>).sort();
+    enterContainer(value, ancestors);
     const pairs: string[] = [];
     for (let i = 0; i < keys.length; i++) {
       const k: string = keys[i];
@@ -275,8 +301,9 @@ export function canonicalStringify(value: Object): string {
       if (v === undefined || v === null) {
         continue;
       }
-      pairs.push(escapeJsonString(k) + ':' + canonicalStringify(v));
+      pairs.push(escapeJsonString(k) + ':' + stringifyNode(v, ancestors, depth + 1));
     }
+    ancestors.delete(value);
     return '{' + pairs.join(',') + '}';
   }
   // bigint, function and symbol have no canonical JSON spelling:
@@ -284,6 +311,20 @@ export function canonicalStringify(value: Object): string {
   // loudly instead.
   a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL,
     'canonicalStringify does not support values of type ' + typeof value);
+}
+
+/**
+ * Records a container on the current serialization path; a container
+ * already on the path is a reference cycle with no finite JSON spelling.
+ * @param value - The array or plain object being entered
+ * @param ancestors - Containers on the current path
+ * @throws A4pError with A4P_SERIALIZE_FAIL when value is already on the path
+ */
+function enterContainer(value: Object, ancestors: Set<Object>): void {
+  if (ancestors.has(value)) {
+    a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL, 'canonicalStringify does not support cyclic references');
+  }
+  ancestors.add(value);
 }
 
 /** Escapes a string per JSON: quotes, backslash, and control characters. */

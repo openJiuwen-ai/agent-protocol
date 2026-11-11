@@ -406,6 +406,36 @@ export default function utilsTest() {
         const obj: Record<string, Object> = { '中': '文' };
         expect(canonicalStringify(obj as Object)).assertEqual('{"中":"文"}');
       });
+
+      it('fails_whenNestingExceedsMaxDepth', 0, () => {
+        // A value 100 levels below the root is accepted; one level more is
+        // rejected with an A4P code instead of a raw RangeError.
+        let accepted: Object = 1;
+        for (let i = 0; i < 100; i++) {
+          accepted = [accepted];
+        }
+        expect(canonicalStringify(accepted).length).assertLarger(0);
+
+        const rejected: Object[] = [accepted];
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(rejected as Object);
+        });
+      });
+
+      it('fails_whenReferenceIsCyclic', 0, () => {
+        const cyclic: Record<string, Object> = { 'a': 1 };
+        cyclic['self'] = cyclic;
+        expectThrows(A4pErrorCode.A4P_SERIALIZE_FAIL, () => {
+          canonicalStringify(cyclic as Object);
+        });
+      });
+
+      it('allowsSharedNonCyclicReferences', 0, () => {
+        // A container referenced twice without a cycle is serialized twice.
+        const shared: Record<string, Object> = { 'v': 1 };
+        const obj: Record<string, Object> = { 'a': shared, 'b': shared };
+        expect(canonicalStringify(obj as Object)).assertEqual('{"a":{"v":1},"b":{"v":1}}');
+      });
     });
 
     describe('toSignableBytes', () => {
