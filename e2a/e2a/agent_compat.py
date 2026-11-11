@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from e2a.e2a.agent_models import AgentRequest
-from e2a.e2a.gateway_normalize import E2A_INTERNAL_CONTEXT_KEY
-from e2a.e2a.models import E2AEnvelope
+from e2a.agent_models import AgentRequest
+from e2a.gateway_normalize import E2A_INTERNAL_CONTEXT_KEY
+from e2a.models import E2AEnvelope
 from e2a.message import ReqMethod
 
 logger = logging.getLogger(__name__)

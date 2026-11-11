@@ -7,8 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from e2a.e2a.agent_compat import e2a_to_agent_request
-from e2a.e2a.models import E2AEnvelope
+from e2a.agent_compat import e2a_to_agent_request
+from e2a.models import E2AEnvelope
 from e2a.message import ReqMethod
 
 

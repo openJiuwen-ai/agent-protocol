@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from e2a.e2a.gateway_normalize import (
+from e2a.gateway_normalize import (
     E2A_INTERNAL_CONTEXT_KEY,
     E2A_LEGACY_AGENT_REQUEST_KEY,
     e2a_from_agent_fields,

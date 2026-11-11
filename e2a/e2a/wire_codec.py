@@ -10,27 +10,27 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
-from e2a.e2a.constants import (
+from e2a.constants import (
     E2A_RESPONSE_KIND_E2A_ERROR,
     E2A_RESPONSE_STATUS_FAILED,
     E2A_WIRE_LEGACY_AGENT_CHUNK_KEY,
     E2A_WIRE_LEGACY_AGENT_RESPONSE_KEY,
 )
-from e2a.e2a.gateway_normalize import (
+from e2a.gateway_normalize import (
     e2a_response_from_agent_chunk,
     e2a_response_from_agent_response,
     e2a_response_to_agent_chunk,
     e2a_response_to_agent_response,
 )
-from e2a.e2a.constants import E2A_SOURCE_PROTOCOL_E2A
-from e2a.e2a.models import (
+from e2a.constants import E2A_SOURCE_PROTOCOL_E2A
+from e2a.models import (
     E2A_PROTOCOL_VERSION,
     E2AProvenance,
     E2AResponse,
     IdentityOrigin,
     utc_now_iso,
 )
-from e2a.e2a.agent_models import AgentResponse, AgentResponseChunk
+from e2a.agent_models import AgentResponse, AgentResponseChunk
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +364,7 @@ def _fallback_wire_unary_from_legacy(
     ts = utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="e2a.e2a.wire_codec:_fallback_wire_unary_from_legacy",
+        converter="e2a.wire_codec:_fallback_wire_unary_from_legacy",
         converted_at=ts,
         details={"error": str(exc), "kind": "wire_encode_fallback"},
     )
@@ -402,7 +402,7 @@ def _fallback_wire_chunk_from_legacy(
     ts = utc_now_iso()
     prov = E2AProvenance(
         source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-        converter="e2a.e2a.wire_codec:_fallback_wire_chunk_from_legacy",
+        converter="e2a.wire_codec:_fallback_wire_chunk_from_legacy",
         converted_at=ts,
         details={"error": str(exc), "kind": "wire_encode_chunk_fallback"},
     )
@@ -450,7 +450,7 @@ def encode_json_parse_error_wire(
         timestamp=ts,
         provenance=E2AProvenance(
             source_protocol=E2A_SOURCE_PROTOCOL_E2A,
-            converter="e2a.e2a.wire_codec:encode_json_parse_error_wire",
+            converter="e2a.wire_codec:encode_json_parse_error_wire",
             converted_at=ts,
             details={"kind": "json_parse_error"},
         ),

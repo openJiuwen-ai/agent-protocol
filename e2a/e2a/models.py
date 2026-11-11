@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from e2a.e2a.constants import (
+from e2a.constants import (
     E2A_RESPONSE_STATUS_IN_PROGRESS,
     E2A_SOURCE_PROTOCOL_A2A,
     E2A_SOURCE_PROTOCOL_ACP,

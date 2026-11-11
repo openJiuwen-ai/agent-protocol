@@ -8,9 +8,8 @@ SshAuthPort / CryptoProvider 等）、扩展基类（BaseExtension 及子类）�
 编解码逻辑，均由各仓实现侧持有一份副本。
 
 导出策略：各模块的公开常量与类型统一在顶层再导出（``from e2a
-import <NAME>`` 可用）；例外只有两处——``match_expressions`` 的函数名易与业务
-符号重名，经 ``e2a.match_expressions`` 访问；``e2a`` 子包按
-命名空间访问，不在顶层汇总。
+import <NAME>`` 可用）；例外只有一处——``match_expressions`` 的函数名易与业务
+符号重名，经 ``e2a.match_expressions`` 访问。
 
 模块边界：
 - ``channel_event``    通道契约（ChannelType 枚举）
@@ -32,8 +31,15 @@ import <NAME>`` 可用）；例外只有两处——``match_expressions`` 的函
 - ``sdk``              扩展 SDK 共享数据类（ApplicationPluginServices / 贡献类）
 - ``template_slots``   企业配置 template_ref 槽位（TemplateRefSlot / normalize_template_ref）
 - ``types``            ExtensionConfig / ExtensionMetadata 等通用数据类型
-- ``e2a``              E2A 协议数据结构（信封/响应/线协议模型/常量；经
-  ``e2a.e2a`` 子包命名空间访问，不在顶层汇总导出）
+- ``models``           E2A 信封/响应模型（E2AEnvelope / E2AResponse）
+- ``constants``        ACP/E2A 线协议常量
+- ``agent_models``     AgentRequest / AgentResponse 线协议类型
+- ``agent_compat``     AgentRequest 兼容转换
+- ``adapters``         ACP/A2A 与 E2A 信封互转
+- ``gateway_normalize`` 网关侧 E2A/Agent 归一化纯函数
+- ``wire_codec``       线上编解码
+- ``runtime_http_routes`` Runtime HTTP 路由表
+- ``acp``              ACP JSON-RPC / 会话更新转换
 """
 
 from __future__ import annotations
@@ -164,9 +170,99 @@ from e2a.template_slots import (
 )
 from e2a.types import ExtensionConfig, ExtensionMetadata
 
+from e2a.acp import (
+    AcpSessionUpdateState,
+    build_acp_final_text_update,
+    build_acp_initialize_result,
+    build_acp_prompt_result,
+    build_acp_session_update,
+    build_acp_usage_update,
+)
+from e2a.adapters import (
+    e2a_response_to_a2a_stream_payload,
+    e2a_response_to_acp_jsonrpc_response,
+    envelope_from_a2a_send_message,
+    envelope_from_acp_jsonrpc,
+    envelope_to_acp_jsonrpc_call,
+)
+from e2a.agent_compat import e2a_to_agent_request
+from e2a.agent_models import (
+    AgentRef,
+    AgentRequest,
+    AgentResponse,
+    AgentResponseChunk,
+    PermissionContext,
+)
+from e2a.constants import (
+    ACP_AGENT_TO_CLIENT_METHODS,
+    ACP_CLIENT_TO_AGENT_METHODS,
+    ACP_NOTIFICATION_NAMES,
+    ACP_SESSION_UPDATE_KINDS,
+    E2A_A2A_STREAM_BRANCHES,
+    E2A_RESPONSE_KINDS,
+    E2A_WIRE_LEGACY_AGENT_CHUNK_KEY,
+    E2A_WIRE_LEGACY_AGENT_RESPONSE_KEY,
+    E2A_WIRE_SERVER_PUSH_KEY,
+    E2A_RESPONSE_KIND_ACP_JSONRPC_ERROR,
+    E2A_RESPONSE_KIND_ACP_PROMPT_RESULT,
+    E2A_RESPONSE_KIND_ACP_SESSION_UPDATE,
+    E2A_RESPONSE_KIND_A2A_MESSAGE,
+    E2A_RESPONSE_KIND_A2A_STREAM_EVENT,
+    E2A_RESPONSE_KIND_A2A_TASK,
+    E2A_RESPONSE_KIND_E2A_CHUNK,
+    E2A_RESPONSE_KIND_E2A_COMPLETE,
+    E2A_RESPONSE_KIND_E2A_ERROR,
+    E2A_RESPONSE_KIND_EXT,
+    E2A_RESPONSE_STATUS_FAILED,
+    E2A_RESPONSE_STATUS_IN_PROGRESS,
+    E2A_RESPONSE_STATUS_SUCCEEDED,
+    E2A_SOURCE_PROTOCOL_A2A,
+    E2A_SOURCE_PROTOCOL_ACP,
+    E2A_SOURCE_PROTOCOL_E2A,
+)
+from e2a.gateway_normalize import (
+    E2A_FALLBACK_FAILED_KEY,
+    E2A_INTERNAL_CONTEXT_KEY,
+    E2A_LEGACY_AGENT_REQUEST_KEY,
+    MAX_LEGACY_AGENT_REQUEST_JSON_BYTES,
+    build_fallback_e2a,
+    channel_context_for_channel_reply,
+    e2a_from_agent_fields,
+    e2a_response_from_agent_chunk,
+    e2a_response_from_agent_response,
+    e2a_response_to_agent_chunk,
+    e2a_response_to_agent_response,
+    message_to_e2a,
+    message_to_e2a_or_fallback,
+    message_to_legacy_agent_dict,
+)
+from e2a.models import (
+    E2A_PROTOCOL_VERSION,
+    E2AAuth,
+    E2AEnvelope,
+    E2AFileRef,
+    E2AProvenance,
+    E2AResponse,
+    IdentityOrigin,
+    merge_params_to_acp_prompt,
+    utc_now_iso,
+)
+from e2a.wire_codec import (
+    encode_agent_chunk_for_wire,
+    encode_agent_response_for_wire,
+    encode_json_parse_error_wire,
+    is_e2a_response_wire_dict,
+    parse_agent_server_wire_chunk,
+    parse_agent_server_wire_unary,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
+    "ACP_AGENT_TO_CLIENT_METHODS",
+    "ACP_CLIENT_TO_AGENT_METHODS",
+    "ACP_NOTIFICATION_NAMES",
+    "ACP_SESSION_UPDATE_KINDS",
     "ASSET_ID_PREFIX",
     "ASSET_KINDS",
     "ASSET_KIND_AUDIO",
@@ -194,6 +290,11 @@ __all__ = [
     "AUDIT_LIFTED_FIELDS",
     "AUDIT_RSPCD_FAILURE",
     "AUDIT_RSPCD_SUCCESS",
+    "AcpSessionUpdateState",
+    "AgentRef",
+    "AgentRequest",
+    "AgentResponse",
+    "AgentResponseChunk",
     "AgentServerChatHookContext",
     "AgentServerHookEvents",
     "ApplicationPluginServices",
@@ -208,11 +309,41 @@ __all__ = [
     "CronTargetChannel",
     "DEFAULT_AGENT_LOAD_SLOTS",
     "DEFAULT_WEB_WORK_MODE",
+    "E2AAuth",
+    "E2AEnvelope",
+    "E2AFileRef",
+    "E2AProvenance",
+    "E2AResponse",
+    "E2A_A2A_STREAM_BRANCHES",
+    "E2A_FALLBACK_FAILED_KEY",
+    "E2A_INTERNAL_CONTEXT_KEY",
+    "E2A_LEGACY_AGENT_REQUEST_KEY",
+    "E2A_PROTOCOL_VERSION",
+    "E2A_RESPONSE_KINDS",
+    "E2A_RESPONSE_KIND_A2A_MESSAGE",
+    "E2A_RESPONSE_KIND_A2A_STREAM_EVENT",
+    "E2A_RESPONSE_KIND_A2A_TASK",
+    "E2A_RESPONSE_KIND_ACP_JSONRPC_ERROR",
+    "E2A_RESPONSE_KIND_ACP_PROMPT_RESULT",
+    "E2A_RESPONSE_KIND_ACP_SESSION_UPDATE",
+    "E2A_RESPONSE_KIND_E2A_CHUNK",
+    "E2A_RESPONSE_KIND_E2A_COMPLETE",
+    "E2A_RESPONSE_KIND_E2A_ERROR",
+    "E2A_RESPONSE_KIND_EXT",
+    "E2A_RESPONSE_STATUS_FAILED",
+    "E2A_RESPONSE_STATUS_IN_PROGRESS",
+    "E2A_RESPONSE_STATUS_SUCCEEDED",
+    "E2A_SOURCE_PROTOCOL_A2A",
+    "E2A_SOURCE_PROTOCOL_ACP",
+    "E2A_SOURCE_PROTOCOL_E2A",
+    "E2A_WIRE_LEGACY_AGENT_CHUNK_KEY",
+    "E2A_WIRE_LEGACY_AGENT_RESPONSE_KEY",
+    "E2A_WIRE_SERVER_PUSH_KEY",
     "EXPERT_TEMPLATE_HTTP_ROUTES",
+    "EventType",
     "ExpertHttpRoute",
     "ExtensionConfig",
     "ExtensionMetadata",
-    "EventType",
     "FrontendContribution",
     "GATEWAY_CRON_JOBS_HASH_TEMPLATE",
     "GATEWAY_CRON_LIVE_CHANNEL_TEMPLATE",
@@ -224,10 +355,12 @@ __all__ = [
     "GatewayChatHookContext",
     "GatewayHookEvents",
     "HIDDEN_HUB_ASSET_IDS",
+    "IdentityOrigin",
     "LOGGING_CONFIG_SECTION",
     "LOGGING_LEVEL_FIELDS",
     "LOG_CONFIG_OP_DELETE",
     "LOG_CONFIG_OP_FIELD",
+    "MAX_LEGACY_AGENT_REQUEST_JSON_BYTES",
     "MAX_PACKAGE_ALLOWLIST_JSON_BYTES",
     "MCP_REGISTRY_PROVIDER_DOMAIN",
     "MODEL_SLOT_KEYS",
@@ -248,6 +381,7 @@ __all__ = [
     "PROVIDER_DOMAIN_SESSION_METADATA",
     "PROVIDER_DOMAIN_TEAM_BINDING_STORE",
     "PROVIDER_DOMAIN_TEAM_ENTITY_STORE",
+    "PermissionContext",
     "REDIS_KEY_PREFIX_SEPARATOR",
     "ROUTING_METADATA_KEY",
     "ReqMethod",
@@ -266,13 +400,42 @@ __all__ = [
     "__version__",
     "apply_allowlist_to_envelope",
     "apply_routing_metadata",
+    "build_acp_final_text_update",
+    "build_acp_initialize_result",
+    "build_acp_prompt_result",
+    "build_acp_session_update",
+    "build_acp_usage_update",
+    "build_fallback_e2a",
     "canonical_kind",
+    "channel_context_for_channel_reply",
     "decode_package_allowlist_header",
+    "e2a_from_agent_fields",
+    "e2a_response_from_agent_chunk",
+    "e2a_response_from_agent_response",
+    "e2a_response_to_a2a_stream_payload",
+    "e2a_response_to_acp_jsonrpc_response",
+    "e2a_response_to_agent_chunk",
+    "e2a_response_to_agent_response",
+    "e2a_to_agent_request",
+    "encode_agent_chunk_for_wire",
+    "encode_agent_response_for_wire",
+    "encode_json_parse_error_wire",
     "encode_package_allowlist_header",
     "ensure_packages_fit",
+    "envelope_from_a2a_send_message",
+    "envelope_from_acp_jsonrpc",
+    "envelope_to_acp_jsonrpc_call",
     "expert_http_routes",
+    "is_e2a_response_wire_dict",
+    "merge_params_to_acp_prompt",
+    "message_to_e2a",
+    "message_to_e2a_or_fallback",
+    "message_to_legacy_agent_dict",
     "normalize_packages",
     "normalize_routing_identity",
     "normalize_template_ref",
+    "parse_agent_server_wire_chunk",
+    "parse_agent_server_wire_unary",
+    "utc_now_iso",
     "web_routing_identity",
 ]
