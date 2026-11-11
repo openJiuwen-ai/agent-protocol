@@ -10,7 +10,7 @@ jiuwenswarm 侧 ``common/e2a`` 现为指向本包的转发别名（过渡形态�
   均在本包内，原"依赖 jiuwenswarm 侧实现"的理由不再成立）；两仓
   ``common/e2a`` 均改为本模块的转发别名，并在本包顶层汇总导出。
 - ``AgentResponse`` / ``AgentResponseChunk`` 线协议类型定义在
-  ``openjiuwen_protocol.e2a.agent_models``（原 jiuwenswarm ``schema.agent`` 的
+  ``e2a.e2a.agent_models``（原 jiuwenswarm ``schema.agent`` 的
   线协议部分；jiuwenswarm 侧 ``schema/agent.py`` 为其转发别名）。
 - ``acp.protocol.build_acp_initialize_result`` 的 agent 版本号改由调用方
   ``agent_version=`` 注入；``acp.session_updates`` 的事件分发改按事件名
@@ -19,7 +19,7 @@ jiuwenswarm 侧 ``common/e2a`` 现为指向本包的转发别名（过渡形态�
   注入（未注入时返回等价 dict），不再 import jiuwenswarm ``Message``。
 """
 
-from openjiuwen_protocol.e2a.acp import (
+from e2a.e2a.acp import (
     AcpSessionUpdateState,
     build_acp_final_text_update,
     build_acp_initialize_result,
@@ -27,22 +27,22 @@ from openjiuwen_protocol.e2a.acp import (
     build_acp_session_update,
     build_acp_usage_update,
 )
-from openjiuwen_protocol.e2a.adapters import (
+from e2a.e2a.adapters import (
     e2a_response_to_a2a_stream_payload,
     e2a_response_to_acp_jsonrpc_response,
     envelope_from_a2a_send_message,
     envelope_from_acp_jsonrpc,
     envelope_to_acp_jsonrpc_call,
 )
-from openjiuwen_protocol.e2a.agent_compat import e2a_to_agent_request
-from openjiuwen_protocol.e2a.agent_models import (
+from e2a.e2a.agent_compat import e2a_to_agent_request
+from e2a.e2a.agent_models import (
     AgentRef,
     AgentRequest,
     AgentResponse,
     AgentResponseChunk,
     PermissionContext,
 )
-from openjiuwen_protocol.e2a.constants import (
+from e2a.e2a.constants import (
     ACP_AGENT_TO_CLIENT_METHODS,
     ACP_CLIENT_TO_AGENT_METHODS,
     ACP_NOTIFICATION_NAMES,
@@ -69,7 +69,7 @@ from openjiuwen_protocol.e2a.constants import (
     E2A_SOURCE_PROTOCOL_ACP,
     E2A_SOURCE_PROTOCOL_E2A,
 )
-from openjiuwen_protocol.e2a.gateway_normalize import (
+from e2a.e2a.gateway_normalize import (
     E2A_FALLBACK_FAILED_KEY,
     E2A_INTERNAL_CONTEXT_KEY,
     E2A_LEGACY_AGENT_REQUEST_KEY,
@@ -85,7 +85,7 @@ from openjiuwen_protocol.e2a.gateway_normalize import (
     message_to_e2a_or_fallback,
     message_to_legacy_agent_dict,
 )
-from openjiuwen_protocol.e2a.models import (
+from e2a.e2a.models import (
     E2A_PROTOCOL_VERSION,
     E2AAuth,
     E2AEnvelope,
@@ -96,7 +96,7 @@ from openjiuwen_protocol.e2a.models import (
     merge_params_to_acp_prompt,
     utc_now_iso,
 )
-from openjiuwen_protocol.e2a.wire_codec import (
+from e2a.e2a.wire_codec import (
     encode_agent_chunk_for_wire,
     encode_agent_response_for_wire,
     encode_json_parse_error_wire,

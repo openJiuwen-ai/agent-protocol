@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from openjiuwen_protocol.message import ReqMethod
+from e2a.message import ReqMethod
 
 
 @dataclass
@@ -100,7 +100,7 @@ class AgentRequest:
     """Agent 请求（Gateway → AgentServer）.
 
     ``req_method`` 类型为 ``ReqMethod | str | None``，与 ``Message.req_method``
-    一致：已知方法使用 ``openjiuwen_protocol.message.ReqMethod``，扩展方法保留
+    一致：已知方法使用 ``e2a.message.ReqMethod``，扩展方法保留
     原始字符串，``None`` 表示未指定方法。
     """
 
