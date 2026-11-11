@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-from openjiuwen_protocol.e2a.runtime_http_routes import (
+from e2a.runtime_http_routes import (
     RUNTIME_HTTP_API_PREFIX,
     RUNTIME_HTTP_CHAT_ROUTES,
     RUNTIME_HTTP_ROUTES,

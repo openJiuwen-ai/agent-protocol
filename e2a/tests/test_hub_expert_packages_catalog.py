@@ -7,9 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from openjiuwen_protocol.e2a.agent_compat import e2a_to_agent_request
-from openjiuwen_protocol.e2a.models import E2AEnvelope
-from openjiuwen_protocol.message import ReqMethod
+from e2a.agent_compat import e2a_to_agent_request
+from e2a.models import E2AEnvelope
+from e2a.message import ReqMethod
 
 
 def test_hub_catalog_is_available_in_a_clean_protocol_only_process():
@@ -17,7 +17,7 @@ def test_hub_catalog_is_available_in_a_clean_protocol_only_process():
     script = (
         "import sys; "
         f"sys.path.insert(0, {str(package_root)!r}); "
-        "from openjiuwen_protocol.message import ReqMethod; "
+        "from e2a.message import ReqMethod; "
         "assert ReqMethod('hub.expert_packages.catalog') is ReqMethod.HUB_EXPERT_PACKAGES_CATALOG; "
         "assert not any(name.split('.')[0] in ('jiuwenswarm', 'gateway') for name in sys.modules)"
     )

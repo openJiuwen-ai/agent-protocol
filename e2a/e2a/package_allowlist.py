@@ -10,7 +10,7 @@ E2A 信封的 ``channel_context``，并通过内部 HTTP 头转给 server；两�
 信封写入；``bind_request_subject`` / ``bind_outbound_allowlist`` 等 ContextVar
 状态，以及 ``allows`` 依赖的 Hub/市场包查找，均依赖具体仓的运行时，留在实现侧。
 ``match_expr`` 只做结构规范化（是否可求值由企业版准入层用
-``openjiuwen_protocol.match_expressions`` 校验），保证传输层不会因策略差异
+``e2a.match_expressions`` 校验），保证传输层不会因策略差异
 改变报文形状。
 
 **空名单语义（fail-closed）**：名单为空时，受控包（Hub/内置/resources）一律
