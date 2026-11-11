@@ -2,7 +2,7 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  */
 
-import { CreateIntentRequest, IntentIssueContext, VerificationResult, A4pErrorCode } from '../models/common';
+import { CreateIntentRequest, IntentIssueContext, VerificationResult, A4pErrorCode, PROTOCOL_VERSION } from '../models/common';
 import {
   IntentExecutionContext, IntentExecutionStatus, ExecutionStatus, ExecutionRecord, Execution
 } from '../models/execution';
@@ -18,15 +18,13 @@ import {
   computeCurrentPeriodIndex, recomputeAccounting, computeExecutionInfo, computeExecutionCount,
   computePeriodExecutionCount, computeAccumulatedAmount, periodRuleOf, PeriodRule
 } from '../internal/accounting';
-import { A4pValidationFailure } from '../internal/validation';
 import {
-  productMatches, validateCreateIntentRequest, validateIssueContext, validateNow,
-  validateSigningEnv, validateExecution, validateExecutionContext,
-  validateIntentL1, validateIntentL2, validateIntentL3, validateSignatureInfo
+  validateCreateIntentRequest, validateIssueContext, validateNow,
+  validateSigningEnv, validateExecution, validateIntentExecutionContext,
+  validateIntentL1, validateIntentL2, validateIntentL3, validateSignatureInfo,
+  checkChainVersions, enforceWhitelistScope, enforceTemplateMatch, A4pValidationFailure
 } from '../internal/validation';
 import { util } from '@kit.ArkTS';
-
-const PROTOCOL_VERSION: string = '1.0';
 
 /**
  * Throws the validation failure as an A4pError: the specific cause is
@@ -158,7 +156,7 @@ export namespace A4p {
    * intent's `timestamp` field and thereby covered by the signature. Unlike
    * the evaluation instant of the execution APIs it drives no decision —
    * creation applies no validity-window check; the window's upper bound is
-   * first judged at L3 signing (see signIntent) and the full window at
+   * first judged at L2 issuance (see issueIntent) and the full window at
    * reservation time. Defaults to the system clock; pass a fixed value in
    * tests to make the signed bytes reproducible. A provided `now` must be a
    * non-negative safe integer.
@@ -205,10 +203,12 @@ export namespace A4p {
    * `alg` to the resolved key type (see SignatureVerifier).
    *
    * `now` is the signing instant in epoch milliseconds (see createIntent).
-   * It must not be earlier than the embedded L1's `timestamp`: the issuance
-   * would violate the chain's monotonic timestamps, so it is rejected here
-   * instead of producing an L2 that every downstream validation (signIntent,
-   * activateIntent) would refuse.
+   * It is recorded as given: the L1/L2/L3 timestamps take no part in any
+   * monotonicity check. It must not be later than the intent's `validUntil`:
+   * the server cannot issue an intent whose validity window has already
+   * closed — every execution against it would be refused as expired — so a
+   * post-validUntil issuance instant is rejected here with
+   * A4P_TIMESTAMP_EXPIRED. It may be earlier than `validFrom`.
    * The embedded L1 and the three identities are deep copies — the caller's
    * objects are never aliased into the returned intent.
    * @param { IntentL1 } intentL1 - The Level 1 intent to verify and endorse.
@@ -221,6 +221,7 @@ export namespace A4p {
    * @throws { BusinessError } 1002 - Unsupported version.
    * @throws { BusinessError } 2001 - Signing failed.
    * @throws { BusinessError } 2002 - Verification failed.
+   * @throws { BusinessError } 3002 - Timestamp expired.
    * @throws { BusinessError } 5001 - Serialization failed.
    */
   export function issueIntent(intentL1: IntentL1, agentVerifier: SignatureVerifier, issueContext: IntentIssueContext,
@@ -234,15 +235,20 @@ export namespace A4p {
       a4pThrow(A4pErrorCode.A4P_UNSUPPORTED_VERSION, 'IntentL1 version ' + intentL1.version + ' is not supported');
     }
 
-    // The issuance stamp must not predate the intent it endorses: an L2
-    // stamped before its L1 violates the chain's monotonic timestamps and
-    // would be refused by every later step, so reject the skewed clock here,
-    // with the precise cause, instead of signing a dead-end L2. This covers
-    // the default clock too (a wall clock stepped back past the L1 stamp).
+    // Check order is part of the contract: structure and versions are
+    // judged before any clock verdict, so a malformed or mixed-version
+    // chain is reported as such even when its validity window has also
+    // lapsed.
     const timestamp: number = now !== undefined ? now : Date.now();
-    if (timestamp < intentL1.timestamp) {
-      a4pThrow(A4pErrorCode.A4P_INVALID_PARAMETER,
-        'Issuance timestamp ' + timestamp + ' is earlier than intentL1.timestamp ' + intentL1.timestamp);
+    // The issuance stamp may not fall past the validity window being
+    // endorsed: an L2 issued after validUntil could never lead to an
+    // executable intent (every reservation would be refused as expired),
+    // so the closed window is reported here. The window is not required
+    // to have opened yet (validFrom is not judged at issuance).
+    const validUntil: number = intentL1.structuredIntent.constraints.validUntil;
+    if (timestamp > validUntil) {
+      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_EXPIRED,
+        'Issuance timestamp ' + timestamp + ' is after validUntil ' + validUntil);
     }
 
     const l1Data: Uint8Array = toSignableBytes(intentL1);
@@ -273,14 +279,9 @@ export namespace A4p {
    * version: a mixed-version chain is signature-valid but semantically
    * unsupported and is rejected before the user signs it.
    * `now` is the signing instant in epoch milliseconds (see createIntent).
-   * It must not be earlier than the embedded L2's `timestamp`: the
-   * authorization would violate the chain's monotonic timestamps, so it is
-   * rejected here instead of producing an L3 that activateIntent (and every
-   * other receiver validating the chain) would refuse.
-   * It must not be later than the intent's `validUntil`: the user cannot
-   * authorize an intent whose validity window has already closed — every
-   * execution against it would be refused as expired — so a post-validUntil
-   * signing instant is rejected here instead of producing a dead-end L3.
+   * It is recorded as given: the L1/L2/L3 timestamps take no part in any
+   * monotonicity check, and signing judges no clock — in particular the
+   * validity window (`validUntil`) is not checked here.
    * The embedded L2 and the signing environment are deep copies — the
    * caller's objects are never aliased into the returned intent.
    * @param { IntentL2 } intentL2 - The Level 2 intent to verify and sign.
@@ -293,7 +294,6 @@ export namespace A4p {
    * @throws { BusinessError } 1002 - Unsupported version.
    * @throws { BusinessError } 2001 - Signing failed.
    * @throws { BusinessError } 2002 - Verification failed.
-   * @throws { BusinessError } 3002 - Timestamp expired.
    * @throws { BusinessError } 5001 - Serialization failed.
    */
   export function signIntent(intentL2: IntentL2, serverVerifier: SignatureVerifier, signingEnv: SigningEnv,
@@ -316,27 +316,7 @@ export namespace A4p {
         'IntentL1 version ' + intentL2.intentL1.version + ' is not supported');
     }
 
-    // Check order is part of the contract: structure and versions are
-    // judged before any clock verdict, so a malformed or mixed-version
-    // chain is reported as such even when its validity window has also
-    // lapsed.
-    // The user's signing stamp must not predate the issuance it authorizes
-    // (see issueIntent): reject the skewed clock here instead of signing a
-    // dead-end L3 that activation would always refuse.
     const timestamp: number = now !== undefined ? now : Date.now();
-    if (timestamp < intentL2.timestamp) {
-      a4pThrow(A4pErrorCode.A4P_INVALID_PARAMETER,
-        'Signing timestamp ' + timestamp + ' is earlier than intentL2.timestamp ' + intentL2.timestamp);
-    }
-    // Nor may the stamp fall past the validity window being authorized:
-    // an L3 signed after validUntil could never execute (every reservation
-    // would be refused as expired), so the closed window is reported here
-    // instead of at activation.
-    const constraints: PaymentConstraints = intentL2.intentL1.structuredIntent.constraints;
-    if (timestamp > constraints.validUntil) {
-      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_EXPIRED,
-        'Signing timestamp ' + timestamp + ' is after validUntil ' + constraints.validUntil);
-    }
 
     const l2Data: Uint8Array = toSignableBytes(intentL2);
     // validateIntentL2 guarantees sign is present (validateSignatureInfo
@@ -357,29 +337,6 @@ export namespace A4p {
   }
 
   /**
-   * Checks that the intent chain carries the protocol version at every
-   * level. A mixed-version chain is signature-valid but semantically
-   * unsupported and must be rejected.
-   * @param intentL3 - The Level 3 intent chain to check
-   * @returns A validation failure if any version mismatches, or null if all match
-   */
-  function checkChainVersions(intentL3: IntentL3): A4pValidationFailure | null {
-    if (intentL3.version != PROTOCOL_VERSION) {
-      return new A4pValidationFailure(A4pErrorCode.A4P_UNSUPPORTED_VERSION,
-        'IntentL3 version ' + intentL3.version + ' is not supported');
-    }
-    if (intentL3.intentL2.version != PROTOCOL_VERSION) {
-      return new A4pValidationFailure(A4pErrorCode.A4P_UNSUPPORTED_VERSION,
-        'IntentL2 version ' + intentL3.intentL2.version + ' is not supported');
-    }
-    if (intentL3.intentL2.intentL1.version != PROTOCOL_VERSION) {
-      return new A4pValidationFailure(A4pErrorCode.A4P_UNSUPPORTED_VERSION,
-        'IntentL1 version ' + intentL3.intentL2.intentL1.version + ' is not supported');
-    }
-    return null;
-  }
-
-  /**
    * Verifies the user's L3 signature and creates the execution context with
    * a frozen authorization snapshot. The full chain (embedded L2/L1,
    * identities, constraints, signingEnv) is structurally validated before
@@ -389,13 +346,10 @@ export namespace A4p {
    * `now` is the activation instant in epoch milliseconds: it fixes the
    * period figures (`periodIndex`, `leftPeriodExecutionCount`) of the
    * initial `executionInfo` snapshot for periodic intents, and is recorded
-   * as the context's `activatedTime` — the floor later reservations are
-   * judged against (createExecution rejects an earlier instant).
-   * Non-periodic intents derive no period figure from it. It must not be
-   * earlier than the L3's own `timestamp` — the chain's
-   * monotonic-timestamp rule (see issueIntent) applied to the activation
-   * step: no context can be created for an authorization that did not
-   * exist yet at that instant. It must not be later than the intent's
+   * as the context's `activatedTime`, which is not compared with any other
+   * timestamp.
+   * Non-periodic intents derive no period figure from it. It is not
+   * compared with the L3's own `timestamp`. It must not be later than the intent's
    * `validUntil`: an intent whose validity window has already closed can
    * no longer be activated — every execution against it would be refused
    * as expired — so no context is created for it (an intent not yet valid,
@@ -426,17 +380,7 @@ export namespace A4p {
     // judged before any clock verdict, so a malformed or mixed-version
     // chain is reported as such even when its validity window has also
     // lapsed.
-    // The activation instant must not predate the authorization it
-    // activates (the monotonic rule issueIntent/signIntent enforce for
-    // their stamps): a context created before the L3's signing timestamp
-    // would cover executions at instants the user had not signed at. This
-    // covers the default clock too (a wall clock stepped back past the L3
-    // stamp).
     const nowMs: number = now !== undefined ? now : Date.now();
-    if (nowMs < intentL3.timestamp) {
-      a4pThrow(A4pErrorCode.A4P_INVALID_PARAMETER,
-        'Activation timestamp ' + nowMs + ' is earlier than intentL3.timestamp ' + intentL3.timestamp);
-    }
     const constraints: PaymentConstraints = intentL3.intentL2.intentL1.structuredIntent.constraints;
     // Nor may it fall past the validity window: a context created after
     // validUntil could never reserve (every createExecution would be
@@ -537,132 +481,33 @@ export namespace A4p {
    * Revokes the intent: no new executions may be reserved; pending ones
    * can still complete or cancel.
    * `now` is the revocation instant in epoch milliseconds. It is validated
-   * but never recorded — the status flip carries no timestamp, so unlike
-   * the completion/cancellation floors this one guards no persisted
-   * field. Its reason is the protocol's own: the revocable object is the
-   * activated context, which exists only from `activatedTime` on, so an
-   * instant before it is refused (equality allowed). Beyond that floor
-   * the clock plays no role — the intent's validity window is
-   * deliberately not judged: revocation is an administrative kill-switch,
+   * but never recorded — the status flip carries no timestamp — and it is
+   * not compared with `activatedTime` or any other timestamp: the clock
+   * plays no role in revocation. In particular the intent's validity window
+   * is deliberately not judged: revocation is an administrative kill-switch,
    * and an intent whose window already closed is revoked rather than
-   * reported as expired. Defaults to the system clock. A provided `now`
-   * must be a non-negative safe integer.
+   * reported as expired. A provided `now` must be a non-negative safe
+   * integer.
    * @param { IntentExecutionContext } context - The execution context to revoke.
    * @param { number } now - Optional revocation instant in epoch milliseconds; defaults to Date.now().
    * @returns { IntentExecutionContext } The updated execution context with status set to REVOKED.
    * @throws { BusinessError } 1001 - Invalid parameter.
    * @throws { BusinessError } 3001 - Invalid status.
-   * @throws { BusinessError } 3003 - Timestamp too early.
    */
   export function revokeIntent(context: IntentExecutionContext, now?: number): IntentExecutionContext {
-    raise(validateExecutionContext(context));
+    raise(validateIntentExecutionContext(context));
     if (now !== undefined) {
       raise(validateNow(now));
     }
+    const nowMs: number = now !== undefined ? now : Date.now();
     if (context.status !== IntentExecutionStatus.ACTIVE) {
       a4pThrow(A4pErrorCode.A4P_INVALID_STATUS,
         'revokeIntent requires an active intent, current status: ' + context.status);
     }
 
-    const nowMs: number = now !== undefined ? now : Date.now();
-    // The revocation instant is floored by the context's creation: the
-    // revocable object exists only from activatedTime on. Unlike the
-    // completion/cancellation floors this guards no persisted field —
-    // the status flip carries no timestamp. Equality is allowed.
-    if (nowMs < context.activatedTime) {
-      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
-        'Revocation timestamp ' + nowMs + ' is earlier than activatedTime ' + context.activatedTime);
-    }
-
     context.status = IntentExecutionStatus.REVOKED;
+    context.revokedTime = nowMs;
     return context;
-  }
-
-  /**
-   * Enforces the authorization scope the user actually signed: every cart
-   * product must be on at least one whitelist group of the resource.
-   * @param context - The execution context carrying the authorized intent
-   * @param cartItems - The ordered cart items to validate against the authorized scope
-   * @returns A validation failure if the cart exceeds scope, or null if within scope
-   */
-  function enforceWhitelistScope(context: IntentExecutionContext, cartItems: CartItem[]): A4pValidationFailure | null {
-    const resources: ShoppingItems = context.authorizedIntent.intentL2.intentL1.structuredIntent.resources;
-    for (let i = 0; i < cartItems.length; i++) {
-      const item = cartItems[i];
-      const whitelisted: boolean = resources.itemsWhiteList.some(
-        (group: ItemWhiteList) => group.whiteList.some((p: Product) => productMatches(p, item.product)));
-      if (!whitelisted) {
-        return new A4pValidationFailure(A4pErrorCode.A4P_PRODUCT_NOT_AUTHORIZED,
-          'Cart product is not in the authorized whitelist: seller ' + item.product.seller.id +
-          ', sku ' + item.product.spusku.skuId);
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Enforces the order template the user actually signed. The resource is
-   * a template, not a budget: every AI_PAY execution's cart must carry
-   * exactly one cart item per whitelist group — same length, arrays in
-   * any order — with the item's product drawn from its group's whitelist
-   * (OR within a group, AND across groups) and its quantity exactly the
-   * group's quantity. Cumulative bounds across executions come from the
-   * intent's constraints (amount, count, period caps), not from the group
-   * quantities.
-   *
-   * Intent validation guarantees a product uniquely determines its group
-   * (no product in two groups, none twice within one group), so the first
-   * group matching a cart item is its group; a second cart item landing
-   * on an already-matched group, a shorter or longer cart, a quantity
-   * other than the group's, or an uncovered group all fail as
-   * A4P_CART_MISMATCH.
-   * @param context - The execution context carrying the authorized intent
-   * @param cartItems - The ordered cart items to validate against the order template
-   * @returns A validation failure if the cart does not match the template, or null if it does
-   */
-  function enforceTemplateMatch(context: IntentExecutionContext, cartItems: CartItem[]): A4pValidationFailure | null {
-    const groups: ItemWhiteList[] =
-      context.authorizedIntent.intentL2.intentL1.structuredIntent.resources.itemsWhiteList;
-    if (cartItems.length !== groups.length) {
-      return new A4pValidationFailure(A4pErrorCode.A4P_CART_MISMATCH,
-        'Cart has ' + cartItems.length + ' items but the authorized resource has ' + groups.length +
-        ' whitelist groups');
-    }
-    const matchedGroups: Set<number> = new Set<number>();
-    for (let i = 0; i < cartItems.length; i++) {
-      const item: CartItem = cartItems[i];
-      let groupIndex: number = -1;
-      for (let g = 0; g < groups.length; g++) {
-        if (groups[g].whiteList.some((p: Product) => productMatches(p, item.product))) {
-          groupIndex = g;
-          break;
-        }
-      }
-      if (groupIndex < 0) {
-        // Unreachable after enforceWhitelistScope (scope runs first);
-        // kept fail-closed for standalone use.
-        return new A4pValidationFailure(A4pErrorCode.A4P_PRODUCT_NOT_AUTHORIZED,
-          'Cart product is not in the authorized whitelist: seller ' + item.product.seller.id +
-          ', sku ' + item.product.spusku.skuId);
-      }
-      if (matchedGroups.has(groupIndex)) {
-        return new A4pValidationFailure(A4pErrorCode.A4P_CART_MISMATCH,
-          'Two cart items match whitelist group ' + groupIndex + ': the group allows a single item per execution');
-      }
-      matchedGroups.add(groupIndex);
-      if (item.quantity !== groups[groupIndex].quantity) {
-        return new A4pValidationFailure(A4pErrorCode.A4P_CART_MISMATCH,
-          'Cart item quantity ' + item.quantity + ' does not equal the authorized quantity ' +
-          groups[groupIndex].quantity + ' of whitelist group ' + groupIndex);
-      }
-    }
-    for (let g = 0; g < groups.length; g++) {
-      if (!matchedGroups.has(g)) {
-        return new A4pValidationFailure(A4pErrorCode.A4P_CART_MISMATCH,
-          'Whitelist group ' + g + ' is not covered by any cart item');
-      }
-    }
-    return null;
   }
 
   /**
@@ -692,11 +537,11 @@ export namespace A4p {
    * client-declared value.
    *
    * `now` is the evaluation instant in epoch milliseconds: one value used
-   * for all time judgments of this call (activation floor, validity window,
+   * for all time judgments of this call (validity window,
    * period rollover, record timestamps); a provided `now` must be a
-   * non-negative safe integer. It must not be earlier than the context's
-   * `activatedTime` — a reservation may not predate the activation — nor
-   * than `validFrom`. Defaults to the system clock; pass a fixed or offset
+   * non-negative safe integer. It must not be earlier than `validFrom`.
+   * It is not compared with the context's `activatedTime`.
+   * Defaults to the system clock; pass a fixed or offset
    * value in tests or to apply a caller-side clock-skew tolerance policy.
    * The SDK itself applies no tolerance — callers that want a window
    * adjust the value they pass.
@@ -707,8 +552,7 @@ export namespace A4p {
    * sees the expiry. Callers relying on immutability of failed results
    * must copy. Checks run in a fixed order — request structure, parameter
    * consistency with the frozen snapshot (action, currency),
-   * context status, validity window (validFrom, the activatedTime floor,
-   * the lazy EXPIRED flip), duplicate
+   * context status, validity window (validFrom, the lazy EXPIRED flip), duplicate
    * ids, then quota — so parameter-class rejections never depend on the
    * ledger state and the expiry flip is not skipped by duplicate rejections.
    * @param { IntentExecutionContext } context - The execution context to reserve against.
@@ -729,7 +573,7 @@ export namespace A4p {
    */
   export function createExecution(context: IntentExecutionContext, execution: Execution,
                                   now?: number): IntentExecutionContext {
-    raise(validateExecutionContext(context));
+    raise(validateIntentExecutionContext(context));
     if (now !== undefined) {
       raise(validateNow(now));
     }
@@ -768,13 +612,6 @@ export namespace A4p {
     if (nowMs < constraints.validFrom) {
       a4pThrow(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
         'Current time ' + nowMs + ' is before validFrom ' + constraints.validFrom);
-    }
-    // The activation instant is a second reservation floor alongside
-    // validFrom: no execution may be reserved for a time before the
-    // context existed, whatever the signed window allows.
-    if (nowMs < context.activatedTime) {
-      a4pThrow(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
-        'Current time ' + nowMs + ' is before the activation time ' + context.activatedTime);
     }
     if (nowMs > constraints.validUntil) {
       context.status = IntentExecutionStatus.EXPIRED;
@@ -888,7 +725,7 @@ export namespace A4p {
    */
   export function completeExecution(context: IntentExecutionContext, executionId: string,
                                     now?: number): IntentExecutionContext {
-    raise(validateExecutionContext(context));
+    raise(validateIntentExecutionContext(context));
     if (now !== undefined) {
       raise(validateNow(now));
     }
@@ -974,7 +811,7 @@ export namespace A4p {
    */
   export function cancelExecution(context: IntentExecutionContext, executionId: string,
                                   now?: number): IntentExecutionContext {
-    raise(validateExecutionContext(context));
+    raise(validateIntentExecutionContext(context));
     if (now !== undefined) {
       raise(validateNow(now));
     }

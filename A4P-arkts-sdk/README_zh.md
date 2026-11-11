@@ -119,11 +119,13 @@ null 时，序列化直接以 `A4P_SERIALIZE_FAIL` 失败，不会输出 `null` 
 seller id，且 `spuId`/`skuId` 至少提供一个非空白值；seller id + spuId + skuId 是白名单
 匹配键，一个商品在每个分组内至多出现一次，且至多属于一个分组。周期规则要求
 `anchorTime`、`periodSeconds`、`maxExecutionCountPerPeriod` 三者同时提供，且
-`anchorTime <= validFrom`、`periodSeconds <= 9007199254740`。链上时间戳单调：
-`L1.timestamp <= L2.timestamp <= L3.timestamp <= 激活时刻`。有效期窗口随链路推进逐级
-判定：签发不做窗口检查；签名与激活各自以 `A4P_TIMESTAMP_EXPIRED` 拒绝越过
+`anchorTime <= validFrom`、`periodSeconds <= 9007199254740`。`L1.timestamp`、
+`L2.timestamp`、`L3.timestamp`、激活时刻（`activatedTime`）与撤销时刻（`revokedTime`，
+存在时）均须为非负整数；它们都不参与任何时间单调性检查（创建、签发、签名、激活与撤销
+运行在不同进程，时钟无法相互比较）。有效期窗口随链路推进逐级
+判定：创建与签名不做窗口检查；签发与激活各自以 `A4P_TIMESTAMP_EXPIRED` 拒绝越过
 `validUntil` 的时刻（彼时生成的 L3 或 context 永远无法预留），但允许早于
-`validFrom`，意图只是等待窗口开启；完整窗口（两端加 `activatedTime` 下限）在预留时
+`validFrom`，意图只是等待窗口开启；完整窗口（两端）在预留时
 强制。早于窗口的预留以 `A4P_TIMESTAMP_TOO_EARLY` 失败，越过 `validUntil` 的预留把
 context 惰性置为 EXPIRED。`intentConversation` 的长度限制与敏感数据过滤由 Agent
 负责。
@@ -172,7 +174,7 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
   `A4P_DUPLICATE_ID` 被拒绝。重复的执行 ID 在取消之后依然被拒绝；调用方提供的执行 ID
   不能为空白，缺席时自动生成。
 - 预留检查按固定顺序执行：请求结构；动作与币种是否与已授权意图一致；context 状态；
-  有效期窗口（`validFrom`、`activatedTime` 下限、惰性置为 EXPIRED）；执行/订单 ID 重复；
+  有效期窗口（`validFrom`、惰性置为 EXPIRED）；执行/订单 ID 重复；
   执行次数上限、单笔上限、剩余金额；白名单范围与模板；周期配额。
 - `amount` 由调用方声明：SDK 只校验其不超过签名的金额上限，不与购物车对账（`Product`
   不含价格）。将金额绑定到真实价格是持有权威商品目录一方的职责。
@@ -245,7 +247,7 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
 - `verifyIntentAuthenticity` 有意不校验用户签名。
 - 反序列化是结构性的（JSON.parse 语义）：不拒绝未知字段与重复 JSON 键，这一点不如
   Java 移植版严格。
-- 签名与激活只判定窗口上界（`validUntil`）；窗口的开启（`validFrom`）与惰性的 EXPIRED
+- 签发与激活只判定窗口上界（`validUntil`），签名不判定任何时钟；窗口的开启（`validFrom`）与惰性的 EXPIRED
   翻转都留给预留阶段。
 - context 操作无同步保护：仅在 ArkTS 单线程运行时中安全，不覆盖多进程或各自独立激活的
   副本。

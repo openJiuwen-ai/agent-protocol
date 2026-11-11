@@ -29,10 +29,10 @@ import {
 
 // Deterministic evaluation instant used by execution-period tests:
 // constraints built with createTestCreateIntentRequestAround(FIXED_NOW)
-// stay valid there. Every signIntent/activateIntent call on a chain
+// stay valid there. Every issueIntent/activateIntent call on a chain
 // anchored here must inject the clock (FIXED_NOW or a later in-window
 // instant): the real wall clock is years past the anchored validUntil,
-// and the signing/activation expiry gate would fire before the checks
+// and the issuance/activation expiry gate would fire before the checks
 // such tests assert.
 const FIXED_NOW: number = 1730000000000;
 
@@ -55,8 +55,7 @@ class FullLifecycle {
  * Builds a full lifecycle around the fixed clock so validity windows and
  * period rollovers are deterministic. Callers may customize the request
  * before it is signed. The whole chain (and the activation) is stamped at
- * FIXED_NOW by default — the monotonic checks are non-strict, so one
- * shared instant is a valid chain, and the fixed default keeps the
+ * FIXED_NOW by default, and the fixed default keeps the
  * context's activatedTime at or before every FIXED_NOW reservation the
  * execution tests make. Pass another instant to shift the chain.
  */
@@ -693,9 +692,8 @@ export default function a4pTest() {
       });
 
       it('issueIntent_usesInjectedClock_forTimestamp', 0, () => {
-        // The chain is anchored on the fixed clock so the issuance stamp
-        // stays monotonic with the L1 stamp (issueIntent rejects a now
-        // earlier than the embedded L1's timestamp).
+        // The chain is anchored on the fixed clock so every stamp is the
+        // same deterministic instant.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
 
@@ -706,17 +704,47 @@ export default function a4pTest() {
         expect(l2.timestamp).assertEqual(FIXED_NOW);
       });
 
-      it('issueIntent_fails_whenNowEarlierThanL1Timestamp', 0, () => {
-        // The issuance stamp must not predate the intent it endorses: a
-        // skewed clock is rejected here, instead of producing an L2 whose
-        // regressive timestamp every later validation step would refuse.
+      it('issueIntent_succeeds_whenNowEarlierThanL1Timestamp', 0, () => {
+        // The issuance stamp is not compared with the L1 stamp.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 1000);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+
+        expect(l2.timestamp).assertEqual(FIXED_NOW);
+      });
+
+      it('issueIntent_fails_whenNowAfterValidUntil', 0, () => {
+        // The issuance stamp must not fall past the validity window being
+        // endorsed: the closed window is reported at issuance with
+        // A4P_TIMESTAMP_EXPIRED. Equality is allowed — validUntil itself is
+        // inside the window.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validUntil = FIXED_NOW;
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+        expect(l2.timestamp).assertEqual(FIXED_NOW);
+
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
           A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
-            new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+            new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW + 1);
         });
+      });
+
+      it('issueIntent_succeeds_whenNowBeforeValidFrom', 0, () => {
+        // Only the window's upper bound is judged at issuance.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        request.structuredIntent.constraints.validFrom = FIXED_NOW + 3600000;
+        request.structuredIntent.constraints.validUntil = FIXED_NOW + 7200000;
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
+
+        expect(l2.timestamp).assertEqual(FIXED_NOW);
       });
 
       it('issueIntent_succeeds_whenAdditionalInfoOmitted', 0, () => {
@@ -999,9 +1027,8 @@ export default function a4pTest() {
       });
 
       it('signIntent_usesInjectedClock_forTimestamp', 0, () => {
-        // The chain is anchored on the fixed clock so the user's signing
-        // stamp stays monotonic with the L2 stamp (signIntent rejects a now
-        // earlier than the embedded L2's timestamp).
+        // The chain is anchored on the fixed clock so every stamp is the
+        // same deterministic instant.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
         const l2 = A4p.issueIntent(l1, new MockVerifier(),
@@ -1015,27 +1042,23 @@ export default function a4pTest() {
         expect(l3.timestamp).assertEqual(FIXED_NOW);
       });
 
-      it('signIntent_fails_whenNowEarlierThanL2Timestamp', 0, () => {
-        // The user's signing stamp must not predate the issuance it
-        // authorizes: a skewed clock is rejected here, instead of producing
-        // an L3 whose regressive timestamp activation would always refuse.
+      it('signIntent_succeeds_whenNowEarlierThanL2Timestamp', 0, () => {
+        // The user's signing stamp is not compared with the L2 stamp.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW + 2000);
         const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
           new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW + 2000);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
-            new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
-        });
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+
+        expect(l3.timestamp).assertEqual(FIXED_NOW);
       });
 
-      it('signIntent_fails_whenNowAfterValidUntil', 0, () => {
-        // The user's signing stamp must also not fall past the validity
-        // window being authorized: an L3 signed after validUntil could
-        // never execute (every reservation would be refused as expired),
-        // so the closed window is reported at signing time. Equality is
-        // allowed — validUntil itself is inside the window.
+      it('signIntent_succeeds_whenNowAfterValidUntil', 0, () => {
+        // Signing judges no clock: a signing instant past validUntil is
+        // accepted and recorded as given (the window is judged at
+        // issuance, activation and reservation).
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         request.structuredIntent.constraints.validUntil = FIXED_NOW;
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
@@ -1043,13 +1066,9 @@ export default function a4pTest() {
           new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
 
         const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
-          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
-        expect(l3.intentL2.intentL1.intentId).assertEqual(l2.intentL1.intentId);
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW + 1);
 
-        expectThrows(A4pErrorCode.A4P_TIMESTAMP_EXPIRED, () => {
-          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
-            new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW + 1);
-        });
+        expect(l3.timestamp).assertEqual(FIXED_NOW + 1);
       });
 
       it('signIntent_fullChainReproducible_withInjectedClock', 0, () => {
@@ -1130,22 +1149,20 @@ export default function a4pTest() {
         });
       });
 
-      it('signIntent_fails_whenReceivedL2TimestampEarlierThanL1', 0, () => {
-        // issueIntent refuses to produce a regressive L2 itself (see
-        // issueIntent_fails_whenNowEarlierThanL1Timestamp), but a
-        // non-compliant issuer can still hand one over: the user-signing
-        // step validates the received L2 and rejects it before endorsing.
-        // (Tampering breaks the signature, but structural validation fires
-        // first, so the INVALID_PARAMETER path is what runs.)
+      it('signIntent_succeeds_whenReceivedL2TimestampEarlierThanL1', 0, () => {
+        // L1/L2/L3 timestamps take part in no monotonicity check: an L2
+        // whose stamp predates its L1 stamp is still accepted. The L2 is
+        // issued (and signed) with the earlier stamp instead of being
+        // tampered with afterwards, which would break its signature.
         const request = createTestCreateIntentRequestAround(FIXED_NOW);
         const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
         const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
-          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW);
-        l2.timestamp = FIXED_NOW - 1;
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW - 1);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(), new MockSigner(), FIXED_NOW);
-        });
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+
+        expect(l3.intentL2.timestamp).assertEqual(FIXED_NOW - 1);
       });
 
       it('signIntent_fails_whenNestedL1VersionUnsupported', 0, () => {
@@ -1299,38 +1316,36 @@ export default function a4pTest() {
         });
       });
 
-      it('activateIntent_fails_whenReceivedL3TimestampEarlierThanL2', 0, () => {
-        // signIntent refuses to produce a regressive L3 itself (see
-        // signIntent_fails_whenNowEarlierThanL2Timestamp), but a
-        // non-compliant signer can still hand one over: activation
-        // validates the received chain and rejects it before freezing the
-        // snapshot. (Tampering breaks the signature, but structural
-        // validation fires first.)
-        const lifecycle = createFullLifecycle();
-        lifecycle.l3.timestamp = lifecycle.l3.intentL2.timestamp - 1;
+      it('activateIntent_succeeds_whenReceivedL3TimestampEarlierThanL2', 0, () => {
+        // L1/L2/L3 timestamps take part in no monotonicity check: a chain
+        // whose L3 stamp predates its L2 stamp is still accepted. The L3 is
+        // signed with the earlier stamp instead of being tampered with
+        // afterwards, which would break its signature.
+        const request = createTestCreateIntentRequestAround(FIXED_NOW);
+        const l1 = A4p.createIntent(request, new MockSigner(), FIXED_NOW);
+        const l2 = A4p.issueIntent(l1, new MockVerifier(), createTestIntentIssueContext(),
+          new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), FIXED_NOW + 1000);
+        const l3 = A4p.signIntent(l2, new MockVerifier(), createTestSigningEnv(),
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
-        });
+        const ctx = A4p.activateIntent(l3, new MockVerifier(), FIXED_NOW);
+
+        expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
       });
 
-      it('activateIntent_fails_whenNowEarlierThanL3Timestamp', 0, () => {
-        // The chain's monotonic rule extends to the activation step: an
-        // activation instant before the L3's signing timestamp would create
-        // a context for an authorization that did not exist yet (also the
-        // default-clock guard against a wall clock stepped back past the
-        // L3 stamp).
+      it('activateIntent_succeeds_whenNowEarlierThanL3Timestamp', 0, () => {
+        // The activation instant is not compared with the L3 timestamp.
         const lifecycle = createFullLifecycle(createTestCreateIntentRequestAround(FIXED_NOW), FIXED_NOW);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW - 1);
-        });
+        const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW - 1);
+
+        expect(ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+        expect(ctx.activatedTime).assertEqual(FIXED_NOW - 1);
       });
 
       it('activateIntent_allowsNowEqualToL3Timestamp', 0, () => {
-        // Equality is allowed, matching the non-strict monotonic stamps of
-        // issueIntent/signIntent: activating in the same millisecond the
-        // L3 was signed is legitimate.
+        // Activating in the same millisecond the L3 was signed is
+        // legitimate.
         const lifecycle = createFullLifecycle(createTestCreateIntentRequestAround(FIXED_NOW), FIXED_NOW);
 
         const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW);
@@ -1358,8 +1373,7 @@ export default function a4pTest() {
 
       it('activateIntent_recordsActivatedTime', 0, () => {
         // The activation instant is recorded as the context's
-        // activatedTime — the floor createExecution judges reservations
-        // against.
+        // activatedTime.
         const lifecycle = createFullLifecycle();
 
         const ctx = A4p.activateIntent(lifecycle.l3, new MockVerifier(), FIXED_NOW + 1000);
@@ -1505,7 +1519,7 @@ export default function a4pTest() {
       });
 
       it('verifyIntentAuthenticity_fails_whenL3CarrierFieldsInvalid', 0, () => {
-        // The carrier must be structurally sound: a negative or regressive
+        // The carrier must be structurally sound: a negative or fractional
         // timestamp and a missing signingEnv each fail the structural
         // check before the L2's signature is verified, independent of the
         // verifier's verdict.
@@ -1515,10 +1529,10 @@ export default function a4pTest() {
           A4p.verifyIntentAuthenticity(negativeTs.l3, new MockVerifier());
         });
 
-        const regressiveTs = createFullLifecycle();
-        regressiveTs.l3.timestamp = regressiveTs.l3.intentL2.timestamp - 1;
+        const fractionalTs = createFullLifecycle();
+        fractionalTs.l3.timestamp = FIXED_NOW + 0.5;
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
-          A4p.verifyIntentAuthenticity(regressiveTs.l3, new MockVerifier());
+          A4p.verifyIntentAuthenticity(fractionalTs.l3, new MockVerifier());
         });
 
         const noEnv = createFullLifecycle();
@@ -1526,6 +1540,17 @@ export default function a4pTest() {
         expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
           A4p.verifyIntentAuthenticity(noEnv.l3, new MockVerifier());
         });
+      });
+
+      it('verifyIntentAuthenticity_succeeds_whenL3TimestampEarlierThanL2', 0, () => {
+        // L1/L2/L3 timestamps take part in no monotonicity check.
+        const lifecycle = createFullLifecycle();
+        lifecycle.l3.timestamp = lifecycle.l3.intentL2.timestamp - 1;
+
+        const result: VerificationResult =
+          A4p.verifyIntentAuthenticity(lifecycle.l3, new MockVerifier());
+
+        expect(result.valid).assertTrue();
       });
 
       it('verifyIntentAuthenticity_succeeds_whenL3CarrierSignatureTampered', 0, () => {
@@ -1596,28 +1621,29 @@ export default function a4pTest() {
         });
       });
 
-      it('revokeIntent_fails_whenNowBeforeActivatedTime', 0, () => {
-        // The revocation instant is floored by the context's creation, like
-        // every reservation: a clock stepped back past activatedTime is
-        // refused and the context stays active. Equality is allowed. The
-        // instant is validated only — the flip records no timestamp — and
-        // the validity window is deliberately not judged (an intent whose
+      it('revokeIntent_succeeds_whenNowBeforeActivatedTime', 0, () => {
+        // The revocation instant is validated only — it is not compared
+        // with activatedTime, the flip records no timestamp, and the
+        // validity window is deliberately not judged (an intent whose
         // window closed is revoked, not reported as expired).
         const lifecycle = createFullLifecycle();
 
-        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
-          A4p.revokeIntent(lifecycle.ctx, FIXED_NOW - 1);
-        });
-        expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
-
-        const ctx = A4p.revokeIntent(lifecycle.ctx, FIXED_NOW);
+        const ctx = A4p.revokeIntent(lifecycle.ctx, FIXED_NOW - 1);
 
         expect(ctx.status).assertEqual(IntentExecutionStatus.REVOKED);
       });
 
+      it('revokeIntent_fails_whenNowInvalid', 0, () => {
+        const lifecycle = createFullLifecycle();
+
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.revokeIntent(lifecycle.ctx, -1);
+        });
+        expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+      });
+
       it('revokeIntent_succeeds_afterValidUntil', 0, () => {
-        // Revocation judges the activatedTime floor only, never the
-        // validity window: an intent whose window already closed (but whose
+        // Revocation never judges the validity window: an intent whose window already closed (but whose
         // lazy EXPIRED flip has not fired — that happens only in
         // createExecution) is revoked rather than reported as expired, so
         // the caller need not fake a reservation to terminalize it.
@@ -1895,19 +1921,14 @@ export default function a4pTest() {
         });
       });
 
-      it('createExecution_fails_whenBeforeActivatedTime', 0, () => {
-        // The activation instant is a reservation floor alongside
-        // validFrom: a now earlier than activatedTime is rejected even
-        // though the signed validity window has already opened (validFrom
-        // is a minute before FIXED_NOW). Equality is allowed — the floor
-        // is non-strict, like validFrom.
+      it('createExecution_succeeds_whenBeforeActivatedTime', 0, () => {
+        // activatedTime takes part in no monotonicity check: a now earlier
+        // than it is accepted as long as the signed validity window allows
+        // it (validFrom is a minute before FIXED_NOW).
         const lifecycle = createFullLifecycle();
 
-        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
-          A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW - 1);
-        });
+        const ctx = A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW - 1);
 
-        const ctx = A4p.createExecution(lifecycle.ctx, createTestExecution(), FIXED_NOW);
         expect(ctx.executions.length).assertEqual(1);
       });
 
