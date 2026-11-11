@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from openjiuwen_protocol.sdk.application_plugin import (
+from e2a.sdk.application_plugin import (
     ApplicationPluginServices,
     FrontendContribution,
     WebSocketEndpoint,
