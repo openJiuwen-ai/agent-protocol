@@ -15,7 +15,15 @@ from e2a.gateway_normalize import (
     message_to_legacy_agent_dict,
     method_value,
 )
-from e2a.message import Message, ReqMethod
+from enum import Enum
+
+from e2a.message import Message
+
+
+class _Method(Enum):
+    """Stand-in for the implementation-side method enum."""
+
+    CHAT_SEND = "chat.send"
 
 
 def _message(method):
@@ -33,7 +41,7 @@ def _message(method):
 
 @pytest.mark.parametrize(
     "method,expected",
-    [(ReqMethod.CHAT_SEND, "chat.send"), ("future.extension", "future.extension"),
+    [(_Method.CHAT_SEND, "chat.send"), ("future.extension", "future.extension"),
      ("0", "0"), ("False", "False")],
 )
 def test_valid_method_names_are_preserved(method, expected):
@@ -75,7 +83,7 @@ def test_invalid_methods_are_rejected_including_legacy_fallback(method, error):
 
 
 def test_unrelated_normalization_failure_keeps_legacy_fallback():
-    message = _message(ReqMethod.CHAT_SEND)
+    message = _message(_Method.CHAT_SEND)
     message.id = ""
     envelope = message_to_e2a_or_fallback(message)
     legacy = envelope.channel_context[E2A_INTERNAL_CONTEXT_KEY][E2A_LEGACY_AGENT_REQUEST_KEY]

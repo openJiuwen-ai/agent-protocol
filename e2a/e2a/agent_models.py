@@ -9,17 +9,20 @@ AgentResponseChunk 部分）。这三个 dataclass 是跨 WS 进程共享的线�
 （trusted_session_message_route 等进程内字段），暂随 AgentRequest 一起放
 本模块；后续 schema 大迁移时再评估拆分。
 
-``ReqMethod`` 枚举已随 ``message`` 模块进包（原 jiuwenswarm
-``common/schema/message.py``），此处直接引用；``AgentRequest.req_method``
-同时支持扩展方法字符串和缺省值 ``None``。
+``AgentRequest.req_method`` 同时支持方法枚举（任意 ``Enum`` 成员）、扩展方法
+字符串和缺省值 ``None``。枚举类型由实现侧持有，本模块只在类型标注中引用
+``ReqMethod``，不在运行时 import——协议包据此不绑定具体方法表。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from e2a.message import ReqMethod
+if TYPE_CHECKING:
+    from enum import Enum
+
+    ReqMethod = Enum
 
 
 @dataclass
@@ -100,18 +103,18 @@ class AgentRequest:
     """Agent 请求（Gateway → AgentServer）.
 
     ``req_method`` 类型为 ``ReqMethod | str | None``，与 ``Message.req_method``
-    一致：已知方法使用 ``e2a.message.ReqMethod``，扩展方法保留
-    原始字符串，``None`` 表示未指定方法。
+    一致：已知方法可使用方法枚举成员，扩展方法保留原始字符串，``None`` 表示
+    未指定方法。方法枚举由实现侧（jiuwenswarm）拥有，本包只承载字符串。
     """
 
     request_id: str
     channel_id: str = ""
     session_id: str | None = None
     chat_id: str | None = None
-    # Known methods use ReqMethod for existing dispatch code.  A method added
-    # by a newer AgentServer may arrive as a string while an older Gateway is
-    # still running; preserving that string is part of the E2A compatibility
-    # contract.
+    # Known methods use a method enum for existing dispatch code.  A method
+    # added by a newer AgentServer may arrive as a string while an older
+    # Gateway is still running; preserving that string is part of the E2A
+    # compatibility contract.
     req_method: ReqMethod | str | None = None
     params: dict = field(default_factory=dict)
     is_stream: bool = False

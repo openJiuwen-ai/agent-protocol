@@ -6,6 +6,9 @@
 Gateway 产出 E2A 信封、AgentServer 消费为 ``AgentRequest``，任何一侧单独改动
 转换规则都会造成线上行为不一致，故收敛到协议包，两仓只保留转发别名。
 
+本模块不绑定具体方法枚举：``method`` 默认按 E2A 线上语义保留字符串，
+需要枚举的实现侧通过 ``method_resolver=`` 注入自己的解析函数。
+
 不得与 ``gateway_normalize`` 的 ``normalize_failed`` 兜底同时使用：含兜底标记的
 信封须由调用方先走 legacy 分支。
 """
@@ -14,13 +17,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any, Callable
 
 from e2a.agent_models import AgentRequest
 from e2a.gateway_normalize import E2A_INTERNAL_CONTEXT_KEY
 from e2a.models import E2AEnvelope
-from e2a.message import ReqMethod
 
 logger = logging.getLogger(__name__)
+
+MethodResolver = Callable[[str], Any]
 
 
 def _e2a_timestamp_to_float(ts: str | None) -> float:
@@ -33,10 +38,19 @@ def _e2a_timestamp_to_float(ts: str | None) -> float:
         return 0.0
 
 
-def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
+def e2a_to_agent_request(
+    env: E2AEnvelope,
+    *,
+    method_resolver: MethodResolver | None = None,
+) -> AgentRequest:
     """将规范化成功的 E2A 信封转换为 ``AgentRequest``。
 
     若 envelope 含 Gateway 兜底标记，须由调用方先分支处理 legacy，勿调用本函数。
+
+    Args:
+        env: 已规范化的 E2A 信封。
+        method_resolver: 可选的方法名 → 枚举解析函数。未注入时 ``req_method``
+            保留线上方法名，由下游 AgentServer 决定是否支持该方法。
     """
     ctx = dict(env.channel_context or {})
     internal = ctx.pop(E2A_INTERNAL_CONTEXT_KEY, None)
@@ -45,21 +59,22 @@ def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
 
     metadata = ctx if ctx else None
     method_str = env.method
-    req_method: ReqMethod | str | None = None
+    req_method: Any = None
     if method_str:
-        try:
-            req_method = ReqMethod(method_str)
-        except ValueError:
-            # E2A carries method names as strings.  Keep an unknown method
-            # intact so a newer AgentServer can receive it through an older
-            # Gateway; the AgentServer remains responsible for deciding
-            # whether the method is implemented.
-            req_method = method_str
-            logger.debug(
-                "[E2A][compat] preserving extension method=%r request_id=%s",
-                method_str,
-                env.request_id,
-            )
+        req_method = method_str
+        if method_resolver is not None:
+            try:
+                req_method = method_resolver(method_str)
+            except ValueError:
+                # E2A carries method names as strings.  Keep an unknown method
+                # intact so a newer AgentServer can receive it through an older
+                # Gateway; the AgentServer remains responsible for deciding
+                # whether the method is implemented.
+                logger.debug(
+                    "[E2A][compat] preserving extension method=%r request_id=%s",
+                    method_str,
+                    env.request_id,
+                )
 
     return AgentRequest(
         request_id=env.request_id or "",
