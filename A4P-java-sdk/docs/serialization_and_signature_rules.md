@@ -79,6 +79,8 @@ All serialization APIs accept protocol objects that have already been constructe
 
 Deserialization APIs handle external input and therefore consistently return `A4pResult<T>` to represent errors such as invalid formats and unsupported versions.
 
+All four Java deserialization methods require an exact match with the corresponding serializer output. Adding formatting whitespace, reordering fields or changing JSON escapes causes `A4P_DESERIALIZE_FAIL` (5002). Pass the original serialized string when calling these methods.
+
 ## Signature Coverage at Each Layer
 
 The `sign` field in each of the three Intent layers is a `SignatureInfo` object (containing `alg`, `keyIdentifier`, and `sign`). Each layer's signature covers the entire object at that layer except its own `sign` field (the entire `SignatureInfo` object). Fields at that layer, such as `timestamp`, are included in the signed content.

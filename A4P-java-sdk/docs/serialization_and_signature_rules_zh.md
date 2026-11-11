@@ -84,6 +84,8 @@ public class A4pIntentCodec {
 
 反序列化 API 面向外部输入，因此统一返回 `A4pResult<T>`，用于表达非法格式、版本不支持等错误。
 
+Java 的四个反序列化接口都要求输入与对应序列化接口的输出逐字符一致。添加格式化空白、调整字段顺序或改变 JSON 转义写法都会返回 `A4P_DESERIALIZE_FAIL`（5002）。调用这些接口时请传入原始序列化字符串。
+
 ## 各层签名覆盖范围
 
 三层 Intent 的 `sign` 字段均为 `SignatureInfo`（含 `alg`、`keyIdentifier`、`sign`）。每层签名覆盖该层除自身 `sign` 字段（整个 `SignatureInfo` 对象）以外的完整对象，`timestamp` 等本层字段均属于签名内容。

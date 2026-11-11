@@ -203,7 +203,9 @@ if (!restored.success()) {
 IntentExecutionContext restoredContext = restored.data();
 ```
 
-The same codec supports L1, L2 and L3 serialization and restoration. Serialization takes a consistent context snapshot under its lock. Serialization includes `revokedTime` only when `status` is `REVOKED`. On restoration, `REVOKED` requires a timestamp, and other states accept an omitted field or JSON `null`. Parsing rejects duplicate keys and trailing tokens; structural validation failures may return specific protocol errors rather than only 5002. Intent deserializers check structure; context restoration additionally checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
+The codec supports L1, L2, L3 and Context. Deserialization requires the input to match the corresponding serializer output character for character. Extra formatting whitespace, reordered fields and alternate escapes are rejected. Keep the original serializer output when storing or forwarding it. For existing data that was reformatted, regenerate it with the corresponding SDK serializer from the original object or a trusted copy.
+
+Serialization takes a consistent Context snapshot under its lock. `revokedTime` is required for `REVOKED` and omitted in other states. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Intent deserializers check structure. Context restoration also checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
 

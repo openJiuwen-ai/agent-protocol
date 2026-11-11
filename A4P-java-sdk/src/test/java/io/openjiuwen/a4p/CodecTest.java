@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -17,6 +18,27 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CodecTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
+
+    /** Checks that each decoder accepts the original output and rejects formatting changes. */
+    @Test
+    void codecRejectsReformattedJsonAtAllEntryPoints() {
+        IntentL3 l3 = authorized(constraints());
+        IntentL2 l2 = l3.intentL2();
+        IntentL1 l1 = l2.intentL1();
+        Map<String, Function<String, A4pResult<?>>> decoders = Map.of(
+                codec.serializeIntentL1(l1), codec::deserializeIntentL1,
+                codec.serializeIntentL2(l2), codec::deserializeIntentL2,
+                codec.serializeIntentL3(l3), codec::deserializeIntentL3,
+                codec.serializeIntentExecutionContext(ledgerContext()), codec::deserializeIntentExecutionContext);
+        decoders.forEach((json, decode) -> {
+            assertTrue(decode.apply(json).success());
+            for (String input : List.of(" " + json, json + "\n", "{\n " + json.substring(1),
+                    String.format("{\"\\u%04x%s", (int) json.charAt(2), json.substring(3)))) {
+                assertNotEquals(json, input);
+                fails(A4P_DESERIALIZE_FAIL, decode.apply(input));
+            }
+        });
+    }
 
     @Test
     void canonicalVectorsMatchArkts() {
@@ -283,6 +305,6 @@ class CodecTest {
                 consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"ACTIVE\"")));
         // REVOKED and EXPIRED are reachable whatever the ledger holds.
         assertEquals(IntentExecutionStatus.REVOKED, ok(codec.deserializeIntentExecutionContext(
-                consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\",\"revokedTime\":20000"))).status());
+                consumed.replace("\"status\":\"CONSUMED\"", "\"revokedTime\":20000,\"status\":\"REVOKED\""))).status());
     }
 }

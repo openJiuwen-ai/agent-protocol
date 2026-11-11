@@ -202,7 +202,9 @@ if (!restored.success()) {
 IntentExecutionContext restoredContext = restored.data();
 ```
 
-同一个编解码器支持 L1、L2、L3 的序列化与恢复。序列化在 Context 锁内取得一致快照。仅当 `status` 为 `REVOKED` 时，序列化才输出 `revokedTime`。恢复时，`REVOKED` 状态必须提供撤销时间戳，其他状态允许省略该字段或将其设为 JSON `null`。解析拒绝重复键和尾随 token；结构校验失败可能返回具体协议错误，而非统一返回 5002。Intent 反序列化检查结构；Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
+编解码器支持 L1、L2、L3 和 Context。反序列化要求输入与对应序列化器的输出逐字符一致，额外的格式化空白、不同的字段顺序或等价的转义写法都会被拒绝。存储或转发时请保留原始序列化输出。已经重新排版的历史数据需要从原对象或可信副本通过对应的 SDK 序列化接口重新生成。
+
+序列化在 Context 锁内取得一致快照。`REVOKED` 状态要求提供 `revokedTime`，其他状态省略该字段。反序列化拒绝显式 JSON `null`、重复键和尾随 token，所有反序列化失败均返回 `A4P_DESERIALIZE_FAIL`（5002）。Intent 反序列化检查结构。Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。缺少必填 `activatedTime` 的旧 Context 无法直接恢复；应使用应用控制的可信迁移，或启动新的授权生命周期，同时避免重置已有授权用量。
 

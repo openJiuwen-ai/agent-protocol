@@ -80,7 +80,7 @@ public class A4pIntentCodec {
     /**
      * Restores IntentL1 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
-     * @param serialized serialized local JSON representation
+     * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentL1> deserializeIntentL1(String serialized) {
@@ -90,7 +90,7 @@ public class A4pIntentCodec {
     /**
      * Restores IntentL2 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
-     * @param serialized serialized local JSON representation
+     * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentL2> deserializeIntentL2(String serialized) {
@@ -100,7 +100,7 @@ public class A4pIntentCodec {
     /**
      * Restores IntentL3 from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
-     * @param serialized serialized local JSON representation
+     * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentL3> deserializeIntentL3(String serialized) {
@@ -141,11 +141,15 @@ public class A4pIntentCodec {
      * Does not verify cryptographic signatures or authenticate persisted data.
      * Checks integer timestamp formats, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
      * Audit timestamps are not compared with each other, execution times or authorization validity boundaries.
-     * @param serialized serialized local JSON representation
+     * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentExecutionContext> deserializeIntentExecutionContext(String serialized) {
-        return deserializeSafely(() -> restore(parse(serialized, ContextJson.class)));
+        return deserializeSafely(() -> {
+            IntentExecutionContext context = restore(parse(serialized, ContextJson.class));
+            requireSerializedForm(serialized, serializeIntentExecutionContext(context));
+            return context;
+        });
     }
 
     /**
@@ -283,8 +287,15 @@ public class A4pIntentCodec {
         return deserializeSafely(() -> {
             Value value = parse(json, type);
             validate.accept(value);
+            requireSerializedForm(json, serialize(value));
             return value;
         });
+    }
+
+    /** Requires the original text to match the serializer output exactly. */
+    private static void requireSerializedForm(String input, String serialized) {
+        Validation.require(input.equals(serialized), A4P_DESERIALIZE_FAIL,
+                "JSON input must exactly match the canonical serialization");
     }
 
     /** Rejects explicit nulls recursively, including array elements, before typed conversion. */
