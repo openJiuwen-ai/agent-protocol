@@ -11,6 +11,7 @@ import {
   IntentExecutionStatus, ExecutionStatus
 } from '../models/execution';
 import { Product, ItemWhiteList, ShoppingItems, CartItem } from '../models/product';
+import { MAX_JSON_DEPTH } from './strictJson';
 
 /**
  * Two validation layers share this file. The structure layer
@@ -589,12 +590,12 @@ function checkServiceProviderIdentityContent(spi: ServiceProviderIdentity): Vali
  * serialization drops a null property and fails on a null array item, and
  * deserialization never delivers one (the strict parser rejects explicit
  * nulls at every value position).
- * Entirely structural (no content pass), so the deserialization-side
- * structure checks share it.
+ * Only checks the map shape; deserialization relies on the strict parser
+ * to bound the depth of their contents.
  * @param env - The signing environment to validate
  * @returns A validation failure if invalid, or null if valid
  */
-export function validateSigningEnv(env: SigningEnv): Validation {
+function checkSigningEnvStructure(env: SigningEnv): Validation {
   if (!env) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'signingEnv must not be null');
   }
@@ -609,6 +610,58 @@ export function validateSigningEnv(env: SigningEnv): Validation {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'signingEnv.app must be an object');
   }
   return null;
+}
+
+// Reserve enough room for Context -> authorizedIntent -> signingEnv -> device/app.
+const SIGNING_ENV_MAP_DEPTH: number = 3;
+
+/** Checks the runtime tree before cloning or signing it, without changing null semantics. */
+function checkSigningEnvTree(value: Object, field: string, depth: number, ancestors: Set<Object>): Validation {
+  if (depth > MAX_JSON_DEPTH) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' nesting exceeds ' + MAX_JSON_DEPTH + ' levels');
+  }
+  if (value === null || typeof value !== 'object') {
+    return null;
+  }
+  if (ancestors.has(value)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not contain cyclic references');
+  }
+  ancestors.add(value);
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const err = checkSigningEnvTree(value[i] as Object, field, depth + 1, ancestors);
+      if (err) {
+        return err;
+      }
+    }
+  } else {
+    const container: Record<string, Object> = value as Record<string, Object>;
+    const keys: string[] = Object.keys(container);
+    for (let i = 0; i < keys.length; i++) {
+      const child: Object = container[keys[i]];
+      // Object null/undefined members are omitted; array slots are not.
+      if (child === null || child === undefined) {
+        continue;
+      }
+      const err = checkSigningEnvTree(child, field, depth + 1, ancestors);
+      if (err) {
+        return err;
+      }
+    }
+  }
+  ancestors.delete(value);
+  return null;
+}
+
+function checkSigningEnvRuntime(env: SigningEnv): Validation {
+  const ancestors = new Set<Object>();
+  return checkSigningEnvTree(env.device, 'signingEnv.device', SIGNING_ENV_MAP_DEPTH, ancestors) ??
+    checkSigningEnvTree(env.app, 'signingEnv.app', SIGNING_ENV_MAP_DEPTH, ancestors);
+}
+
+/** Validates a signing environment supplied to the signing API. */
+export function validateSigningEnv(env: SigningEnv): Validation {
+  return checkSigningEnvStructure(env) ?? checkSigningEnvRuntime(env);
 }
 
 /** Structure pass for an Order: closed field set, string orderId and currency, safe-integer amount and timestamp, cart array. */
@@ -1068,7 +1121,7 @@ export function checkIntentL3Structure(intent: IntentL3): Validation {
   if (!intent.signingEnv) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.signingEnv must not be null');
   }
-  const envErr = validateSigningEnv(intent.signingEnv);
+  const envErr = checkSigningEnvStructure(intent.signingEnv);
   if (envErr) {
     return envErr;
   }
@@ -1090,7 +1143,7 @@ function checkIntentL3Content(intent: IntentL3): Validation {
   if (!isNonNegativeInteger(intent.timestamp)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.timestamp must be a non-negative integer');
   }
-  return checkSignatureInfoContent(intent.sign as SignatureInfo, 'intentL3');
+  return checkSigningEnvRuntime(intent.signingEnv) ?? checkSignatureInfoContent(intent.sign as SignatureInfo, 'intentL3');
 }
 
 /**

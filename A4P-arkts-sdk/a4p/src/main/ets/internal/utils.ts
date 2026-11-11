@@ -219,14 +219,14 @@ export function decodeUtf8(bytes: Uint8Array): string {
  * serialization this SDK emits is one its own parser accepts back.
  * @param value - The value to serialize (plain objects, arrays, primitives)
  * @returns The canonical JSON string
- * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, values with no JSON spelling (bigint, function, symbol), or nesting deeper than MAX_JSON_DEPTH
+ * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, values with no JSON spelling (bigint, function, symbol), cyclic references, or nesting deeper than MAX_JSON_DEPTH
  */
 export function canonicalStringify(value: Object): string {
-  return canonicalStringifyAt(value, 0);
+  return canonicalStringifyAt(value, 0, new Set<Object>());
 }
 
 /** Depth-tracked recursive worker behind canonicalStringify. */
-function canonicalStringifyAt(value: Object, depth: number): string {
+function canonicalStringifyAt(value: Object, depth: number, ancestors: Set<Object>): string {
   if (depth > MAX_JSON_DEPTH) {
     a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL, 'JSON nesting exceeds ' + MAX_JSON_DEPTH + ' levels');
   }
@@ -258,10 +258,12 @@ function canonicalStringifyAt(value: Object, depth: number): string {
     return escapeJsonString(value);
   }
   if (Array.isArray(value)) {
+    enterCanonicalContainer(value, ancestors);
     const items: string[] = [];
     for (let i = 0; i < value.length; i++) {
-      items.push(canonicalStringifyAt(value[i] as Object, depth + 1));
+      items.push(canonicalStringifyAt(value[i] as Object, depth + 1, ancestors));
     }
+    ancestors.delete(value);
     return '[' + items.join(',') + ']';
   }
   if (typeof value === 'object') {
@@ -278,6 +280,7 @@ function canonicalStringifyAt(value: Object, depth: number): string {
     // order. It is NOT Unicode code point order: the two differ for
     // keys mixing astral characters with BMP characters above U+D7FF,
     // so a code-point sort would diverge from the reference.
+    enterCanonicalContainer(value, ancestors);
     const keys: string[] = Object.keys(value as Record<string, Object>).sort();
     const pairs: string[] = [];
     for (let i = 0; i < keys.length; i++) {
@@ -291,8 +294,9 @@ function canonicalStringifyAt(value: Object, depth: number): string {
       if (v === undefined || v === null) {
         continue;
       }
-      pairs.push(escapeJsonString(k) + ':' + canonicalStringifyAt(v, depth + 1));
+      pairs.push(escapeJsonString(k) + ':' + canonicalStringifyAt(v, depth + 1, ancestors));
     }
+    ancestors.delete(value);
     return '{' + pairs.join(',') + '}';
   }
   // bigint, function and symbol have no canonical JSON spelling:
@@ -300,6 +304,14 @@ function canonicalStringifyAt(value: Object, depth: number): string {
   // loudly instead.
   a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL,
     'canonicalStringify does not support values of type ' + typeof value);
+}
+
+/** Tracks only the current path so shared references are not mistaken for cycles. */
+function enterCanonicalContainer(value: Object, ancestors: Set<Object>): void {
+  if (ancestors.has(value)) {
+    a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL, 'JSON contains a cyclic reference');
+  }
+  ancestors.add(value);
 }
 
 /** Escapes a string per JSON: quotes, backslash, and control characters. */

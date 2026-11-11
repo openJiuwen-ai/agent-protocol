@@ -152,8 +152,8 @@ Optional fields are `undefined`; absent optional fields are omitted from signed 
 A `null` value is invalid input — every lifecycle and model API (every entry point
 of the `A4p` namespace) rejects it with `A4P_INVALID_PARAMETER` (1001). The one
 exception is nested: a null value inside the free-form `signingEnv.device`/
-`signingEnv.app` maps is not rejected — input validation does not inspect the map
-contents, and canonical serialization silently omits the property, so the null
+`signingEnv.app` maps is not rejected by input validation, and canonical
+serialization silently omits the property, so the null
 never reaches the signed bytes or the wire form. Null array items (and a null root)
 have no acceptable spelling: serialization fails with `A4P_SERIALIZE_FAIL`, symmetric
 with the strict parser's rejection of explicit nulls at every value position.
@@ -163,9 +163,11 @@ are not integers must be carried as strings, and zero has a single spelling: `-0
 serializes as `0`. Values handed to the SDK must be plain
 objects (object literals), not class instances — canonical serialization rejects class
 instances with `A4P_SERIALIZE_FAIL`. A value may sit at most 100 containers deep:
-canonical serialization rejects deeper values with `A4P_SERIALIZE_FAIL`, the same
-limit the strict parser enforces, so every serialization this SDK
-emits is one its own parser accepts back.
+canonical serialization rejects deeper values and cyclic references with
+`A4P_SERIALIZE_FAIL` (5001). The strict parser enforces the same depth limit.
+Lifecycle APIs reject cyclic or overly deep `signingEnv` maps with
+`A4P_INVALID_PARAMETER` (1001), counting depth from the execution-context root
+so the signed intent can also be embedded in that context.
 
 Lifecycle and execution functions all take a required explicit clock (`now`, epoch
 milliseconds); `now` must be a non-negative safe integer. Use a
