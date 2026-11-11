@@ -1,5 +1,9 @@
 package io.openjiuwen.a4p;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import io.openjiuwen.a4p.Models.IntentL1;
+import io.openjiuwen.a4p.Models.StructuredIntent;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import static io.openjiuwen.a4p.Fixtures.*;
@@ -8,6 +12,47 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CodecFloatingPointTest {
     private final A4pIntentCodec codec = new A4pIntentCodec();
+
+    @Test
+    void rejectsNestedFloatingPointValuesDuringSerializationAndSigning() {
+        var original = authorized(constraints()).intentL2().intentL1();
+        var resources = JsonNodeFactory.instance.objectNode();
+        resources.putArray("items").addObject().put("amount", 1.5);
+        var structured = new StructuredIntent(original.structuredIntent().action(), resources,
+                original.structuredIntent().constraints());
+        var intent = new IntentL1(original.version(), original.intentId(), original.intentConversation(),
+                original.intentSummary(), structured, original.timestamp(), original.sign());
+
+        var error = assertThrows(A4pException.class, () -> codec.serializeIntentL1(intent));
+        assertEquals(A4P_SERIALIZE_FAIL, error.code());
+        assertTrue(error.getMessage().contains("$/structuredIntent/resources/items/0/amount"));
+        assertNotNull(error.getCause());
+        assertEquals(A4P_SERIALIZE_FAIL,
+                assertThrows(A4pException.class, () -> A4pIntentCodec.toSignableBytes(intent)).code());
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {9_007_199_254_740_992L, 9_007_199_254_740_993L, -9_007_199_254_740_993L})
+    void rejectsUnsafeIntegersBeforeCanonicalization(long timestamp) {
+        var original = authorized(constraints()).intentL2().intentL1();
+        var intent = new IntentL1(original.version(), original.intentId(), original.intentConversation(),
+                original.intentSummary(), original.structuredIntent(), timestamp, original.sign());
+
+        var error = assertThrows(A4pException.class, () -> codec.serializeIntentL1(intent));
+        assertEquals(A4P_SERIALIZE_FAIL, error.code());
+        assertTrue(error.getMessage().contains("safe range"));
+    }
+
+    @Test
+    void preservesLargestSafeTimestampAcrossRoundTrip() {
+        var original = authorized(constraints()).intentL2().intentL1();
+        var intent = new IntentL1(original.version(), original.intentId(), original.intentConversation(),
+                original.intentSummary(), original.structuredIntent(), CanonicalJson.MAX_SAFE_INTEGER, original.sign());
+
+        var result = codec.deserializeIntentL1(codec.serializeIntentL1(intent));
+        assertTrue(result.success(), result.message());
+        assertEquals(intent.timestamp(), result.data().timestamp());
+    }
 
     @ParameterizedTest
     @ValueSource(strings = {"0.5", "-0.5", "1.0", "0.0", "-0.0", "1e0", "1E+3", "1e-3", "1e-400", "9007199254740991.0"})

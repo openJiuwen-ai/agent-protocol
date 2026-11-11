@@ -187,6 +187,8 @@ record 提供规范构造器和标准 `equals`、`hashCode`、`toString`。`Sign
 
 ## 序列化与持久化
 
+编解码器递归要求 JSON 数值为 `-9007199254740991` 至 `9007199254740991` 闭区间内的整数。序列化遇到 `1.0` 等浮点值或超出范围的整数时，抛出错误码为 `A4P_SERIALIZE_FAIL`（5001）的 `A4pException`。反序列化遇到浮点 token 或超出范围的整数时，返回 `A4P_DESERIALIZE_FAIL`（5002）。
+
 `A4pIntentCodec` 是带公开无参构造器的公开具体类，可直接使用，无须应用自行实现或查找工厂。
 
 ```java

@@ -246,9 +246,11 @@ public class A4pIntentCodec {
         return CanonicalJson.encodeUtf8(CanonicalJson.stringify(node));
     }
 
-    /** Converts protocol values to JSON, omitting null object fields recursively. */
+    /** Converts protocol values to JSON, omitting null object fields and validating numbers recursively. */
     static JsonNode toJsonNode(Object value) {
-        return omitNullFields(CanonicalJson.MAPPER.valueToTree(value));
+        JsonNode node = omitNullFields(CanonicalJson.MAPPER.valueToTree(value));
+        validateNumbers(node, A4P_SERIALIZE_FAIL);
+        return node;
     }
 
     static JsonNode omitNullFields(JsonNode node) {
@@ -294,26 +296,34 @@ public class A4pIntentCodec {
         }
     }
 
-    /** Enforces protocol safe integers recursively before typed conversion. */
-    private static void rejectUnsafeIntegers(JsonNode node) {
+    /** Applies the protocol numeric constraints before canonicalization or typed conversion. */
+    private static void validateNumbers(JsonNode node, A4pErrorCode code) {
+        rejectFloatingPointValues(node, "$", code);
+        rejectUnsafeIntegers(node, code);
+    }
+
+    /** Rejects integers outside the protocol's safe range recursively. */
+    private static void rejectUnsafeIntegers(JsonNode node, A4pErrorCode code) {
         if (node.isIntegralNumber()) {
             Validation.require(node.bigIntegerValue().abs().compareTo(
                     java.math.BigInteger.valueOf(CanonicalJson.MAX_SAFE_INTEGER)) <= 0,
-                    A4P_DESERIALIZE_FAIL, "Integer exceeds the interoperable safe range");
+                    code, "Integer exceeds the interoperable safe range");
         }
-        if (node.isContainerNode()) { node.forEach(A4pIntentCodec::rejectUnsafeIntegers); }
+        if (node.isContainerNode()) {
+            node.forEach(child -> rejectUnsafeIntegers(child, code));
+        }
     }
 
-    /** Rejects floating-point tokens before typed conversion, including arbitrary payloads. */
-    private static void rejectFloatingPointValues(JsonNode node, String path) {
-        Validation.require(!node.isFloatingPointNumber(), A4P_DESERIALIZE_FAIL,
+    /** Rejects floating-point nodes recursively and reports their location. */
+    private static void rejectFloatingPointValues(JsonNode node, String path, A4pErrorCode code) {
+        Validation.require(!node.isFloatingPointNumber(), code,
                 "Floating-point values are not allowed at " + path);
         if (node.isObject()) {
             node.properties().forEach(entry -> rejectFloatingPointValues(entry.getValue(),
-                    path + "/" + entry.getKey().replace("~", "~0").replace("/", "~1")));
+                    path + "/" + entry.getKey().replace("~", "~0").replace("/", "~1"), code));
         } else if (node.isArray()) {
             for (int index = 0; index < node.size(); index++) {
-                rejectFloatingPointValues(node.get(index), path + "/" + index);
+                rejectFloatingPointValues(node.get(index), path + "/" + index, code);
             }
         }
     }
@@ -329,8 +339,7 @@ public class A4pIntentCodec {
         Validation.require(json != null && !json.isEmpty(), A4P_INVALID_PARAMETER, "JSON input must not be null or empty");
         JsonNode parsed = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json));
         rejectNullValues(parsed);
-        rejectFloatingPointValues(parsed, "$");
-        rejectUnsafeIntegers(parsed);
+        validateNumbers(parsed, A4P_DESERIALIZE_FAIL);
         try {
             return CanonicalJson.MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {

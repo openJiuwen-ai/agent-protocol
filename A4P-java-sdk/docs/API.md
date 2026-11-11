@@ -188,6 +188,8 @@ See [Serialization and signature rules](serialization_and_signature_rules.md).
 
 ## Serialization and persistence
 
+The codec recursively requires integer JSON numbers between `-9007199254740991` and `9007199254740991`, inclusive. Floating-point values such as `1.0` and integers outside that range cause serialization to throw `A4pException` with `A4P_SERIALIZE_FAIL` (5001). Decoding rejects floating-point tokens and out-of-range integers with `A4P_DESERIALIZE_FAIL` (5002).
+
 `A4pIntentCodec` is a public concrete class with a public no-argument constructor. Use the provided codec directly; no application implementation or factory is required.
 
 ```java
