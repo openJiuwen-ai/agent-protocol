@@ -273,7 +273,7 @@ export default function a4pHttpTest() {
         const body: string = '{"data":"{\\"version\\":\\"1.0\\"}"}';
         const response = buildHttpResponse(200, body);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pHttp.parseIntentProposalResponse(response);
         });
       });
@@ -376,7 +376,7 @@ export default function a4pHttpTest() {
         const body: string = '{"data":"{\\"version\\":\\"1.0\\"}"}';
         const response = buildHttpResponse(200, body);
 
-        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
           A4pHttp.parseIntentAuthorizationResponse(response);
         });
       });
