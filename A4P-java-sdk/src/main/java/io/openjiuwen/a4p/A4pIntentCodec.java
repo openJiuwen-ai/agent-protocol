@@ -152,10 +152,9 @@ public class A4pIntentCodec {
     }
 
     /**
-     * Restores IntentExecutionContext from JSON with structural and protocol validation.
+     * Restores IntentExecutionContext from canonical JSON with structural and numeric validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
-     * Checks integer timestamp formats, ledger reachability and accounting consistency; older contexts without activatedTime are rejected.
-     * Audit timestamps are not compared with each other, execution times or authorization validity boundaries.
+     * Requires activatedTime and restores the persisted status, ledger and quota snapshot as supplied.
      * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */

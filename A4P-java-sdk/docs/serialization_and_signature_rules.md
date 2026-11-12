@@ -8,31 +8,38 @@ A4P uses the [RFC 8785](https://www.rfc-editor.org/info/rfc8785/) JSON Canonical
 
 JCS canonicalization meets the following requirements:
 
-* JSON object fields are sorted deterministically according to JCS rules, with nested objects processed recursively;
-* JSON arrays retain their original element order; canonicalization must not reorder array elements;
-* Whitespace that does not affect semantics is omitted;
-* String contents retain their original Unicode data, without additional Unicode normalization;
-* JSON objects must not contain duplicate field names;
+* JSON object fields are sorted deterministically according to JCS rules, with nested objects processed recursively.
+* JSON arrays retain their original element order.
+* Whitespace that does not affect semantics is omitted.
+* String contents retain their original Unicode data, without additional Unicode normalization.
+* JSON objects must not contain duplicate field names.
 * The canonicalized JSON is encoded as UTF-8 to produce the `byte[]` to be signed.
 
-For interoperable A4P data, use integers in the inclusive range `-9007199254740991` to `9007199254740991` throughout the payload, including `SigningEnv.device` and `SigningEnv.app`. Java lifecycle methods apply field-specific validation, such as requiring non-negative safe integer timestamps and positive safe integer amounts. Before JCS canonicalization, the public Java serializers recursively check numeric values. A floating-point value or an integer outside the safe range causes an `A4pException` with `A4P_SERIALIZE_FAIL` (5001).
+A4P also imposes the following data requirements.
 
-Note: JSON in HTTP messages does not need to be canonicalized and can be transmitted directly. The receiver should first parse the JSON, then regenerate canonicalized bytes according to the rules above for signature verification. Therefore, field order and formatting whitespace in HTTP messages do not affect signature verification.
+* Data must not contain fractional numbers.
+* Field values must not be `null`. Optional fields may be omitted.
+* Numeric values in the payload must be integers in the inclusive range `-9007199254740991` to `9007199254740991`, including numeric values in `SigningEnv.device` and `SigningEnv.app`.
+* Some fields have additional constraints. For example, timestamps must be non-negative safe integers, and amounts must be positive safe integers.
+
+The public Java serialization methods recursively validate numeric values before JCS canonicalization. If they encounter a floating-point value or an integer outside the safe range, they throw an `A4pException` with code `A4P_SERIALIZE_FAIL` (5001). When the input format is invalid, the Java deserialization methods report `A4P_DESERIALIZE_FAIL` (5002) in an `A4pResult`.
 
 Examples:
 
 ```text
-{"b":1,"a":2}                 -> {"a":2,"b":1}
-[3,1,2]                       -> [3,1,2]
-{"10":1,"2":2}                -> {"10":1,"2":2}
-9007199254740991               -> 9007199254740991
-1.5                           -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
-9007199254740993              -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
+{"b":1,"a":2}                      -> {"a":2,"b":1}
+[3,1,2]                            -> [3,1,2]
+{"10":1,"2":2}                     -> {"10":1,"2":2}
+{"optional": null, "required": 10} -> Java codec rejects null on deserialization (5002) and omits null-valued fields on serialization
+{"required": 10}                   -> {"required": 10}
+9007199254740991                   -> 9007199254740991
+1.5                                -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
+9007199254740993                   -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
 {"sign":"outer","nested":{"sign":"inner"}}
-signed bytes                  -> {"nested":{"sign":"inner"}}
+signed bytes                       -> {"nested":{"sign":"inner"}}
 ```
 
-Canonicalization is implemented internally by the Java SDK. Use the public `A4pIntentCodec` for serialization; signing callbacks receive the canonical bytes directly.
+The Java SDK handles canonicalization internally. Use the public `A4pIntentCodec` for serialization. Signing callbacks receive the canonical bytes directly.
 
 ## Serialization/Deserialization API
 

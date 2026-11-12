@@ -207,9 +207,9 @@ IntentExecutionContext restoredContext = restored.data();
 
 The codec supports L1, L2, L3 and Context. Deserialization requires the input to match the corresponding serializer output character for character. Extra formatting whitespace, reordered fields and alternate escapes are rejected. Keep the original serializer output when storing or forwarding it. For existing data that was reformatted, regenerate it with the corresponding SDK serializer from the original object or a trusted copy.
 
-Serialization takes a consistent Context snapshot under its lock. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Activation initializes them from the SDK protocol version and the authorized L1 intent ID. Deserialization preserves the two stored strings as supplied, along with the stored ledger and quota snapshot.
+Serialization takes a consistent Context snapshot under its lock. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Deserialization preserves the stored Context, even if the value of certain fields is invalid.
 
-Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
+Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Persist only one copy of each Intent and each Context.
 
 ## Result codes
 
