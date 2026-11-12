@@ -37,9 +37,11 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 所有时间戳和显式 `now` 参数均为 Unix epoch 毫秒。生命周期操作必须显式传入 `now`；显式时间必须来自可信时钟。协议数值为 ±9007199254740991 范围内的整数；时间戳非负，金额与数量为正整数。金额使用应用约定的货币最小单位。
 
+时间戳的校验均在意图中心执行。意图中心需要提供可信任的时钟。下面是部分意图中心调用 API 的要求:
+
 | 操作 | 时间要求 |
 | --- | --- |
-| `createIntent`、`issueIntent` | 要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；先于签名或验签检查。`issueIntent` 不比较 now 与 L1.timestamp。 |
+| `issueIntent` | 验签前要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）。不比较 `now` 与 `L1.timestamp`。 |
 | `signIntent` | 仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。 |
 | `activateIntent` | `now <= validUntil`，否则返回过期；保存 `activatedTime = now`。 |
 | `createExecution` | `validFrom <= now <= validUntil`；过早返回 3003，过期返回 3002，并可能将 Context 置为 EXPIRED。 |
@@ -57,7 +59,7 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 | 类型 | 签名 | 说明 |
 | --- | --- | --- |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）。 |
+| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | 创建并签名 L1；请求可省略 intentId，由 SDK 生成。将 `now` 用作 L1 时间戳，允许在 `validUntil` 之后创建。 |
 | `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | 校验 L1 和 Agent 签名，绑定身份后由服务端签发 L2。验签前要求 `now <= validUntil`，否则返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L1.timestamp。 |
 | `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | 验证 L2 服务端签名，绑定签名环境并生成用户签名的 L3。校验 L2 和内嵌 L1 的版本；仅校验时间戳格式，不比较 now 与 L2.timestamp 或 validUntil。允许在 `validFrom` 前提前签署；生效前预留由 `createExecution` 返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。 |
 | `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | 要求 `now <= validUntil`，再验证 L3 用户签名并创建 ACTIVE Context，记录 `activatedTime = now`。过期返回 `A4P_TIMESTAMP_EXPIRED`（3002）；不比较 now 与 L3.timestamp。 |

@@ -37,9 +37,11 @@ Serialization, payment helpers and model normalization can throw `A4pException`;
 
 All timestamps and explicit `now` arguments are Unix epoch milliseconds. Lifecycle operations require an explicit `now` argument; explicit clocks must be trusted. Numeric protocol values are integers within ±9007199254740991; timestamps are non-negative. Amounts and quantities are positive integers. Amount units are application-defined minor currency units.
 
+The Intent Center validates all timestamps and must provide a trusted clock. The following requirements apply to some APIs called by the Intent Center:
+
 | Operation | Time requirements |
 | --- | --- |
-| `createIntent`, `issueIntent` | `now <= validUntil`; otherwise `A4P_TIMESTAMP_EXPIRED` (3002), before signing or verification. `issueIntent` does not compare now with L1.timestamp. |
+| `issueIntent` | Requires `now <= validUntil` before verification. Otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare `now` with `L1.timestamp`. |
 | `signIntent` | Validates the timestamp format only; does not compare now with L2.timestamp or validUntil. |
 | `activateIntent` | `now <= validUntil`; otherwise A4P_TIMESTAMP_EXPIRED (3002). Stores `activatedTime = now`. |
 | `createExecution` | `validFrom <= now <= validUntil`. Too early returns 3003; expiration returns 3002 and can mark the context EXPIRED. |
@@ -58,7 +60,7 @@ The following timestamps are used only for auditing:
 
 | Type | Signature | Behavior |
 | --- | --- | --- |
-| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | Create and agent-sign L1; generate intentId when omitted. Requires `now <= validUntil`; otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). |
+| `A4p` | `static A4pResult<IntentL1> createIntent(CreateIntentRequest request, Signer agentSigner, long now)` | Create and agent-sign L1; generate intentId when omitted. Uses `now` as the L1 timestamp and allows creation after `validUntil`. |
 | `A4p` | `static A4pResult<IntentL2> issueIntent(IntentL1 intent, SignatureVerifier agentVerifier, IntentIssueContext context, Signer serverSigner, long now)` | Validate L1 and its agent signature, bind identities and server-sign L2. Requires `now <= validUntil` before verification; otherwise returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L1.timestamp. |
 | `A4p` | `static A4pResult<IntentL3> signIntent(IntentL2 intent, SignatureVerifier serverVerifier, SigningEnv environment, Signer userSigner, long now)` | Verify the L2 server signature, attach the signing environment and user-sign L3. Checks both L2 and L1 versions. Validates the timestamp format but does not compare now with L2.timestamp or validUntil. Signing before `validFrom` is allowed; `createExecution` rejects early reservations with `A4P_TIMESTAMP_TOO_EARLY` (3003). |
 | `A4p` | `static A4pResult<IntentExecutionContext> activateIntent(IntentL3 intent, SignatureVerifier userVerifier, long now)` | Require `now <= validUntil`, then verify the L3 user signature and create an ACTIVE context with `activatedTime = now`. Expiration returns `A4P_TIMESTAMP_EXPIRED` (3002). Does not compare now with L3.timestamp. |

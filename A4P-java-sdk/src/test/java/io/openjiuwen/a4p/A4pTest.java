@@ -555,7 +555,8 @@ class A4pTest {
             ok(codec.deserializeIntentExecutionContext(invalid));
             fails(A4P_TIMESTAMP_EXPIRED, A4p.activateIntent(signed, VERIFIER, 100_001));
         }
-        fails(A4P_TIMESTAMP_EXPIRED, A4p.createIntent(request(constraints()), SIGNER, 100_001));
+        IntentL1 createdAfterValidUntil = ok(A4p.createIntent(request(constraints()), SIGNER, 100_001));
+        assertEquals(100_001L, createdAfterValidUntil.timestamp());
         fails(A4P_TIMESTAMP_EXPIRED, A4p.issueIntent(first, VERIFIER, issueContext(), SIGNER, 100_001));
     }
 
