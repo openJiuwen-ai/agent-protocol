@@ -27,7 +27,7 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 ## 返回结果与异常
 
-生命周期方法和反序列化方法返回 `A4pResult<T>`。先检查 `success()`，再读取 `data()`：成功时数据非空、结果码为 `0`；失败时数据为 null、结果码非零。业务判断应使用数值结果码。公开结果构造器在 success/data/code 不一致时抛出 `IllegalArgumentException`。`toString()` 不包含业务载荷。
+生命周期方法和反序列化方法返回 `A4pResult<T>`。先检查 `success()`，再读取 `data()`：成功时数据非空、结果码为 `0`；失败时数据为 null、结果码非零。业务判断应使用数值结果码。公开结果构造器在 success/data/code 不一致时抛出 `IllegalArgumentException`。
 
 序列化、支付辅助方法和模型规范化可能抛出 `A4pException`，可通过 `code()` 读取 `A4pErrorCode`。返回结果的方法遇到非预期运行时缺陷时会抛出 `A4pException(A4P_INTERNAL_ERROR)`，而非返回普通失败结果。
 
@@ -84,8 +84,8 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 | `A4pResult` | `boolean success()` | 读取操作成功标志。 |
 | `A4pResult` | `T data()` | 读取成功数据；失败时为 null。 |
 | `A4pResult` | `long code()` | 读取结果码或异常对应的错误码。 |
-| `A4pResult` | `String message()` | 读取诊断说明（SDK 生成的结果使用固定英文消息）。 |
-| `A4pResult` | `String toString()` | 返回不包含业务数据的结果摘要。 |
+| `A4pResult` | `String message()` | 读取诊断说明. |
+| `A4pResult` | `String toString()` | 返回包含 `success`、`code` 和 `message` 的结果摘要，省略 `data`。 |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | 构造结果；成功要求数据非空且结果码为 0，失败要求数据为空且结果码非 0。 |
 | `IntentExecutionContext` | `long activatedTime()` | 读取激活时的毫秒时间戳，序列化与恢复时保留。 |
 | `IntentExecutionContext` | `Long revokedTime()` | 读取撤销时的 Unix 毫秒时间戳，未撤销时返回 `null`。 |

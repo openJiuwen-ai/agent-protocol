@@ -27,7 +27,7 @@ The SDK reserves and accounts for authorization; the application performs the ex
 
 ## Results and exceptions
 
-Lifecycle methods and deserializers return `A4pResult<T>`. Check `success()` before reading `data()`: success has non-null data and code `0`; failure has null data and a nonzero code. Branch on numeric codes rather than message text. The public result constructor throws `IllegalArgumentException` for inconsistent success/data/code combinations. `toString()` excludes business payloads.
+Lifecycle methods and deserializers return `A4pResult<T>`. Check `success()` before reading `data()`: success has non-null data and code `0`; failure has null data and a nonzero code. Branch on numeric codes rather than message text. The public result constructor throws `IllegalArgumentException` for inconsistent success/data/code combinations.
 
 Serialization, payment helpers and model normalization can throw `A4pException`; inspect `code()` for its `A4pErrorCode`. Unexpected runtime defects in result-returning operations surface as `A4pException(A4P_INTERNAL_ERROR)` rather than ordinary failure results.
 
@@ -85,8 +85,8 @@ The following timestamps are used only for auditing:
 | `A4pResult` | `boolean success()` | Read the success flag. |
 | `A4pResult` | `T data()` | Read success data, or null on failure. |
 | `A4pResult` | `long code()` | Read the result code or exception error code. |
-| `A4pResult` | `String message()` | Read the diagnostic message (SDK-generated results use fixed English messages). |
-| `A4pResult` | `String toString()` | Return a result summary without business payloads. |
+| `A4pResult` | `String message()` | Read the diagnostic message.  |
+| `A4pResult` | `String toString()` | Return a result summary containing `success`, `code`, and `message`, with `data` omitted. |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | Construct a result; success requires non-null data and code 0, failure requires null data and a nonzero code. |
 | `IntentExecutionContext` | `long activatedTime()` | Read the activation timestamp in epoch milliseconds, preserved across serialization. |
 | `IntentExecutionContext` | `Long revokedTime()` | Read the revocation timestamp in Unix epoch milliseconds. Returns `null` before revocation. |
