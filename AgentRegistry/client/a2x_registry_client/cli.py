@@ -48,16 +48,27 @@ def _resolve_login_base_url(args: argparse.Namespace) -> str:
 
     ``--token`` is documented as the scripted path ("for scripts"), so a
     closed/redirected stdin must not turn the optional base-URL prompt into
-    an EOFError traceback; fall back to DEFAULT_BASE_URL instead.
+    an EOFError traceback; fall back to DEFAULT_BASE_URL instead. Without
+    ``--token`` the prompt still reads stdin, so a caller piping the URL and
+    the token in sequence keeps working.
     """
     if args.base_url:
         return args.base_url
-    if not sys.stdin.isatty():
-        # Say which URL was chosen: a silent default is how `--base-url X` in
-        # front of the subcommand used to disappear unnoticed.
-        print(f"note: no --base-url given; using {DEFAULT_BASE_URL}", file=sys.stderr)
-        return DEFAULT_BASE_URL
-    return input(f"Registry URL [{DEFAULT_BASE_URL}]: ").strip() or DEFAULT_BASE_URL
+    interactive = sys.stdin is not None and sys.stdin.isatty()
+    if args.token and not interactive:
+        return _fallback_base_url()
+    try:
+        return input(f"Registry URL [{DEFAULT_BASE_URL}]: ").strip() or DEFAULT_BASE_URL
+    except EOFError:
+        # A TTY check is not proof of input: Windows reports `< NUL` as a TTY.
+        return _fallback_base_url()
+
+
+def _fallback_base_url() -> str:
+    # Say which URL was chosen: a silent default is how `--base-url X` in
+    # front of the subcommand used to disappear unnoticed.
+    print(f"note: no --base-url given; using {DEFAULT_BASE_URL}", file=sys.stderr)
+    return DEFAULT_BASE_URL
 
 
 def cmd_login(args: argparse.Namespace) -> int:
