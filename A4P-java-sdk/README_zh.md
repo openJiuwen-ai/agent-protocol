@@ -164,7 +164,7 @@ if (!completed.success()) { throw new IllegalStateException("Completion failed: 
 PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 ```
 
-使用 `new A4pIntentCodec()` 序列化与恢复。激活后和每次更新后均须持久化 Context，并在事务中串行执行同一意图的数据库读取、更新与写回。Context JSON 仅用于本地持久化；恢复不会验证签名或存储完整性。
+使用 `new A4pIntentCodec()` 序列化与恢复。激活后和每次更新后均须持久化 Context，并在事务中串行执行同一意图的数据库读取、更新与写回。Context JSON 仅用于本地持久化。恢复时检查必填字段和数据类型，并直接读取持久化的账本和额度快照。恢复时不会验证签名或存储完整性。详见 [序列化与持久化](docs/API_zh.md#序列化与持久化)。
 
 ### 结果码
 
@@ -212,6 +212,5 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 
 测试覆盖生命周期、配额回滚、订单幂等、购物车一一匹配、检查顺序、过期终结、终态、消费、白名单校验、
 周期边界、空白与结构校验、结果模型、类型联合载荷、线格式名称与枚举编码、并发预留、canonical 向量、
-分离的签名元数据、畸形输入、验证器结果一致性、执行 context 的持久化与恢复（包括状态可达性与记录
-时间戳），以及真实的 RSA 签名验证与篡改检测。测试夹具中的 digest 签名器只是一个确定性的测试替身，
+分离的签名元数据、畸形输入、验证器结果一致性、执行 context 的持久化与恢复（包括必填字段与记录时间戳类型），以及真实的 RSA 签名验证与篡改检测。测试夹具中的 digest 签名器只是一个确定性的测试替身，
 不得用于授权。

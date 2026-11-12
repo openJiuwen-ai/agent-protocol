@@ -16,11 +16,15 @@ import java.util.List;
  * @see A4p
  */
 public final class IntentExecutionContext {
+    /** Version stored in the context snapshot. */
+    private final String version;
+    /** Intent identifier stored in the context snapshot. */
+    private final String intentId;
     /** Authorized L3 snapshot bound to this context. */
     private final IntentL3 authorizedIntent;
     /** Activation instant in Unix epoch milliseconds. */
     private final long activatedTime;
-    /** Revocation instant in Unix epoch milliseconds, or null before revocation. */
+    /** Revocation instant in Unix epoch milliseconds, or null when absent. */
     private Long revokedTime;
     /** Decoded payment resource whitelist. */
     private final ShoppingItems resources;
@@ -43,41 +47,47 @@ public final class IntentExecutionContext {
 
     /**
      * Initializes an execution context from an authorized L3 intent and activation time.
-     * Restoration overloads retain the supplied ledger and recompute the stored accounting period.
      * @param authorizedIntent authorized L3 snapshot
      * @param now trusted non-negative Unix epoch milliseconds within the safe integer range
      */
     IntentExecutionContext(IntentL3 authorizedIntent, long now) {
-        this(now, authorizedIntent, null);
+        this(A4p.PROTOCOL_VERSION, authorizedIntent.intentL2().intentL1().intentId(),
+                now, authorizedIntent, null);
         Accounting.recompute(this, now);
     }
 
-    // Restores a persisted context; executionInfo is recomputed for the period it was last computed in.
     /**
-     * Initializes an execution context from an authorized L3 intent and activation time.
-     * Restoration overloads retain the supplied ledger and recompute the stored accounting period.
+     * Restores the persisted identifiers, status, ledger and quota snapshot.
+     * @param version persisted context version
+     * @param intentId persisted context intent identifier
      * @param authorizedIntent authorized L3 snapshot
-     * @param status context execution state
+     * @param status persisted execution state
      * @param ledger execution records paired with decoded orders
-     * @param period accounting period index, or null when periodic limits are absent
+     * @param executionInfo persisted quota snapshot
      * @param activatedTime activation instant in Unix epoch milliseconds
-     * @param revokedTime revocation instant, or null when not revoked
+     * @param revokedTime optional revocation instant
      */
-    IntentExecutionContext(IntentL3 authorizedIntent, IntentExecutionStatus status, List<Entry> ledger,
-                           Long period, long activatedTime, Long revokedTime) {
-        this(activatedTime, authorizedIntent, revokedTime);
+    IntentExecutionContext(String version, String intentId, IntentL3 authorizedIntent,
+                           IntentExecutionStatus status, List<Entry> ledger, PaymentExecutionInfo executionInfo,
+                           long activatedTime, Long revokedTime) {
+        this(version, intentId, activatedTime, authorizedIntent, revokedTime);
         this.status = status;
         this.ledger.addAll(ledger);
-        this.executionInfo = Accounting.executionInfo(this, period);
+        this.executionInfo = executionInfo;
     }
 
     /**
-     * Initializes an execution context from an authorized L3 intent and activation time.
-     * Restoration overloads retain the supplied ledger and recompute the stored accounting period.
+     * Initializes the shared authorization data for new and restored contexts.
+     * @param version context version
+     * @param intentId context intent identifier
      * @param activatedTime activation instant in Unix epoch milliseconds
-     * @param authorizedIntent authorized L3 snapshot
+     * @param authorizedIntent authorized L3 snapshot containing the payment resources and constraints
+     * @param revokedTime optional revocation instant
      */
-    private IntentExecutionContext(long activatedTime, IntentL3 authorizedIntent, Long revokedTime) {
+    private IntentExecutionContext(String version, String intentId, long activatedTime,
+                                   IntentL3 authorizedIntent, Long revokedTime) {
+        this.version = version;
+        this.intentId = intentId;
         this.revokedTime = revokedTime;
         this.activatedTime = activatedTime;
         this.authorizedIntent = authorizedIntent;
@@ -86,7 +96,7 @@ public final class IntentExecutionContext {
         this.constraints = PaymentProfile.constraints(intent);
     }
 
-    /** Returns the revocation instant, or null before revocation. */
+    /** Returns the revocation instant, or null when absent. */
     public synchronized Long revokedTime() { return revokedTime; }
 
     /** Updates the revocation instant; callers must hold the context lock. */
@@ -99,15 +109,15 @@ public final class IntentExecutionContext {
     public long activatedTime() { return activatedTime; }
 
     /**
-     * Returns the supported protocol version.
-     * @return protocol version
+     * Returns the version stored in this context.
+     * @return context version
      */
-    public String version() { return A4p.PROTOCOL_VERSION; }
+    public String version() { return version; }
     /**
-     * Returns the identifier of the authorized intent.
-     * @return associated intent identifier
+     * Returns the intent identifier stored in this context.
+     * @return context intent identifier
      */
-    public String intentId() { return authorizedIntent.intentL2().intentL1().intentId(); }
+    public String intentId() { return intentId; }
     /**
      * Returns the authorized L3 snapshot associated with this context.
      * @return authorized L3 snapshot

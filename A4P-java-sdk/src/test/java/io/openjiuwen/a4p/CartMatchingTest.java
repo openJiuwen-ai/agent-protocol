@@ -40,8 +40,9 @@ class CartMatchingTest {
                 () -> CartMatching.requireOneToOne(cart(A, B, A), List.of(group(A, B), group(A, B), group(A))));
     }
 
+    /** Covers carts with fewer or more items than there are whitelist groups. */
     @Test
-    void rejectsCartsWhoseSizeDiffersFromTheWhitelist() {
+    void rejectsCartSizeDifferentFromWhitelistGroupCount() {
         thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A), List.of(group(A), group(B))));
         thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A, B), List.of(group(A, B))));
     }

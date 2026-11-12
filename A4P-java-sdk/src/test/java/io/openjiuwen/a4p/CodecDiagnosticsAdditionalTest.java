@@ -20,8 +20,9 @@ class CodecDiagnosticsAdditionalTest {
         A4pException parseError = assertThrows(A4pException.class, () -> CanonicalJson.parse("{"));
         assertNotNull(parseError.getCause());
     }
-@Test
-    void rejectsFloatingPointTokensRecursivelyAtEveryCodecEntry() {
+    /** Checks the diagnostic path for a floating-point array element. */
+    @Test
+    void reportsNestedFloatingPointPathInEveryDecoder() {
         for (String number : List.of("1.5", "1.0", "1e0", "-0.0", "1E+2")) {
             String input = "{\"payload\":{\"items\":[" + number + "]}}";
             for (A4pResult<?> result : List.of(codec.deserializeIntentL1(input),

@@ -91,9 +91,9 @@ The following timestamps are used only for auditing:
 | `A4pResult` | `String toString()` | Return a result summary containing `success`, `code`, and `message`, with `data` omitted. |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | Construct a result; success requires non-null data and code 0, failure requires null data and a nonzero code. |
 | `IntentExecutionContext` | `long activatedTime()` | Read the activation timestamp in epoch milliseconds, preserved across serialization. |
-| `IntentExecutionContext` | `Long revokedTime()` | Read the revocation timestamp in Unix epoch milliseconds. Returns `null` before revocation. |
-| `IntentExecutionContext` | `String version()` | Read the protocol version. |
-| `IntentExecutionContext` | `String intentId()` | Read the associated intent identifier. |
+| `IntentExecutionContext` | `Long revokedTime()` | Read the revocation timestamp in Unix epoch milliseconds. Returns `null` when the timestamp is absent. |
+| `IntentExecutionContext` | `String version()` | Read the stored Context version. |
+| `IntentExecutionContext` | `String intentId()` | Read the stored Context intent identifier. |
 | `IntentExecutionContext` | `IntentL3 authorizedIntent()` | Read the authorized L3 snapshot. |
 | `IntentExecutionContext` | `synchronized IntentExecutionStatus status()` | Read the intent execution status. |
 | `IntentExecutionContext` | `synchronized List<ExecutionRecord> executions()` | Read an immutable ledger snapshot. |
@@ -207,7 +207,7 @@ IntentExecutionContext restoredContext = restored.data();
 
 The codec supports L1, L2, L3 and Context. Deserialization requires the input to match the corresponding serializer output character for character. Extra formatting whitespace, reordered fields and alternate escapes are rejected. Keep the original serializer output when storing or forwarding it. For existing data that was reformatted, regenerate it with the corresponding SDK serializer from the original object or a trusted copy.
 
-Serialization takes a consistent Context snapshot under its lock. `revokedTime` is required for `REVOKED` and omitted in other states. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Intent deserializers check structure. Context restoration also checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
+Serialization takes a consistent Context snapshot under its lock. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Activation initializes them from the SDK protocol version and the authorized L1 intent ID. Deserialization preserves the two stored strings as supplied, along with the stored ledger and quota snapshot.
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
 
@@ -237,15 +237,22 @@ Restoration does not authenticate stored data or reverify signatures. Protect pe
 
 Code 4003 is retained for ArkTS compatibility; Java uses 4004 for per-period execution-count limits.
 
+## Version Validation and Compatibility
+
+Lifecycle APIs that accept an Intent, as well as `verifyIntentAuthenticity`, require every layer of the supplied Intent to use the SDK’s protocol version. `revokeIntent`, `createExecution`, `completeExecution`, and `cancelExecution` require the Context version and the version at every layer of its authorizing Intent to match the SDK’s protocol version.
+
+If any required version is unsupported, the API returns `A4P_UNSUPPORTED_VERSION` (1002). A persisted Context with an unsupported version can still be decoded for inspection. Before resuming lifecycle operations, use an SDK that supports the stored version.
+
 ## Usage contract
 
 1. Create or restore all Intent and Context structures through SDK APIs. Hand-assembled lifecycle structures may cause undefined behavior. Applications may construct the documented request, identity, environment and order input models.
-2. Follow the lifecycle: createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution or cancelExecution. An ACTIVE Context may be revoked.
+2. Follow the lifecycle in order: `createIntent` → `issueIntent` → `signIntent` → `activateIntent` → `createExecution` → `completeExecution` or `cancelExecution`. Call `revokeIntent` only for an `ACTIVE` Context. Use trusted Intent and Context inputs for these APIs.
 3. Do not repeat the same lifecycle step for an Intent, activation/revocation for a Context, or reservation/finalization for an Execution. An ACTIVE Context may process distinct Executions; reads and serialization may be repeated.
 4. Persist the Context object returned by activateIntent and other APIs returning a Context. Even if createExecution fails, it may change the status to EXPIRED; persist the current Context in that case as well. Persistence is not performed automatically by the SDK.
 5. The SDK does not protect persisted Contexts against tampering or verify their integrity. Add caller-side verification where required; structural checks during deserialization are not security integrity checks.
 6. Serialized Contexts are for local persistence only and must not be transmitted as network messages.
-7. Authorization APIs (Intent-related APIs) do not enforce chronological ordering of L1/L2/L3 timestamps; these timestamps are used for auditing.
+7. The L1, L2 and L3 Intent creation timestamps are used for auditing. The authorization APIs do not check their chronological order.
 8. Implementations of the signing and signature-verification interfaces must conform to the specification.
-9. The caller must enforce idempotency for Intent and Context operations.
+9. Callers must enforce idempotency for Intent, Context and Execution operations. Each `intentId` identifies one Intent at each of L1, L2 and L3 and one Context. Each `executionId` must be unique within its Context.
 10. Prevent concurrent API calls.
+11. Pass trusted objects to serialization APIs and trusted strings to deserialization APIs. Untrusted input may produce untrustworthy output even when the operation succeeds.

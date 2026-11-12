@@ -35,8 +35,9 @@ class A4pTest {
         assertEquals(NOW + 1, context.revokedTime());
     }
 
+    /** Covers revocation with an earlier clock and rejects missing or incorrectly typed activation times. */
     @Test
-    void futureActivationCannotBeRevokedAndInvalidPersistedTimesAreRejected() {
+    void allowsRevocationBeforeActivationAndRequiresAnIntegerActivationTimeOnRestore() {
         long future = System.currentTimeMillis() + 60_000;
         PaymentConstraints limits = new PaymentConstraints(null, 1000L, "CNY", 0L,
                 future + 60_000, null, null, null, null);
@@ -110,8 +111,9 @@ class A4pTest {
         assertEquals(1, info(context).leftExecutionCount());
     }
 
+    /** Checks the distinct reservation errors for amount, currency, whitelist and quantity violations. */
     @Test
-    void enforcesAmountCountCurrencyAndProductLimits() {
+    void enforcesAmountCurrencyProductAndCartQuantityLimits() {
         IntentExecutionContext context = context();
         fails(A4P_SINGLE_ORDER_AMOUNT_EXCEEDED, A4p.createExecution(context, execution("big", 501, 1), NOW));
         fails(A4P_CART_MISMATCH, A4p.createExecution(context, execution("many", 1, 6), NOW));
@@ -227,8 +229,9 @@ class A4pTest {
         assertEquals(2, context.executions().size());
     }
 
+    /** Exercises rejecting, throwing and inconsistent signature callbacks. */
     @Test
-    void signaturesAndCallbackFailuresAreCheckedBeforeStateChanges() {
+    void mapsSignatureRejectionsAndCallbackFailuresToProtocolResults() {
         IntentL3 intent = authorized(constraints());
         SignatureVerifier reject = (data, signature) -> new VerificationResult(false, A4P_VERIFY_FAIL.code(), "NO");
         assertFalse(ok(A4p.verifyIntentAuthenticity(intent, reject)).valid());
@@ -276,8 +279,9 @@ class A4pTest {
         fails(A4P_INVALID_PARAMETER, A4p.verifyIntentAuthenticity(null, VERIFIER));
     }
 
+    /** Checks validation at activation, intent creation and reservation. */
     @Test
-    void nestedVersionAndInvalidConstraintsAreRejected() {
+    void rejectsUnsupportedNestedVersionPartialPeriodicConstraintsAndInvalidRequests() {
         IntentL3 intent = authorized(constraints());
         IntentL1 original = intent.intentL2().intentL1();
         IntentL1 bad = new IntentL1("2.0", original.intentId(), original.intentConversation(), original.intentSummary(),
@@ -293,8 +297,9 @@ class A4pTest {
         fails(A4P_INVALID_PARAMETER, A4p.createExecution(null, execution("no-context", 1, 1), NOW));
     }
 
+    /** Checks mutator visibility and verifies that revocation time can be updated. */
     @Test
-    void contextMutatorsAreNotPublic() throws Exception {
+    void contextMutatorsArePackagePrivateAndRevocationTimeIsMutable() throws Exception {
         for (String name : List.of("revokedTime", "status", "executionInfo", "ledger")) {
             for (java.lang.reflect.Method method : IntentExecutionContext.class.getDeclaredMethods()) {
                 if (method.getName().equals(name) && (method.getParameterCount() > 0 || name.equals("ledger"))) {
@@ -375,13 +380,19 @@ class A4pTest {
         assertEquals(2, ok(new A4pIntentCodec().deserializeIntentExecutionContext(json)).executions().size());
     }
 
+    /** Checks rejection of a negative clock and of a second revocation. */
     @Test
-    void revocationUsesExplicitClockAndArkTsErrorPrecedence() {
+    void revocationRejectsInvalidTimeAndRepeatedRevocation() {
         IntentExecutionContext context = context();
         fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(context, -1));
         ok(A4p.revokeIntent(context, NOW - 1));
         assertEquals(IntentExecutionStatus.REVOKED, context.status());
         fails(A4P_INVALID_STATUS, A4p.revokeIntent(context, NOW - 1));
+    }
+
+    /** Checks the numeric wire code for a cart mismatch. */
+    @Test
+    void cartMismatchHasProtocolCode4005() {
         assertEquals(4005, A4P_CART_MISMATCH.code());
     }
 
@@ -472,21 +483,23 @@ class A4pTest {
         ok(A4p.createIntent(request(same), SIGNER, NOW));
     }
 
+    /** Separates parsing of algorithm metadata from validation during creation and issuance. */
     @Test
-    void unknownAlgorithmsAreRejectedStructurally() {
+    void codecAcceptsUnknownAlgorithmButIntentCreationAndIssuanceRejectIt() {
         IntentL1 intent = ok(A4p.createIntent(request(constraints()), SIGNER, NOW));
         IntentL1 relabeled = new IntentL1(intent.version(), intent.intentId(), intent.intentConversation(),
                 intent.intentSummary(), intent.structuredIntent(), intent.timestamp(),
                 new SignatureInfo("HS256", intent.sign().keyIdentifier(), intent.sign().sign()));
         fails(A4P_INVALID_PARAMETER, A4p.issueIntent(relabeled, VERIFIER, issueContext(), SIGNER, NOW));
         A4pIntentCodec codec = new A4pIntentCodec();
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1(codec.serializeIntentL1(relabeled)));
+        assertEquals(relabeled, ok(codec.deserializeIntentL1(codec.serializeIntentL1(relabeled))));
         Signer foreign = data -> new SignatureInfo("HS256", "key", "c2ln");
         fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), foreign, NOW));
     }
 
+    /** Checks each unsupported input version with callbacks that fail if invoked. */
     @Test
-    void signingRejectsUnsupportedVersionsAtEveryLevelBeforeSignatureCallbacks() {
+    void signingRejectsUnsupportedL1AndL2VersionsBeforeSignatureCallbacks() {
         IntentL2 second = authorized(constraints()).intentL2();
         IntentL1 first = second.intentL1();
         IntentL1 unsupportedFirst = new IntentL1("2.0", first.intentId(), first.intentConversation(),
@@ -536,6 +549,7 @@ class A4pTest {
         }
     }
 
+    /** Covers skewed signing times and verifies that restoration preserves the stored activation time. */
     @Test
     void clientClockSkewAllowsActivationAndRestoration() {
         IntentL1 first = ok(A4p.createIntent(request(constraints()), SIGNER, NOW + 1000));
@@ -550,9 +564,9 @@ class A4pTest {
             assertEquals(NOW, restored.activatedTime());
             ok(A4p.createExecution(restored, execution("skew", 100, 1), NOW));
             ok(A4p.activateIntent(signed, VERIFIER, NOW - 1));
-            String invalid = codec.serializeIntentExecutionContext(context)
+            String earlierActivation = codec.serializeIntentExecutionContext(context)
                     .replace("\"activatedTime\":" + NOW, "\"activatedTime\":" + (NOW - 1));
-            ok(codec.deserializeIntentExecutionContext(invalid));
+            assertEquals(NOW - 1, ok(codec.deserializeIntentExecutionContext(earlierActivation)).activatedTime());
             fails(A4P_TIMESTAMP_EXPIRED, A4p.activateIntent(signed, VERIFIER, 100_001));
         }
         IntentL1 createdAfterValidUntil = ok(A4p.createIntent(request(constraints()), SIGNER, 100_001));
@@ -604,8 +618,9 @@ class A4pTest {
         assertEquals(IntentExecutionStatus.EXPIRED, expiring.status());
     }
 
+    /** Checks negative and out-of-range clocks across lifecycle operations. */
     @Test
-    void invalidNowIsRejectedBeforeAnythingElse() {
+    void lifecycleOperationsRejectInvalidEvaluationTimestamps() {
         fails(A4P_INVALID_PARAMETER, A4p.createIntent(request(constraints()), SIGNER, -1));
         fails(A4P_INVALID_PARAMETER, A4p.activateIntent(authorized(constraints()), VERIFIER,
                 CanonicalJson.MAX_SAFE_INTEGER + 1));

@@ -8,7 +8,8 @@ import static io.openjiuwen.a4p.A4pErrorCode.*;
 import static org.junit.jupiter.api.Assertions.*;
 class CodecNullAdditionalTest {
  private final A4pIntentCodec codec = new A4pIntentCodec();
-@Test void nullFieldsAreOmittedOnlyByCodec() {
+    /** Compares codec null omission with canonical JSON serialization. */
+    @Test void codecOmitsNullObjectFieldsAndCanonicalJsonPreservesThem() {
  String input = "{\"z\":null,\"a\":[null,{\"b\":null}]}";
  assertEquals("{\"a\":[null,{\"b\":null}],\"z\":null}", CanonicalJson.stringify(CanonicalJson.parse(input)));
  assertEquals("{\"a\":[null,{}]}", CanonicalJson.stringify(A4pIntentCodec.toJsonNode(CanonicalJson.parse(input))));

@@ -41,7 +41,7 @@ class CodecTest {
     }
 
     @Test
-    void canonicalVectorsMatchArkts() {
+    void canonicalizesReferenceJsonVectors() {
         assertEquals("{\"a\":2,\"b\":1}", CanonicalJson.stringify(Map.of("b", 1, "a", 2)));
         assertEquals("[3,1,2]", CanonicalJson.stringify(List.of(3, 1, 2)));
         assertEquals("\"a\\\"b\\\\c\\nd\\te\"", CanonicalJson.stringify("a\"b\\c\nd\te"));
@@ -63,8 +63,9 @@ class CodecTest {
         assertEquals("\"RSA3072\"", CanonicalJson.stringify(AlgorithmType.RSA3072));
     }
 
+    /** Checks canonical serialization failures for values outside its supported input model. */
     @Test
-    void rejectsNonCanonicalNumbersCyclesAndObjects() {
+    void rejectsNonFiniteNumbersCyclesAndUnsupportedObjects() {
         for (Number number : List.of(Double.NaN, Double.POSITIVE_INFINITY)) {
             thrown(A4P_SERIALIZE_FAIL, () -> CanonicalJson.stringify(number));
         }
@@ -148,8 +149,9 @@ class CodecTest {
         thrown(A4P_SERIALIZE_FAIL, () -> codec.serializeIntentL1(null));
     }
 
+    /** Checks parser failures and rejection of invalid L1 fields. */
     @Test
-    void malformedAndUntrustedJsonIsRejected() {
+    void rejectsMalformedJsonAndInvalidIntentStructure() {
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1(""));
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1(null));
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentL1("{"));
@@ -188,8 +190,9 @@ class CodecTest {
         return context;
     }
 
+    /** Restores a mixed-status ledger and checks that later operations use its state. */
     @Test
-    void executionContextRoundTripsAndKeepsEnforcingTheLedger() {
+    void contextRoundTripPreservesLedgerAndEnforcesSubsequentOperations() {
         IntentExecutionContext context = ledgerContext();
         String json = codec.serializeIntentExecutionContext(context);
         var recordJson = CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(json)).get("executions").get(0);
@@ -224,76 +227,70 @@ class CodecTest {
         IntentExecutionContext restored = ok(codec.deserializeIntentExecutionContext(json));
         assertEquals(IntentExecutionStatus.REVOKED, restored.status());
         fails(A4P_INVALID_STATUS, A4p.createExecution(restored, execution("one", 100, 1), NOW));
-        // Without a period constraint there is no current period.
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
-                json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":0")));
+        assertEquals(0L, info(ok(codec.deserializeIntentExecutionContext(
+                json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":0")))).periodIndex());
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
                 json.replace("\"leftAmount\":1000", "\"leftAmount\":1000,\"periodIndex\":null")));
     }
 
+    /** Checks required context fields, retained quotas and identifiers derived from the SDK and embedded L1. */
     @Test
-    void tamperedExecutionContextIsRejected() {
+    void validatesContextStructureAndRestoresStoredIdentifiersAndQuota() {
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(null));
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(""));
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext("{"));
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext("null"));
         fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext("{}"));
         String json = codec.serializeIntentExecutionContext(ledgerContext());
-        String version = "\"version\":\"1.0\"}";
-        assertTrue(json.endsWith(version));
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
-                json.substring(0, json.length() - version.length()) + "\"version\":\"2.0\"}"));
+        String edited = json.replaceFirst("\"version\":\"1\\.0\"}$", "\"version\":\"2.0\"}")
+                .replace("\"intentId\":\"intent\",\"status\"", "\"intentId\":\"other\",\"status\"")
+                .replace("\"leftAmount\":800", "\"leftAmount\":900");
+        var restored = ok(codec.deserializeIntentExecutionContext(edited));
+        assertEquals("2.0", restored.version());
+        assertEquals("other", restored.intentId());
+        assertEquals("intent", restored.authorizedIntent().intentL2().intentL1().intentId());
+        assertEquals(900L, info(restored).leftAmount());
+        assertEquals(edited, codec.serializeIntentExecutionContext(restored));
         Map<String, A4pErrorCode> tampered = new LinkedHashMap<>();
         tampered.put(json.replaceFirst("\\{", "{\"extra\":1,"), A4P_INVALID_PARAMETER);
-        tampered.put(json.replace("\"intentId\":\"intent\",\"status\"", "\"intentId\":\"other\",\"status\""),
-                A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"status\":\"ACTIVE\"", "\"status\":\"PAUSED\""), A4P_INVALID_PARAMETER);
-        tampered.put(json.replace("\"leftAmount\":800", "\"leftAmount\":900"), A4P_INVALID_PARAMETER);
-        tampered.put(json.replace("\"periodIndex\":2},\"executions\"", "\"periodIndex\":3},\"executions\""),
-                A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"periodIndex\":2},\"executions\"", "\"periodIndex\":null},\"executions\""),
                 A4P_INVALID_PARAMETER);
-        tampered.put(json.replace("\"periodIndex\":1,", "\"periodIndex\":2,"), A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"reservedAt\":10000,", ""), A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"reservedAt\":10000,", "\"reservedAt\":\"10000\","), A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"canceledAt\":20000", "\"completedAt\":20000"), A4P_INVALID_PARAMETER);
         tampered.put(json.replace("\"status\":\"CANCELED\"", "\"status\":\"COMPLETED\""), A4P_INVALID_PARAMETER);
-        tampered.put(json.replace("\"currency\":\"CNY\",\"orderId\"", "\"currency\":\"USD\",\"orderId\""),
-                A4P_INVALID_PARAMETER);
-        tampered.put(json.replace("\"three\"", "\"two\""), A4P_DUPLICATE_ID);
-        tampered.put(json.replace("\"amount\":100", "\"amount\":501"), A4P_SINGLE_ORDER_AMOUNT_EXCEEDED);
-        tampered.put(json.replace("\"quantity\":1}", "\"quantity\":3}"), A4P_CART_MISMATCH);
         tampered.forEach((input, code) -> {
             assertNotEquals(json, input);
             fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(input));
         });
     }
 
-    // The restored status and record timestamps must be ones the execution operations could have produced.
+    /** Checks that restoration accepts structurally valid timestamps and statuses independently of lifecycle ordering. */
     @Test
-    void executionContextStatusAndRecordTimestampsMustBeReachable() {
+    void executionContextAcceptsOutOfOrderTimestampsAndStoredStatus() {
         PaymentConstraints late = new PaymentConstraints(null, 200L, "CNY", 20_000L, 100_000L, 2L, null, null, null);
         IntentExecutionContext context = ok(A4p.activateIntent(authorized(late), VERIFIER, NOW));
         ok(A4p.createExecution(context, execution("one", 100, 1), 20_000));
         String pending = codec.serializeIntentExecutionContext(context);
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 pending.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 pending.replace("\"reservedAt\":20000", "\"reservedAt\":19999")));
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 pending.replace("\"reservedAt\":20000", "\"reservedAt\":100001")));
 
         ok(A4p.completeExecution(context, "one", 20_000));
         String completed = codec.serializeIntentExecutionContext(context);
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 completed.replace("\"completedAt\":20000", "\"completedAt\":19999")));
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 completed.replace("\"status\":\"ACTIVE\"", "\"status\":\"CONSUMED\"")));
 
         ok(A4p.createExecution(context, execution("two", 100, 1), 20_000));
         ok(A4p.cancelExecution(context, "two", 20_000));
         String canceled = codec.serializeIntentExecutionContext(context);
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 canceled.replace("\"canceledAt\":20000", "\"canceledAt\":19999")));
 
         ok(A4p.createExecution(context, execution("three", 100, 1), 20_000));
@@ -301,9 +298,16 @@ class CodecTest {
         assertEquals(IntentExecutionStatus.CONSUMED, context.status());
         String consumed = codec.serializeIntentExecutionContext(context);
         assertEquals(IntentExecutionStatus.CONSUMED, ok(codec.deserializeIntentExecutionContext(consumed)).status());
-        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+        ok(codec.deserializeIntentExecutionContext(
                 consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"ACTIVE\"")));
         // REVOKED and EXPIRED are reachable whatever the ledger holds.
+        String revokedWithoutTime = consumed.replace("\"status\":\"CONSUMED\"", "\"status\":\"REVOKED\"");
+        var restoredWithoutTime = ok(codec.deserializeIntentExecutionContext(revokedWithoutTime));
+        assertEquals(IntentExecutionStatus.REVOKED, restoredWithoutTime.status());
+        assertNull(restoredWithoutTime.revokedTime());
+        assertEquals(revokedWithoutTime, codec.serializeIntentExecutionContext(restoredWithoutTime));
+        fails(A4P_DESERIALIZE_FAIL, codec.deserializeIntentExecutionContext(
+                revokedWithoutTime.replace("\"status\":\"REVOKED\"", "\"revokedTime\":null,\"status\":\"REVOKED\"")));
         assertEquals(IntentExecutionStatus.REVOKED, ok(codec.deserializeIntentExecutionContext(
                 consumed.replace("\"status\":\"CONSUMED\"", "\"revokedTime\":20000,\"status\":\"REVOKED\""))).status());
     }

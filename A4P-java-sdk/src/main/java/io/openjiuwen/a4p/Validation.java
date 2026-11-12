@@ -1,17 +1,13 @@
 package io.openjiuwen.a4p;
 
 import io.openjiuwen.a4p.Models.*;
-import java.math.BigInteger;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import static io.openjiuwen.a4p.A4pErrorCode.*;
 
 /**
- * Validates protocol inputs, layered intent structure and restored execution ledgers.
+ * Validates protocol inputs and layered intents.
  * Violations throw A4pException with the appropriate protocol code; these checks do not authenticate signatures.
  */
 final class Validation {
@@ -287,72 +283,14 @@ final class Validation {
         versions(intent.intentL2());
     }
 
-    // A persisted ledger is untrusted: it must be one the execution operations could have produced for the
-    // authorized intent, and a violation fails with the code the offending operation would have returned.
     /**
-     * Validates restored record IDs, timestamps, statuses, cart templates, quotas and context-state reachability.
-     * @param context activated intent and mutable execution ledger
+     * Requires the supported protocol version in the context and throughout its intent chain.
+     * @param context execution context to validate
      */
-    static void ledger(IntentExecutionContext context) {
-        IntentL1 intent = context.authorizedIntent().intentL2().intentL1();
-        PaymentConstraints constraints = context.constraints();
-        List<ItemWhiteList> groups = context.resources().itemsWhiteList();
-        Set<String> executionIds = new HashSet<>();
-        Set<String> orderIds = new HashSet<>();
-        Map<Long, Long> periodCounts = new HashMap<>();
-        BigInteger amount = BigInteger.ZERO;
-        for (IntentExecutionContext.Entry entry : context.ledger()) {
-            ExecutionRecord record = entry.record();
-            Order order = entry.order();
-            text(record.executionId());
-            present(record.status());
-            require(record.action() == intent.structuredIntent().action(), A4P_INVALID_PARAMETER, "Execution action does not match the authorized intent action");
-            require(order.currency().equals(constraints.currency()), A4P_INVALID_PARAMETER, "Order currency does not match the intent currency");
-            timeAtOrAfter(record.reservedAt(), constraints.validFrom(), A4P_TIMESTAMP_TOO_EARLY, "Timestamp is earlier than validFrom");
-            timeAtOrBefore(record.reservedAt(), constraints.validUntil(), A4P_TIMESTAMP_EXPIRED, "Timestamp is later than validUntil");
-            require(Objects.equals(record.periodIndex(), Accounting.period(constraints, record.reservedAt())), A4P_INVALID_PARAMETER, "Ledger period index does not match the reservation time");
-            finalizedAt(record.completedAt(), record.status() == ExecutionStatus.COMPLETED, record.reservedAt());
-            finalizedAt(record.canceledAt(), record.status() == ExecutionStatus.CANCELED, record.reservedAt());
-            require(executionIds.add(record.executionId()), A4P_DUPLICATE_ID, "Duplicate execution ID");
-            require(orderIds.add(order.orderId()), A4P_DUPLICATE_ID, "Duplicate order ID");
-            if (constraints.singleOrderMaxAmount() != null) {
-                require(order.amount() <= constraints.singleOrderMaxAmount(), A4P_SINGLE_ORDER_AMOUNT_EXCEEDED, "Order amount exceeds the single-order limit");
-            }
-            CartMatching.requireOneToOne(order.cartItems(), groups);
-            if (Accounting.counted(entry)) {
-                amount = amount.add(BigInteger.valueOf(order.amount()));
-                if (record.periodIndex() != null) { periodCounts.merge(record.periodIndex(), 1L, Long::sum); }
-            }
-        }
-        if (constraints.maxExecutionCount() != null) {
-            require(Accounting.count(context) <= constraints.maxExecutionCount(), A4P_EXECUTION_COUNT_EXCEEDED, "Execution count exceeds the total limit");
-        }
-        require(amount.compareTo(BigInteger.valueOf(constraints.totalMaxAmount())) <= 0, A4P_AMOUNT_EXCEEDED, "Order amounts exceed the total available budget");
-        if (constraints.maxExecutionCountPerPeriod() != null) {
-            require(periodCounts.values().stream().allMatch(count -> count <= constraints.maxExecutionCountPerPeriod()), A4P_PERIOD_EXECUTION_COUNT_EXCEEDED, "Execution count exceeds the per-period limit");
-        }
-        // Completing the last pending record of an exhausted ACTIVE intent always yields CONSUMED, and nothing
-        // else does; REVOKED and EXPIRED are reachable with any ledger.
-        IntentExecutionStatus status = context.status();
-        if (status == IntentExecutionStatus.ACTIVE || status == IntentExecutionStatus.CONSUMED) {
-            require((status == IntentExecutionStatus.CONSUMED) == Accounting.exhausted(context), A4P_INVALID_PARAMETER, "Consumption status does not match exhausted quotas");
-        }
-    }
-
-    // completedAt and canceledAt are set exactly when the record reached the matching final status, never before
-    // the reservation.
-    /**
-     * Requires a finalization timestamp exactly for its matching final state and never before reservation.
-     * @param timestamp Unix epoch milliseconds
-     * @param expected whether this finalization timestamp must be present
-     * @param reservedAt reservation instant in Unix epoch milliseconds
-     */
-    private static void finalizedAt(Long timestamp, boolean expected, long reservedAt) {
-        require((timestamp != null) == expected, A4P_INVALID_PARAMETER, "Finalization timestamp presence does not match execution status");
-        if (timestamp != null) {
-            integer(timestamp, false);
-            timeAtOrAfter(timestamp, reservedAt, A4P_TIMESTAMP_TOO_EARLY, "Finalization time is earlier than reservation time");
-        }
+    static void versions(IntentExecutionContext context) {
+        present(context);
+        version(context.version());
+        versions(context.authorizedIntent());
     }
 
     /**

@@ -8,7 +8,8 @@ import static io.openjiuwen.a4p.A4pErrorCode.*;
 import static org.junit.jupiter.api.Assertions.*;
 class CanonicalJsonAdditionalTest {
  private final A4pIntentCodec codec = new A4pIntentCodec();
-@Test void ecmascriptNumbersAndInvalidUnicode() {
+    /** Checks canonical number formatting and parse failures for overflow and unpaired surrogates. */
+    @Test void formatsEcmascriptNumbersAndRejectsOverflowAndInvalidUnicode() {
         assertEquals("[333333333.3333333,1e+30,4.5,0.002,1e-27]",
                 CanonicalJson.stringify(CanonicalJson.parse(
                         "[333333333.33333329,1E30,4.50,2e-3,1e-27]")));

@@ -182,7 +182,7 @@ public final class A4p {
      */
     public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now) {
         return A4pResult.capture(() -> {
-            Validation.present(context);
+            Validation.versions(context);
             Validation.integer(now, false);
             synchronized (context) {
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
@@ -252,7 +252,7 @@ public final class A4p {
      */
     private static IntentExecutionContext reserve(IntentExecutionContext context, Execution execution, long now) {
         Validation.integer(now, false);
-        Validation.present(context);
+        Validation.versions(context);
         Order order = Validation.execution(execution);
         String executionId = execution.id() == null ? UUID.randomUUID().toString() : execution.id();
         synchronized (context) {
@@ -302,7 +302,7 @@ public final class A4p {
     private static IntentExecutionContext finalizeExecution(IntentExecutionContext context, String executionId,
                                                             long now, boolean cancel) {
         Validation.integer(now, false);
-        Validation.present(context);
+        Validation.versions(context);
         synchronized (context) {
             // Pending reservations made before revocation or expiry can still be finalized.
             require(context.status() == IntentExecutionStatus.ACTIVE || context.status() == IntentExecutionStatus.REVOKED

@@ -21,6 +21,7 @@ class CodecErrorBoundaryTest {
         }
     }
 
+    /** Checks codec error codes and diagnostic messages for invalid wire input. */
     @Test void decodeErrorsExposeDiagnosticsAcrossAllEntryPoints() {
         for (Function<String, A4pResult<?>> decode : List.<Function<String, A4pResult<?>>>of(
                 codec::deserializeIntentL1, codec::deserializeIntentL2,
@@ -34,8 +35,8 @@ class CodecErrorBoundaryTest {
             }
         }
         String json = codec.serializeIntentExecutionContext(context());
-        var result = codec.deserializeIntentExecutionContext(json.replace("\"leftAmount\":1000", "\"leftAmount\":999"));
+        var result = codec.deserializeIntentExecutionContext(json.replace("\"leftAmount\":1000", "\"leftAmount\":\"999\""));
         assertEquals(5002, result.code());
-        assertTrue(result.message().contains("execution info"));
+        assertTrue(result.message().contains("leftAmount"));
     }
 }

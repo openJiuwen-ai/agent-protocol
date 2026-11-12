@@ -90,9 +90,9 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 | `A4pResult` | `String toString()` | 返回包含 `success`、`code` 和 `message` 的结果摘要，省略 `data`。 |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | 构造结果；成功要求数据非空且结果码为 0，失败要求数据为空且结果码非 0。 |
 | `IntentExecutionContext` | `long activatedTime()` | 读取激活时的毫秒时间戳，序列化与恢复时保留。 |
-| `IntentExecutionContext` | `Long revokedTime()` | 读取撤销时的 Unix 毫秒时间戳，未撤销时返回 `null`。 |
-| `IntentExecutionContext` | `String version()` | 读取协议版本。 |
-| `IntentExecutionContext` | `String intentId()` | 读取关联意图标识。 |
+| `IntentExecutionContext` | `Long revokedTime()` | 读取撤销时的 Unix 毫秒时间戳，缺少时间戳时返回 `null`。 |
+| `IntentExecutionContext` | `String version()` | 读取 Context 保存的版本。 |
+| `IntentExecutionContext` | `String intentId()` | 读取 Context 保存的意图标识。 |
 | `IntentExecutionContext` | `IntentL3 authorizedIntent()` | 读取已授权 L3 快照。 |
 | `IntentExecutionContext` | `synchronized IntentExecutionStatus status()` | 读取意图执行状态。 |
 | `IntentExecutionContext` | `synchronized List<ExecutionRecord> executions()` | 读取只读账本快照。 |
@@ -206,7 +206,7 @@ IntentExecutionContext restoredContext = restored.data();
 
 编解码器支持 L1、L2、L3 和 Context。反序列化要求输入与对应序列化器的输出逐字符一致，额外的格式化空白、不同的字段顺序或等价的转义写法都会被拒绝。存储或转发时请保留原始序列化输出。已经重新排版的历史数据需要从原对象或可信副本通过对应的 SDK 序列化接口重新生成。
 
-序列化在 Context 锁内取得一致快照。`REVOKED` 状态要求提供 `revokedTime`，其他状态省略该字段。反序列化拒绝显式 JSON `null`、重复键和尾随 token，所有反序列化失败均返回 `A4P_DESERIALIZE_FAIL`（5002）。Intent 反序列化检查结构。Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
+序列化在 Context 锁内取得一致快照。反序列化拒绝显式 JSON `null`、重复键和尾随 token，所有反序列化失败均返回 `A4P_DESERIALIZE_FAIL`（5002）。激活时分别使用 SDK 协议版本和已授权的 L1 意图标识初始化。反序列化时原样恢复这两个字符串以及持久化的账本和额度快照。
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。缺少必填 `activatedTime` 的旧 Context 无法直接恢复；应使用应用控制的可信迁移，或启动新的授权生命周期，同时避免重置已有授权用量。
 
@@ -236,15 +236,20 @@ IntentExecutionContext restoredContext = restored.data();
 
 4003 为兼容 ArkTS 保留，Java 使用 4004 表示周期执行次数超限。
 
+## 版本校验与兼容性
+
+接收 Intent 的生命周期接口以及 `verifyIntentAuthenticity` 要求传入的各层 Intent 都使用 SDK 协议版本。`revokeIntent`、`createExecution`、`completeExecution` 和 `cancelExecution` 要求 Context 版本及其授权 Intent 各层版本均与 SDK 一致。版本不受支持时返回 `A4P_UNSUPPORTED_VERSION`（1002）。版本不受支持的持久化 Context 仍可解码以供检查。恢复生命周期操作前，请使用支持该存储版本的 SDK。
+
 ## 使用约束
 
 1. 所有 Intent 和 Context 结构必须通过 SDK 接口创建或恢复，禁止自行组装，否则可能产生未定义行为。请求、身份、环境与订单等输入模型可按下文构造。
-2. 必须按生命周期顺序调用：createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution 或 cancelExecution；可撤销 ACTIVE Context。
+2. 必须按生命周期顺序调用：createIntent → issueIntent → signIntent → activateIntent → createExecution → completeExecution 或 cancelExecution。只有处于 ACTIVE Context 才可调用 revokeIntent 接口。上述接口的输入 Intent/Context 必须是可信的。
 3. 同一个 Intent 的同一生命周期步骤、同一个 Context 的激活/撤销步骤以及同一执行的预留/终结步骤不得重复调用。一个 ACTIVE Context 可处理多个不同执行；只读查询与序列化可以重复。
 4. activateIntent 及其他返回 Context 的接口返回的 Context 对象需要被持久化储存。即使 createExecution 执行失败，也可能把状态改为 EXPIRED，此时仍须持久化当前 Context。持久化不是 SDK 自动完成的。
 5. SDK 不负责持久化 Context 的防篡改或完整性验证；需要该能力时由调用方自行校验。反序列化中的格式检查不代表安全完整性校验。
 6. 序列化 Context 只能用于本地持久化，不应作为消息通过网络传输。
-7. 授权阶段（Intent 相关接口）不会校验 L1/L2/L3 Intent 的先后顺序，只作为审计使用
+7. 授权阶段（Intent 相关接口）不会校验 L1/L2/L3 Intent 创建时间戳的先后顺序，只作为审计使用
 8. 签名/验签接口的实现需要确保其符合规范
-9. 调用方需要校验 Intent/Context 的幂等
+9. 调用方需要校验 Intent/Context/Execution 的幂等，对于同一个 intentId ，其对应的 L1/L2/L3 Intent 以及 Context 都是唯一的。对于同一个 Context 而言，其中的 executionId 不能相同。
 10. 防止并发调用接口
+11. 用户必须确保序列化与反序列化接口的输入是可信的。输入不可信的结构/字符串到序列化/反序列化有可能出现没有报错，但是输出不可信结果的情况。

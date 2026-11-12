@@ -3,6 +3,10 @@ package io.openjiuwen.a4p;
 import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.cfg.CoercionAction;
+import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.type.LogicalType;
 import io.openjiuwen.a4p.Models.*;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -11,17 +15,28 @@ import java.util.Map;
 import java.util.function.Consumer;
 import static io.openjiuwen.a4p.A4pErrorCode.*;
 
-// Serializes to canonical JSON; deserialization parses strictly and validates the whole chain.
-/**
- * Provides canonical JSON serialization and structural restoration checks.
- * Restoration validates layered intents, ledger reachability and accounting consistency,
- * but does not verify signatures or provide integrity protection for persisted data.
- */
+/** Serializes canonical JSON and restores objects with required-field and type checks. */
 public class A4pIntentCodec {
+    private static final JsonMapper WIRE_MAPPER = CanonicalJson.MAPPER.rebuild()
+            .withCoercionConfig(LogicalType.Textual, config -> config
+                    .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
+                    .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+                    .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail))
+            .build();
+
+    /**
+     * Represents the persisted quota snapshot with boxed values for presence checks.
+     * @param leftAmount required remaining amount
+     * @param leftExecutionCount optional remaining total execution count
+     * @param periodIndex optional accounting period
+     * @param leftPeriodExecutionCount optional remaining count for that period
+     */
+    record QuotaJson(Long leftAmount, Long leftExecutionCount, Long periodIndex,
+                     Long leftPeriodExecutionCount) {}
 
     // Wire form of a persisted context; reservedAt is boxed so a missing field is rejected instead of read as 0.
     /**
-     * Represents persisted context fields; restoration checks consistency without authenticating the data.
+     * Represents persisted context fields; restoration checks required fields and types.
      * @param version A4P Core protocol version
      * @param intentId globally unique intent identifier
      * @param authorizedIntent authorized L3 snapshot
@@ -29,9 +44,10 @@ public class A4pIntentCodec {
      * @param executionInfo persisted quota snapshot
      * @param executions persisted execution ledger
      * @param activatedTime activation instant in Unix epoch milliseconds
+     * @param revokedTime optional revocation instant
      */
     record ContextJson(String version, String intentId, IntentL3 authorizedIntent, IntentExecutionStatus status,
-                       JsonNode executionInfo, List<RecordJson> executions, Long activatedTime, Long revokedTime) {}
+                       QuotaJson executionInfo, List<RecordJson> executions, Long activatedTime, Long revokedTime) {}
 
     /**
      * Represents a persisted execution record; boxed reservedAt allows missing timestamps to be rejected.
@@ -41,8 +57,8 @@ public class A4pIntentCodec {
      * @param executionContent action-specific JSON payload; AI_PAY contains an Order
      * @param periodIndex original reservation period, or null without periodic limits
      * @param reservedAt reservation instant in Unix epoch milliseconds
-     * @param completedAt completion instant, present only for COMPLETED and not before reservedAt
-     * @param canceledAt cancellation instant, present only for CANCELED and not before reservedAt
+     * @param completedAt completion instant, required for COMPLETED
+     * @param canceledAt cancellation instant, required for CANCELED
      */
     record RecordJson(String executionId, ExecutionStatus status, IntentActionType action,
                       JsonNode executionContent, Long periodIndex, Long reservedAt,
@@ -78,33 +94,33 @@ public class A4pIntentCodec {
     public String serializeIntentL3(IntentL3 intentL3) { return serialize(intentL3); }
 
     /**
-     * Restores IntentL1 from JSON with structural and protocol validation.
+     * Restores IntentL1 from JSON with required-field and type checks.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentL1> deserializeIntentL1(String serialized) {
-        return decode(serialized, IntentL1.class, Validation::intentL1);
+        return decode(serialized, IntentL1.class, A4pIntentCodec::requireL1Fields);
     }
 
     /**
-     * Restores IntentL2 from JSON with structural and protocol validation.
+     * Restores IntentL2 from JSON with required-field and type checks.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentL2> deserializeIntentL2(String serialized) {
-        return decode(serialized, IntentL2.class, Validation::intentL2);
+        return decode(serialized, IntentL2.class, A4pIntentCodec::requireL2Fields);
     }
 
     /**
-     * Restores IntentL3 from JSON with structural and protocol validation.
+     * Restores IntentL3 from JSON with required-field and type checks.
      * Does not verify cryptographic signatures or authenticate persisted data.
      * @param serialized JSON exactly matching the corresponding serializer output
      * @return restored object, code 5002 for all decoding and restoration failures
      */
     public A4pResult<IntentL3> deserializeIntentL3(String serialized) {
-        return decode(serialized, IntentL3.class, Validation::intentL3);
+        return decode(serialized, IntentL3.class, A4pIntentCodec::requireL3Fields);
     }
 
     /**
@@ -135,7 +151,6 @@ public class A4pIntentCodec {
         });
     }
 
-    // The user signature is not re-verified; the stored L3 is checked like activateIntent's input otherwise.
     /**
      * Restores IntentExecutionContext from JSON with structural and protocol validation.
      * Does not verify cryptographic signatures or authenticate persisted data.
@@ -153,62 +168,120 @@ public class A4pIntentCodec {
     }
 
     /**
-     * Restores a context after checking activation time, layered intent structure, ledger constraints and accounting consistency.
-     * Does not reverify user signatures or authenticate persistence.
-     * @param wire parsed persistence representation
-     * @return structurally validated execution context
+     * Checks required context and ledger fields and restores the persisted quota snapshot.
+     * @param wire decoded context fields
+     * @return restored execution context
      */
     private static IntentExecutionContext restore(ContextJson wire) {
-        Validation.present(wire);
-        Validation.text(wire.version());
-        Validation.version(wire.version());
-        IntentL3 authorized = wire.authorizedIntent();
-        Validation.intentL3(authorized);
-        Validation.versions(authorized);
-        IntentL1 intent = authorized.intentL2().intentL1();
-        Validation.require(intent.intentId().equals(wire.intentId()), A4P_INVALID_PARAMETER, "Context intent ID does not match the authorized intent ID");
-        Validation.integer(wire.activatedTime(), false);
-        Validation.present(wire.status());
-        Validation.present(wire.executions());
+        requireFields(wire.version(), wire.intentId(), wire.status(), wire.activatedTime(),
+                wire.executionInfo(), wire.executions());
+        requireL3Fields(wire.authorizedIntent());
+        QuotaJson quota = wire.executionInfo();
+        requireFields(quota.leftAmount());
         List<IntentExecutionContext.Entry> ledger = new ArrayList<>();
         for (RecordJson record : wire.executions()) {
-            Validation.present(record);
-            Validation.integer(record.reservedAt(), false);
-            Order order = Validation.execution(new Execution(record.action(), record.executionId(),
-                    record.executionContent()));
+            requireFields(record.executionId(), record.status(), record.action(), record.executionContent(),
+                    record.reservedAt());
+            if (record.status() == ExecutionStatus.COMPLETED) {
+                requireFields(record.completedAt());
+            }
+            if (record.status() == ExecutionStatus.CANCELED) {
+                requireFields(record.canceledAt());
+            }
+            Order order = WIRE_MAPPER.convertValue(record.executionContent(), Order.class);
+            requireFields(order.orderId(), order.amount(), order.currency(), order.cartItems(), order.timestamp());
+            for (CartItem item : order.cartItems()) {
+                requireFields(item.quantity());
+                requireProductFields(item.product());
+            }
             ledger.add(new IntentExecutionContext.Entry(new ExecutionRecord(record.executionId(), record.status(),
                     record.action(), record.executionContent(), record.periodIndex(), record.reservedAt(),
                     record.completedAt(), record.canceledAt()), order));
         }
-        Long period = period(wire.executionInfo(), PaymentProfile.constraints(intent.structuredIntent()));
-        IntentExecutionContext context = new IntentExecutionContext(authorized, wire.status(), ledger, period, wire.activatedTime(), wire.revokedTime());
-        if (wire.status() == IntentExecutionStatus.REVOKED) {
-            Validation.integer(wire.revokedTime(), false);
-        } else {
-            Validation.require(wire.revokedTime() == null, A4P_INVALID_PARAMETER, "Revocation time must be absent unless the intent is revoked");
-        }
-        Validation.ledger(context);
-        // executionInfo is derived state, so it must match what the restored ledger yields.
-        Validation.require(context.executionInfo().equals(CanonicalJson.freezeNode(wire.executionInfo())), A4P_INVALID_PARAMETER, "Serialized execution info does not match the restored ledger");
-        return context;
+        PaymentExecutionInfo info = new PaymentExecutionInfo(quota.leftExecutionCount(), quota.leftAmount(),
+                quota.periodIndex(), quota.leftPeriodExecutionCount());
+        return new IntentExecutionContext(wire.version(), wire.intentId(), wire.authorizedIntent(),
+                wire.status(), ledger, info, wire.activatedTime(), wire.revokedTime());
     }
 
-    // The period executionInfo was last recomputed in depends on call times the ledger does not record.
     /**
-     * Reads the stored accounting period and checks that it agrees with the configured periodic policy.
-     * @param info quota accounting snapshot
-     * @param constraints authorized AI_PAY payment limits
-     * @return computed or stored accounting period, or null without periodic limits
+     * Checks required L1 fields and maps the AI_PAY resources and constraints to their wire types.
+     * @param intent first-layer intent to check
      */
-    private static Long period(JsonNode info, PaymentConstraints constraints) {
-        Validation.require(info != null && info.isObject(), A4P_INVALID_PARAMETER, "Execution info must be a non-null JSON object");
-        JsonNode period = info.get("periodIndex");
-        if (period == null || period.isNull()) {
-            Validation.require(constraints.anchorTime() == null, A4P_INVALID_PARAMETER, "Periodic intent requires a period index");
-            return null;
+    private static void requireL1Fields(IntentL1 intent) {
+        requireFields(intent);
+        requireFields(intent.version(), intent.intentId(), intent.intentConversation(), intent.intentSummary(),
+                intent.timestamp(), intent.structuredIntent());
+        requireSignatureFields(intent.sign());
+        StructuredIntent structured = intent.structuredIntent();
+        requireFields(structured.action(), structured.resources(), structured.constraints());
+        ShoppingItems resources = WIRE_MAPPER.convertValue(structured.resources(), ShoppingItems.class);
+        requireFields(resources.itemsWhiteList());
+        for (ItemWhiteList group : resources.itemsWhiteList()) {
+            requireFields(group.whiteList(), group.quantity());
+            group.whiteList().forEach(A4pIntentCodec::requireProductFields);
         }
-        Validation.require(constraints.anchorTime() != null && period.isIntegralNumber() && period.canConvertToLong(), A4P_INVALID_PARAMETER, "Period index requires periodic constraints and must be a long integer");
-        return period.longValue();
+        PaymentConstraints constraints = WIRE_MAPPER.convertValue(structured.constraints(), PaymentConstraints.class);
+        requireFields(constraints.totalMaxAmount(), constraints.currency(), constraints.validFrom(),
+                constraints.validUntil());
+    }
+
+    /**
+     * Checks required L2 fields, including the identities and embedded L1.
+     * @param intent second-layer intent to check
+     */
+    private static void requireL2Fields(IntentL2 intent) {
+        requireFields(intent);
+        requireFields(intent.version(), intent.timestamp(), intent.userIdentity(), intent.agentIdentity(),
+                intent.serviceProviderIdentity());
+        requireFields(intent.userIdentity().identityProvider(), intent.userIdentity().id(),
+                intent.agentIdentity().identityProvider(), intent.agentIdentity().id(),
+                intent.serviceProviderIdentity().id());
+        requireSignatureFields(intent.sign());
+        requireL1Fields(intent.intentL1());
+    }
+
+    /**
+     * Checks required L3 fields, including the signing environment and embedded L2.
+     * @param intent third-layer intent to check
+     */
+    private static void requireL3Fields(IntentL3 intent) {
+        requireFields(intent);
+        requireFields(intent.version(), intent.timestamp(), intent.signingEnv());
+        requireFields(intent.signingEnv().device(), intent.signingEnv().app());
+        requireSignatureFields(intent.sign());
+        requireL2Fields(intent.intentL2());
+    }
+
+    /**
+     * Checks that all signature metadata fields are present.
+     * @param signature decoded signature metadata
+     */
+    private static void requireSignatureFields(SignatureInfo signature) {
+        requireFields(signature);
+        requireFields(signature.alg(), signature.keyIdentifier(), signature.sign());
+    }
+
+    /**
+     * Checks the seller ID and requires at least one SPU or SKU identifier.
+     * @param product decoded payment product
+     */
+    private static void requireProductFields(Product product) {
+        requireFields(product);
+        requireFields(product.seller());
+        requireFields(product.seller().id(), product.spusku());
+        Validation.require(product.spusku().spuId() != null || product.spusku().skuId() != null,
+                A4P_INVALID_PARAMETER, "Product must specify at least one SPU or SKU ID");
+    }
+
+    /**
+     * Requires every supplied field to be non-null.
+     * @param values decoded fields that are required
+     */
+    private static void requireFields(Object... values) {
+        for (Object value : values) {
+            Validation.present(value);
+        }
     }
 
     /**
@@ -352,7 +425,7 @@ public class A4pIntentCodec {
         rejectNullValues(parsed);
         validateNumbers(parsed, A4P_DESERIALIZE_FAIL);
         try {
-            return CanonicalJson.MAPPER.convertValue(parsed, type);
+            return WIRE_MAPPER.convertValue(parsed, type);
         } catch (IllegalArgumentException error) {
             throw new A4pException(A4P_INVALID_PARAMETER, "JSON object mapping failed: " + error.getMessage(), error);
         }
