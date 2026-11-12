@@ -15,7 +15,7 @@ JCS canonicalization meets the following requirements:
 * JSON objects must not contain duplicate field names;
 * The canonicalized JSON is encoded as UTF-8 to produce the `byte[]` to be signed.
 
-For interoperable A4P data, use integers in the inclusive range `-9007199254740991` to `9007199254740991` throughout the payload, including `SigningEnv.device` and `SigningEnv.app`. Java lifecycle methods apply field-specific validation, such as requiring non-negative safe integer timestamps and positive safe integer amounts. JCS renders numbers using IEEE 754 binary64, so serializing an integer outside the safe range can change its value.
+For interoperable A4P data, use integers in the inclusive range `-9007199254740991` to `9007199254740991` throughout the payload, including `SigningEnv.device` and `SigningEnv.app`. Java lifecycle methods apply field-specific validation, such as requiring non-negative safe integer timestamps and positive safe integer amounts. Before JCS canonicalization, the public Java serializers recursively check numeric values. A floating-point value or an integer outside the safe range causes an `A4pException` with `A4P_SERIALIZE_FAIL` (5001).
 
 Note: JSON in HTTP messages does not need to be canonicalized and can be transmitted directly. The receiver should first parse the JSON, then regenerate canonicalized bytes according to the rules above for signature verification. Therefore, field order and formatting whitespace in HTTP messages do not affect signature verification.
 
@@ -26,8 +26,8 @@ Examples:
 [3,1,2]                       -> [3,1,2]
 {"10":1,"2":2}                -> {"10":1,"2":2}
 9007199254740991               -> 9007199254740991
-1.5                            -> 1.5 (JCS output, rejected by the A4P deserializer)
-9007199254740993               -> 9007199254740992 (JCS rounding outside the safe integer range)
+1.5                           -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
+9007199254740993              -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
 {"sign":"outer","nested":{"sign":"inner"}}
 signed bytes                  -> {"nested":{"sign":"inner"}}
 ```
@@ -77,7 +77,7 @@ public class A4pIntentCodec {
 
 All serialization APIs accept protocol objects that have already been constructed within the SDK.
 
-Deserialization checks required fields and JSON types. Invalid JSON, missing required fields and incompatible field types return code 5002 in an `A4pResult<T>`. The protocol uses integer JSON tokens. Fields mapped to Java `long` accept the full `long` range during deserialization. Version compatibility, timestamp ordering and accounting consistency are outside the deserialization contract.
+Deserialization checks required fields and JSON types. Invalid JSON, missing required fields and incompatible field types return code 5002 in an `A4pResult<T>`. The Java codec recursively requires JSON numbers to be integer tokens in the inclusive range `-9007199254740991` to `9007199254740991`, including for fields mapped to Java `long`. Floating-point tokens and out-of-range integers return `A4P_DESERIALIZE_FAIL` (5002). Version compatibility, timestamp ordering and accounting consistency are outside the deserialization contract.
 
 All four Java deserialization methods require an exact match with the corresponding serializer output. Adding formatting whitespace, reordering fields or changing JSON escapes causes `A4P_DESERIALIZE_FAIL` (5002). Pass the original serialized string when calling these methods.
 
