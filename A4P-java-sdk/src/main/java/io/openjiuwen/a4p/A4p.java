@@ -353,7 +353,7 @@ public final class A4p {
      * @return signature metadata
      */
     private static SignatureInfo sign(Signer signer, Object intent) {
-        byte[] bytes = CanonicalJson.toSignableBytes(intent);
+        byte[] bytes = A4pIntentCodec.toSignableBytes(intent);
         SignatureInfo signature;
         try {
             signature = signer.sign(bytes);
@@ -373,7 +373,7 @@ public final class A4p {
      * @return signature verification verdict
      */
     private static VerificationResult verify(SignatureVerifier verifier, Object intent, SignatureInfo signature) {
-        byte[] bytes = CanonicalJson.toSignableBytes(intent);
+        byte[] bytes = A4pIntentCodec.toSignableBytes(intent);
         try {
             VerificationResult result = verifier.verify(bytes, signature);
             // valid and code must agree; an inconsistent result is not trusted either way.

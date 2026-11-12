@@ -27,7 +27,7 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 
 ## 返回结果与异常
 
-生命周期方法和反序列化方法返回 `A4pResult<T>`。先检查 `success()`，再读取 `data()`：成功时数据非空、结果码为 `0`；失败时数据为 null、结果码非零。业务判断应使用数值结果码。公开结果构造器在 success/data/code 不一致时抛出 `IllegalArgumentException`。`toString()` 不包含业务载荷。
+生命周期方法和反序列化方法返回 `A4pResult<T>`。先检查 `success()`，再读取 `data()`：成功时数据非空、结果码为 `0`；失败时数据为 null、结果码非零。业务判断应使用数值结果码。公开结果构造器在 success/data/code 不一致时抛出 `IllegalArgumentException`。
 
 序列化、支付辅助方法和模型规范化可能抛出 `A4pException`，可通过 `code()` 读取 `A4pErrorCode`。返回结果的方法遇到非预期运行时缺陷时会抛出 `A4pException(A4P_INTERNAL_ERROR)`，而非返回普通失败结果。
 
@@ -86,8 +86,8 @@ SDK 负责授权预留和额度记账，应用负责实际对外支付，再根�
 | `A4pResult` | `boolean success()` | 读取操作成功标志。 |
 | `A4pResult` | `T data()` | 读取成功数据；失败时为 null。 |
 | `A4pResult` | `long code()` | 读取结果码或异常对应的错误码。 |
-| `A4pResult` | `String message()` | 读取诊断说明（SDK 生成的结果使用固定英文消息）。 |
-| `A4pResult` | `String toString()` | 返回不包含业务数据的结果摘要。 |
+| `A4pResult` | `String message()` | 读取诊断说明. |
+| `A4pResult` | `String toString()` | 返回包含 `success`、`code` 和 `message` 的结果摘要，省略 `data`。 |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | 构造结果；成功要求数据非空且结果码为 0，失败要求数据为空且结果码非 0。 |
 | `IntentExecutionContext` | `long activatedTime()` | 读取激活时的毫秒时间戳，序列化与恢复时保留。 |
 | `IntentExecutionContext` | `Long revokedTime()` | 读取撤销时的 Unix 毫秒时间戳，未撤销时返回 `null`。 |
@@ -189,6 +189,8 @@ record 提供规范构造器和标准 `equals`、`hashCode`、`toString`。`Sign
 
 ## 序列化与持久化
 
+编解码器递归要求 JSON 数值为 `-9007199254740991` 至 `9007199254740991` 闭区间内的整数。序列化遇到 `1.0` 等浮点值或超出范围的整数时，抛出错误码为 `A4P_SERIALIZE_FAIL`（5001）的 `A4pException`。反序列化遇到浮点 token 或超出范围的整数时，返回 `A4P_DESERIALIZE_FAIL`（5002）。
+
 `A4pIntentCodec` 是带公开无参构造器的公开具体类，可直接使用，无须应用自行实现或查找工厂。
 
 ```java
@@ -202,7 +204,9 @@ if (!restored.success()) {
 IntentExecutionContext restoredContext = restored.data();
 ```
 
-同一个编解码器支持 L1、L2、L3 的序列化与恢复。序列化在 Context 锁内取得一致快照。仅当 `status` 为 `REVOKED` 时，序列化才输出 `revokedTime`。恢复时，`REVOKED` 状态必须提供撤销时间戳，其他状态允许省略该字段或将其设为 JSON `null`。解析拒绝重复键和尾随 token；结构校验失败可能返回具体协议错误，而非统一返回 5002。Intent 反序列化检查结构；Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
+编解码器支持 L1、L2、L3 和 Context。反序列化要求输入与对应序列化器的输出逐字符一致，额外的格式化空白、不同的字段顺序或等价的转义写法都会被拒绝。存储或转发时请保留原始序列化输出。已经重新排版的历史数据需要从原对象或可信副本通过对应的 SDK 序列化接口重新生成。
+
+序列化在 Context 锁内取得一致快照。`REVOKED` 状态要求提供 `revokedTime`，其他状态省略该字段。反序列化拒绝显式 JSON `null`、重复键和尾随 token，所有反序列化失败均返回 `A4P_DESERIALIZE_FAIL`（5002）。Intent 反序列化检查结构。Context 恢复还检查支持的版本、激活时间、账本约束、状态可达性和额度一致性。
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。缺少必填 `activatedTime` 的旧 Context 无法直接恢复；应使用应用控制的可信迁移，或启动新的授权生命周期，同时避免重置已有授权用量。
 

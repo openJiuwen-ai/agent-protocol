@@ -27,7 +27,7 @@ The SDK reserves and accounts for authorization; the application performs the ex
 
 ## Results and exceptions
 
-Lifecycle methods and deserializers return `A4pResult<T>`. Check `success()` before reading `data()`: success has non-null data and code `0`; failure has null data and a nonzero code. Branch on numeric codes rather than message text. The public result constructor throws `IllegalArgumentException` for inconsistent success/data/code combinations. `toString()` excludes business payloads.
+Lifecycle methods and deserializers return `A4pResult<T>`. Check `success()` before reading `data()`: success has non-null data and code `0`; failure has null data and a nonzero code. Branch on numeric codes rather than message text. The public result constructor throws `IllegalArgumentException` for inconsistent success/data/code combinations.
 
 Serialization, payment helpers and model normalization can throw `A4pException`; inspect `code()` for its `A4pErrorCode`. Unexpected runtime defects in result-returning operations surface as `A4pException(A4P_INTERNAL_ERROR)` rather than ordinary failure results.
 
@@ -87,8 +87,8 @@ The following timestamps are used only for auditing:
 | `A4pResult` | `boolean success()` | Read the success flag. |
 | `A4pResult` | `T data()` | Read success data, or null on failure. |
 | `A4pResult` | `long code()` | Read the result code or exception error code. |
-| `A4pResult` | `String message()` | Read the diagnostic message (SDK-generated results use fixed English messages). |
-| `A4pResult` | `String toString()` | Return a result summary without business payloads. |
+| `A4pResult` | `String message()` | Read the diagnostic message.  |
+| `A4pResult` | `String toString()` | Return a result summary containing `success`, `code`, and `message`, with `data` omitted. |
 | `A4pResult` | `A4pResult(boolean success, T data, long code, String message)` | Construct a result; success requires non-null data and code 0, failure requires null data and a nonzero code. |
 | `IntentExecutionContext` | `long activatedTime()` | Read the activation timestamp in epoch milliseconds, preserved across serialization. |
 | `IntentExecutionContext` | `Long revokedTime()` | Read the revocation timestamp in Unix epoch milliseconds. Returns `null` before revocation. |
@@ -190,6 +190,8 @@ See [Serialization and signature rules](serialization_and_signature_rules.md).
 
 ## Serialization and persistence
 
+The codec recursively requires integer JSON numbers between `-9007199254740991` and `9007199254740991`, inclusive. Floating-point values such as `1.0` and integers outside that range cause serialization to throw `A4pException` with `A4P_SERIALIZE_FAIL` (5001). Decoding rejects floating-point tokens and out-of-range integers with `A4P_DESERIALIZE_FAIL` (5002).
+
 `A4pIntentCodec` is a public concrete class with a public no-argument constructor. Use the provided codec directly; no application implementation or factory is required.
 
 ```java
@@ -203,7 +205,9 @@ if (!restored.success()) {
 IntentExecutionContext restoredContext = restored.data();
 ```
 
-The same codec supports L1, L2 and L3 serialization and restoration. Serialization takes a consistent context snapshot under its lock. Serialization includes `revokedTime` only when `status` is `REVOKED`. On restoration, `REVOKED` requires a timestamp, and other states accept an omitted field or JSON `null`. Parsing rejects duplicate keys and trailing tokens; structural validation failures may return specific protocol errors rather than only 5002. Intent deserializers check structure; context restoration additionally checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
+The codec supports L1, L2, L3 and Context. Deserialization requires the input to match the corresponding serializer output character for character. Extra formatting whitespace, reordered fields and alternate escapes are rejected. Keep the original serializer output when storing or forwarding it. For existing data that was reformatted, regenerate it with the corresponding SDK serializer from the original object or a trusted copy.
+
+Serialization takes a consistent Context snapshot under its lock. `revokedTime` is required for `REVOKED` and omitted in other states. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Intent deserializers check structure. Context restoration also checks supported versions, activation time, ledger constraints, reachable status and accounting consistency.
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Old contexts without the required `activatedTime` cannot be restored directly; use an application-controlled trusted migration, or a new authorization lifecycle without resetting existing authorization usage.
 

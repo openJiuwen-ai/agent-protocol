@@ -1,12 +1,14 @@
 package io.openjiuwen.a4p;
 
 import java.util.function.Supplier;
-import static io.openjiuwen.a4p.A4pErrorCode.*;
+
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_INTERNAL_ERROR;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_SUCCESS;
 
 /**
  * Represents a successful value or a protocol failure.
  * Check success() before accessing data(). Success has non-null data and code zero;
- * failure has null data and a nonzero code. SDK-generated messages are fixed diagnostics.
+ * failure has null data and a nonzero code. Codec failure messages include diagnostic details.
  * @param <T> successful payload type
  * @see A4pErrorCode
  */
@@ -74,6 +76,18 @@ public final class A4pResult<T> {
     }
 
     /**
+     * Builds a failure with operation-specific diagnostic details.
+     * @param <T> successful payload type
+     * @param code protocol error code, mapped to internal error if null or success
+     * @param message diagnostic message to include in the result
+     * @return failure result with a nonzero error code and the supplied message
+     */
+    static <T> A4pResult<T> failure(A4pErrorCode code, String message) {
+        A4pErrorCode actual = code == null || code == A4P_SUCCESS ? A4P_INTERNAL_ERROR : code;
+        return new A4pResult<>(false, null, actual.code(), message);
+    }
+
+    /**
      * Reports whether this result contains a successful payload.
      * @return true if data is available
      */
@@ -95,8 +109,8 @@ public final class A4pResult<T> {
     public String message() { return message; }
 
     /**
-     * Returns a diagnostic summary without including the business payload.
-     * @return diagnostic summary excluding the business payload
+     * Returns a diagnostic summary without including the data payload.
+     * @return diagnostic summary excluding the data payload
      */
     @Override
     public String toString() {
