@@ -58,6 +58,9 @@ int HttpServerTransport::Start()
     config.host = config_.ip;
     config.port = static_cast<uint16_t>(config_.port);
     config.ioThreadNum = config_.ioThreadNum;
+    config.connectionTimeoutSeconds = config_.connectionTimeoutSeconds;
+    config.connectionSweepIntervalSeconds = config_.connectionSweepIntervalSeconds;
+    config.requestTimeoutSeconds = config_.requestTimeoutSeconds;
 
     // Disable TLS for simple HTTP service
     config.tlsConfig.enabled = false;
@@ -155,20 +158,25 @@ void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, con
         response.type = Http::HttpSendType::HTTPRESPONSESTART;
         ctx.httpSendFunc(response, ctx);
 
+        auto emitter = std::make_shared<StreamServerEmitter>(ctx, headersCopy);
         try {
-            auto emitter = std::make_shared<StreamServerEmitter>(ctx);
             std::string unusedResp; // For streaming, response body is not used
             handler_(reqBody, unusedResp, emitter);
         } catch (const std::exception& e) {
             std::string error_msg = e.what() ? e.what() : "Unknown exception";
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed: " + error_msg);
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "streaming handler failed: " + error_msg);
 
-            // Send error as SSE event
-            Http::HttpResponse error_response;
-            SetCommonHeaders(error_response);
-            error_response.body = "event: error\ndata: {\"error\":\"" + std::string(e.what()) + "\"}\n\n";
-
-            ctx.httpSendFunc(error_response, ctx);
+            // The error goes out as an event inside the open stream (headers are already on the
+            // wire), followed by the terminating chunk; both are dropped if the handler ended
+            // the stream before throwing. Guarded because an exception escaping this lambda
+            // would leave the worker thread and end the process.
+            try {
+                emitter->WriteErrorEvent(error_msg);
+                emitter->WriteDone();
+            } catch (const std::exception& reportError) {
+                A2A_LOG(A2A_LOG_LEVEL::ERROR,
+                    std::string("failed to report streaming error: ") + reportError.what());
+            }
         }
 
         // Clean up the thread from the vector when done

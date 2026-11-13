@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -19,8 +20,11 @@
 #undef protected
 
 #include "shared/http_common.h"
+#include "server/http_server_builder.h"
 
+using ::testing::EndsWith;
 using ::testing::HasSubstr;
+using ::testing::Not;
 
 using namespace A2A;
 using namespace A2A::Server;
@@ -52,6 +56,14 @@ public:
     FakeTcpSocket(EventSystem& es, int fd = 123)
         : TcpSocket(es, fd, TcpSocketOptions{})
     {
+    }
+
+    // The fd numbers used in these tests are made up and usually belong to something else in
+    // the process. ~TcpSocket calls TcpSocket::Close() unconditionally, which would ::close()
+    // that borrowed number; dropping it here keeps the base teardown a no-op.
+    ~FakeTcpSocket() override
+    {
+        fd_ = -1;
     }
 
     bool Send(const char* data, size_t len) override
@@ -160,6 +172,7 @@ TEST_F(HttpServerTest, BuildchunkedResponse_StartAndBodyWithChunkedHeader)
     EXPECT_THAT(raw, HasSubstr("Transfer-Encoding: chunked\r\n"));
     EXPECT_THAT(raw, HasSubstr("\r\n\r\n"));
     EXPECT_THAT(raw, HasSubstr("5\r\nhello\r\n"));
+    EXPECT_THAT(raw, EndsWith("0\r\n\r\n")); // the one-shot response terminates the stream
 }
 
 TEST_F(HttpServerTest, BuildchunkedResponse_BodyOnlyWhenChunkedAlreadyEnabled)
@@ -636,6 +649,7 @@ TEST_F(HttpServerTest, SendResponse_ChunkedHeaderPath_SendsChunkedResponse)
     EXPECT_THAT(typed->sentData_, HasSubstr("HTTP/1.1 200 OK\r\n"));
     EXPECT_THAT(typed->sentData_, HasSubstr("Transfer-Encoding: chunked\r\n"));
     EXPECT_THAT(typed->sentData_, HasSubstr("5\r\nhello\r\n"));
+    EXPECT_THAT(typed->sentData_, EndsWith("0\r\n\r\n"));
 }
 
 TEST_F(HttpServerTest, CleanupConnection_WithConnection_ClosesAndErases)
@@ -1013,7 +1027,7 @@ TEST_F(HttpServerTest, HandleRequest_HandlerThrows_Sends500Body)
     EXPECT_THAT(typed->sentData_, HasSubstr("Error: boom"));
 }
 
-TEST_F(HttpServerTest, BuildchunkedResponse_HttpResponseWithEmptyBody_DoesNotAppendChunk)
+TEST_F(HttpServerTest, BuildchunkedResponse_HttpResponseWithEmptyBody_WritesOnlyTerminatingChunk)
 {
     Http::HttpResponse response;
     response.type = Http::HttpSendType::HTTPRESPONSE;
@@ -1027,7 +1041,9 @@ TEST_F(HttpServerTest, BuildchunkedResponse_HttpResponseWithEmptyBody_DoesNotApp
 
     EXPECT_TRUE(chunkedEnabled);
     EXPECT_THAT(raw, HasSubstr("HTTP/1.1 200 OK\r\n"));
-    EXPECT_EQ(raw.find("0\r\n\r\n"), std::string::npos);
+    // No data chunk for an empty body, but the stream must still be terminated so the client
+    // sees a complete (zero-length) body.
+    EXPECT_THAT(raw, EndsWith("\r\n\r\n0\r\n\r\n"));
 }
 
 TEST_F(HttpServerTest, HandleRequest_RouteNotFound_Sends404Response)
@@ -1082,6 +1098,31 @@ TEST_F(HttpServerTest, OnRead_InvalidRequest_Sends400Response)
     EXPECT_TRUE(server->connections_[82].requestBuffer.empty());
 }
 
+TEST_F(HttpServerTest, OnRead_SendFails_StopsTouchingTheClosedConnection)
+{
+    // Writing the response fails, so the connection is cleaned up in the middle of OnRead;
+    // the bookkeeping that follows must not reach for the context that went with it (ASAN
+    // catches it). Covers both the unparsable-request and the handled-request path.
+    auto badRequest = MakeFakeSocket(83);
+    static_cast<FakeTcpSocket*>(badRequest.get())->SetSendResult(false);
+    HttpServer::ConnectionContext badCtx;
+    badCtx.connection = badRequest;
+    server->connections_[83] = std::move(badCtx);
+
+    auto noRoute = MakeFakeSocket(84);
+    static_cast<FakeTcpSocket*>(noRoute.get())->SetSendResult(false);
+    HttpServer::ConnectionContext noRouteCtx;
+    noRouteCtx.connection = noRoute;
+    server->connections_[84] = std::move(noRouteCtx);
+
+    EXPECT_NO_THROW(server->OnRead(83, "%%%INVALID%%%"));
+    EXPECT_NO_THROW(server->OnRead(84,
+        "GET /missing HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n"));
+
+    EXPECT_TRUE(server->connections_.find(83) == server->connections_.end());
+    EXPECT_TRUE(server->connections_.find(84) == server->connections_.end());
+}
+
 TEST_F(HttpServerTest, OnRead_ValidRequestWithoutRoute_Sends404Response)
 {
     auto fake = MakeFakeSocket(83);
@@ -1128,23 +1169,6 @@ TEST_F(HttpServerTest, HandleRequest_RouteMatched_DirectSendWritesResponse)
     // 当前 server 未 running，httpSendFunc 最终会走 SendResponseAsync early return，
     // 所以这里只验证 HandleRequest 本身不再额外发送 fallback。
     EXPECT_TRUE(typed->sentData_.empty());
-}
-
-TEST_F(HttpServerTest, BuildchunkedResponse_HttpResponseWithEmptyBody_DoesNotAppendChunkData)
-{
-    Http::HttpResponse response;
-    response.type = Http::HttpSendType::HTTPRESPONSE;
-    response.statusCode = 200;
-    response.statusText = "OK";
-    response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
-    response.body = "";
-
-    bool chunkedEnabled = false;
-    std::string raw = server->BuildchunkedResponse(response, chunkedEnabled);
-
-    EXPECT_TRUE(chunkedEnabled);
-    EXPECT_THAT(raw, HasSubstr("HTTP/1.1 200 OK\r\n"));
-    EXPECT_EQ(raw.find("0\r\n"), std::string::npos);
 }
 
 TEST_F(HttpServerTest, SendResponse_ChunkedBodyOnly_UsesExistingSseChunkedState)
@@ -1263,4 +1287,430 @@ TEST_F(HttpServerTest, Run_TlsEnabledWithMissingCert_Throws)
     EXPECT_THROW(localServer->Run(), std::runtime_error);
     EXPECT_TRUE(localServer->running_.load());
     EXPECT_NO_THROW(localServer->Stop());
+}
+
+// ===========================================================================
+// Idle connection reclamation: connections that neither receive nor send data
+// for longer than the configured timeout must be closed and reclaimed.
+// ===========================================================================
+
+TEST_F(HttpServerTest, ResolveSweepIntervalMs_UsesConfiguredInterval)
+{
+    ConnectionTimeoutConfig config;
+    config.timeoutSeconds = 300;
+    config.sweepIntervalSeconds = 30;
+
+    EXPECT_EQ(HttpServer::ResolveSweepIntervalMs(config), 30000L);
+}
+
+TEST_F(HttpServerTest, ResolveSweepIntervalMs_FallsBackToDefaultWhenIntervalZero)
+{
+    ConnectionTimeoutConfig config;
+    config.timeoutSeconds = 300;
+    config.sweepIntervalSeconds = 0;
+
+    EXPECT_EQ(HttpServer::ResolveSweepIntervalMs(config),
+        static_cast<long>(DEFAULT_CONNECTION_SWEEP_INTERVAL_SECONDS) * 1000L);
+}
+
+TEST_F(HttpServerTest, ResolveSweepIntervalMs_ClampsIntervalToTimeout)
+{
+    ConnectionTimeoutConfig config;
+    config.timeoutSeconds = 10;
+    config.sweepIntervalSeconds = 600;
+
+    EXPECT_EQ(HttpServer::ResolveSweepIntervalMs(config), 10000L);
+}
+
+TEST_F(HttpServerTest, ResolveSweepIntervalMs_ClampsIntervalToRequestTimeoutWhenIdleDisabled)
+{
+    ConnectionTimeoutConfig config;
+    config.timeoutSeconds = 0; // idle budget disabled, only the request budget remains
+    config.requestTimeoutSeconds = 7;
+    config.sweepIntervalSeconds = 600;
+
+    EXPECT_EQ(HttpServer::ResolveSweepIntervalMs(config), 7000L);
+}
+
+TEST_F(HttpServerTest, CloseIdleConnections_ClosesConnectionIdleBeyondTimeout)
+{
+    server->timeoutConfig_.timeoutSeconds = 2;
+
+    auto fake = MakeFakeSocket(201);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.lastActivity = std::chrono::steady_clock::now() - std::chrono::seconds(3);
+    server->connections_[201] = std::move(ctx);
+
+    server->CloseIdleConnections(std::chrono::steady_clock::now());
+
+    EXPECT_TRUE(server->connections_.empty());
+    EXPECT_TRUE(static_cast<FakeTcpSocket*>(fake.get())->closed_);
+}
+
+TEST_F(HttpServerTest, CloseIdleConnections_KeepsConnectionAtExactThreshold)
+{
+    server->timeoutConfig_.timeoutSeconds = 5;
+
+    const auto now = std::chrono::steady_clock::now();
+    auto fake = MakeFakeSocket(202);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.lastActivity = now - std::chrono::seconds(5); // exactly at the threshold, not beyond it
+    server->connections_[202] = std::move(ctx);
+
+    server->CloseIdleConnections(now);
+
+    EXPECT_EQ(server->connections_.size(), 1u);
+    EXPECT_FALSE(static_cast<FakeTcpSocket*>(fake.get())->closed_);
+}
+
+TEST_F(HttpServerTest, CloseIdleConnections_KeepsRecentlyActiveConnection)
+{
+    server->timeoutConfig_.timeoutSeconds = 2;
+
+    auto fake = MakeFakeSocket(203);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.lastActivity = std::chrono::steady_clock::now();
+    server->connections_[203] = std::move(ctx);
+
+    server->CloseIdleConnections(std::chrono::steady_clock::now());
+
+    EXPECT_EQ(server->connections_.size(), 1u);
+    EXPECT_FALSE(static_cast<FakeTcpSocket*>(fake.get())->closed_);
+}
+
+TEST_F(HttpServerTest, CloseIdleConnections_KeepsAncientConnectionWhenTimeoutDisabled)
+{
+    server->timeoutConfig_.timeoutSeconds = 0; // reclamation disabled
+
+    const auto now = std::chrono::steady_clock::now();
+    auto fake = MakeFakeSocket(204);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.lastActivity = now - std::chrono::hours(1);
+    server->connections_[204] = std::move(ctx);
+
+    server->CloseIdleConnections(now);
+
+    EXPECT_EQ(server->connections_.size(), 1u);
+    EXPECT_FALSE(static_cast<FakeTcpSocket*>(fake.get())->closed_);
+}
+
+TEST_F(HttpServerTest, CloseIdleConnections_OnlyClosesIdleConnections)
+{
+    server->timeoutConfig_.timeoutSeconds = 2;
+
+    const auto now = std::chrono::steady_clock::now();
+
+    auto fresh = MakeFakeSocket(301);
+    HttpServer::ConnectionContext freshCtx;
+    freshCtx.connection = fresh;
+    freshCtx.lastActivity = now - std::chrono::milliseconds(100);
+    server->connections_[301] = std::move(freshCtx);
+
+    auto idle = MakeFakeSocket(302);
+    HttpServer::ConnectionContext idleCtx;
+    idleCtx.connection = idle;
+    idleCtx.lastActivity = now - std::chrono::seconds(10);
+    server->connections_[302] = std::move(idleCtx);
+
+    auto alsoFresh = MakeFakeSocket(303);
+    HttpServer::ConnectionContext alsoFreshCtx;
+    alsoFreshCtx.connection = alsoFresh;
+    alsoFreshCtx.lastActivity = now - std::chrono::milliseconds(200);
+    server->connections_[303] = std::move(alsoFreshCtx);
+
+    server->CloseIdleConnections(now);
+
+    EXPECT_EQ(server->connections_.size(), 2u);
+    EXPECT_TRUE(server->connections_.find(301) != server->connections_.end());
+    EXPECT_TRUE(server->connections_.find(302) == server->connections_.end());
+    EXPECT_TRUE(server->connections_.find(303) != server->connections_.end());
+    EXPECT_TRUE(static_cast<FakeTcpSocket*>(idle.get())->closed_);
+    EXPECT_FALSE(static_cast<FakeTcpSocket*>(fresh.get())->closed_);
+    EXPECT_FALSE(static_cast<FakeTcpSocket*>(alsoFresh.get())->closed_);
+}
+
+// ===========================================================================
+// In-flight requests: a connection whose handler is still working is silent on
+// the wire by design and must not be mistaken for an idle client.
+// ===========================================================================
+
+TEST_F(HttpServerTest, CloseIdleConnections_AppliesRequestBudgetToInFlightConnections)
+{
+    server->timeoutConfig_.timeoutSeconds = 2;
+    server->timeoutConfig_.requestTimeoutSeconds = 60;
+
+    const auto now = std::chrono::steady_clock::now();
+
+    auto working = MakeFakeSocket(401);
+    HttpServer::ConnectionContext workingCtx;
+    workingCtx.connection = working;
+    workingCtx.inFlight = true;
+    workingCtx.lastActivity = now - std::chrono::seconds(30); // past the idle timeout, not the request one
+    server->connections_[401] = std::move(workingCtx);
+
+    auto stuck = MakeFakeSocket(402);
+    HttpServer::ConnectionContext stuckCtx;
+    stuckCtx.connection = stuck;
+    stuckCtx.inFlight = true;
+    stuckCtx.lastActivity = now - std::chrono::seconds(61); // this handler is never going to finish
+    server->connections_[402] = std::move(stuckCtx);
+
+    server->CloseIdleConnections(now);
+
+    EXPECT_TRUE(server->connections_.find(401) != server->connections_.end());
+    EXPECT_TRUE(server->connections_.find(402) == server->connections_.end());
+    EXPECT_FALSE(static_cast<FakeTcpSocket*>(working.get())->closed_);
+    EXPECT_TRUE(static_cast<FakeTcpSocket*>(stuck.get())->closed_);
+}
+
+TEST_F(HttpServerTest, HandleRequest_HandlerThrows_LeavesNoRequestInFlight)
+{
+    server->routes_["/boom"] = [](const Http::HttpRequest&, const Http::HttpRequestContext&) {
+        throw std::runtime_error("boom");
+    };
+
+    auto fake = MakeFakeSocket(6);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.currentRequest.url = "/boom";
+    server->connections_[6] = std::move(ctx);
+
+    EXPECT_NO_THROW(server->HandleRequest(6, server->connections_[6]));
+
+    EXPECT_FALSE(server->connections_[6].inFlight);
+}
+
+TEST_F(HttpServerTest, HandleRequest_HandlerThrowsWithStreamOpen_TerminatesStreamWithoutRepeatingStatusLine)
+{
+    // The status line and headers are already on the wire. A second header block would land
+    // inside the body, and this layer cannot know what payload format the stream carries, so
+    // the only safe move is to close the stream out; the detail goes to the log.
+    server->routes_["/boom"] = [](const Http::HttpRequest&, const Http::HttpRequestContext&) {
+        throw std::runtime_error("boom");
+    };
+
+    auto fake = MakeFakeSocket(18);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.sseChunked = true; // a chunked response is already in progress
+    ctx.currentRequest.url = "/boom";
+    server->connections_[18] = std::move(ctx);
+
+    server->HandleRequest(18, server->connections_[18]);
+
+    const std::string& sent = static_cast<FakeTcpSocket*>(fake.get())->sentData_;
+    EXPECT_EQ(sent, "0\r\n\r\n"); // nothing but the terminating chunk
+    EXPECT_FALSE(server->connections_[18].inFlight);
+    EXPECT_FALSE(server->connections_[18].sseChunked);
+}
+
+TEST_F(HttpServerTest, SendResponse_FullResponse_ClearsInFlight)
+{
+    auto fake = MakeFakeSocket(8);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.inFlight = true;
+    server->connections_[8] = std::move(ctx);
+
+    Http::HttpResponse response;
+    response.type = Http::HttpSendType::HTTPRESPONSE;
+    response.streaming = false;
+    response.body = "{}";
+
+    EXPECT_TRUE(server->SendResponse(8, response));
+    EXPECT_FALSE(server->connections_[8].inFlight);
+}
+
+TEST_F(HttpServerTest, SendResponse_StreamLifecycle_KeepsInFlightUntilTheTerminatingChunk)
+{
+    auto fake = MakeFakeSocket(9);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.inFlight = true;
+    server->connections_[9] = std::move(ctx);
+    auto* typed = static_cast<FakeTcpSocket*>(fake.get());
+
+    Http::HttpResponse start;
+    start.type = Http::HttpSendType::HTTPRESPONSESTART;
+    start.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
+    EXPECT_TRUE(server->SendResponse(9, start));
+    EXPECT_TRUE(server->connections_[9].inFlight);
+    ASSERT_TRUE(server->connections_[9].sseChunked);
+    // Headers only: a terminator here would cut the stream off before the first event.
+    EXPECT_THAT(typed->sentData_, Not(EndsWith("0\r\n\r\n")));
+
+    Http::HttpResponse chunk;
+    chunk.type = Http::HttpSendType::HTTPRESPONSEBODY;
+    chunk.body = "data: one";
+    EXPECT_TRUE(server->SendResponse(9, chunk));
+    EXPECT_TRUE(server->connections_[9].inFlight);
+    EXPECT_THAT(typed->sentData_, EndsWith("9\r\ndata: one\r\n")); // no terminator yet
+
+    Http::HttpResponse done;
+    done.type = Http::HttpSendType::HTTPRESPONSEBODY; // empty body = terminating chunk
+    EXPECT_TRUE(server->SendResponse(9, done));
+    EXPECT_THAT(typed->sentData_, EndsWith("0\r\n\r\n"));
+    EXPECT_FALSE(server->connections_[9].inFlight);
+    // A kept-alive connection must negotiate chunking again for the next request.
+    EXPECT_FALSE(server->connections_[9].sseChunked);
+}
+
+TEST_F(HttpServerTest, SendResponse_FullResponseOnChunkedConnection_TerminatesStream)
+{
+    // Without the trailing 0-chunk the client cannot tell the body ended and hangs until its
+    // own timeout, while the server already treats the exchange as finished.
+    auto fake = MakeFakeSocket(17);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.inFlight = true;
+    ctx.sseChunked = true;
+    server->connections_[17] = std::move(ctx);
+
+    Http::HttpResponse response;
+    response.type = Http::HttpSendType::HTTPRESPONSE;
+    response.headers[Http::TRANSFER_ENCODING_HEADER] = Http::TRANSFER_ENCODING_CHUNKED;
+    response.body = "event: error\ndata: {}\n\n";
+
+    EXPECT_TRUE(server->SendResponse(17, response));
+
+    const std::string& sent = static_cast<FakeTcpSocket*>(fake.get())->sentData_;
+    EXPECT_THAT(sent, HasSubstr("event: error\ndata: {}\n\n"));
+    EXPECT_THAT(sent, EndsWith("0\r\n\r\n"));
+    EXPECT_FALSE(server->connections_[17].inFlight);
+}
+
+TEST_F(HttpServerTest, HandleNewConnection_AssignsIncreasingSequences)
+{
+    server->HandleNewConnection(MakeFakeSocket(11));
+    auto first = server->connections_.find(11);
+    ASSERT_TRUE(first != server->connections_.end());
+    const uint64_t firstSequence = first->second.sequence;
+
+    server->CleanupConnection(11);
+    server->HandleNewConnection(MakeFakeSocket(11)); // same fd number, different connection
+    auto second = server->connections_.find(11);
+    ASSERT_TRUE(second != server->connections_.end());
+
+    EXPECT_NE(firstSequence, 0u);
+    EXPECT_GT(second->second.sequence, firstSequence);
+}
+
+TEST_F(HttpServerTest, SendResponse_StaleSequence_DropsResponseInsteadOfWritingToReusedFd)
+{
+    auto fake = MakeFakeSocket(13);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.sequence = 78;
+    server->connections_[13] = std::move(ctx);
+    auto* typed = static_cast<FakeTcpSocket*>(fake.get());
+
+    Http::HttpResponse response;
+    response.type = Http::HttpSendType::HTTPRESPONSE;
+    response.streaming = false;
+    response.body = "payload";
+
+    EXPECT_TRUE(server->SendResponse(13, 78u, response));
+    EXPECT_THAT(typed->sentData_, HasSubstr("payload"));
+
+    // Sequence 77 belonged to the connection this fd was reused from; its late response must
+    // not reach the client now holding the fd.
+    typed->sentData_.clear();
+    EXPECT_FALSE(server->SendResponse(13, 77u, response));
+    EXPECT_TRUE(typed->sentData_.empty());
+}
+
+TEST_F(HttpServerTest, ServedConnectionSurvivesSweepAndItsResponseStillGetsThrough)
+{
+    // The whole chain for a slow handler: the request is read, the sweep runs long past the
+    // idle timeout, and the response produced afterwards still reaches the client.
+    server->timeoutConfig_.timeoutSeconds = 1;
+    server->timeoutConfig_.requestTimeoutSeconds = 600;
+
+    Http::HttpRequestContext captured{};
+    server->routes_["/slow"] = [&captured](const Http::HttpRequest&, const Http::HttpRequestContext& ctx) {
+        captured = ctx; // the transport hands the work to a worker thread and answers later
+    };
+
+    auto fake = MakeFakeSocket(90);
+    HttpServer::ConnectionContext ctx;
+    ctx.connection = fake;
+    ctx.sequence = 9001;
+    ctx.lastActivity = std::chrono::steady_clock::now();
+    server->connections_[90] = std::move(ctx);
+
+    server->OnRead(90, "POST /slow HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n");
+    ASSERT_EQ(captured.connectionSequence, 9001u);
+    ASSERT_TRUE(server->connections_[90].inFlight);
+
+    // Nothing has been read or written for two minutes because the handler is still working.
+    const auto now = std::chrono::steady_clock::now();
+    server->connections_[90].lastActivity = now - std::chrono::seconds(120);
+    server->CloseIdleConnections(now);
+    ASSERT_TRUE(server->connections_.find(90) != server->connections_.end());
+
+    Http::HttpResponse response;
+    response.type = Http::HttpSendType::HTTPRESPONSE;
+    response.streaming = false;
+    response.body = "late but delivered";
+
+    EXPECT_TRUE(server->SendResponse(captured.connectionId, captured.connectionSequence, response));
+    EXPECT_THAT(static_cast<FakeTcpSocket*>(fake.get())->sentData_, HasSubstr("late but delivered"));
+}
+
+TEST_F(HttpServerTest, Run_ArmsSweepTimerWithDefaultConfiguration)
+{
+    RouteMap localRoutes;
+    auto localServer = std::make_unique<HttpServer>("127.0.0.1", 0, MakeTlsConfig(false), localRoutes, 0);
+
+    ASSERT_NO_THROW(localServer->Run());
+    EXPECT_GE(localServer->sweepTimerId_, 0);
+
+    EXPECT_NO_THROW(localServer->Stop());
+    EXPECT_EQ(localServer->sweepTimerId_, -1);
+}
+
+TEST_F(HttpServerTest, Run_DoesNotArmSweepTimerWhenTimeoutDisabled)
+{
+    RouteMap localRoutes;
+    ConnectionTimeoutConfig config;
+    config.timeoutSeconds = 0; // idle reclamation disabled
+    config.requestTimeoutSeconds = 0; // request budget disabled as well
+    auto localServer = std::make_unique<HttpServer>("127.0.0.1", 0, MakeTlsConfig(false), localRoutes, 0, config);
+
+    ASSERT_NO_THROW(localServer->Run());
+    EXPECT_EQ(localServer->sweepTimerId_, -1);
+
+    EXPECT_NO_THROW(localServer->Stop());
+}
+
+TEST_F(HttpServerTest, Run_ArmsSweepTimerWhenOnlyRequestTimeoutEnabled)
+{
+    RouteMap localRoutes;
+    ConnectionTimeoutConfig config;
+    config.timeoutSeconds = 0; // idle reclamation disabled, request budget still has to be enforced
+    config.requestTimeoutSeconds = 60;
+    auto localServer = std::make_unique<HttpServer>("127.0.0.1", 0, MakeTlsConfig(false), localRoutes, 0, config);
+
+    ASSERT_NO_THROW(localServer->Run());
+    EXPECT_GE(localServer->sweepTimerId_, 0);
+
+    EXPECT_NO_THROW(localServer->Stop());
+}
+
+// Wiring the sweep onto the event loop is covered by Run_ArmsSweepTimer* above plus
+// EventSystemTest.AddTimer_Repeat; the socket-level version of that check needed a free port
+// and multi-second polling, so it was dropped.
+
+// HttpConfig repeats the defaults as literals (a public header cannot include internal ones).
+TEST(HttpConfigDefaults, MatchInternalDefaults)
+{
+    const HttpConfig config{};
+
+    EXPECT_EQ(config.connectionTimeoutSeconds, DEFAULT_CONNECTION_TIMEOUT_SECONDS);
+    EXPECT_EQ(config.connectionSweepIntervalSeconds, DEFAULT_CONNECTION_SWEEP_INTERVAL_SECONDS);
+    EXPECT_EQ(config.requestTimeoutSeconds, DEFAULT_REQUEST_TIMEOUT_SECONDS);
 }

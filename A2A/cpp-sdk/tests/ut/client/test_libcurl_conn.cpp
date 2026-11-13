@@ -780,9 +780,14 @@ TEST(CurlErrorMappingTest, ErrorCodeMapping)
     EXPECT_EQ(CurlErrorCode(CURLE_COULDNT_RESOLVE_HOST), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
     EXPECT_EQ(CurlErrorCode(CURLE_COULDNT_CONNECT), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
     EXPECT_EQ(CurlErrorCode(CURLE_SSL_CONNECT_ERROR), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    // 连接中断（如服务端回收仍在处理的连接）：没有可解析的内容，归为传输错误而非解析错误
+    EXPECT_EQ(CurlErrorCode(CURLE_GOT_NOTHING), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    EXPECT_EQ(CurlErrorCode(CURLE_PARTIAL_FILE), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    EXPECT_EQ(CurlErrorCode(CURLE_SEND_ERROR), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
+    EXPECT_EQ(CurlErrorCode(CURLE_RECV_ERROR), static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION));
     // 未映射的错误返回 0（上层回退到 HTTP_PARSE_ERROR）
     EXPECT_EQ(CurlErrorCode(CURLE_OK), 0);
-    EXPECT_EQ(CurlErrorCode(CURLE_RECV_ERROR), 0);
+    EXPECT_EQ(CurlErrorCode(CURLE_UNSUPPORTED_PROTOCOL), 0);
 }
 
 TEST(CurlErrorMappingTest, DescribeCurlErrorStages)
