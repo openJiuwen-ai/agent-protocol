@@ -206,6 +206,8 @@ IntentExecutionContext restoredContext = restored.data();
 
 编解码器支持 L1、L2、L3 和 Context。反序列化要求输入与对应序列化器的输出逐字符一致，额外的格式化空白、不同的字段顺序或等价的转义写法都会被拒绝。存储或转发时请保留原始序列化输出。已经重新排版的历史数据需要从原对象或可信副本通过对应的 SDK 序列化接口重新生成。
 
+序列化会省略值为 null 的对象成员，遇到任意层级的 null 数组元素时抛出 `A4P_SERIALIZE_FAIL`（5001）。反序列化遇到显式 null 值时返回 `A4P_DESERIALIZE_FAIL`（5002）。
+
 序列化在 Context 锁内取得一致快照。反序列化拒绝显式 JSON `null`、重复键和尾随 token，所有反序列化失败均返回 `A4P_DESERIALIZE_FAIL`（5002）。反序列化时原样恢复持久化的 Context，即使内容不合法，例如部分字段的值错误等。
 
 恢复不会认证持久化数据，也不会重新验签。需要时由应用保护存储完整性。Context JSON 仅用于本地持久化，不得作为网络消息。对于每一个 Intent 和 Context 应该只持久化一份数据。
@@ -236,9 +238,11 @@ IntentExecutionContext restoredContext = restored.data();
 
 4003 为兼容 ArkTS 保留，Java 使用 4004 表示周期执行次数超限。
 
-## 版本校验与兼容性
+## 校验与兼容性
 
 接收 Intent 的生命周期接口以及 `verifyIntentAuthenticity` 要求传入的各层 Intent 都使用 SDK 协议版本。`revokeIntent`、`createExecution`、`completeExecution` 和 `cancelExecution` 要求 Context 版本及其授权 Intent 各层版本均与 SDK 一致。版本不受支持时返回 `A4P_UNSUPPORTED_VERSION`（1002）。版本不受支持的持久化 Context 仍可解码以供检查。恢复生命周期操作前，请使用支持该存储版本的 SDK。
+
+这四个 Context 操作也会校验授权 Intent 的结构，字段非法时返回 `A4P_INVALID_PARAMETER`（1001）。持久化 Context 可能成功解码，但仍因签名密钥标识为空白等原因被拒绝。重试前，请从可信备份恢复原始有效的已签名 Context 及其账本。
 
 ## 使用约束
 

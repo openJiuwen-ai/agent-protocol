@@ -31,6 +31,7 @@ Examples:
 [3,1,2]                            -> [3,1,2]
 {"10":1,"2":2}                     -> {"10":1,"2":2}
 {"optional": null, "required": 10} -> Java codec rejects null on deserialization (5002) and omits null-valued fields on serialization
+{"items": [null]}                  -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
 {"required": 10}                   -> {"required": 10}
 9007199254740991                   -> 9007199254740991
 1.5                                -> rejected by the Java codec (5001 on serialization, 5002 on deserialization)
