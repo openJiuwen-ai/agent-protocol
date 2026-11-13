@@ -865,6 +865,19 @@ export default function a4pCodecTest() {
         expect(deserialized.intentL2.intentL1.intentId).assertEqual(original.intentL2.intentL1.intentId);
         expect(deserialized.sign?.sign).assertEqual(original.sign?.sign);
       });
+
+      it('deserialize_fails_whenSigningEnvIsDeeplyNested', 0, () => {
+        // Deeper than the nesting bound: the structural check must report
+        // it with an A4P code rather than recurse without limit (any
+        // structural rejection surfaces from the codec as 5002).
+        const serialized = A4pCodec.serializeIntentL3(createL3());
+        const deep: string = '{"x":'.repeat(200) + '1' + '}'.repeat(200);
+        const tampered: string = serialized.replace('"device":{', '"device":{"deep":' + deep + ',');
+
+        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
+          A4pCodec.deserializeIntentL3(tampered);
+        });
+      });
     });
 
     describe('IntentExecutionContext', () => {

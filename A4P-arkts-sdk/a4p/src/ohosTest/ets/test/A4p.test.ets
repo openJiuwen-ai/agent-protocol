@@ -1227,6 +1227,34 @@ export default function a4pTest() {
         // (verifyIntentAuthenticity verifies the embedded L2 instead).
         A4p.activateIntent(l3, new MockVerifier());
       });
+
+      it('signIntent_fails_whenSigningEnvIsCyclicOrTooDeep', 0, () => {
+        // A cyclic or overly deep signing environment has no canonical form:
+        // it must fail with an A4P code, not a raw RangeError.
+        const request = createTestCreateIntentRequest();
+        const l1 = A4p.createIntent(request, new MockSigner());
+        const l2 = A4p.issueIntent(l1, new MockVerifier(),
+          createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'));
+
+        const cyclic = createTestSigningEnv();
+        const device: Record<string, Object> = { 'model': 'TestDevice' };
+        device['self'] = device;
+        cyclic.device = device;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.signIntent(l2, new MockVerifier(), cyclic, new MockSigner(AlgorithmType.RSA3072, 'user-key-001'));
+        });
+
+        let nested: Record<string, Object> = { 'leaf': 'value' };
+        for (let i = 0; i < 100; i++) {
+          const wrapper: Record<string, Object> = { 'n': nested };
+          nested = wrapper;
+        }
+        const deep = createTestSigningEnv();
+        deep.app = nested;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.signIntent(l2, new MockVerifier(), deep, new MockSigner(AlgorithmType.RSA3072, 'user-key-001'));
+        });
+      });
     });
 
     describe('activateIntent', () => {

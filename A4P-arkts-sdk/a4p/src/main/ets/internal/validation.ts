@@ -11,6 +11,7 @@ import {
   IntentExecutionStatus, ExecutionStatus
 } from '../models/execution';
 import { Product, ItemWhiteList, ShoppingItems, CartItem } from '../models/product';
+import { MAX_NESTING_DEPTH } from './utils';
 
 // All protocol numbers must be safe integers: beyond 2^53 - 1 doubles lose
 // precision and canonical serialization across implementations would break.
@@ -127,32 +128,51 @@ function rejectUnknownFields(obj: object, allowed: string[], field: string): Val
 }
 
 /**
- * Whether a signing-environment value tree contains a null anywhere. The
- * canonical form has no nulls (serialization omits them), so a null inside
- * device/app would be silently dropped from the signed bytes — reject it
- * loudly instead of signing bytes different from what was validated.
+ * Depth of signingEnv.device/app below the outermost document that embeds
+ * them (context -> authorizedIntent -> signingEnv -> device).
  */
-function containsNullValue(value: Object): boolean {
+const SIGNING_ENV_MAP_DEPTH: number = 3;
+
+/**
+ * Checks that a signing-environment value tree is null-free and finitely
+ * nested. The canonical form has no nulls (serialization omits them), so a
+ * null inside device/app would be silently dropped from the signed bytes —
+ * reject it loudly instead of signing bytes different from what was
+ * validated. A cyclic or overly deep tree has no canonical form either and
+ * is rejected here rather than exhausting the call stack.
+ * @param value - The value tree to check
+ * @param field - The field path for error messages
+ * @param ancestors - Containers on the current path, used to detect cycles
+ * @param depth - Nesting depth of value below the outermost document root
+ * @returns A validation failure, or null when the tree is acceptable
+ */
+function checkSigningEnvTree(value: Object, field: string, ancestors: Set<Object>, depth: number): Validation {
   if (value === null || value === undefined) {
-    return true;
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not contain null values; omit the key instead');
   }
-  if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) {
-      if (containsNullValue(value[i] as Object)) {
-        return true;
-      }
+  // Same bound and counting as canonicalStringify: every value, leaf or
+  // container, must sit at most MAX_NESTING_DEPTH levels below the root.
+  if (depth > MAX_NESTING_DEPTH) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + ' nesting exceeds the maximum depth of ' + MAX_NESTING_DEPTH);
+  }
+  if (typeof value !== 'object') {
+    return null;
+  }
+  if (ancestors.has(value)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not contain cyclic references');
+  }
+  ancestors.add(value);
+  const container: Record<string, Object> = value as Record<string, Object>;
+  const keys: string[] = Object.keys(container);
+  for (let i = 0; i < keys.length; i++) {
+    const err = checkSigningEnvTree(container[keys[i]], field, ancestors, depth + 1);
+    if (err) {
+      return err;
     }
-    return false;
   }
-  if (typeof value === 'object') {
-    const keys: string[] = Object.keys(value as Record<string, Object>);
-    for (let i = 0; i < keys.length; i++) {
-      if (containsNullValue((value as Record<string, Object>)[keys[i]])) {
-        return true;
-      }
-    }
-  }
-  return false;
+  ancestors.delete(value);
+  return null;
 }
 
 /**
@@ -490,18 +510,17 @@ export function validateSigningEnv(env: SigningEnv): Validation {
   if (!env.device || typeof env.device !== 'object' || Array.isArray(env.device)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'signingEnv.device must be an object');
   }
-  if (containsNullValue(env.device)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'signingEnv.device must not contain null values; omit the key instead');
+  // The maps are measured at their deepest embedding
+  // (context.authorizedIntent.signingEnv.device), so any accepted tree also
+  // fits the serialization bound of every document that carries it.
+  const deviceErr = checkSigningEnvTree(env.device, 'signingEnv.device', new Set<Object>(), SIGNING_ENV_MAP_DEPTH);
+  if (deviceErr) {
+    return deviceErr;
   }
   if (!env.app || typeof env.app !== 'object' || Array.isArray(env.app)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'signingEnv.app must be an object');
   }
-  if (containsNullValue(env.app)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'signingEnv.app must not contain null values; omit the key instead');
-  }
-  return null;
+  return checkSigningEnvTree(env.app, 'signingEnv.app', new Set<Object>(), SIGNING_ENV_MAP_DEPTH);
 }
 
 /** Validates an Order: non-empty id and currency, positive amount, valid cart, timestamp. */
