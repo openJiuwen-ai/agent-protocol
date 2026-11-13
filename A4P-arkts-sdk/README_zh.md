@@ -4,9 +4,8 @@
 
 A4P（Agent-to-Agent Payment）支付意图协议的 HarmonyOS（ArkTS）实现，以 HAR 库（模块名
 `a4p`）形式交付。覆盖带签名的意图生命周期（创建 → 签发 → 授权 → 激活）、基于冻结授权
-快照的支付执行记账，以及用于签名与持久化的规范化 JSON（canonical JSON）编解码。密码学
-通过 `Signer` / `SignatureVerifier` 接口由使用方注入。仓库中的 Java 移植版
-[`A4P-java-sdk/`](../A4P-java-sdk) 即移植自本 SDK。
+快照的支付执行记账，以及用于签名与持久化的规范化 JSON（canonical JSON）编解码。签名和验签
+通过 `Signer` / `SignatureVerifier` 接口由使用方注入。
 
 ## 构建与测试
 
@@ -28,7 +27,7 @@ scripts/build.sh --ohpm <path> --hvigorw <path>   # 或显式指定位置
 - HAR 库：`a4p/build/default/outputs/default/a4p.har`
 - 端侧测试 HAP：`a4p/build/default/outputs/ohosTest/a4p-ohosTest-unsigned.hap`
 
-测试可在 DevEco Studio 中针对 `a4p/src/ohosTest` 运行，也可将打包好的测试 HAP 安装到
+可在 DevEco Studio 中运行 `a4p/src/ohosTest` 下的测试，也可将打包好的测试 HAP 安装到
 设备上运行。本 SDK 不带示例应用；测试源码兼作参考用法（见[测试](#测试)）。
 
 ### 引入本库
@@ -55,28 +54,28 @@ import { A4p, A4pCodec, A4pErrorCode } from 'a4p';
 
 | 规范 | ArkTS |
 | --- | --- |
-| `createIntent` | `A4p.createIntent(CreateIntentRequest, Signer[, now?])` 返回 `IntentL1` |
-| `issueIntent` | `A4p.issueIntent(IntentL1, SignatureVerifier, IntentIssueContext, Signer[, now?])` 返回 `IntentL2` |
-| `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer[, now?])` 返回 `IntentL3` |
-| `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier[, now?])` 返回 `IntentExecutionContext` |
+| `createIntent` | `A4p.createIntent(CreateIntentRequest, Signer, now)` 返回 `IntentL1` |
+| `issueIntent` | `A4p.issueIntent(IntentL1, SignatureVerifier, IntentIssueContext, Signer, now)` 返回 `IntentL2` |
+| `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer, now)` 返回 `IntentL3` |
+| `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier, now)` 返回 `IntentExecutionContext` |
 | `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` 返回 `VerificationResult` |
-| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext[, now?])` 返回 `IntentExecutionContext` |
+| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext, now)` 返回 `IntentExecutionContext` |
 | `createExecution / completeExecution / cancelExecution` | `A4p` 命名空间下的函数，返回 `IntentExecutionContext` |
-| 失败上报 | 无结果包装：API 直接返回数据，失败时抛出符合 `BusinessError` 形态的错误，`code` 为 `A4pErrorCode`（具体类为模块内部实现，按结构捕获） |
+| 失败处理 | 没有结果包装：API 直接返回数据，失败时抛出符合 `BusinessError` 形态的错误，`code` 为 `A4pErrorCode`（具体类为模块内部实现，按结构捕获） |
 | 编解码 | `A4pCodec.serializeIntentL1/L2/L3/IntentExecutionContext` 返回 `String`；对应的每个 `deserialize…` 先做结构校验再返回对象 |
-| 密码学 | 不内置：`Signer.sign(Uint8Array): SignatureInfo` 与 `SignatureVerifier.verify(Uint8Array, SignatureInfo): VerificationResult` 由应用提供 |
+| 签名和验签 | 不内置：`Signer.sign(Uint8Array): SignatureInfo` 与 `SignatureVerifier.verify(Uint8Array, SignatureInfo): VerificationResult` 由应用提供 |
 | 数据模型 | 普通接口与字符串枚举（`AI_PAY`、`RSA3072`、`ACTIVE`、`PENDING`） |
 
-`now?` 表示下文说明的可选显式时钟参数。
+`now` 是必选的显式时钟参数（epoch 毫秒），详见下文说明。
 
-下面的片段展示调用形态；完整可编译的参考实现见 ohosTest 测试源码（尤其是
+下面的片段展示调用方式；完整可编译的参考实现见 ohosTest 测试源码（尤其是
 `A4p.test.ets` 与 `mock/TestDataFactory.ets`）。
 
 ```typescript
 // Agent 创建并签名 L1；服务端验证后签发 L2 并绑定三方身份；用户验证 L2 后签名 L3。
-const intentL1 = A4p.createIntent(request, agentSigner);
-const intentL2 = A4p.issueIntent(intentL1, agentVerifier, issueContext, serverSigner);
-const intentL3 = A4p.signIntent(intentL2, serverVerifier, signingEnv, userSigner);
+const intentL1 = A4p.createIntent(request, agentSigner, now);
+const intentL2 = A4p.issueIntent(intentL1, agentVerifier, issueContext, serverSigner, now);
+const intentL3 = A4p.signIntent(intentL2, serverVerifier, signingEnv, userSigner, now);
 
 // 激活：验证用户的 L3 签名，冻结授权快照。
 let context = A4p.activateIntent(intentL3, userVerifier, now);
@@ -100,11 +99,17 @@ try {
 `A4P_SERIALIZE_FAIL` 拒绝，且任何底层失败一律以 5001 抛出；
 反序列化先做严格解析，再校验结构。
 
-解析是严格的：重复 JSON 键、显式 `null` 字面量、非规范数字拼写（分数、指数、超出安全
-整数范围、负零 `-0`）、空格（规范化形式不含任何空格——输入必须是序列化器输出的确切
-字节，带填充或美化排版的文档会被拒绝）、尾部多余内容与非法字面量都以
-`A4P_DESERIALIZE_FAIL` 拒绝。
-结构校验按封闭字段集进行，任意层级的未知字段都会被拒绝，且任何拒绝（输入缺失、解析失败
+解析是严格的：重复 JSON 键、键序不符合规范（规范化形式按 UTF-16 码元排序每个对象的
+键——被调换键序的文档会被拒绝，而不是被静默重新规范化）、显式 `null` 字面量、非规范
+数字拼写（分数、指数、超出安全整数范围、负零 `-0`）、非规范转义写法（规范化形式对
+每个字符只有一种拼写——`\"`、`\\`、`\b`、`\f`、`\n`、`\r`、`\t`，其余 0x20 以下的
+控制字符用小写 `\u00xx`，其他字符一律裸写——因此 `\/`、对裸写字符的 `\uXXXX` 转义
+（含增补平面字符：转义代理对会被拒绝而非合并）、五个短转义字符的 `\uXXXX` 拼写与
+大写十六进制位都会被拒绝，与 Java SDK 一致——它只接受与自身规范化再序列化逐字节
+相同的文档）、嵌套超过 100 层的文档（Java SDK 在两个方向上执行同一上限）、空格
+（规范化形式不含任何空格——输入必须是序列化器输出的确切字节，带填充或美化排版的
+文档会被拒绝）、尾部多余内容与非法字面量都以 `A4P_DESERIALIZE_FAIL` 拒绝。
+结构校验按封闭字段集进行，类型化协议对象任意层级的未知字段都会被拒绝，且任何拒绝（输入缺失、解析失败
 或结构不符）一律以 `A4P_DESERIALIZE_FAIL`（5002）抛出——无法解析或不符合协议形状的
 文档就是反序列化失败，无论具体缺陷是什么（具体原因会记入 hilog 日志）：已授权的
 L3 链、`intentId` 的推导、`activatedTime`/`revokedTime`（校验为非负整数，但不做先后
@@ -114,29 +119,32 @@ L3 链、`intentId` 的推导、`activatedTime`/`revokedTime`（校验为非负�
 数值与 `leftExecutionCount` 恰在对应上限存在时出现）。反序列化只判定格式：版本号按
 原样恢复，账本内容——窗口、周期索引、id 唯一性、与签名快照的参数一致性、累计上限、
 状态与记账数值——一律原样恢复。执行类 API 在每次调用时重新执行账本规则，因此恢复的
-context 的账本在使用时才被判定，而不是在解析时；版本则从不重新判定——只有面向链路的
+context 的账本在使用时才被判定，而不是在解析时；反序列化自身不判定版本——面向链路的
 API（`issueIntent`、`signIntent`、`activateIntent`、`verifyIntentAuthenticity`）会比较
 版本，执行类 API（`revokeIntent`、`createExecution`、`completeExecution`、
-`cancelExecution`）不比较版本，外来版本的 context 恢复后可直接操作。需要校验签名的
+`cancelExecution`）在每次调用时校验 context 自身的 `version` 字段与内嵌链路（L3、L2、
+L1）的版本，外来版本的 context 恢复后虽可解析，但对其的任何操作都会被拒绝。需要校验签名的
 调用方在恢复后自行执行 `verifyIntentAuthenticity`（其判定同时拒绝不支持的 L2/L1
 版本）。最后重新冻结授权快照。
 
-可选字段用 `undefined` 表示；未提供的可选字段不会出现在签名 JSON 中，内存中的 `null`
-可选字段同样视为未提供，规范化形式绝不会出现 `"key":null` 键值对。数组元素或根为
+可选字段用 `undefined` 表示；未提供的可选字段不会出现在签名 JSON 中。`null` 值是非法
+输入——所有 API 都会以 `A4P_INVALID_PARAMETER` 拒绝，undefined 是"未提供"的唯一拼写；
+序列化时省略 null 属性只是最后一道兜底，规范化形式绝不会出现 `"key":null` 键值对。数组元素或根为
 null 时，序列化直接以 `A4P_SERIALIZE_FAIL` 失败，不会输出 `null` 字面量，与解析端
 在所有值位置拒绝显式 null 的规则保持一致。金额是正整数，以
 应用约定的最小货币单位计。所有协议数值都必须是 JavaScript 安全整数范围内的整数；
 不是整数的值必须以字符串承载；零只有一种拼写——`-0` 序列化为 `0`。传给 SDK 的值必须是普通对象（对象字面量），不能是
-类实例——规范化序列化会以 `A4P_SERIALIZE_FAIL` 拒绝类实例。
+类实例——规范化序列化会以 `A4P_SERIALIZE_FAIL` 拒绝类实例。值至多嵌套 100 层容器：
+规范化序列化对更深的值以 `A4P_SERIALIZE_FAIL` 拒绝，与严格解析器和 Java SDK 执行
+同一上限，因此本 SDK 产出的每一份序列化都能被自己的解析器接受。
 
-生命周期与执行函数都接受可选的显式时钟（`now`，epoch 毫秒），缺省使用 `Date.now()`。
-显式 `now` 必须是非负安全整数。测试中传入固定值可让签名字节可复现，也可用于实现
-调用方的时钟偏移策略；SDK 自身不做任何时钟容差，生产代码必须从可信时钟取值，绝不能
-使用客户端提供的时间戳。订单时间戳只被记录、不被评估：配额周期与有效期均以 `now`
-判定。
+生命周期与执行函数都接受必选的显式时钟（`now`，epoch 毫秒），`now` 必须是非负安全整数。
+测试中传入固定值可让签名字节可复现，传入偏移值可实现调用方的时钟偏移策略；SDK 自身
+不做任何时钟容差，生产代码必须从可信时钟取值，绝不能使用客户端提供的时间戳。订单
+时间戳只作记录、不参与判定：配额周期与有效期均以 `now` 为准。
 
 必填字符串不能为空白（使用 JavaScript `trim()` 的空白字符集）。一个商品需要非空白的
-seller id，且 `spuId`/`skuId` 至少提供一个非空白值；seller id + spuId + skuId 是白名单
+seller id，且 `spuId`/`skuId` 至少有一个非空值；seller id + spuId + skuId 是白名单
 匹配键，一个商品在每个分组内至多出现一次，且至多属于一个分组。周期规则要求
 `anchorTime`、`periodSeconds`、`maxExecutionCountPerPeriod` 三者同时提供，且
 `anchorTime <= validFrom`、`periodSeconds <= 9007199254740`。`L1.timestamp`、
@@ -177,14 +185,18 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
 | 5002 | `A4P_DESERIALIZE_FAIL` | 反序列化失败 |
 | 6001 | `A4P_INTERNAL_ERROR` | 意外的内部错误 |
 
-`2001` 与 `2002` 同样覆盖密码学边界：抛出异常、不返回结果，或返回畸形/自相矛盾结果
-（`valid` 为真却携带非成功码，或 `valid` 为假却携带码 `0`）的
-`Signer`/`SignatureVerifier` 会被 SDK 映射为这两个码，原始异常不会穿透生命周期 API。
+`2001` 与 `2002` 除了表示签名/验签失败，还涵盖签名和验签异常：为空的 `Signer`/`SignatureVerifier` 与
+抛出异常的同属基础设施故障，会被 SDK 映射为这两个码（`A4P_SIGNING_FAIL` / `A4P_VERIFY_FAIL`，
+与 Java SDK 对同类失败的映射一致），
+原始异常不会从生命周期 API 中泄漏。不返回结果或返回自相矛盾结果（`valid` 为真却
+携带非成功码，或 `valid` 为假却携带码 `0`）的 `SignatureVerifier` 同样映射为 `2002`。
+而不返回结果或返回畸形 `SignatureInfo` 的 `Signer` 属于数据损坏，
+会以 `A4P_INVALID_PARAMETER`（1001）失败，调用方据此可以区分两者。
 
 ## 执行语义
 
 - 待处理与已完成记录都占用金额、次数和周期配额；只有显式取消会释放配额，下游结果
-  未知则不回滚。
+  未知时不回滚。
 - 购物车必须与白名单模板精确匹配：`cartItems` 与 `itemsWhiteList` 长度相同，每个购物车
   条目与一个不同的、列出该商品的分组配对（组内 OR，组间 AND），且数量等于该分组的
   `quantity`。购物车顺序无关。长度不符、一个分组被匹配两次、数量不符或有分组未覆盖，
@@ -192,17 +204,19 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
   失败。
 - `orderId` 是支付的幂等键：账本中已存在的订单 ID（含已取消记录）会以
   `A4P_DUPLICATE_ID` 被拒绝。重复的执行 ID 在取消之后依然被拒绝；调用方提供的执行 ID
-  不能为空白，缺席时自动生成。
-- 预留检查按固定顺序执行：请求结构；动作与币种是否与已授权意图一致；context 状态；
+  不能为空白，未提供时自动生成。
+- 预留检查按固定顺序执行：请求结构；版本（context 自身与内嵌链路）；动作与币种是否与
+  已授权意图一致；context 状态；
   有效期窗口（`validFrom`、惰性置为 EXPIRED）；执行/订单 ID 重复；
   执行次数上限、单笔上限、剩余金额；白名单范围与模板；周期配额。
-- 执行类 API 不比较版本：`revokeIntent`、`createExecution`、`completeExecution`、
-  `cancelExecution` 只判定 context 的状态、窗口、ID 与配额，从不比较其 `version`
-  字段或内嵌链路的版本——外来版本的 context 恢复后会被照常操作。预留前的版本把关由
-  调用方负责（`verifyIntentAuthenticity` 拒绝不支持的 L2/L1 版本）。
+- 执行类 API 比较版本：`revokeIntent`、`createExecution`、`completeExecution`、
+  `cancelExecution` 在每次调用时校验 context 的 `version` 字段与内嵌链路（L3、L2、
+  L1）的版本，任何操作执行前先以 `A4P_UNSUPPORTED_VERSION` 拒绝外来版本的 context。
 - `amount` 由调用方声明：SDK 只校验其不超过签名的金额上限，不与购物车对账（`Product`
   不含价格）。将金额绑定到真实价格是持有权威商品目录一方的职责。
-- 撤销要求 context 处于 ACTIVE 并阻止新的预留，但待处理执行仍可完成或取消。
+- 撤销要求 context 处于 ACTIVE 并阻止新的预留，但待处理执行仍可完成或取消。撤销把
+  `revokedTime` 原样记录：不判定任何时钟——既不对照 `activatedTime`，
+  也不对照账本已有的预留，也不对照有效期窗口。
 - 超过 `validUntil` 的预留会把 context 置为 EXPIRED，尽管该次调用失败；待处理记录在
   EXPIRED 与 REVOKED 状态下仍可被终结。
 - 当一次完成操作之后不再有待处理记录，且要么达到次数上限、要么金额预算用尽时，ACTIVE
@@ -210,17 +224,18 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
 - `executionInfo` 始终给出 `leftAmount`；`periodIndex`/`leftPeriodExecutionCount` 仅在
   周期意图上出现，`leftExecutionCount` 仅在存在 `maxExecutionCount` 时出现——不适用的数值
   被省略而非置 null。快照始终由账本推导，从不手工维护。
-- 调用方的 execution 对象既不会被改动也不会被别名引用：ID 在本地解析并存为记录的
+- 调用方的 execution 对象既不会被改动，也不会被保留引用：ID 在本地解析并存为记录的
   `executionId`，执行内容的深拷贝则在全部检查通过后写入扁平的账本记录。账本只追加。
 - 完成操作不占用配额，但会按评估时刻重新推导记账快照，因此周期数值跟随 `now`，而不是
   最近一次账本变更。
 - 已授权意图在激活时被深拷贝并深度冻结；执行检查读取不可变快照，而账本与数值保持
   可变。
-- context 操作不加锁。这在 ArkTS 单线程运行时中是安全的，但**不**覆盖多个进程或同一个
+- context 操作不加锁。这在 ArkTS 单线程运行时中是安全的，但**不**适用于多个进程或同一个
   `intentId` 各自独立激活的副本。
-- `verifyIntentAuthenticity` 结构化校验整条 L3 链（含 L3 自身的 `sign`、`signingEnv`、
-  `timestamp` 与 `version`）并验证服务端的 L2 签名，不校验用户签名，也不依赖任何
-  context 状态。
+- `verifyIntentAuthenticity` 对整条 L3 链做结构校验（含 L3 自身的 `sign`、`signingEnv`
+  与 `version`——链上的时间戳从不参与判定），要求每一层（L3、L2、L1）
+  都是协议版本——绝不背书混合版本的链——并验证服务端的 L2 签名，不校验用户签名，也不
+  依赖任何 context 状态。
 
 账本位于内存中。接入方（意图中心）必须在以 `intentId` 加锁的数据库事务中持久化
 context，防止同一个 `intentId` 被重放，并把密钥与身份绑定。
@@ -238,21 +253,16 @@ UTF-16 码元排序、无空白、仅限安全整数、`undefined` 与 `null` �
 
 每一层的签名覆盖该层除去整个 `sign` 对象之后的内容，因此该层自己的 `alg` 与
 `keyIdentifier` 不在其自身签名字节内；它们由下一层的签名覆盖。这是规范规定的设计。
-`alg` 必须是 `RSA3072`（因 `alg` 是分离元数据，结构校验即拒绝未知值）。验证方必须仅凭
-`keyIdentifier` 在自己为该角色信任的密钥中解析，并拒绝与解析出的密钥类型不兼容的任何
+`alg` 必须是 `RSA3072`（因 `alg` 属签名外的元数据，结构校验即拒绝未知值）。验证方必须仅凭
+`keyIdentifier`、在自己为该角色所信任的密钥中解析，并拒绝与解析出的密钥类型不兼容的任何
 `alg`——绝不要信任传入的 `alg`。这是防御算法/密钥混淆攻击的主要手段（同类问题参见
 RFC 8725 的未签名 JWT 头部）。
 
-SDK 不内置任何密码学实现。`RSA3072` 套件请基于 `@kit.CryptoArchitectureKit` 提供
+SDK 不内置任何签名和验签实现。`RSA3072` 套件请基于 `@kit.CryptoArchitectureKit` 提供
 `Signer`/`SignatureVerifier`，使用 `SHA256withRSA`（PKCS#1 v1.5）、3072 位密钥与无填充
-Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配器（不属于 SDK 公共 API）互操作。
+Base64URL；独立实现同一套件的两端只要遵循上述规则即可互操作。
 
-调用方提供的对象会被深拷贝进意图（绝不别名引用），激活后的快照被深度冻结。内部有一个
-未导出的 `A4pHttp` 模块，为三个协议端点
-（`/a4p/v1/intent/proposal|authorization|submission`，媒体类型 `application/a4p+json`）
-构建与解析请求/响应封套，并把每个错误码映射到 HTTP 状态（签名失败 401、状态与配额
-冲突 409、版本不受支持 426、参数错误 400、其余 500）；它有测试覆盖，但在规范确定绑定
-之前不属于公共 API。
+调用方提供的对象会被深拷贝进意图，激活后的快照被深度冻结。
 
 ## 版本与兼容性
 
@@ -260,25 +270,22 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
 各层——不一致（包括混合版本的链）时以 `A4P_UNSUPPORTED_VERSION` 拒绝。编解码器有意
 不判定版本：`deserializeIntentL1/L2/L3` 与 `deserializeIntentExecutionContext` 按原样
 恢复文档所携带的任何版本。执行类 API（`revokeIntent`、`createExecution`、
-`completeExecution`、`cancelExecution`）接收的是 context 而非各层，同样不比较版本：
-外来版本的 context 恢复后会被照常撤销、预留与终结，预留前的版本把关由调用方负责
-（`verifyIntentAuthenticity` 覆盖 L2/L1 版本）。协议兼容性由 `version` 字段决定，
-而不是由 HAR 版本决定。
+`completeExecution`、`cancelExecution`）接收的是 context 而非各层，但每次调用都会
+校验其版本，外来版本的context 恢复后虽可解析，但对其的任何操作都会以 `A4P_UNSUPPORTED_VERSION` 拒绝。
+协议兼容性由 `version` 字段决定，而不是由 HAR 版本决定。
 
 ## 已知限制
 
-- 账本是内存内的、以单个 context 为粒度。持久化、加锁写入、防重放以及密钥与身份的绑定
+- 账本位于内存中，以单个 context 为粒度。持久化、加锁写入、防重放以及密钥与身份的绑定
   都由意图中心负责。
-- 不内置密码学实现；`Signer`/`SignatureVerifier` 由应用提供。测试源码中基于 XOR 的
+- 不内置签名和验签实现；`Signer`/`SignatureVerifier` 由应用提供。测试源码中基于 XOR 的
   `MockSigner` 只是确定性的测试替身，不得用于授权。
-- HTTP 绑定为内部实现且未导出，待规范确定后再开放；公共能力仅限进程内调用与 canonical
-  JSON 序列化。
 - `verifyIntentAuthenticity` 有意不校验用户签名。
 - 有效期窗口只在签发、激活与预留时判定；创建与签名只记录时间戳、不判定任何时钟。记录级
   时间戳（`reservedAt`、`completedAt`、`canceledAt`）保留单调性与状态绑定校验；
   `activatedTime`、`revokedTime` 与链上各层时间戳仅校验为非负整数，不做先后顺序或
   状态绑定检查。
-- context 操作无同步保护：仅在 ArkTS 单线程运行时中安全，不覆盖多进程或各自独立激活的
+- context 操作无同步保护：仅在 ArkTS 单线程运行时中安全，不适用于多进程或各自独立激活的
   副本。
 
 ## 更多文档
@@ -297,11 +304,9 @@ Base64URL，以便与 Java 独立 `examples` 模块中的 `Rsa3072` 参考适配
 - `A4pCodec.test.ets`——确定性与键序无关的序列化、固定时钟下的 golden 线格式、往返
   编解码，以及 context 恢复（包括重新冻结授权快照与原样恢复契约：篡改的版本号、
   激活/预留时间窗口、周期索引、重复 id、购物车与上限数值、状态与记账不一致均按原样恢复）。
-- `A4pHttp.test.ets`——封套构建与解析、完整的错误码 → HTTP 状态映射表，以及
-  proposal → authorization → submission 全流程。
 - `Utils.test.ets`——base64url、UTF-8 与 canonical JSON 的边界用例，包括对非规范编码的
   拒绝。
 
-在 DevEco Studio 中针对 `a4p/src/ohosTest` 运行，或将构建出的测试 HAP 安装到设备上运行。
+在 DevEco Studio 中运行 `a4p/src/ohosTest` 下的测试，或将构建出的测试 HAP 安装到设备上运行。
 测试替身（`MockSigner`、`MockVerifier`、`TestDataFactory`）仅是确定性假实现，不是可用于
-授权的密码学实现。
+授权的签名和验签实现。

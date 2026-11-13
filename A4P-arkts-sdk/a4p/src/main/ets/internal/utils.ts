@@ -9,6 +9,7 @@
 
 import { A4pErrorCode } from '../models/common';
 import { a4pThrow } from './result';
+import { MAX_JSON_DEPTH } from './strictJson';
 
 const BASE64URL_CHARS: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
@@ -205,16 +206,30 @@ export function decodeUtf8(bytes: Uint8Array): string {
 
 /**
  * Serializes a value to canonical JSON: sorted keys, no whitespace,
- * integers only, undefined and null property values omitted (a null
- * optional field is an absent field in the canonical form — a "key":null
- * pair is bytes the protocol neither produces nor accepts). A null root
- * or null array item has no acceptable spelling and fails instead: the
- * strict parser rejects explicit nulls at every value position.
+ * integers only, undefined property values omitted — a null property is
+ * omitted too, as a last-resort fallback (the input validators reject
+ * null, and undefined is the only absent spelling; no "key":null pair —
+ * bytes the protocol neither produces nor accepts — is ever emitted). A
+ * null root or null array item has no acceptable spelling and fails
+ * instead: the strict parser rejects explicit nulls at every value
+ * position.
+ * A value may sit at most MAX_JSON_DEPTH containers deep — the same
+ * 100-level limit the strict parser and the Java SDK enforce, so every
+ * serialization this SDK emits is one its own parser accepts back and
+ * the Java SDK can reproduce.
  * @param value - The value to serialize (plain objects, arrays, primitives)
  * @returns The canonical JSON string
- * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, or values with no JSON spelling (bigint, function, symbol)
+ * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, values with no JSON spelling (bigint, function, symbol), or nesting deeper than MAX_JSON_DEPTH
  */
 export function canonicalStringify(value: Object): string {
+  return canonicalStringifyAt(value, 0);
+}
+
+/** Depth-tracked recursive worker behind canonicalStringify. */
+function canonicalStringifyAt(value: Object, depth: number): string {
+  if (depth > MAX_JSON_DEPTH) {
+    a4pThrow(A4pErrorCode.A4P_SERIALIZE_FAIL, 'JSON nesting exceeds ' + MAX_JSON_DEPTH + ' levels');
+  }
   // Null has no spelling the strict parser accepts back, and no validated
   // protocol object contains one — emitting "null" or "[null]" would
   // produce bytes this SDK cannot parse, so fail loudly instead.
@@ -245,7 +260,7 @@ export function canonicalStringify(value: Object): string {
   if (Array.isArray(value)) {
     const items: string[] = [];
     for (let i = 0; i < value.length; i++) {
-      items.push(canonicalStringify(value[i] as Object));
+      items.push(canonicalStringifyAt(value[i] as Object, depth + 1));
     }
     return '[' + items.join(',') + ']';
   }
@@ -268,14 +283,15 @@ export function canonicalStringify(value: Object): string {
     for (let i = 0; i < keys.length; i++) {
       const k: string = keys[i];
       const v: Object = (value as Record<string, Object>)[k];
-      // Null is an absent optional field, exactly like undefined: the pair
-      // is omitted, never rendered as "key":null. Array items are values,
-      // not optional fields — a null item reaches the recursive call and
-      // fails there, symmetric with the parser's "[null]" rejection.
+      // Null is omitted as a last-resort fallback (the input validators
+      // reject null; undefined is the only absent spelling), never
+      // rendered as "key":null. Array items are values, not optional
+      // fields — a null item reaches the recursive call and fails there,
+      // symmetric with the parser's "[null]" rejection.
       if (v === undefined || v === null) {
         continue;
       }
-      pairs.push(escapeJsonString(k) + ':' + canonicalStringify(v));
+      pairs.push(escapeJsonString(k) + ':' + canonicalStringifyAt(v, depth + 1));
     }
     return '{' + pairs.join(',') + '}';
   }
