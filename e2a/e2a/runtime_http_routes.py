@@ -28,9 +28,6 @@ class RuntimeHttpRoute(NamedTuple):
 RUNTIME_HTTP_ROUTES: tuple[RuntimeHttpRoute, ...] = (
     RuntimeHttpRoute("media.persist", "POST", "/sessions/{session_id}/media"),
     RuntimeHttpRoute("media.discard", "DELETE", "/sessions/{session_id}/media"),
-    RuntimeHttpRoute("session.assets.list", "GET", "/sessions/{session_id}/assets"),
-    RuntimeHttpRoute("session.assets.register", "POST", "/sessions/{session_id}/assets"),
-    RuntimeHttpRoute("session.assets.rename", "PATCH", "/sessions/{session_id}/assets/{asset_id}"),
     RuntimeHttpRoute("document.persist", "POST", "/sessions/{session_id}/documents"),
     RuntimeHttpRoute("document.formats", "GET", "/documents/formats"),
     RuntimeHttpRoute("file.import_url", "POST", "/sessions/{session_id}/files/import"),
