@@ -439,3 +439,5 @@ __all__ = [
     "utc_now_iso",
     "web_routing_identity",
 ]
+
+# 本包由 upstream/feature/E2A 同步维护，保持纯数据结构与零第三方运行时依赖。
