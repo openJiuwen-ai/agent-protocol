@@ -18,10 +18,8 @@ from datetime import datetime
 from e2a.agent_models import AgentRequest
 from e2a.gateway_normalize import E2A_INTERNAL_CONTEXT_KEY
 from e2a.models import E2AEnvelope
-from e2a.message import ReqMethod
 
 logger = logging.getLogger(__name__)
-
 
 def _e2a_timestamp_to_float(ts: str | None) -> float:
     if not ts:
@@ -37,6 +35,8 @@ def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
     """将规范化成功的 E2A 信封转换为 ``AgentRequest``。
 
     若 envelope 含 Gateway 兜底标记，须由调用方先分支处理 legacy，勿调用本函数。
+
+    方法名按线上字符串保留，由 AgentServer 决定是否支持该方法。
     """
     ctx = dict(env.channel_context or {})
     internal = ctx.pop(E2A_INTERNAL_CONTEXT_KEY, None)
@@ -45,21 +45,7 @@ def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
 
     metadata = ctx if ctx else None
     method_str = env.method
-    req_method: ReqMethod | str | None = None
-    if method_str:
-        try:
-            req_method = ReqMethod(method_str)
-        except ValueError:
-            # E2A carries method names as strings.  Keep an unknown method
-            # intact so a newer AgentServer can receive it through an older
-            # Gateway; the AgentServer remains responsible for deciding
-            # whether the method is implemented.
-            req_method = method_str
-            logger.debug(
-                "[E2A][compat] preserving extension method=%r request_id=%s",
-                method_str,
-                env.request_id,
-            )
+    req_method = method_str or None
 
     return AgentRequest(
         request_id=env.request_id or "",

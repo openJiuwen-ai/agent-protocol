@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import json
 import logging
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from e2a.message import ReqMethod
 from e2a.constants import (
     E2A_RESPONSE_KIND_ACP_OUTPUT_REQUEST,
     E2A_RESPONSE_KIND_CRON,
@@ -38,16 +38,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def method_value(method: ReqMethod | str) -> str:
+def method_value(method: Any) -> str:
     """Return a non-empty method name. Callers handle absent methods.
 
+    Method names are wire strings.  The implementation side may hand in its own
+    enum member; this package only reads the value and never resolves a
+    vocabulary of its own.
+
     Raises:
-        TypeError: The method is neither a ReqMethod nor a string.
+        TypeError: The method is neither an enum member nor a string.
         ValueError: A supplied method name is empty or whitespace-only.
     """
-    value = method.value if isinstance(method, ReqMethod) else method
+    # Only strings and real enum members carry a method name; anything else
+    # (e.g. a duck-typed object that happens to expose ``.value``) is rejected.
+    value = method.value if isinstance(method, Enum) else method
     if not isinstance(value, str):
-        raise TypeError("method must be ReqMethod or str")
+        raise TypeError("method must be a string or an enum member")
     if not value.strip():
         raise ValueError("method must be a non-empty string")
     return value
@@ -242,7 +248,7 @@ def e2a_from_agent_fields(
     request_id: str,
     channel_id: str = "",
     session_id: str | None = None,
-    req_method: "ReqMethod | str | None" = None,
+    req_method: str | None = None,
     params: dict[str, Any] | None = None,
     is_stream: bool = False,
     timestamp: float = 0.0,
