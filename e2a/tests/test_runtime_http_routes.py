@@ -37,6 +37,21 @@ def test_chat_and_history_keep_their_existing_stream_addresses():
     )
 
 
+def test_session_assets_methods_have_runtime_http_routes():
+    assert [
+        resolve_runtime_http_route(method)[1:]
+        for method in (
+            "session.assets.list",
+            "session.assets.register",
+            "session.assets.rename",
+        )
+    ] == [
+        ("GET", "/sessions/{session_id}/assets"),
+        ("POST", "/sessions/{session_id}/assets"),
+        ("PATCH", "/sessions/{session_id}/assets/{asset_id}"),
+    ]
+
+
 def test_runtime_http_route_keeps_legacy_aliases_and_has_no_implicit_fallback():
     assert resolve_runtime_http_route("agents.tools.list")[1:] == (
         resolve_runtime_http_route("agents.tools_list")[1:]
