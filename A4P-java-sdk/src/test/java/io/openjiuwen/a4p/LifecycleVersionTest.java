@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import static io.openjiuwen.a4p.A4pErrorCode.A4P_UNSUPPORTED_VERSION;
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_INVALID_PARAMETER;
 import static io.openjiuwen.a4p.Fixtures.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -65,6 +66,24 @@ class LifecycleVersionTest {
         fails(A4P_UNSUPPORTED_VERSION, A4p.completeExecution(restored, "pending", NOW));
         fails(A4P_UNSUPPORTED_VERSION, A4p.cancelExecution(restored, "pending", NOW));
         fails(A4P_UNSUPPORTED_VERSION, A4p.revokeIntent(restored, NOW));
+        fails(A4P_UNSUPPORTED_VERSION, A4p.revokeIntent(restored, -1));
+        assertEquals(serialized, codec.serializeIntentExecutionContext(restored));
+    }
+
+    /** Checks that restored contexts with invalid signature metadata cannot mutate the ledger or status. */
+    @Test
+    void rejectsMalformedAuthorizedIntentWithoutMutatingContext() throws Exception {
+        var context = context();
+        ok(A4p.createExecution(context, execution("pending", 100, 1), NOW));
+        var json = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentExecutionContext(context));
+        ((ObjectNode) json.at("/authorizedIntent/sign")).put("keyIdentifier", "");
+        String serialized = CanonicalJson.stringify(json);
+        var restored = ok(codec.deserializeIntentExecutionContext(serialized));
+
+        fails(A4P_INVALID_PARAMETER, A4p.createExecution(restored, execution("new", 100, 1), NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(restored, "pending", NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(restored, "pending", NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(restored, NOW));
         assertEquals(serialized, codec.serializeIntentExecutionContext(restored));
     }
 
