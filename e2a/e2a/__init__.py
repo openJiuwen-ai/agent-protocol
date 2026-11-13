@@ -22,7 +22,8 @@ import <NAME>`` 可用）；例外只有一处——``match_expressions`` 的函
 - ``logging_config``   日志级别配置请求体字段契约（logging 段字段名 / op 字面量）
 - ``match_expressions`` 实例 Agent 授权表达式校验/求值（纯函数；经
   ``e2a.match_expressions`` 访问，不在顶层汇总导出）
-- ``message``          WS/E2A 线上报文与枚举（Message / ReqMethod / EventType / Mode）
+- ``message``          WS/E2A 线上报文与枚举（Message / EventType / Mode）；方法名
+  是实现侧词汇表，本包只按字符串承载
 - ``mcp_oauth``        MCP OAuth 回调共享契约（McpOAuthError / provider 域名）
 - ``package_allowlist`` 专家包允许名单线上契约（元数据键 / 内部头 / 规范化与编解码）
 - ``provider_domains`` external provider 能力域名常量
@@ -106,7 +107,7 @@ from e2a.logging_config import (
     LOG_CONFIG_OP_FIELD,
 )
 from e2a.mcp_oauth import MCP_REGISTRY_PROVIDER_DOMAIN, McpOAuthError
-from e2a.message import EventType, Message, Mode, ReqMethod
+from e2a.message import EventType, Message, Mode
 from e2a.package_allowlist import (
     HIDDEN_HUB_ASSET_IDS,
     MAX_PACKAGE_ALLOWLIST_JSON_BYTES,
@@ -384,7 +385,6 @@ __all__ = [
     "PermissionContext",
     "REDIS_KEY_PREFIX_SEPARATOR",
     "ROUTING_METADATA_KEY",
-    "ReqMethod",
     "SLOT_ENTITY_TABLE",
     "SessionAsset",
     "SshAuthResult",

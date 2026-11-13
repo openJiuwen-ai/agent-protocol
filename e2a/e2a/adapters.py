@@ -240,8 +240,7 @@ def build_acp_tool_response_message(
     to avoid duplicated Message construction logic.
 
     ``message_factory``: ``(channel_id, session_id, params, req_method_value) -> Message``
-    由调用方注入（jiuwenswarm 侧用 ``common.schema.message.Message`` +
-    ``ReqMethod.ACP_TOOL_RESPONSE`` 构造），避免协议包反向依赖实现侧类型；
+    由调用方注入，以方法名字符串构造消息，避免协议包反向依赖实现侧类型；
     返回对象的字段形状与原 Message 构造一致，消费方按鸭子类型使用。
     """
     params = {
