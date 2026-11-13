@@ -27,6 +27,15 @@ import { VerificationResult } from "../models/common"
  *   defense against algorithm- and key-confusion attacks (the same class
  *   as unsigned JWT headers, cf. RFC 8725), e.g. rewriting an RSA
  *   signature as HS256 and using the public key bytes as the HMAC secret.
+ *
+ * A verifier that throws — or a null one — fails the calling API with
+ * A4P_VERIFY_FAIL (an infrastructure failure, matching the Java SDK,
+ * which maps the NullPointerException of the same call to that code);
+ * one that returns no result, a non-boolean `valid`, or a verdict whose
+ * `valid` and `code` disagree fails the calling API the same way — the
+ * result is checked before it is trusted (see runVerifier in
+ * api/a4p.ts), mirroring the signer-side guard on a signer's return
+ * value.
  */
 export interface SignatureVerifier {
   /**

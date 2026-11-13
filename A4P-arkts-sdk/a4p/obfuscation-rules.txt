@@ -65,6 +65,7 @@ serviceProviderIdentity
 signingEnv
 authorizedIntent
 activatedTime
+revokedTime
 executions
 executionInfo
 resources

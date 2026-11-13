@@ -498,7 +498,7 @@ export default function a4pHttpTest() {
         const parsedL1 = A4pHttp.parseIntentProposalRequest(proposalReq);
 
         const l2 = A4p.issueIntent(parsedL1, new MockVerifier(),
-          createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'));
+          createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), Date.now());
 
         const proposalResp = A4pHttp.buildIntentProposalResponse(l2);
         const parsedL2 = A4pHttp.parseIntentProposalResponse(proposalResp);
@@ -507,7 +507,7 @@ export default function a4pHttpTest() {
         const parsedL2FromReq = A4pHttp.parseIntentAuthorizationRequest(authReq);
 
         const l3 = A4p.signIntent(parsedL2FromReq, new MockVerifier(),
-          createTestSigningEnv(), new MockSigner(AlgorithmType.RSA3072, 'user-key-001'));
+          createTestSigningEnv(), new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), Date.now());
 
         const authResp = A4pHttp.buildIntentAuthorizationResponse(l3);
         const parsedL3 = A4pHttp.parseIntentAuthorizationResponse(authResp);
@@ -527,7 +527,7 @@ export default function a4pHttpTest() {
         // error response; the client side re-parses it into the same code.
         const caught = expectThrows(A4pErrorCode.A4P_VERIFY_FAIL, () => {
           A4p.issueIntent(createL1(), new MockVerifier(false),
-            createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'));
+            createTestIntentIssueContext(), new MockSigner(AlgorithmType.RSA3072, 'server-key-001'), Date.now());
         });
         const response = buildErrorResponse(caught);
         expect(response.statusCode).assertEqual(401);
