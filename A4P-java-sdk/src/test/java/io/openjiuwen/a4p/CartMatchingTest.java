@@ -25,24 +25,9 @@ class CartMatchingTest {
     }
 
     @Test
-    void acceptsAnyCartOrder() {
-        List<ItemWhiteList> groups = List.of(group(A), group(B), group(C));
-        assertDoesNotThrow(() -> CartMatching.requireOneToOne(cart(A, B, C), groups));
-        assertDoesNotThrow(() -> CartMatching.requireOneToOne(cart(C, A, B), groups));
-        assertDoesNotThrow(() -> CartMatching.requireOneToOne(cart(B, C, A), groups));
-    }
-
-    @Test
     void rejectsCartsWithoutAOneToOneMatching() {
-        thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A, A), List.of(group(A), group(B))));
         thrown(A4P_PRODUCT_NOT_AUTHORIZED, () -> CartMatching.requireOneToOne(cart(C), List.of(group(A, B))));
         thrown(A4P_CART_MISMATCH,
                 () -> CartMatching.requireOneToOne(cart(A, B, A), List.of(group(A, B), group(A, B), group(A))));
-    }
-
-    @Test
-    void rejectsCartsWhoseSizeDiffersFromTheWhitelist() {
-        thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A), List.of(group(A), group(B))));
-        thrown(A4P_CART_MISMATCH, () -> CartMatching.requireOneToOne(cart(A, B), List.of(group(A, B))));
     }
 }

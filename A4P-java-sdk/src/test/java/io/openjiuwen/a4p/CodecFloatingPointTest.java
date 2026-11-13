@@ -69,14 +69,19 @@ class CodecFloatingPointTest {
         }
     }
 
+    /**
+     * Checks that the diagnostic identifies the floating-point value in the probe field.
+     * @param number test input for the numeric field
+     */
     @ParameterizedTest
     @ValueSource(strings = {"0.5", "1.0", "1e0", "1e-400"})
-    void rejectsDecimalsRecursivelyBeforeTypedMapping(String number) {
+    void reportsFloatingPointPathsBeforeRejectingUnknownFields(String number) {
         String original = codec.serializeIntentL1(authorized(constraints()).intentL2().intentL1());
         assertTrue(codec.deserializeIntentL1(original).success());
         for (String value : new String[]{number, "{\"nested\":" + number + "}", "[0,{\"nested\":[" + number + "]}]"}) {
-            // Assert the codec error specifically: unknown-field mapping alone returns INVALID_PARAMETER.
-            assertRejected(0, "{\"probe\":" + value + "," + original.substring(1));
+            var result = codec.deserializeIntentL1("{\"probe\":" + value + "," + original.substring(1));
+            assertEquals(A4P_DESERIALIZE_FAIL.code(), result.code());
+            assertTrue(result.message().contains("Floating-point values are not allowed at $/probe"));
         }
     }
 

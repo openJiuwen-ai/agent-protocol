@@ -22,6 +22,7 @@ class CodecNullTest {
         assertEquals(json, codec.serializeIntentExecutionContext(ok(codec.deserializeIntentExecutionContext(json))));
     }
 
+    /** Checks that the null-specific rejection applies before mapping in all four deserializers. */
     @Test void explicitNullIsRejectedAtEveryLevelAndInNestedContainers() {
         var l3 = authorized(constraints());
         String[] jsons = {codec.serializeIntentL1(l3.intentL2().intentL1()),
@@ -30,7 +31,6 @@ class CodecNullTest {
         for (int i = 0; i < jsons.length; i++) {
             for (String value : new String[]{"null", "{\"nested\":null}", "[null]"}) {
                 ObjectNode node = (ObjectNode) CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(jsons[i]));
-                // Unknown fields are ignored by the mapper: rejection must happen before mapping.
                 try { node.set("probe", CanonicalJson.MAPPER.readTree(value)); }
                 catch (java.io.IOException e) { throw new AssertionError(e); }
                 var result = switch (i) {
@@ -40,11 +40,13 @@ class CodecNullTest {
                     default -> codec.deserializeIntentExecutionContext(node.toString());
                 };
                 assertFalse(result.success());
+                assertTrue(result.message().contains("JSON values must not be null"));
             }
         }
     }
 
-    @Test void recursivelyOmitsObjectKeysAndPreservesArrayNulls() {
+    /** Checks that the codec drops null object members and retains null array elements. */
+    @Test void recursivelyOmitsNullObjectFieldsAndPreservesArrayNulls() {
         var node = CanonicalJson.parse("{\"a\":null,\"b\":[null,{\"c\":null,\"d\":1}]}");
         assertEquals("{\"b\":[null,{\"d\":1}]}", CanonicalJson.stringify(A4pIntentCodec.toJsonNode(node)));
     }

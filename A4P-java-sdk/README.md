@@ -165,7 +165,7 @@ if (!completed.success()) { throw new IllegalStateException("Completion failed: 
 PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 ```
 
-Use `new A4pIntentCodec()` for serialization and restoration. Persist the context after activation and every update, and serialize database read-update-write cycles for each intent in a transaction. Context JSON is for local persistence only; restoration does not verify signatures or storage integrity.
+Use `new A4pIntentCodec()` for serialization and restoration. Persist the context after activation and every update, and serialize database read-update-write cycles for each intent in a transaction. Context JSON is for local persistence only. Restoration checks required fields and types, and reads the stored ledger and quota snapshot directly. Restoration does not verify signatures or storage integrity. See the [Context persistence API](docs/API.md#serialization-and-persistence) for details.
 
 ### Result codes
 
@@ -214,6 +214,6 @@ Reference documents are located in `docs/`:
 Tests cover lifecycle, quota rollback, order idempotency, one-to-one cart matching, check ordering, expiry finalization,
 terminal states, consumption, whitelist validation, period boundaries, blank and structural validation, the result model,
 typed-union payloads, wire-format names and enum encoding, concurrent reservations, canonical vectors, detached signature
-metadata, malformed input, verifier result consistency, execution-context persistence and restoration (including reachable
-states and record timestamps), and real RSA signature verification and tampering detection. The digest signer in the test
-fixtures is only a deterministic test double and must not be used for authorization.
+metadata, malformed input, verifier result consistency, execution context persistence and restoration (including required
+fields and execution record timestamp types), and real RSA signature verification and tampering detection. The digest signer
+in the test fixtures is only a deterministic test double and must not be used for authorization.

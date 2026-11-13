@@ -26,7 +26,8 @@ class CanonicalJsonRfc8785Test {
         assertEquals("\"\\u000f\\b\\t\\n\\f\\r/\"", CanonicalJson.stringify("\u000f\b\t\n\f\r/"));
     }
 
-    @Test void rejectsInvalidJsonUnicodeAndNonFiniteNumbers() {
+    /** Checks JSON parsing boundaries and canonical serialization of a large integer. */
+    @Test void rejectsInvalidJsonUnicodeAndNonFiniteNumbersButAcceptsLargeIntegers() {
         for (String json : new String[]{"{\"a\":1,\"a\":2}", "{} {}", "\"\\ud800\"", "1e400"}) {
             assertThrows(A4pException.class, () -> CanonicalJson.parse(json));
         }
