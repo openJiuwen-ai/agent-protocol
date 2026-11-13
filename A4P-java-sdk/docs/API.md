@@ -207,6 +207,8 @@ IntentExecutionContext restoredContext = restored.data();
 
 The codec supports L1, L2, L3 and Context. Deserialization requires the input to match the corresponding serializer output character for character. Extra formatting whitespace, reordered fields and alternate escapes are rejected. Keep the original serializer output when storing or forwarding it. For existing data that was reformatted, regenerate it with the corresponding SDK serializer from the original object or a trusted copy.
 
+Serialization omits null object members and rejects null array elements at any depth with `A4P_SERIALIZE_FAIL` (5001). Deserialization rejects explicit null values with `A4P_DESERIALIZE_FAIL` (5002).
+
 Serialization takes a consistent Context snapshot under its lock. Explicit JSON `null`, duplicate keys and trailing tokens are rejected. All deserialization failures return `A4P_DESERIALIZE_FAIL` (5002). Deserialization preserves the stored Context, even if the value of certain fields is invalid.
 
 Restoration does not authenticate stored data or reverify signatures. Protect persistence integrity at the application level where required. Context JSON is for local persistence only and must not be used as a network message. Persist only one copy of each Intent and each Context.
@@ -237,9 +239,11 @@ Restoration does not authenticate stored data or reverify signatures. Protect pe
 
 Code 4003 is retained for ArkTS compatibility; Java uses 4004 for per-period execution-count limits.
 
-## Version Validation and Compatibility
+## Validation and Compatibility
 
 Lifecycle APIs that accept an Intent, as well as `verifyIntentAuthenticity`, require every layer of the supplied Intent to use the SDK’s protocol version. `revokeIntent`, `createExecution`, `completeExecution`, and `cancelExecution` require the Context version and the version at every layer of its authorizing Intent to match the SDK’s protocol version.
+
+These four Context operations also validate the structure of the authorizing Intent and return `A4P_INVALID_PARAMETER` (1001) on invalid fields. A stored Context may decode successfully and still fail this check, for example if its signature key identifier is blank. Recover the original valid signed Context and its ledger from a trusted backup before retrying.
 
 If any required version is unsupported, the API returns `A4P_UNSUPPORTED_VERSION` (1002). A persisted Context with an unsupported version can still be decoded for inspection. Before resuming lifecycle operations, use an SDK that supports the stored version.
 

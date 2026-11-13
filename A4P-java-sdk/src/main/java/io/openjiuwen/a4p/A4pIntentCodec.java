@@ -317,7 +317,7 @@ public class A4pIntentCodec {
     /** Removes only the outer signature after applying protocol wire mapping. */
     static byte[] toSignableBytes(Object intent) {
         JsonNode node = toJsonNode(intent);
-        if (!node.isObject()) { throw new A4pException(A4P_SERIALIZE_FAIL); }
+        if (!node.isObject()) { throw new A4pException(A4P_SERIALIZE_FAIL, "Input Intent is not an object", null); }
         ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("sign");
         return CanonicalJson.encodeUtf8(CanonicalJson.stringify(node));
     }
@@ -329,6 +329,7 @@ public class A4pIntentCodec {
         return node;
     }
 
+    /** Omits null object fields and rejects null array elements. */
     static JsonNode omitNullFields(JsonNode node) {
         if (node.isObject()) {
             var result = CanonicalJson.MAPPER.createObjectNode();
@@ -341,7 +342,12 @@ public class A4pIntentCodec {
         }
         if (node.isArray()) {
             var result = CanonicalJson.MAPPER.createArrayNode();
-            node.forEach(item -> result.add(omitNullFields(item)));
+            node.forEach(item -> {
+                if (item.isNull()) {
+                    throw new A4pException(A4P_SERIALIZE_FAIL, "Array item cannot be null", null);
+                }
+                result.add(omitNullFields(item));
+            });
             return result;
         }
         return node.deepCopy();

@@ -45,9 +45,24 @@ class CodecNullTest {
         }
     }
 
-    /** Checks that the codec drops null object members and retains null array elements. */
-    @Test void recursivelyOmitsNullObjectFieldsAndPreservesArrayNulls() {
-        var node = CanonicalJson.parse("{\"a\":null,\"b\":[null,{\"c\":null,\"d\":1}]}");
-        assertEquals("{\"b\":[null,{\"d\":1}]}", CanonicalJson.stringify(A4pIntentCodec.toJsonNode(node)));
+    /** Checks that the codec omits object members even inside arrays. */
+    @Test void recursivelyOmitsNullObjectFields() {
+        var node = CanonicalJson.parse("{\"a\":null,\"b\":[{\"c\":null,\"d\":1}]}");
+        assertEquals("{\"b\":[{\"d\":1}]}", CanonicalJson.stringify(A4pIntentCodec.toJsonNode(node)));
+    }
+
+    /** Checks the serialization error code and message for a nested null array item. */
+    @Test void rejectsNullArrayItemsDuringSerialization() {
+        var node = CanonicalJson.parse("{\"payload\":{\"items\":[1,null]}}");
+        var error = assertThrows(A4pException.class, () -> A4pIntentCodec.toJsonNode(node));
+        assertEquals(A4pErrorCode.A4P_SERIALIZE_FAIL, error.code());
+        assertTrue(error.getMessage().contains("Array item cannot be null"));
+    }
+
+    /** Checks the diagnostic when signable bytes are requested for a scalar. */
+    @Test void rejectsNonObjectSignableInput() {
+        var error = assertThrows(A4pException.class, () -> A4pIntentCodec.toSignableBytes(42));
+        assertEquals(A4pErrorCode.A4P_SERIALIZE_FAIL, error.code());
+        assertTrue(error.getMessage().contains("Input Intent is not an object"));
     }
 }
