@@ -32,6 +32,44 @@ SERVICE_JSON_FILE = "service.json"
 SKILLS_DIR = "skills"
 REMOVED_SKILLS_DIR = "removed_skills"
 
+# ---------------------------------------------------------------------------
+# Skill name validation
+#
+# A skill name comes from user-supplied content: the ``name`` key of a
+# SKILL.md frontmatter (uploaded as a ZIP) or the ``name`` field of a service
+# update. It becomes a directory under ``<dataset>/skills/``, so an unvalidated
+# ``..`` makes ``shutil.rmtree(<dataset>/skills/..)`` delete the whole dataset.
+# The ZIP entry paths are already zip-slip guarded; the frontmatter was not.
+# ---------------------------------------------------------------------------
+_MAX_SKILL_NAME_LEN = 200
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *{f"com{i}" for i in range(1, 10)},
+    *{f"lpt{i}" for i in range(1, 10)},
+}
+
+
+def validate_skill_name(name: str) -> str:
+    """Return ``name`` if it is a safe skill directory name, else raise ValueError."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("skill name must be a non-empty string")
+    if name in (".", ".."):
+        raise ValueError(f"invalid skill name: {name!r}")
+    if len(name) > _MAX_SKILL_NAME_LEN:
+        raise ValueError(f"invalid skill name: too long ({len(name)} > {_MAX_SKILL_NAME_LEN})")
+    if name.strip() != name:
+        raise ValueError(f"invalid skill name: leading/trailing whitespace: {name!r}")
+    for ch in ("/", "\\", "\x00"):
+        if ch in name:
+            raise ValueError(f"invalid skill name: path separator or NUL in {name!r}")
+    if ":" in name:
+        raise ValueError(f"invalid skill name: ':' is not allowed in {name!r}")
+    if name.split(".")[0].lower() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"invalid skill name: {name!r} is a reserved device name")
+    return name
+
+
+
 # Default behavior when ``auth_config.json`` is missing: the namespace is
 # anonymous (backward-compat with every dataset created before this module
 # existed). Setting ``required: true`` is opt-in per dataset.
@@ -58,6 +96,24 @@ class RegistryStore:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._api_entries: Dict[str, RegistryEntry] = {}
         self._lock = threading.Lock()
+
+    # -- skill directory helpers -------------------------------------------
+
+    def _skill_dir(self, name: str) -> Path:
+        """Return ``<dataset>/skills/<name>`` after validating ``name``."""
+        validate_skill_name(name)
+        return self._dir / SKILLS_DIR / name
+
+    def _skills_root(self) -> Path:
+        return self._dir / SKILLS_DIR
+
+    def _safe_rmtree(self, target: Path) -> None:
+        """Delete a skill folder, refusing anything outside ``skills/``."""
+        root = self._skills_root().resolve()
+        resolved = target.resolve()
+        if resolved == root or root not in resolved.parents:
+            raise ValueError(f"refusing to delete outside {SKILLS_DIR}/: {resolved}")
+        shutil.rmtree(resolved)
 
     # --- Read ---
 
@@ -168,12 +224,12 @@ class RegistryStore:
             # Parse frontmatter
             skill_md_content = zf.read(skill_md_path).decode("utf-8")
             meta = parse_skill_md_content(skill_md_content)
-            name = meta["name"]
+            name = validate_skill_name(meta["name"])
 
             # Extract to skills/{name}/
-            target_dir = self._dir / SKILLS_DIR / name
+            target_dir = self._skill_dir(name)
             if target_dir.exists():
-                shutil.rmtree(target_dir)
+                self._safe_rmtree(target_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
 
             for info in zf.infolist():
@@ -200,7 +256,7 @@ class RegistryStore:
 
     def remove_skill(self, name: str) -> bool:
         """Move a skill folder to removed_skills/. Returns True if it existed."""
-        skill_dir = self._dir / SKILLS_DIR / name
+        skill_dir = self._skill_dir(name)
         if not skill_dir.exists():
             return False
         removed_dir = self._dir / REMOVED_SKILLS_DIR
@@ -218,8 +274,8 @@ class RegistryStore:
         """
         if not new_name or new_name == old_name:
             return
-        old_dir = self._dir / SKILLS_DIR / old_name
-        new_dir = self._dir / SKILLS_DIR / new_name
+        old_dir = self._skill_dir(old_name)
+        new_dir = self._skill_dir(new_name)
         if not old_dir.exists():
             raise FileNotFoundError(f"Skill folder not found: {old_name}")
         if new_dir.exists():
@@ -232,7 +288,7 @@ class RegistryStore:
         Preserves body text and any frontmatter keys not in ``updates``.
         Creates frontmatter if missing.
         """
-        skill_md = self._dir / SKILLS_DIR / name / "SKILL.md"
+        skill_md = self._skill_dir(name) / "SKILL.md"
         if not skill_md.exists():
             raise FileNotFoundError(f"SKILL.md not found for skill '{name}'")
         with open(skill_md, "r", encoding="utf-8") as f:
