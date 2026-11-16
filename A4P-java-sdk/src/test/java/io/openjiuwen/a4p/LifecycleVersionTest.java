@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import static io.openjiuwen.a4p.A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY;
 import static io.openjiuwen.a4p.A4pErrorCode.A4P_UNSUPPORTED_VERSION;
 import static io.openjiuwen.a4p.A4pErrorCode.A4P_INVALID_PARAMETER;
 import static io.openjiuwen.a4p.Fixtures.*;
@@ -66,7 +67,57 @@ class LifecycleVersionTest {
         fails(A4P_UNSUPPORTED_VERSION, A4p.completeExecution(restored, "pending", NOW));
         fails(A4P_UNSUPPORTED_VERSION, A4p.cancelExecution(restored, "pending", NOW));
         fails(A4P_UNSUPPORTED_VERSION, A4p.revokeIntent(restored, NOW));
-        fails(A4P_UNSUPPORTED_VERSION, A4p.revokeIntent(restored, -1));
+        fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(restored, -1));
+        assertEquals(serialized, codec.serializeIntentExecutionContext(restored));
+    }
+
+    /** Ensures every context operation rejects an inconsistent restored snapshot without changing it. */
+    @Test
+    void rejectsInconsistentRestoredContextBeforeMutation() throws Exception {
+        var context = context();
+        ok(A4p.createExecution(context, execution("pending", 100, 1), NOW));
+        ok(A4p.completeExecution(context, "pending", NOW));
+        String original = codec.serializeIntentExecutionContext(context);
+        for (String defect : java.util.List.of("intentId", "periodIndex", "leftExecutionCount", "completedAt")) {
+            var json = (ObjectNode) CanonicalJson.MAPPER.readTree(original);
+            var record = (ObjectNode) json.at("/executions/0");
+            switch (defect) {
+                case "intentId" -> json.put("intentId", "different-intent");
+                case "periodIndex" -> record.remove("periodIndex");
+                case "leftExecutionCount" -> ((ObjectNode) json.get("executionInfo")).remove("leftExecutionCount");
+                case "completedAt" -> record.put("completedAt", NOW - 1);
+                default -> throw new AssertionError(defect);
+            }
+            String serialized = CanonicalJson.stringify(json);
+            var restored = ok(codec.deserializeIntentExecutionContext(serialized));
+            var error = defect.equals("completedAt") ? A4P_TIMESTAMP_TOO_EARLY : A4P_INVALID_PARAMETER;
+            fails(error, A4p.revokeIntent(restored, NOW));
+            fails(error, A4p.createExecution(restored, execution("new", 100, 1), NOW));
+            fails(error, A4p.completeExecution(restored, "pending", NOW));
+            fails(error, A4p.cancelExecution(restored, "pending", NOW));
+            assertEquals(serialized, codec.serializeIntentExecutionContext(restored));
+        }
+    }
+
+    /**
+     * Confirms that incomplete periodic constraints can be restored but cannot be used by lifecycle operations.
+     * @param missingField periodic constraint to omit from the persisted authorization
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"anchorTime", "periodSeconds", "maxExecutionCountPerPeriod"})
+    void rejectsRestoredContextWithIncompletePeriodicConstraints(String missingField) throws Exception {
+        var context = context();
+        ok(A4p.createExecution(context, execution("pending", 100, 1), NOW));
+        var json = (ObjectNode) CanonicalJson.MAPPER.readTree(codec.serializeIntentExecutionContext(context));
+        var constraints = (ObjectNode) json.at("/authorizedIntent/intentL2/intentL1/structuredIntent/constraints");
+        assertNotNull(constraints.remove(missingField));
+        String serialized = CanonicalJson.stringify(json);
+        var restored = ok(codec.deserializeIntentExecutionContext(serialized));
+
+        fails(A4P_INVALID_PARAMETER, A4p.revokeIntent(restored, NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.createExecution(restored, execution("new", 100, 1), NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.completeExecution(restored, "pending", NOW));
+        fails(A4P_INVALID_PARAMETER, A4p.cancelExecution(restored, "pending", NOW));
         assertEquals(serialized, codec.serializeIntentExecutionContext(restored));
     }
 
