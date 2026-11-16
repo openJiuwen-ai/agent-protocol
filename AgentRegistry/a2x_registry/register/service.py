@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -72,6 +73,46 @@ except ValueError:
         "ignoring invalid A2X_REGISTRY_AGENT_CARD_WORKERS (using %s)", _DEFAULT_AGENT_CARD_WORKERS
     )
     _AGENT_CARD_WORKERS = _DEFAULT_AGENT_CARD_WORKERS
+# ---------------------------------------------------------------------------
+# Dataset name validation
+#
+# Dataset names become directory names directly under ``database_dir``. Any
+# name that can escape that root (``.``, ``..``, path separators, NUL, drive
+# letters) must be rejected *before* it reaches the filesystem — otherwise a
+# caller-supplied ``..`` turns (for example) ``delete_dataset`` into
+# ``shutil.rmtree(<database_dir>/..)`` and wipes the whole registry home
+# directory. Names are deliberately validated with a deny-list rather than a
+# strict allow-list so existing datasets (including non-ASCII names) keep
+# working.
+# ---------------------------------------------------------------------------
+_MAX_DATASET_NAME_LEN = 200
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *{f"com{i}" for i in range(1, 10)},
+    *{f"lpt{i}" for i in range(1, 10)},
+}
+
+
+def validate_dataset_name(name: str) -> str:
+    """Return ``name`` if it is a safe dataset directory name, else raise ValueError."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("dataset name must be a non-empty string")
+    if name in (".", ".."):
+        raise ValueError(f"invalid dataset name: {name!r}")
+    if len(name) > _MAX_DATASET_NAME_LEN:
+        raise ValueError(f"invalid dataset name: too long ({len(name)} > {_MAX_DATASET_NAME_LEN})")
+    if name.strip() != name:
+        raise ValueError(f"invalid dataset name: leading/trailing whitespace: {name!r}")
+    for ch in ("/", "\\", "\x00"):
+        if ch in name:
+            raise ValueError(f"invalid dataset name: path separator or NUL in {name!r}")
+    if ":" in name:
+        raise ValueError(f"invalid dataset name: ':' is not allowed in {name!r}")
+    if name.split(".")[0].lower() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"invalid dataset name: {name!r} is a reserved device name")
+    return name
+
+
 BUILD_CONFIG_FILE = "build_config.json"
 TAXONOMY_FILE    = "taxonomy.json"
 
@@ -759,6 +800,7 @@ class RegistryService:
         helpers) ask "where does this dataset live?" without rebuilding
         the path from PROJECT_ROOT themselves.
         """
+        validate_dataset_name(dataset)
         return self._database_dir / dataset
 
     def service_json_path(self, dataset: str) -> Path:
@@ -1097,7 +1139,7 @@ class RegistryService:
 
     def _get_store(self, dataset: str) -> RegistryStore:
         if dataset not in self._stores:
-            self._stores[dataset] = RegistryStore(self._database_dir / dataset)
+            self._stores[dataset] = RegistryStore(self.dataset_dir(dataset))
         return self._stores[dataset]
 
     def _regenerate_output(self, dataset: str) -> bool:
@@ -1247,6 +1289,7 @@ class RegistryService:
         ``formats`` normalizes to an empty dict (which would reject every
         registration).
         """
+        validate_dataset_name(name)
         ds_dir = self._database_dir / name
         if ds_dir.exists():
             raise ValueError(f"Dataset '{name}' already exists")
@@ -1301,6 +1344,7 @@ class RegistryService:
           loader interprets as ``required: false`` — preserving the
           backward-compat invariant for every legacy dataset on disk.
         """
+        validate_dataset_name(name)
         ds_dir = self._database_dir / name
         ds_dir.mkdir(parents=True, exist_ok=True)
         (ds_dir / "query").mkdir(exist_ok=True)
@@ -1318,6 +1362,7 @@ class RegistryService:
         Raises ValueError if the dataset directory does not exist.
         """
         import shutil
+        validate_dataset_name(name)
         ds_dir = self._database_dir / name
         if not ds_dir.exists():
             raise ValueError(f"Dataset '{name}' does not exist")
