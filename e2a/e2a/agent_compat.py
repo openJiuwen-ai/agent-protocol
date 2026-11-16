@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
 
 from e2a.agent_models import AgentRequest
 from e2a.gateway_normalize import E2A_INTERNAL_CONTEXT_KEY
-from e2a.models import E2AEnvelope
+from e2a.identity import apply_routing_metadata, web_routing_identity
 from e2a.message import ReqMethod
+from e2a.models import E2AEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +35,25 @@ def _e2a_timestamp_to_float(ts: str | None) -> float:
         return 0.0
 
 
+def _routing_identity(env: E2AEnvelope, context: dict[str, Any]) -> dict[str, str]:
+    """Fill missing routing fields from the envelope.
+
+    ``user_id`` comes from the authenticated envelope when channel metadata
+    omits it; non-web channels fall back to ``chat_id`` for ``group_id``.
+    """
+    identity = web_routing_identity(context)
+    if env.user_id and not identity.get("user_id"):
+        identity["user_id"] = env.user_id
+    if env.channel != "web" and env.chat_id and not identity.get("group_id"):
+        identity["group_id"] = env.chat_id
+    return identity
+
+
 def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
     """将规范化成功的 E2A 信封转换为 ``AgentRequest``。
 
+    路由身份按 ``e2a.identity`` 写回 metadata：``user_id`` 放顶层，
+    ``group_id`` / ``bot_id`` / ``gateway_id`` 进 ``routing``。
     若 envelope 含 Gateway 兜底标记，须由调用方先分支处理 legacy，勿调用本函数。
     """
     ctx = dict(env.channel_context or {})
@@ -43,6 +61,8 @@ def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
     if isinstance(internal, dict) and internal.get("normalize_failed"):
         raise RuntimeError("e2a_to_agent_request called on fallback envelope; use legacy path")
 
+    identity = _routing_identity(env, ctx)
+    ctx = apply_routing_metadata(ctx, identity)
     metadata = ctx if ctx else None
     method_str = env.method
     req_method: ReqMethod | str | None = None
@@ -71,11 +91,11 @@ def e2a_to_agent_request(env: E2AEnvelope) -> AgentRequest:
         is_stream=bool(env.is_stream),
         timestamp=_e2a_timestamp_to_float(env.timestamp),
         metadata=metadata,
-        # V2: 透传 agent_ref 到 AgentServer，供响应侧 chunk/response 回带（设计 §6.3）。
+        # 透传 agent_ref 到 AgentServer，供响应侧 chunk/response 回带。
         agent_ref=env.agent_ref,
         # ``user_id`` 是 Gateway 鉴权后的路由身份，不是通道元数据；跨 E2A 以字符串
-        # 透传，保证重连/重启后两端对同一份所有权边界做判断。
-        user_id=str(env.user_id or ""),
+        # 透传，metadata 缺失时回退到 channel_context 中的身份。
+        user_id=str(env.user_id or identity.get("user_id") or ""),
     )
 
 
