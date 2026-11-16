@@ -242,7 +242,7 @@ IntentExecutionContext restoredContext = restored.data();
 
 接收 Intent 的生命周期接口以及 `verifyIntentAuthenticity` 要求传入的各层 Intent 都使用 SDK 协议版本。`revokeIntent`、`createExecution`、`completeExecution` 和 `cancelExecution` 要求 Context 版本及其授权 Intent 各层版本均与 SDK 一致。版本不受支持时返回 `A4P_UNSUPPORTED_VERSION`（1002）。版本不受支持的持久化 Context 仍可解码以供检查。恢复生命周期操作前，请使用支持该存储版本的 SDK。
 
-这四个 Context 操作也会校验授权 Intent 的结构，字段非法时返回 `A4P_INVALID_PARAMETER`（1001）。持久化 Context 可能成功解码，但仍因签名密钥标识为空白等原因被拒绝。重试前，请从可信备份恢复原始有效的已签名 Context 及其账本。
+这四个操作在检查版本是否受支持及修改状态前，会校验 Context、授权 Intent、账本和额度快照。Context ID 必须与 L1 意图 ID 一致。账本和快照中的周期字段仅在配置周期约束时必填，剩余总次数仅在配置总次数上限时必填。账本终结时间须与记录状态匹配，且不得早于预留时间。内容非法返回 `A4P_INVALID_PARAMETER`（1001），终结早于预留返回 `A4P_TIMESTAMP_TOO_EARLY`（3003）。持久化 Context 仍可解码以供检查。重试前请从可信备份恢复有效快照。
 
 ## 使用约束
 

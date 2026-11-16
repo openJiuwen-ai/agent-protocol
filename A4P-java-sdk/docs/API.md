@@ -243,7 +243,7 @@ Code 4003 is retained for ArkTS compatibility; Java uses 4004 for per-period exe
 
 Lifecycle APIs that accept an Intent, as well as `verifyIntentAuthenticity`, require every layer of the supplied Intent to use the SDK’s protocol version. `revokeIntent`, `createExecution`, `completeExecution`, and `cancelExecution` require the Context version and the version at every layer of its authorizing Intent to match the SDK’s protocol version.
 
-These four Context operations also validate the structure of the authorizing Intent and return `A4P_INVALID_PARAMETER` (1001) on invalid fields. A stored Context may decode successfully and still fail this check, for example if its signature key identifier is blank. Recover the original valid signed Context and its ledger from a trusted backup before retrying.
+Before checking version support or changing state, these four operations validate the Context, authorized intent, ledger and quota snapshot. The Context ID must match the L1 intent ID. Record and snapshot period fields must be present exactly for periodic intents, and the remaining total count must be present exactly when the intent sets a total count limit. Ledger finalization timestamps must match the record status and may not precede reservation. Invalid content returns `A4P_INVALID_PARAMETER` (1001), or `A4P_TIMESTAMP_TOO_EARLY` (3003) for finalization before reservation. A persisted Context can still be decoded for inspection. Restore a valid snapshot from a trusted backup before retrying.
 
 If any required version is unsupported, the API returns `A4P_UNSUPPORTED_VERSION` (1002). A persisted Context with an unsupported version can still be decoded for inspection. Before resuming lifecycle operations, use an SDK that supports the stored version.
 

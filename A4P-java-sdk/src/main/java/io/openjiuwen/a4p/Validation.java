@@ -252,6 +252,15 @@ final class Validation {
         require(execution.action() == IntentActionType.AI_PAY, A4P_INVALID_PARAMETER, "Action must be AI_PAY");
         optionalText(execution.id());
         Order order = PaymentProfile.order(execution);
+        order(order);
+        return order;
+    }
+
+    /**
+     * Validates the payment order shared by new requests and restored ledger entries.
+     * @param order decoded payment order
+     */
+    private static void order(Order order) {
         text(order.orderId());
         integer(order.amount(), true);
         text(order.currency());
@@ -262,7 +271,74 @@ final class Validation {
             product(item.product());
             integer(item.quantity(), true);
         }
-        return order;
+    }
+
+    /**
+     * Validates the context, its authorization, ledger and quota snapshot before a lifecycle operation.
+     * The caller must hold the context lock.
+     * @param context execution context to validate
+     */
+    static void context(IntentExecutionContext context) {
+        text(context.version());
+        text(context.intentId());
+        intentL3(context.authorizedIntent());
+        require(context.intentId().equals(context.authorizedIntent().intentL2().intentL1().intentId()),
+                A4P_INVALID_PARAMETER, "Context intentId must match the authorized intent");
+        integer(context.activatedTime(), false);
+        optionalInteger(context.revokedTime());
+
+        PaymentConstraints constraints = context.constraints();
+        boolean periodic = constraints.anchorTime() != null;
+        for (IntentExecutionContext.Entry entry : context.ledger()) {
+            ExecutionRecord record = entry.record();
+            executionRecord(record, entry.order());
+            require(periodic == (record.periodIndex() != null), A4P_INVALID_PARAMETER,
+                    "Execution record periodIndex presence must match intent periodicity");
+        }
+
+        PaymentExecutionInfo info = context.paymentExecutionInfo();
+        integer(info.leftAmount(), false);
+        optionalInteger(info.leftExecutionCount());
+        optionalInteger(info.leftPeriodExecutionCount());
+        require(periodic == (info.periodIndex() != null)
+                        && periodic == (info.leftPeriodExecutionCount() != null),
+                A4P_INVALID_PARAMETER, "Quota snapshot period fields must match intent periodicity");
+        require((constraints.maxExecutionCount() != null) == (info.leftExecutionCount() != null),
+                A4P_INVALID_PARAMETER, "Quota snapshot leftExecutionCount presence must match the count limit");
+    }
+
+    /**
+     * Validates a restored execution record and its decoded order.
+     * @param record execution ledger record
+     * @param order payment order stored in the record
+     */
+    private static void executionRecord(ExecutionRecord record, Order order) {
+        text(record.executionId());
+        optionalInteger(record.periodIndex());
+        integer(record.reservedAt(), false);
+        optionalInteger(record.completedAt());
+        optionalInteger(record.canceledAt());
+        require((record.status() == ExecutionStatus.COMPLETED) == (record.completedAt() != null),
+                A4P_INVALID_PARAMETER, "completedAt must be present exactly for COMPLETED records");
+        require((record.status() == ExecutionStatus.CANCELED) == (record.canceledAt() != null),
+                A4P_INVALID_PARAMETER, "canceledAt must be present exactly for CANCELED records");
+        if (record.completedAt() != null) {
+            timeAtOrAfter(record.completedAt(), record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY,
+                    "completedAt must not be earlier than reservedAt");
+        }
+        if (record.canceledAt() != null) {
+            timeAtOrAfter(record.canceledAt(), record.reservedAt(), A4P_TIMESTAMP_TOO_EARLY,
+                    "canceledAt must not be earlier than reservedAt");
+        }
+        order(order);
+    }
+
+    /**
+     * Validates a non-negative safe integer when supplied.
+     * @param value optional numeric field
+     */
+    private static void optionalInteger(Long value) {
+        if (value != null) { integer(value, false); }
     }
 
     /**

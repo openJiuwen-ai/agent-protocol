@@ -174,7 +174,8 @@ public final class A4p {
     /**
      * Changes an ACTIVE context to REVOKED without restricting revocation to the authorization validity window.
      * Revocation time is audit-only. Pending executions may still be finalized.
-     * Invalid fields in the authorizing intent return {@code A4P_INVALID_PARAMETER}.
+     * Invalid context fields return {@code A4P_INVALID_PARAMETER}. A ledger finalization before reservation
+     * returns {@code A4P_TIMESTAMP_TOO_EARLY}.
      * Persist the updated context and do not repeat revocation.
      * Uses the supplied evaluation instant.
      * @param context activated intent and mutable execution ledger
@@ -183,10 +184,11 @@ public final class A4p {
      */
     public static A4pResult<IntentExecutionContext> revokeIntent(IntentExecutionContext context, long now) {
         return A4pResult.capture(() -> {
-            Validation.versions(context);
-            Validation.integer(now, false);
-            Validation.intentL3(context.authorizedIntent());
+            Validation.present(context);
             synchronized (context) {
+                Validation.context(context);
+                Validation.integer(now, false);
+                Validation.versions(context);
                 require(context.status() == IntentExecutionStatus.ACTIVE, A4P_INVALID_STATUS, "Intent must be active for this operation");
                 context.revokedTime(now);
                 context.status(IntentExecutionStatus.REVOKED);
@@ -198,7 +200,8 @@ public final class A4p {
     /**
      * Checks status, validity, action, currency, unique IDs, cart shape and payment quotas, then reserves a PENDING execution.
      * Omitted execution IDs are generated. Order and execution IDs remain unavailable for reuse after cancellation.
-     * Invalid fields in the authorizing intent return {@code A4P_INVALID_PARAMETER}.
+     * Invalid context fields return {@code A4P_INVALID_PARAMETER}. A ledger finalization before reservation
+     * returns {@code A4P_TIMESTAMP_TOO_EARLY}.
      * PENDING and COMPLETED records occupy quota. The evaluation instant determines the reservation period.
      * An expired reservation attempt can mark the context EXPIRED even when the result is a failure; persist it in either case.
      * Uses the supplied evaluation instant.
@@ -215,7 +218,8 @@ public final class A4p {
     /**
      * Changes a PENDING execution to COMPLETED while retaining its occupied quotas.
      * Refreshes the accounting snapshot for the evaluation period without moving the reservation period.
-     * Invalid fields in the authorizing intent return {@code A4P_INVALID_PARAMETER}.
+     * Invalid context fields return {@code A4P_INVALID_PARAMETER}. A ledger finalization before reservation
+     * returns {@code A4P_TIMESTAMP_TOO_EARLY}.
      * An ACTIVE context becomes CONSUMED only when global quota is exhausted and no execution is pending.
      * REVOKED and EXPIRED contexts may finalize existing reservations and retain their status.
      * Evaluation must not precede reservation. Persist the context and never finalize the same record twice.
@@ -233,7 +237,8 @@ public final class A4p {
     /**
      * Changes a PENDING execution to CANCELED, releases its quota and retains the ledger record and IDs.
      * Refreshes accounting for the evaluation period; canceling an old-period order does not change current-period usage.
-     * Invalid fields in the authorizing intent return {@code A4P_INVALID_PARAMETER}.
+     * Invalid context fields return {@code A4P_INVALID_PARAMETER}. A ledger finalization before reservation
+     * returns {@code A4P_TIMESTAMP_TOO_EARLY}.
      * REVOKED and EXPIRED contexts may cancel existing reservations. Evaluation must not precede reservation.
      * Persist the context and never finalize the same record twice.
      * Uses the supplied evaluation instant.
@@ -256,12 +261,13 @@ public final class A4p {
      * @return context containing the pending reservation
      */
     private static IntentExecutionContext reserve(IntentExecutionContext context, Execution execution, long now) {
-        Validation.integer(now, false);
-        Validation.versions(context);
-        Validation.intentL3(context.authorizedIntent());
-        Order order = Validation.execution(execution);
-        String executionId = execution.id() == null ? UUID.randomUUID().toString() : execution.id();
+        Validation.present(context);
         synchronized (context) {
+            Validation.context(context);
+            Validation.integer(now, false);
+            Order order = Validation.execution(execution);
+            Validation.versions(context);
+            String executionId = execution.id() == null ? UUID.randomUUID().toString() : execution.id();
             // Parameter consistency comes before state and ledger checks, and the expiry flip before duplicates.
             IntentL1 intent = context.authorizedIntent().intentL2().intentL1();
             PaymentConstraints constraints = context.constraints();
@@ -307,10 +313,12 @@ public final class A4p {
      */
     private static IntentExecutionContext finalizeExecution(IntentExecutionContext context, String executionId,
                                                             long now, boolean cancel) {
-        Validation.integer(now, false);
-        Validation.versions(context);
-        Validation.intentL3(context.authorizedIntent());
+        Validation.present(context);
         synchronized (context) {
+            Validation.context(context);
+            Validation.integer(now, false);
+            Validation.text(executionId);
+            Validation.versions(context);
             // Pending reservations made before revocation or expiry can still be finalized.
             require(context.status() == IntentExecutionStatus.ACTIVE || context.status() == IntentExecutionStatus.REVOKED
                     || context.status() == IntentExecutionStatus.EXPIRED, A4P_INVALID_STATUS, "Intent must be active, revoked or expired to finalize an execution");
