@@ -7,11 +7,9 @@ import { a4pThrow } from './result';
 
 /**
  * Nesting limit shared by this parser and the canonical serializer (utils.ts
- * imports it): a value may sit at most this many containers deep. The Java
- * SDK enforces the same 100-level limit on both directions (its CanonicalJson
- * normalize rejects deeper documents), so a deeper document fails
- * deserialization there — accepting it here would let the two SDKs disagree
- * about the same bytes.
+ * imports it): a value may sit at most this many containers deep. A deeper
+ * document fails deserialization — accepting it would break the round-trip
+ * guarantee that every accepted document re-serializes to the same bytes.
  */
 export const MAX_JSON_DEPTH: number = 100;
 
@@ -55,8 +53,8 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  *   included: an escaped surrogate pair is rejected, not combined), a
  *   `\uXXXX` spelling of one of the five short-escape characters, and
  *   uppercase hex digits are all rejected rather than silently
- *   re-canonicalized, matching the Java SDK, which accepts a document only
- *   when it equals its canonical re-serialization byte for byte;
+ *   re-canonicalized — the input must be exactly the canonical
+ *   serialization;
  * - whitespace, anywhere: the canonical form carries none — no space,
  *   tab, newline or carriage return before, between or after tokens —
  *   so the input must be the exact bytes the canonical serializer
@@ -65,7 +63,7 @@ const MAX_SAFE_INTEGER: number = 9007199254740991;
  * - trailing content after the top-level value, malformed numbers
  *   (leading zeros, bare '.', truncated exponents), raw control
  *   characters in strings, invalid escapes, and nesting deeper than
- *   MAX_JSON_DEPTH (100 levels, the Java SDK's shared limit).
+ *   MAX_JSON_DEPTH (100 levels, the limit shared with the serializer).
  *
  * The one admitted null is the bare document "null": it parses to a null
  * root so the structural validators reject it as invalid data — which
@@ -285,9 +283,8 @@ class StrictJsonParser {
    * the canonical form writes raw, and a lone escaped half is rejected
    * before the surrogate rules even apply), a `\uXXXX` spelling of one
    * of the five short-escape characters, or uppercase hex digits — and
-   * is rejected rather than silently re-canonicalized, matching the
-   * Java SDK, which accepts a document only when it equals its own
-   * canonical re-serialization.
+   * is rejected rather than silently re-canonicalized: the input must be
+   * exactly the canonical serialization.
    */
   private parseEscape(): string {
     if (this.pos + 1 >= this.text.length) {

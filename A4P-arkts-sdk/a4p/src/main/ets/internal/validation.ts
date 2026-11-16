@@ -12,6 +12,26 @@ import {
 } from '../models/execution';
 import { Product, ItemWhiteList, ShoppingItems, CartItem } from '../models/product';
 
+/**
+ * Two validation layers share this file. The structure layer
+ * (checkXxxStructure) judges whether an object is a well-formed protocol
+ * document: closed field sets, required-field presence, per-field types
+ * (strings, safe integers, arrays), enum membership, and status-bound
+ * finalization presence. Deserialization runs exactly this layer (see
+ * A4pCodec): the codec judges structure and types only, never parameter
+ * values.
+ *
+ * The content layer (checkXxxContent) judges values — blankness, ranges,
+ * ordering, duplicates, the period rule, and the ledger/context
+ * consistency rules (intentId derivation, periodicity-bound presence,
+ * monotonic finalization) — and runs only inside the composed validators
+ * (validateXxx = structure, then content) that the lifecycle APIs use,
+ * where an invalid parameter is A4P_INVALID_PARAMETER (1001): values
+ * deserialization restores verbatim are judged by the APIs that operate
+ * on the restored data. Content functions dereference freely — they run
+ * only after the structure pass accepted the object.
+ */
+
 // All protocol numbers must be safe integers: beyond 2^53 - 1 doubles lose
 // precision and canonical serialization across implementations would break.
 const MAX_SAFE: number = Number.MAX_SAFE_INTEGER;
@@ -44,6 +64,11 @@ export class A4pValidationFailure {
 
 /** Validation outcome: a failure describing the first problem found, or null when the input is valid. */
 type Validation = A4pValidationFailure | null;
+
+/** Whether v is a defined string (blankness is the content layer's isNonBlankString). */
+function isString(v: string | undefined): boolean {
+  return typeof v === 'string';
+}
 
 /** Whether v is a non-negative safe integer (undefined is not). */
 function isNonNegativeInteger(v: number | undefined): boolean {
@@ -127,35 +152,6 @@ function rejectUnknownFields(obj: object, allowed: string[], field: string): Val
 }
 
 /**
- * Whether a signing-environment value tree contains a null anywhere. The
- * canonical form has no nulls (serialization omits them), so a null inside
- * device/app would be silently dropped from the signed bytes — reject it
- * loudly instead of signing bytes different from what was validated.
- */
-function containsNullValue(value: Object): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) {
-      if (containsNullValue(value[i] as Object)) {
-        return true;
-      }
-    }
-    return false;
-  }
-  if (typeof value === 'object') {
-    const keys: string[] = Object.keys(value as Record<string, Object>);
-    for (let i = 0; i < keys.length; i++) {
-      if (containsNullValue((value as Record<string, Object>)[keys[i]])) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
  * Whether the value is a defined IntentActionType member. A foreign value
  * (e.g. a tampered or out-of-enum number) is not a valid action.
  */
@@ -173,18 +169,48 @@ function isValidAlgorithmType(alg: AlgorithmType): boolean {
   return alg === AlgorithmType.RSA3072;
 }
 
-/**
- * Validates a PaymentConstraints object: amounts, validity window, and the
- * period rule. Optional caps (`singleOrderMaxAmount`, `maxExecutionCount`)
- * are validated only when present; the period rule is all-or-nothing —
- * all three fields provided (periodic) or all three omitted
- * (non-periodic), never partial.
- */
-function validatePaymentConstraints(pc: PaymentConstraints): Validation {
+/** Structure pass for constraints: closed field set; every present figure is a safe integer. */
+function checkPaymentConstraintsStructure(pc: PaymentConstraints): Validation {
   const fieldsErr = rejectUnknownFields(pc, CONSTRAINTS_FIELDS, 'structuredIntent.constraints');
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (pc.singleOrderMaxAmount !== undefined && !isSafeInteger(pc.singleOrderMaxAmount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'singleOrderMaxAmount must be a safe integer when present');
+  }
+  if (!isSafeInteger(pc.totalMaxAmount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'totalMaxAmount must be a safe integer');
+  }
+  if (!isString(pc.currency)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'currency must be a string');
+  }
+  if (!isSafeInteger(pc.validFrom)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'validFrom must be a safe integer');
+  }
+  if (!isSafeInteger(pc.validUntil)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'validUntil must be a safe integer');
+  }
+  if (pc.maxExecutionCount !== undefined && !isSafeInteger(pc.maxExecutionCount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'maxExecutionCount must be a safe integer when present');
+  }
+  if (pc.anchorTime !== undefined && !isSafeInteger(pc.anchorTime)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'anchorTime must be a safe integer when present');
+  }
+  if (pc.periodSeconds !== undefined && !isSafeInteger(pc.periodSeconds)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'periodSeconds must be a safe integer when present');
+  }
+  if (pc.maxExecutionCountPerPeriod !== undefined && !isSafeInteger(pc.maxExecutionCountPerPeriod)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'maxExecutionCountPerPeriod must be a safe integer when present');
+  }
+  return null;
+}
+
+/**
+ * Content pass for constraints: positive amounts and caps, non-blank
+ * currency, ordered window, and the period rule all-or-nothing — all
+ * three fields provided (periodic) or all three omitted, never partial.
+ */
+function checkPaymentConstraintsContent(pc: PaymentConstraints): Validation {
   if (pc.singleOrderMaxAmount !== undefined && !isPositiveInteger(pc.singleOrderMaxAmount)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'singleOrderMaxAmount must be a positive integer');
   }
@@ -217,10 +243,8 @@ function validatePaymentConstraints(pc: PaymentConstraints): Validation {
     if (!isNonNegativeInteger(pc.anchorTime)) {
       return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'anchorTime must be a non-negative integer');
     }
-    // Reservations happen at now >= validFrom: an anchor later than
-    // validFrom would give pre-anchor reservations negative period
-    // indexes, each with a fresh per-period budget, hollowing out the
-    // per-period cap.
+    // An anchor later than validFrom would give pre-anchor reservations
+    // negative period indexes, each with a fresh per-period budget.
     if (pc.anchorTime > pc.validFrom) {
       return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'anchorTime must not be later than validFrom');
     }
@@ -248,14 +272,8 @@ export function productMatches(a: Product, b: Product): boolean {
   return a.seller.id === b.seller.id && a.spusku.spuId === b.spusku.spuId && a.spusku.skuId === b.spusku.skuId;
 }
 
-/**
- * Validates a product's identity: a non-null seller with a non-blank id,
- * and a non-null spusku carrying at least one non-blank id (a provided id
- * must not be blank). seller id + spuId + skuId is the whitelist matching
- * key (see productMatches), so blank or absent ids would let products
- * match each other vacuously and hollow out the authorized scope.
- */
-function validateProduct(product: Product, field: string): Validation {
+/** Structure pass for a product (callers have rejected a null product): non-null seller/spusku, string ids, at least one of spuId/skuId. */
+function checkProductStructure(product: Product, field: string): Validation {
   const fieldsErr = rejectUnknownFields(product, PRODUCT_FIELDS, field);
   if (fieldsErr) {
     return fieldsErr;
@@ -267,8 +285,8 @@ function validateProduct(product: Product, field: string): Validation {
   if (sellerErr) {
     return sellerErr;
   }
-  if (!isNonBlankString(product.seller.id)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.seller.id must not be blank');
+  if (!isString(product.seller.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.seller.id must be a string');
   }
   if (!product.spusku) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku must not be null');
@@ -277,11 +295,11 @@ function validateProduct(product: Product, field: string): Validation {
   if (spuskuErr) {
     return spuskuErr;
   }
-  if (product.spusku.spuId !== undefined && !isNonBlankString(product.spusku.spuId)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku.spuId must not be blank when provided');
+  if (product.spusku.spuId !== undefined && !isString(product.spusku.spuId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku.spuId must be a string when provided');
   }
-  if (product.spusku.skuId !== undefined && !isNonBlankString(product.spusku.skuId)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku.skuId must not be blank when provided');
+  if (product.spusku.skuId !== undefined && !isString(product.spusku.skuId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku.skuId must be a string when provided');
   }
   if (product.spusku.spuId === undefined && product.spusku.skuId === undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
@@ -290,12 +308,22 @@ function validateProduct(product: Product, field: string): Validation {
   return null;
 }
 
-/**
- * Validates a whitelist group: non-empty product list, no duplicate
- * products, and positive quantity. A product may appear at most once:
- * duplicates would make the OR semantics of the group ambiguous.
- */
-function validateItemWhiteList(group: ItemWhiteList, field: string): Validation {
+/** Content pass for a product: non-blank seller id, and spuId/skuId when provided (see productMatches for why blank ids hollow out the scope). */
+function checkProductContent(product: Product, field: string): Validation {
+  if (!isNonBlankString(product.seller.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.seller.id must not be blank');
+  }
+  if (product.spusku.spuId !== undefined && !isNonBlankString(product.spusku.spuId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku.spuId must not be blank when provided');
+  }
+  if (product.spusku.skuId !== undefined && !isNonBlankString(product.spusku.skuId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.spusku.skuId must not be blank when provided');
+  }
+  return null;
+}
+
+/** Structure pass for a whitelist group: whiteList array of non-null valid products, safe-integer quantity. */
+function checkItemWhiteListStructure(group: ItemWhiteList, field: string): Validation {
   if (!group) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not be null');
   }
@@ -304,17 +332,35 @@ function validateItemWhiteList(group: ItemWhiteList, field: string): Validation 
     return fieldsErr;
   }
   // The shape is checked before the emptiness: a truthy non-array (e.g. an
-  // object literal) has no length to compare and would otherwise pass the
-  // emptiness test, then break the callers that iterate the list.
-  if (!Array.isArray(group.whiteList) || group.whiteList.length === 0) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.whiteList must be a non-empty array');
+  // object literal) has no length to compare and would otherwise break
+  // the callers that iterate the list.
+  if (!Array.isArray(group.whiteList)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.whiteList must be an array');
   }
   for (let i = 0; i < group.whiteList.length; i++) {
     const product = group.whiteList[i];
     if (!product) {
       return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.whiteList[' + i + '] must not be null');
     }
-    const productErr = validateProduct(product, field + '.whiteList[' + i + ']');
+    const productErr = checkProductStructure(product, field + '.whiteList[' + i + ']');
+    if (productErr) {
+      return productErr;
+    }
+  }
+  if (!isSafeInteger(group.quantity)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.quantity must be a safe integer');
+  }
+  return null;
+}
+
+/** Content pass for a whitelist group: non-empty list, no duplicate products (the OR semantics of a group would be ambiguous), positive quantity. */
+function checkItemWhiteListContent(group: ItemWhiteList, field: string): Validation {
+  if (group.whiteList.length === 0) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.whiteList must be a non-empty array');
+  }
+  for (let i = 0; i < group.whiteList.length; i++) {
+    const product = group.whiteList[i];
+    const productErr = checkProductContent(product, field + '.whiteList[' + i + ']');
     if (productErr) {
       return productErr;
     }
@@ -331,22 +377,31 @@ function validateItemWhiteList(group: ItemWhiteList, field: string): Validation 
   return null;
 }
 
-/**
- * Validates the resources: a non-empty list of valid whitelist groups with
- * no product shared by two groups. The resources are an order template and
- * a cart item finds its group by product alone, so a product must
- * uniquely determine its group.
- */
-function validateShoppingItems(resources: ShoppingItems, field: string): Validation {
+/** Structure pass for the resources: closed field set, itemsWhiteList array of valid groups. */
+function checkShoppingItemsStructure(resources: ShoppingItems, field: string): Validation {
   const fieldsErr = rejectUnknownFields(resources, SHOPPING_ITEMS_FIELDS, field);
   if (fieldsErr) {
     return fieldsErr;
   }
-  if (!Array.isArray(resources.itemsWhiteList) || resources.itemsWhiteList.length === 0) {
+  if (!Array.isArray(resources.itemsWhiteList)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.itemsWhiteList must be an array');
+  }
+  for (let i = 0; i < resources.itemsWhiteList.length; i++) {
+    const groupErr = checkItemWhiteListStructure(resources.itemsWhiteList[i], field + '.itemsWhiteList[' + i + ']');
+    if (groupErr) {
+      return groupErr;
+    }
+  }
+  return null;
+}
+
+/** Content pass for the resources: non-empty, valid groups, no product shared by two groups (a cart item finds its group by product alone). */
+function checkShoppingItemsContent(resources: ShoppingItems, field: string): Validation {
+  if (resources.itemsWhiteList.length === 0) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.itemsWhiteList must be a non-empty array');
   }
   for (let i = 0; i < resources.itemsWhiteList.length; i++) {
-    const groupErr = validateItemWhiteList(resources.itemsWhiteList[i], field + '.itemsWhiteList[' + i + ']');
+    const groupErr = checkItemWhiteListContent(resources.itemsWhiteList[i], field + '.itemsWhiteList[' + i + ']');
     if (groupErr) {
       return groupErr;
     }
@@ -367,10 +422,10 @@ function validateShoppingItems(resources: ShoppingItems, field: string): Validat
   return null;
 }
 
-/** Validates a cart item list: non-empty, valid products, positive quantities. */
-function validateCartItems(cartItems: CartItem[], field: string): Validation {
-  if (!Array.isArray(cartItems) || cartItems.length === 0) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must be a non-empty array');
+/** Structure pass for a cart item list: array of non-null items with valid products and safe-integer quantities. */
+function checkCartItemsStructure(cartItems: CartItem[], field: string): Validation {
+  if (!Array.isArray(cartItems)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must be an array');
   }
   for (let i = 0; i < cartItems.length; i++) {
     const item = cartItems[i];
@@ -384,7 +439,25 @@ function validateCartItems(cartItems: CartItem[], field: string): Validation {
     if (!item.product) {
       return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '[' + i + '].product must not be null');
     }
-    const productErr = validateProduct(item.product, field + '[' + i + '].product');
+    const productErr = checkProductStructure(item.product, field + '[' + i + '].product');
+    if (productErr) {
+      return productErr;
+    }
+    if (!isSafeInteger(item.quantity)) {
+      return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '[' + i + '].quantity must be a safe integer');
+    }
+  }
+  return null;
+}
+
+/** Content pass for a cart item list: non-empty, product values, positive quantities. */
+function checkCartItemsContent(cartItems: CartItem[], field: string): Validation {
+  if (cartItems.length === 0) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must be a non-empty array');
+  }
+  for (let i = 0; i < cartItems.length; i++) {
+    const item = cartItems[i];
+    const productErr = checkProductContent(item.product, field + '[' + i + '].product');
     if (productErr) {
       return productErr;
     }
@@ -395,8 +468,8 @@ function validateCartItems(cartItems: CartItem[], field: string): Validation {
   return null;
 }
 
-/** Validates a StructuredIntent: action, resources, and constraints. */
-function validateStructuredIntent(si: StructuredIntent): Validation {
+/** Structure pass for a StructuredIntent: valid action enum, present resources and constraints with valid structure. */
+function checkStructuredIntentStructure(si: StructuredIntent): Validation {
   const fieldsErr = rejectUnknownFields(si, STRUCTURED_INTENT_FIELDS, 'structuredIntent');
   if (fieldsErr) {
     return fieldsErr;
@@ -407,75 +480,117 @@ function validateStructuredIntent(si: StructuredIntent): Validation {
   if (!si.resources) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent.resources must not be null');
   }
-  const resourcesErr = validateShoppingItems(si.resources, 'structuredIntent.resources');
+  const resourcesErr = checkShoppingItemsStructure(si.resources, 'structuredIntent.resources');
   if (resourcesErr) {
     return resourcesErr;
   }
   if (!si.constraints) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent.constraints must not be null');
   }
-  return validatePaymentConstraints(si.constraints);
+  return checkPaymentConstraintsStructure(si.constraints);
 }
 
-/** Validates a UserIdentity: non-empty provider and id, string additionalInfo. */
-function validateUserIdentity(ui: UserIdentity): Validation {
+/** Content pass for a StructuredIntent: resource and constraint values. */
+function checkStructuredIntentContent(si: StructuredIntent): Validation {
+  const resourcesErr = checkShoppingItemsContent(si.resources, 'structuredIntent.resources');
+  if (resourcesErr) {
+    return resourcesErr;
+  }
+  return checkPaymentConstraintsContent(si.constraints);
+}
+
+/** Structure pass for a UserIdentity: closed field set, string identityProvider and id, string additionalInfo when provided. */
+function checkUserIdentityStructure(ui: UserIdentity): Validation {
   const fieldsErr = rejectUnknownFields(ui, USER_IDENTITY_FIELDS, 'userIdentity');
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (!isString(ui.identityProvider)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'userIdentity.identityProvider must be a string');
+  }
+  if (!isString(ui.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'userIdentity.id must be a string');
+  }
+  // A non-string additionalInfo must fail loudly here rather than pass
+  // validation and produce non-canonical bytes.
+  if (ui.additionalInfo !== undefined && !isString(ui.additionalInfo)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'userIdentity.additionalInfo must be a string when provided');
+  }
+  return null;
+}
+
+/** Content pass for a UserIdentity: non-blank provider and id. */
+function checkUserIdentityContent(ui: UserIdentity): Validation {
   if (!isNonBlankString(ui.identityProvider)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'userIdentity.identityProvider must not be blank');
   }
   if (!isNonBlankString(ui.id)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'userIdentity.id must not be blank');
   }
-  // A non-string additionalInfo (a number, say) must fail loudly here
-  // rather than pass validation and produce non-canonical bytes.
-  if (ui.additionalInfo !== undefined && typeof ui.additionalInfo !== 'string') {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'userIdentity.additionalInfo must be a string when provided');
-  }
   return null;
 }
 
-/** Validates an AgentIdentity: non-empty provider and id, string additionalInfo. */
-function validateAgentIdentity(ai: AgentIdentity): Validation {
+/** Structure pass for an AgentIdentity: closed field set, string identityProvider and id, string additionalInfo when provided. */
+function checkAgentIdentityStructure(ai: AgentIdentity): Validation {
   const fieldsErr = rejectUnknownFields(ai, AGENT_IDENTITY_FIELDS, 'agentIdentity');
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (!isString(ai.identityProvider)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'agentIdentity.identityProvider must be a string');
+  }
+  if (!isString(ai.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'agentIdentity.id must be a string');
+  }
+  if (ai.additionalInfo !== undefined && !isString(ai.additionalInfo)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'agentIdentity.additionalInfo must be a string when provided');
+  }
+  return null;
+}
+
+/** Content pass for an AgentIdentity: non-blank provider and id. */
+function checkAgentIdentityContent(ai: AgentIdentity): Validation {
   if (!isNonBlankString(ai.identityProvider)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'agentIdentity.identityProvider must not be blank');
   }
   if (!isNonBlankString(ai.id)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'agentIdentity.id must not be blank');
   }
-  if (ai.additionalInfo !== undefined && typeof ai.additionalInfo !== 'string') {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'agentIdentity.additionalInfo must be a string when provided');
-  }
   return null;
 }
 
-/** Validates a ServiceProviderIdentity: non-empty id, string additionalInfo. */
-function validateServiceProviderIdentity(spi: ServiceProviderIdentity): Validation {
+/** Structure pass for a ServiceProviderIdentity: closed field set, string id, string additionalInfo when provided. */
+function checkServiceProviderIdentityStructure(spi: ServiceProviderIdentity): Validation {
   const fieldsErr = rejectUnknownFields(spi, SERVICE_PROVIDER_FIELDS, 'serviceProviderIdentity');
   if (fieldsErr) {
     return fieldsErr;
   }
-  if (!isNonBlankString(spi.id)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'serviceProviderIdentity.id must not be blank');
+  if (!isString(spi.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'serviceProviderIdentity.id must be a string');
   }
-  if (spi.additionalInfo !== undefined && typeof spi.additionalInfo !== 'string') {
+  if (spi.additionalInfo !== undefined && !isString(spi.additionalInfo)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'serviceProviderIdentity.additionalInfo must be a string when provided');
   }
   return null;
 }
 
+/** Content pass for a ServiceProviderIdentity: non-blank id. */
+function checkServiceProviderIdentityContent(spi: ServiceProviderIdentity): Validation {
+  if (!isNonBlankString(spi.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'serviceProviderIdentity.id must not be blank');
+  }
+  return null;
+}
+
 /**
  * Validates a SigningEnv object: present device and app maps, each an
- * object (not an array or scalar) free of null values — the canonical form
- * omits nulls, so a null inside them would be dropped from the signed
- * bytes rather than represented, and no peer renders it back.
+ * object (not an array or scalar). Null values inside them are tolerated:
+ * serialization drops a null property and fails on a null array item, and
+ * deserialization never delivers one (the strict parser rejects explicit
+ * nulls at every value position).
+ * Entirely structural (no content pass), so the deserialization-side
+ * structure checks share it.
  * @param env - The signing environment to validate
  * @returns A validation failure if invalid, or null if valid
  */
@@ -490,22 +605,14 @@ export function validateSigningEnv(env: SigningEnv): Validation {
   if (!env.device || typeof env.device !== 'object' || Array.isArray(env.device)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'signingEnv.device must be an object');
   }
-  if (containsNullValue(env.device)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'signingEnv.device must not contain null values; omit the key instead');
-  }
   if (!env.app || typeof env.app !== 'object' || Array.isArray(env.app)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'signingEnv.app must be an object');
-  }
-  if (containsNullValue(env.app)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'signingEnv.app must not contain null values; omit the key instead');
   }
   return null;
 }
 
-/** Validates an Order: non-empty id and currency, positive amount, valid cart, timestamp. */
-function validateOrder(order: Order): Validation {
+/** Structure pass for an Order: closed field set, string orderId and currency, safe-integer amount and timestamp, cart array. */
+function checkOrderStructure(order: Order): Validation {
   if (!order) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order must not be null');
   }
@@ -513,6 +620,30 @@ function validateOrder(order: Order): Validation {
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (!isString(order.orderId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.orderId must be a string');
+  }
+  if (!isSafeInteger(order.amount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.amount must be a safe integer');
+  }
+  if (!isString(order.currency)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.currency must be a string');
+  }
+  if (!Array.isArray(order.cartItems)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.cartItems must be an array');
+  }
+  const cartErr = checkCartItemsStructure(order.cartItems, 'order.cartItems');
+  if (cartErr) {
+    return cartErr;
+  }
+  if (!isSafeInteger(order.timestamp)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.timestamp must be a safe integer');
+  }
+  return null;
+}
+
+/** Content pass for an Order: non-blank ids, positive amount, non-empty cart, non-negative timestamp. */
+function checkOrderContent(order: Order): Validation {
   if (!isNonBlankString(order.orderId)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.orderId must not be blank');
   }
@@ -522,10 +653,7 @@ function validateOrder(order: Order): Validation {
   if (!isNonBlankString(order.currency)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.currency must not be blank');
   }
-  if (!Array.isArray(order.cartItems) || order.cartItems.length === 0) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'order.cartItems must be a non-empty array');
-  }
-  const cartErr = validateCartItems(order.cartItems, 'order.cartItems');
+  const cartErr = checkCartItemsContent(order.cartItems, 'order.cartItems');
   if (cartErr) {
     return cartErr;
   }
@@ -564,14 +692,8 @@ export function validateExecutionId(executionId: string): Validation {
   return null;
 }
 
-/**
- * Validates an Execution object: a defined action, an optional non-blank id
- * (an absent id is generated during reservation),
- * and an executionContent that is a well-formed order.
- * @param exec - The execution to validate
- * @returns A validation failure if invalid, or null if valid
- */
-export function validateExecution(exec: Execution): Validation {
+/** Structure pass for an Execution: valid action enum, optional string id, present well-shaped executionContent. */
+function checkExecutionStructure(exec: Execution): Validation {
   if (!exec) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'execution must not be null');
   }
@@ -582,22 +704,37 @@ export function validateExecution(exec: Execution): Validation {
   if (!isValidIntentActionType(exec.action)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'execution.action must be a valid IntentActionType');
   }
-  if (exec.id !== undefined && !isNonBlankString(exec.id)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-      'execution.id must be a non-blank string when provided (an absent id is generated)');
+  if (exec.id !== undefined && !isString(exec.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'execution.id must be a string when provided');
   }
   if (!exec.executionContent) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'execution.executionContent must not be null');
   }
-  return validateOrder(exec.executionContent);
+  return checkOrderStructure(exec.executionContent);
+}
+
+/** Content pass for an Execution: non-blank id when provided, order values. */
+function checkExecutionContent(exec: Execution): Validation {
+  if (exec.id !== undefined && !isNonBlankString(exec.id)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      'execution.id must be a non-blank string when provided (an absent id is generated)');
+  }
+  return checkOrderContent(exec.executionContent);
 }
 
 /**
- * Validates a CreateIntentRequest object.
- * @param request - The request to validate
+ * Validates an Execution object: a defined action, an optional non-blank id
+ * (an absent id is generated during reservation),
+ * and an executionContent that is a well-formed order.
+ * @param exec - The execution to validate
  * @returns A validation failure if invalid, or null if valid
  */
-export function validateCreateIntentRequest(request: CreateIntentRequest): Validation {
+export function validateExecution(exec: Execution): Validation {
+  return checkExecutionStructure(exec) ?? checkExecutionContent(exec);
+}
+
+/** Structure pass for a CreateIntentRequest: closed field set, string fields, present structuredIntent. */
+function checkCreateIntentRequestStructure(request: CreateIntentRequest): Validation {
   if (!request) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'request must not be null');
   }
@@ -605,6 +742,23 @@ export function validateCreateIntentRequest(request: CreateIntentRequest): Valid
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (!isString(request.intentConversation)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentConversation must be a string');
+  }
+  if (!isString(request.intentSummary)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentSummary must be a string');
+  }
+  if (request.intentId !== undefined && !isString(request.intentId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentId must be a string when provided');
+  }
+  if (!request.structuredIntent) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent must not be null');
+  }
+  return checkStructuredIntentStructure(request.structuredIntent);
+}
+
+/** Content pass for a CreateIntentRequest: non-blank conversation, summary and optional id, structured-intent values. */
+function checkCreateIntentRequestContent(request: CreateIntentRequest): Validation {
   if (!isNonBlankString(request.intentConversation)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentConversation must not be blank');
   }
@@ -614,18 +768,20 @@ export function validateCreateIntentRequest(request: CreateIntentRequest): Valid
   if (request.intentId !== undefined && !isNonBlankString(request.intentId)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentId must not be blank when provided');
   }
-  if (!request.structuredIntent) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'structuredIntent must not be null');
-  }
-  return validateStructuredIntent(request.structuredIntent);
+  return checkStructuredIntentContent(request.structuredIntent);
 }
 
 /**
- * Validates an IntentIssueContext object.
- * @param ctx - The issue context to validate
+ * Validates a CreateIntentRequest object.
+ * @param request - The request to validate
  * @returns A validation failure if invalid, or null if valid
  */
-export function validateIssueContext(ctx: IntentIssueContext): Validation {
+export function validateCreateIntentRequest(request: CreateIntentRequest): Validation {
+  return checkCreateIntentRequestStructure(request) ?? checkCreateIntentRequestContent(request);
+}
+
+/** Structure pass for an IntentIssueContext: present, structurally valid identities. */
+function checkIssueContextStructure(ctx: IntentIssueContext): Validation {
   if (!ctx) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'issueContext must not be null');
   }
@@ -636,23 +792,77 @@ export function validateIssueContext(ctx: IntentIssueContext): Validation {
   if (!ctx.userIdentity) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'issueContext.userIdentity must not be null');
   }
-  const uiErr = validateUserIdentity(ctx.userIdentity);
+  const uiErr = checkUserIdentityStructure(ctx.userIdentity);
   if (uiErr) {
     return uiErr;
   }
   if (!ctx.agentIdentity) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'issueContext.agentIdentity must not be null');
   }
-  const aiErr = validateAgentIdentity(ctx.agentIdentity);
+  const aiErr = checkAgentIdentityStructure(ctx.agentIdentity);
   if (aiErr) {
     return aiErr;
   }
   if (!ctx.serviceProviderIdentity) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'issueContext.serviceProviderIdentity must not be null');
   }
-  const spiErr = validateServiceProviderIdentity(ctx.serviceProviderIdentity);
+  const spiErr = checkServiceProviderIdentityStructure(ctx.serviceProviderIdentity);
   if (spiErr) {
     return spiErr;
+  }
+  return null;
+}
+
+/** Content pass for an IntentIssueContext: identity values. */
+function checkIssueContextContent(ctx: IntentIssueContext): Validation {
+  const uiErr = checkUserIdentityContent(ctx.userIdentity);
+  if (uiErr) {
+    return uiErr;
+  }
+  const aiErr = checkAgentIdentityContent(ctx.agentIdentity);
+  if (aiErr) {
+    return aiErr;
+  }
+  return checkServiceProviderIdentityContent(ctx.serviceProviderIdentity);
+}
+
+/**
+ * Validates an IntentIssueContext object.
+ * @param ctx - The issue context to validate
+ * @returns A validation failure if invalid, or null if valid
+ */
+export function validateIssueContext(ctx: IntentIssueContext): Validation {
+  return checkIssueContextStructure(ctx) ?? checkIssueContextContent(ctx);
+}
+
+/** Structure pass for signature information: valid alg enum, present string keyIdentifier and signature. */
+function checkSignatureInfoStructure(info: SignatureInfo, field: string): Validation {
+  if (!info) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign must not be null');
+  }
+  const fieldsErr = rejectUnknownFields(info, SIGNATURE_INFO_FIELDS, field + '.sign');
+  if (fieldsErr) {
+    return fieldsErr;
+  }
+  if (!isValidAlgorithmType(info.alg)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.alg must be a valid AlgorithmType');
+  }
+  if (!isString(info.keyIdentifier)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.keyIdentifier must be a string');
+  }
+  if (!isString(info.sign)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.sign must be a string');
+  }
+  return null;
+}
+
+/** Content pass for signature information: non-blank keyIdentifier and signature. */
+function checkSignatureInfoContent(info: SignatureInfo, field: string): Validation {
+  if (!isNonBlankString(info.keyIdentifier)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.keyIdentifier must not be blank');
+  }
+  if (!isNonBlankString(info.sign)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.sign must not be blank');
   }
   return null;
 }
@@ -666,32 +876,16 @@ export function validateIssueContext(ctx: IntentIssueContext): Validation {
  * (see runSigner in api/a4p.ts).
  */
 export function validateSignatureInfo(info: SignatureInfo, field: string): Validation {
-  if (!info) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign must not be null');
-  }
-  const fieldsErr = rejectUnknownFields(info, SIGNATURE_INFO_FIELDS, field + '.sign');
-  if (fieldsErr) {
-    return fieldsErr;
-  }
-  if (!isValidAlgorithmType(info.alg)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.alg must be a valid AlgorithmType');
-  }
-  if (!isNonBlankString(info.keyIdentifier)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.keyIdentifier must not be blank');
-  }
-  if (!isNonBlankString(info.sign)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.sign.sign must not be blank');
-  }
-  return null;
+  return checkSignatureInfoStructure(info, field) ?? checkSignatureInfoContent(info, field);
 }
 
 /**
- * Validates an IntentL1 object structurally. The `timestamp` field must be
- * a non-negative integer; no cross-level ordering is checked here.
- * @param intent - The Level 1 intent to validate
- * @returns A validation failure if invalid, or null if valid
+ * Structure pass for an IntentL1 — the layer deserialization runs (see
+ * the file header).
+ * @param intent - The Level 1 intent to check
+ * @returns A validation failure if structurally invalid, or null if valid
  */
-export function validateIntentL1(intent: IntentL1): Validation {
+export function checkIntentL1Structure(intent: IntentL1): Validation {
   if (!intent) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1 must not be null');
   }
@@ -699,6 +893,33 @@ export function validateIntentL1(intent: IntentL1): Validation {
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (!isString(intent.version)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.version must be a string');
+  }
+  if (!isString(intent.intentId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.intentId must be a string');
+  }
+  if (!isString(intent.intentConversation)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.intentConversation must be a string');
+  }
+  if (!isString(intent.intentSummary)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.intentSummary must be a string');
+  }
+  if (!intent.structuredIntent) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.structuredIntent must not be null');
+  }
+  const siErr = checkStructuredIntentStructure(intent.structuredIntent);
+  if (siErr) {
+    return siErr;
+  }
+  if (!isSafeInteger(intent.timestamp)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.timestamp must be a safe integer');
+  }
+  return checkSignatureInfoStructure(intent.sign, 'intentL1');
+}
+
+/** Content pass for an IntentL1: non-blank fields, structured-intent values, non-negative timestamp, non-blank signature values. */
+function checkIntentL1Content(intent: IntentL1): Validation {
   if (!isNonBlankString(intent.version)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.version must not be blank');
   }
@@ -711,21 +932,102 @@ export function validateIntentL1(intent: IntentL1): Validation {
   if (!isNonBlankString(intent.intentSummary)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.intentSummary must not be blank');
   }
-  if (!intent.structuredIntent) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.structuredIntent must not be null');
-  }
-  const siErr = validateStructuredIntent(intent.structuredIntent);
+  const siErr = checkStructuredIntentContent(intent.structuredIntent);
   if (siErr) {
     return siErr;
   }
   if (!isNonNegativeInteger(intent.timestamp)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL1.timestamp must be a non-negative integer');
   }
-  const signErr = validateSignatureInfo(intent.sign, 'intentL1');
-  if (signErr) {
-    return signErr;
+  return checkSignatureInfoContent(intent.sign as SignatureInfo, 'intentL1');
+}
+
+/**
+ * Validates an IntentL1 object structurally. The `timestamp` field must be
+ * a non-negative integer; no cross-level ordering is checked here.
+ * @param intent - The Level 1 intent to validate
+ * @returns A validation failure if invalid, or null if valid
+ */
+export function validateIntentL1(intent: IntentL1): Validation {
+  return checkIntentL1Structure(intent) ?? checkIntentL1Content(intent);
+}
+
+/**
+ * Structure pass for an IntentL2 — the layer deserialization runs (see
+ * the file header).
+ * @param intent - The Level 2 intent to check
+ * @returns A validation failure if structurally invalid, or null if valid
+ */
+export function checkIntentL2Structure(intent: IntentL2): Validation {
+  if (!intent) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2 must not be null');
   }
-  return null;
+  const fieldsErr = rejectUnknownFields(intent, L2_FIELDS, 'intentL2');
+  if (fieldsErr) {
+    return fieldsErr;
+  }
+  if (!isString(intent.version)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.version must be a string');
+  }
+  if (!intent.intentL1) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.intentL1 must not be null');
+  }
+  const l1Err = checkIntentL1Structure(intent.intentL1);
+  if (l1Err) {
+    return l1Err;
+  }
+  if (!intent.userIdentity) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.userIdentity must not be null');
+  }
+  const uiErr = checkUserIdentityStructure(intent.userIdentity);
+  if (uiErr) {
+    return uiErr;
+  }
+  if (!intent.agentIdentity) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.agentIdentity must not be null');
+  }
+  const aiErr = checkAgentIdentityStructure(intent.agentIdentity);
+  if (aiErr) {
+    return aiErr;
+  }
+  if (!intent.serviceProviderIdentity) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.serviceProviderIdentity must not be null');
+  }
+  const spiErr = checkServiceProviderIdentityStructure(intent.serviceProviderIdentity);
+  if (spiErr) {
+    return spiErr;
+  }
+  if (!isSafeInteger(intent.timestamp)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.timestamp must be a safe integer');
+  }
+  return checkSignatureInfoStructure(intent.sign, 'intentL2');
+}
+
+/** Content pass for an IntentL2: non-blank version, L1 values, identity values, non-negative timestamp, non-blank signature values. */
+function checkIntentL2Content(intent: IntentL2): Validation {
+  if (!isNonBlankString(intent.version)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.version must not be blank');
+  }
+  const l1Err = checkIntentL1Content(intent.intentL1);
+  if (l1Err) {
+    return l1Err;
+  }
+  const uiErr = checkUserIdentityContent(intent.userIdentity);
+  if (uiErr) {
+    return uiErr;
+  }
+  const aiErr = checkAgentIdentityContent(intent.agentIdentity);
+  if (aiErr) {
+    return aiErr;
+  }
+  const spiErr = checkServiceProviderIdentityContent(intent.serviceProviderIdentity);
+  if (spiErr) {
+    return spiErr;
+  }
+  if (!isNonNegativeInteger(intent.timestamp)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.timestamp must be a non-negative integer');
+  }
+  return checkSignatureInfoContent(intent.sign as SignatureInfo, 'intentL2');
 }
 
 /**
@@ -736,62 +1038,16 @@ export function validateIntentL1(intent: IntentL1): Validation {
  * @returns A validation failure if invalid, or null if valid
  */
 export function validateIntentL2(intent: IntentL2): Validation {
-  if (!intent) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2 must not be null');
-  }
-  const fieldsErr = rejectUnknownFields(intent, L2_FIELDS, 'intentL2');
-  if (fieldsErr) {
-    return fieldsErr;
-  }
-  if (!isNonBlankString(intent.version)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.version must not be blank');
-  }
-  if (!intent.intentL1) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.intentL1 must not be null');
-  }
-  const l1Err = validateIntentL1(intent.intentL1);
-  if (l1Err) {
-    return l1Err;
-  }
-  if (!intent.userIdentity) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.userIdentity must not be null');
-  }
-  const uiErr = validateUserIdentity(intent.userIdentity);
-  if (uiErr) {
-    return uiErr;
-  }
-  if (!intent.agentIdentity) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.agentIdentity must not be null');
-  }
-  const aiErr = validateAgentIdentity(intent.agentIdentity);
-  if (aiErr) {
-    return aiErr;
-  }
-  if (!intent.serviceProviderIdentity) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.serviceProviderIdentity must not be null');
-  }
-  const spiErr = validateServiceProviderIdentity(intent.serviceProviderIdentity);
-  if (spiErr) {
-    return spiErr;
-  }
-  if (!isNonNegativeInteger(intent.timestamp)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL2.timestamp must be a non-negative integer');
-  }
-  const signErr = validateSignatureInfo(intent.sign, 'intentL2');
-  if (signErr) {
-    return signErr;
-  }
-  return null;
+  return checkIntentL2Structure(intent) ?? checkIntentL2Content(intent);
 }
 
 /**
- * Validates an IntentL3 object structurally, including its embedded L2 and L1.
- * The `timestamp` fields must be non-negative integers; no cross-level
- * ordering is checked here.
- * @param intent - The Level 3 intent to validate
- * @returns A validation failure if invalid, or null if valid
+ * Structure pass for an IntentL3 — the layer deserialization runs (see
+ * the file header).
+ * @param intent - The Level 3 intent to check
+ * @returns A validation failure if structurally invalid, or null if valid
  */
-export function validateIntentL3(intent: IntentL3): Validation {
+export function checkIntentL3Structure(intent: IntentL3): Validation {
   if (!intent) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3 must not be null');
   }
@@ -799,13 +1055,13 @@ export function validateIntentL3(intent: IntentL3): Validation {
   if (fieldsErr) {
     return fieldsErr;
   }
-  if (!isNonBlankString(intent.version)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.version must not be blank');
+  if (!isString(intent.version)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.version must be a string');
   }
   if (!intent.intentL2) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.intentL2 must not be null');
   }
-  const l2Err = validateIntentL2(intent.intentL2);
+  const l2Err = checkIntentL2Structure(intent.intentL2);
   if (l2Err) {
     return l2Err;
   }
@@ -816,14 +1072,36 @@ export function validateIntentL3(intent: IntentL3): Validation {
   if (envErr) {
     return envErr;
   }
+  if (!isSafeInteger(intent.timestamp)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.timestamp must be a safe integer');
+  }
+  return checkSignatureInfoStructure(intent.sign, 'intentL3');
+}
+
+/** Content pass for an IntentL3: non-blank version, L2/L1 values, non-negative timestamp, non-blank signature values. */
+function checkIntentL3Content(intent: IntentL3): Validation {
+  if (!isNonBlankString(intent.version)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.version must not be blank');
+  }
+  const l2Err = checkIntentL2Content(intent.intentL2);
+  if (l2Err) {
+    return l2Err;
+  }
   if (!isNonNegativeInteger(intent.timestamp)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'intentL3.timestamp must be a non-negative integer');
   }
-  const signErr = validateSignatureInfo(intent.sign, 'intentL3');
-  if (signErr) {
-    return signErr;
-  }
-  return null;
+  return checkSignatureInfoContent(intent.sign as SignatureInfo, 'intentL3');
+}
+
+/**
+ * Validates an IntentL3 object structurally, including its embedded L2 and L1.
+ * The `timestamp` fields must be non-negative integers; no cross-level
+ * ordering is checked here.
+ * @param intent - The Level 3 intent to validate
+ * @returns A validation failure if invalid, or null if valid
+ */
+export function validateIntentL3(intent: IntentL3): Validation {
+  return checkIntentL3Structure(intent) ?? checkIntentL3Content(intent);
 }
 
 /**
@@ -845,16 +1123,10 @@ function isValidIntentExecutionStatus(status: IntentExecutionStatus): boolean {
 }
 
 /**
- * Validates an execution record: a non-blank executionId, a defined
- * status, a non-negative reservedAt, the status-bound finalization
- * timestamps (completedAt on a COMPLETED record, canceledAt on a CANCELED
- * one — and only there), and the flat reserved-execution fields (a valid
- * action and a well-formed executionContent).
- * @param record - The execution record to validate
- * @param field - The field path prefix for error messages
- * @returns A validation failure if invalid, or null if valid
+ * Structure pass for an execution record: defined status and action, safe-integer stamps, status-bound finalization
+ * presence (COMPLETED carries completedAt, CANCELED canceledAt — the converse is content), well-shaped order.
  */
-function validateExecutionRecord(record: ExecutionRecord, field: string): Validation {
+function checkExecutionRecordStructure(record: ExecutionRecord, field: string): Validation {
   if (!record) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not be null');
   }
@@ -862,16 +1134,55 @@ function validateExecutionRecord(record: ExecutionRecord, field: string): Valida
   if (fieldsErr) {
     return fieldsErr;
   }
-  if (!isNonBlankString(record.executionId)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.executionId must not be blank');
+  if (!isString(record.executionId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.executionId must be a string');
   }
   if (!isValidExecutionStatus(record.status)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.status must be a valid ExecutionStatus');
   }
-  // Reservations happen at now >= validFrom and the anchor is never later
-  // than validFrom, so a record's period index is never negative. Whether
-  // the index must be present at all is a periodicity matter, checked by
-  // the context validator, which knows the intent's period rule.
+  // Whether the index must be present at all is a periodicity matter,
+  // judged by the context content pass; a present one is a safe integer.
+  if (record.periodIndex !== undefined && !isSafeInteger(record.periodIndex)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.periodIndex must be a safe integer when present');
+  }
+  if (!isSafeInteger(record.reservedAt)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.reservedAt must be a safe integer');
+  }
+  if (record.completedAt !== undefined && !isSafeInteger(record.completedAt)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.completedAt must be a safe integer when present');
+  }
+  if (record.canceledAt !== undefined && !isSafeInteger(record.canceledAt)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.canceledAt must be a safe integer when present');
+  }
+  if (record.status === ExecutionStatus.COMPLETED && record.completedAt === undefined) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.completedAt must be present on a COMPLETED record');
+  }
+  if (record.status === ExecutionStatus.CANCELED && record.canceledAt === undefined) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.canceledAt must be present on a CANCELED record');
+  }
+  if (!isValidIntentActionType(record.action)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.action must be a valid IntentActionType');
+  }
+  if (!record.executionContent) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.executionContent must not be null');
+  }
+  return checkOrderStructure(record.executionContent);
+}
+
+/**
+ * Content pass for an execution record: non-blank executionId, non-negative stamps, converse status binding,
+ * monotonic finalization (A4P_TIMESTAMP_TOO_EARLY — the code the offending
+ * operation would have returned), order values.
+ */
+function checkExecutionRecordContent(record: ExecutionRecord, field: string): Validation {
+  if (!isNonBlankString(record.executionId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.executionId must not be blank');
+  }
   if (record.periodIndex !== undefined && !isNonNegativeInteger(record.periodIndex)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.periodIndex must be a non-negative integer when present');
@@ -887,32 +1198,18 @@ function validateExecutionRecord(record: ExecutionRecord, field: string): Valida
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.canceledAt must be a non-negative integer when present');
   }
-  // Finalization timestamps are status-bound: completeExecution stamps
-  // completedAt, cancelExecution stamps canceledAt, and no other
-  // transition exists, so any other pairing is corrupted data.
-  if (record.status === ExecutionStatus.COMPLETED) {
-    if (record.completedAt === undefined) {
-      return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-        field + '.completedAt must be present on a COMPLETED record');
-    }
-  } else if (record.completedAt !== undefined) {
+  // The converse of the structure pass's status binding.
+  if (record.status !== ExecutionStatus.COMPLETED && record.completedAt !== undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.completedAt must be present only on a COMPLETED record');
   }
-  if (record.status === ExecutionStatus.CANCELED) {
-    if (record.canceledAt === undefined) {
-      return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
-        field + '.canceledAt must be present on a CANCELED record');
-    }
-  } else if (record.canceledAt !== undefined) {
+  if (record.status !== ExecutionStatus.CANCELED && record.canceledAt !== undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.canceledAt must be present only on a CANCELED record');
   }
-  // Record timestamps are monotonic: a finalization can
-  // never predate the reservation it finalizes (completeExecution and
-  // cancelExecution reject such a clock), so a persisted record violating
-  // it is corrupted data and fails with the code the offending operation
-  // would have returned.
+  // A finalization can never predate the reservation it finalizes
+  // (completeExecution/cancelExecution reject such a clock), so a record
+  // violating it is corrupted data.
   if (record.completedAt !== undefined && record.completedAt < record.reservedAt) {
     return fail(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
       field + '.completedAt must not be earlier than ' + field + '.reservedAt');
@@ -921,33 +1218,15 @@ function validateExecutionRecord(record: ExecutionRecord, field: string): Valida
     return fail(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY,
       field + '.canceledAt must not be earlier than ' + field + '.reservedAt');
   }
-  // The reserved execution's fields live flat on the record: a valid
-  // action and a well-formed order, exactly like the execution
-  // createExecution received and validated the same way.
-  if (!isValidIntentActionType(record.action)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.action must be a valid IntentActionType');
-  }
-  if (!record.executionContent) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.executionContent must not be null');
-  }
-  const orderErr = validateOrder(record.executionContent);
-  if (orderErr) {
-    return orderErr;
-  }
-  return null;
+  return checkOrderContent(record.executionContent);
 }
 
 /**
- * Validates a payment execution info snapshot: leftAmount is required,
- * the optional figures are checked when present. The presence rules tied
- * to the intent's caps (period figures for periodic intents,
- * leftExecutionCount with a count cap) are checked by the context
- * validator, which knows the intent's constraints.
- * @param info - The execution info snapshot to validate
- * @param field - The field path prefix for error messages
- * @returns A validation failure if invalid, or null if valid
+ * Structure pass for a payment execution info snapshot: closed field set, present safe-integer leftAmount,
+ * safe-integer optional figures. (The snapshot period index may be negative: an activation before the anchor
+ * snapshots the pre-anchor period — activateIntent judges only validUntil.)
  */
-function validatePaymentExecutionInfo(info: PaymentExecutionInfo, field: string): Validation {
+function checkExecutionInfoStructure(info: PaymentExecutionInfo, field: string): Validation {
   if (!info) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + ' must not be null');
   }
@@ -955,15 +1234,26 @@ function validatePaymentExecutionInfo(info: PaymentExecutionInfo, field: string)
   if (fieldsErr) {
     return fieldsErr;
   }
-  // The snapshot period index may be negative: activateIntent judges only
-  // the window's upper bound (validUntil) and permits an instant before
-  // validFrom, so an activation before the anchor snapshots the pre-anchor
-  // period. Record indexes, in contrast, are reserved at
-  // now >= validFrom >= anchorTime and are never negative.
   if (info.periodIndex !== undefined && !isSafeInteger(info.periodIndex)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.periodIndex must be a safe integer when present');
   }
+  if (info.leftPeriodExecutionCount !== undefined && !isSafeInteger(info.leftPeriodExecutionCount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.leftPeriodExecutionCount must be a safe integer when present');
+  }
+  if (info.leftExecutionCount !== undefined && !isSafeInteger(info.leftExecutionCount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      field + '.leftExecutionCount must be a safe integer when present');
+  }
+  if (!isSafeInteger(info.leftAmount)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, field + '.leftAmount must be a safe integer');
+  }
+  return null;
+}
+
+/** Content pass for a payment execution info snapshot: non-negative figures. */
+function checkExecutionInfoContent(info: PaymentExecutionInfo, field: string): Validation {
   if (info.leftPeriodExecutionCount !== undefined && !isNonNegativeInteger(info.leftPeriodExecutionCount)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       field + '.leftPeriodExecutionCount must be a non-negative integer when present');
@@ -979,26 +1269,14 @@ function validatePaymentExecutionInfo(info: PaymentExecutionInfo, field: string)
 }
 
 /**
- * Validates an IntentExecutionContext object structurally: the full
- * authorized intent chain (validateIntentL3), the intentId derivation,
- * a defined lifecycle status, the activation and revocation stamps
- * (activatedTime must be a non-negative integer, revokedTime too when
- * present; no ordering or status-binding check applies to them), every
- * ledger record, and the accounting
- * snapshot — including the cap-tied presence rules: records carry a
- * periodIndex exactly when the intent is periodic, and the snapshot
- * carries its period figures exactly when periodic and
- * leftExecutionCount exactly when the intent has a maxExecutionCount cap.
- * Used both by the codec when deserializing a context (see
- * A4pCodec.deserializeIntentExecutionContext) and by the execution APIs
- * (revoke/create/complete/cancel): the caller's context is untrusted
- * in-memory state whose fields the APIs dereference directly, so a
- * malformed one must surface as a validation failure — an A4pError —
- * instead of a raw TypeError.
- * @param context - The execution context to validate
- * @returns A validation failure if invalid, or null if valid
+ * Structure pass for an IntentExecutionContext — the layer
+ * deserialization runs (see the file header): string version and
+ * intentId, the full authorized chain, a defined status, safe-integer
+ * stamps, an executions array of valid records, a well-shaped snapshot.
+ * @param context - The execution context to check
+ * @returns A validation failure if structurally invalid, or null if valid
  */
-export function validateIntentExecutionContext(context: IntentExecutionContext): Validation {
+export function checkIntentExecutionContextStructure(context: IntentExecutionContext): Validation {
   if (!context) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context must not be null');
   }
@@ -1006,18 +1284,66 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
   if (fieldsErr) {
     return fieldsErr;
   }
+  if (!isString(context.version)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.version must be a string');
+  }
+  if (!isString(context.intentId)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.intentId must be a string');
+  }
+  if (!context.authorizedIntent) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.authorizedIntent must not be null');
+  }
+  const intentErr = checkIntentL3Structure(context.authorizedIntent);
+  if (intentErr) {
+    return intentErr;
+  }
+  if (!isValidIntentExecutionStatus(context.status)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.status must be a valid IntentExecutionStatus');
+  }
+  if (!isSafeInteger(context.activatedTime)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.activatedTime must be a safe integer');
+  }
+  if (context.revokedTime !== undefined && !isSafeInteger(context.revokedTime)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
+      'context.revokedTime must be a safe integer when present');
+  }
+  // The ledger may be empty (nothing reserved yet) but must be an array.
+  if (!Array.isArray(context.executions)) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.executions must be an array');
+  }
+  for (let i = 0; i < context.executions.length; i++) {
+    const recordErr = checkExecutionRecordStructure(context.executions[i], 'context.executions[' + i + ']');
+    if (recordErr) {
+      return recordErr;
+    }
+  }
+  if (!context.executionInfo) {
+    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.executionInfo must not be null');
+  }
+  return checkExecutionInfoStructure(context.executionInfo, 'context.executionInfo');
+}
+
+/**
+ * Content pass for an IntentExecutionContext: non-blank version and
+ * intentId, the authorized chain's content values (checkIntentL3Content —
+ * the structure pass judged only its shape, and the codec restored its
+ * values verbatim; the execution APIs are where they are judged), the
+ * intentId derivation, non-negative stamps, record values,
+ * snapshot figures, and the cap-tied presence rules (records carry a
+ * periodIndex exactly when periodic; the snapshot carries its period
+ * figures exactly when periodic and leftExecutionCount exactly when the
+ * intent has a maxExecutionCount cap).
+ */
+function checkIntentExecutionContextContent(context: IntentExecutionContext): Validation {
   if (!isNonBlankString(context.version)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.version must not be blank');
   }
   if (!isNonBlankString(context.intentId)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.intentId must not be blank');
   }
-  if (!context.authorizedIntent) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.authorizedIntent must not be null');
-  }
-  const intentErr = validateIntentL3(context.authorizedIntent);
-  if (intentErr) {
-    return intentErr;
+  const chainErr = checkIntentL3Content(context.authorizedIntent);
+  if (chainErr) {
+    return chainErr;
   }
   const l1: IntentL1 = context.authorizedIntent.intentL2.intentL1;
   // intentId is derived from the authorized chain at activation; a
@@ -1026,12 +1352,8 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'context.intentId must equal intentL1.intentId of the authorized chain');
   }
-  if (!isValidIntentExecutionStatus(context.status)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.status must be a valid IntentExecutionStatus');
-  }
-  // activatedTime and revokedTime must be non-negative integers (revokedTime
-  // only when present); neither is compared with any other timestamp and
-  // revokedTime is not bound to the status.
+  // Neither stamp is compared with any other timestamp, and revokedTime
+  // is not bound to the status.
   if (!isNonNegativeInteger(context.activatedTime)) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.activatedTime must be a non-negative integer');
   }
@@ -1039,15 +1361,11 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'context.revokedTime must be a non-negative integer when present');
   }
-  // The ledger may be empty (nothing reserved yet) but must be an array.
-  if (!Array.isArray(context.executions)) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.executions must be an array');
-  }
   // The period rule is all-or-nothing (validated with the intent chain),
   // so the anchor alone decides periodicity.
   const periodic: boolean = l1.structuredIntent.constraints.anchorTime !== undefined;
   for (let i = 0; i < context.executions.length; i++) {
-    const recordErr = validateExecutionRecord(context.executions[i], 'context.executions[' + i + ']');
+    const recordErr = checkExecutionRecordContent(context.executions[i], 'context.executions[' + i + ']');
     if (recordErr) {
       return recordErr;
     }
@@ -1060,10 +1378,7 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
         'context.executions[' + i + '].periodIndex must be absent on a non-periodic intent');
     }
   }
-  if (!context.executionInfo) {
-    return fail(A4pErrorCode.A4P_INVALID_PARAMETER, 'context.executionInfo must not be null');
-  }
-  const infoErr = validatePaymentExecutionInfo(context.executionInfo, 'context.executionInfo');
+  const infoErr = checkExecutionInfoContent(context.executionInfo, 'context.executionInfo');
   if (infoErr) {
     return infoErr;
   }
@@ -1077,10 +1392,9 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
       'context.executionInfo.periodIndex and leftPeriodExecutionCount must be absent on a non-periodic intent');
   }
-  // maxExecutionCount is optional: undefined means no count cap. A null
-  // value never reaches here — validatePaymentConstraints (part of the
-  // intent-chain validation above) rejects null; undefined is the only
-  // absent spelling.
+  // A null never reaches here — the structure pass (and, for the intent
+  // chain, checkPaymentConstraintsStructure) rejects it; undefined is
+  // the only absent spelling.
   const countCap: number | undefined = l1.structuredIntent.constraints.maxExecutionCount;
   if (countCap !== undefined && context.executionInfo.leftExecutionCount === undefined) {
     return fail(A4pErrorCode.A4P_INVALID_PARAMETER,
@@ -1091,6 +1405,30 @@ export function validateIntentExecutionContext(context: IntentExecutionContext):
       'context.executionInfo.leftExecutionCount must be absent when the intent carries no maxExecutionCount');
   }
   return null;
+}
+
+/**
+ * Validates an IntentExecutionContext object structurally: the full
+ * authorized intent chain (both the structure and the content layer),
+ * the intentId derivation,
+ * a defined lifecycle status, the activation and revocation stamps
+ * (activatedTime must be a non-negative integer, revokedTime too when
+ * present; no ordering or status-binding check applies to them), every
+ * ledger record, and the accounting
+ * snapshot — including the cap-tied presence rules: records carry a
+ * periodIndex exactly when the intent is periodic, and the snapshot
+ * carries its period figures exactly when periodic and
+ * leftExecutionCount exactly when the intent has a maxExecutionCount cap.
+ * Used by the execution APIs
+ * (revoke/create/complete/cancel): the caller's context is untrusted
+ * in-memory state whose fields the APIs dereference directly, so a
+ * malformed one must surface as a validation failure — an A4pError —
+ * instead of a raw TypeError.
+ * @param context - The execution context to validate
+ * @returns A validation failure if invalid, or null if valid
+ */
+export function validateIntentExecutionContext(context: IntentExecutionContext): Validation {
+  return checkIntentExecutionContextStructure(context) ?? checkIntentExecutionContextContent(context);
 }
 
 /**

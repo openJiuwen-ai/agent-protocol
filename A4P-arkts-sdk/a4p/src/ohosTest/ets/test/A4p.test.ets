@@ -1298,6 +1298,29 @@ export default function a4pTest() {
         });
       });
 
+      it('signIntent_succeeds_whenSigningEnvCarriesNestedNull', 0, () => {
+        // A nested null inside the free-form signingEnv maps is the one
+        // null the APIs tolerate: input validation does not inspect the
+        // map contents, and canonical serialization omits the property —
+        // the null never reaches the signed bytes or the wire form, and
+        // the emitted document parses back unchanged.
+        const lifecycle = createFullLifecycle();
+        const env: SigningEnv = JSON.parse(
+          '{"device":{"model":null,"os":"HarmonyOS"},"app":{"name":"TestApp","version":"1.0.0"}}') as SigningEnv;
+
+        const l3: IntentL3 = A4p.signIntent(lifecycle.l2, new MockVerifier(), env,
+          new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+        const json: string = A4pCodec.serializeIntentL3(l3);
+
+        // The null-valued property is omitted; the rest of the map survives.
+        expect(json.indexOf('"model"')).assertEqual(-1);
+        expect(json.indexOf('"os":"HarmonyOS"')).assertLarger(-1);
+        // The emitted bytes are self-consistent: the document restores and
+        // re-serializes to the same canonical form.
+        const restored: IntentL3 = A4pCodec.deserializeIntentL3(json);
+        expect(A4pCodec.serializeIntentL3(restored)).assertEqual(json);
+      });
+
       it('signIntent_signingEnvIsIndependentOfCallerObject', 0, () => {
         // The signing environment is a deep copy: mutating the caller's
         // env after signing must not leak into the L3.
@@ -1410,7 +1433,7 @@ export default function a4pTest() {
       });
 
       it('activateIntent_fails_whenL3StructurallyInvalid', 0, () => {
-        // A broken chain fails the structural check before verification:
+        // A broken chain fails validation before verification:
         // even a verifier that accepts everything must not activate a
         // malformed snapshot (a non-positive totalMaxAmount would make the
         // amount-quota checks silently pass).
@@ -1654,8 +1677,8 @@ export default function a4pTest() {
       });
 
       it('verifyIntentAuthenticity_fails_whenL3TimestampNegative', 0, () => {
-        // A negative carrier timestamp fails the structural validation
-        // before the L2 signature is looked at.
+        // A negative carrier timestamp fails validation (the content
+        // layer of the full pass) before the L2 signature is looked at.
         const negativeTs = createFullLifecycle();
         negativeTs.l3.timestamp = -1;
 
@@ -3082,10 +3105,8 @@ export default function a4pTest() {
       it('lifecycleApis_failAsA4pError_whenSignerOrVerifierIsNull', 0, () => {
         // A null signer or verifier is an infrastructure failure of the
         // same class as a throwing one — A4P_SIGNING_FAIL /
-        // A4P_VERIFY_FAIL, not A4P_INVALID_PARAMETER — matching the Java
-        // SDK, where the NullPointerException the same call raises is
-        // caught and mapped to those codes. Every signing and verifying
-        // position of every lifecycle API is probed.
+        // A4P_VERIFY_FAIL, not A4P_INVALID_PARAMETER. Every signing and
+        // verifying position of every lifecycle API is probed.
         const lifecycle = createFullLifecycle();
         const nullSigner: Signer = JSON.parse('null') as Signer;
         const nullVerifier: SignatureVerifier = JSON.parse('null') as SignatureVerifier;
@@ -3154,6 +3175,100 @@ export default function a4pTest() {
 
         // The valid context is untouched by the rejected calls.
         expect(lifecycle.ctx.executions.length).assertEqual(0);
+        expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
+      });
+
+      it('executionApis_failAsA4pError_whenContextContentInvalid', 0, () => {
+        // Deserialization judges structure only, so a wire-tampered
+        // context restores fine — the execution APIs reject it with the
+        // code each content rule carries. Each case tampers one wire
+        // property, restores it through the codec, then exercises an API.
+        const lifecycle = createFullLifecycle();
+        const execution = createTestExecution();
+        A4p.createExecution(lifecycle.ctx, execution, FIXED_NOW);
+
+        // intentId derivation (1001).
+        const mismatchedWire: Record<string, Object> =
+          JSON.parse(A4pCodec.serializeIntentExecutionContext(lifecycle.ctx));
+        mismatchedWire['intentId'] = 'mismatched-intent-id';
+        const mismatched: IntentExecutionContext =
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(mismatchedWire));
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.revokeIntent(mismatched, FIXED_NOW);
+        });
+
+        // Periodicity-bound presence (1001). The record is rebuilt
+        // without the key to keep the wire keys in canonical order.
+        const indexLessWire: Record<string, Object> =
+          JSON.parse(A4pCodec.serializeIntentExecutionContext(lifecycle.ctx));
+        const records: Record<string, Object>[] = indexLessWire['executions'] as Record<string, Object>[];
+        const rebuilt: Record<string, Object> = {};
+        const keys: string[] = Object.keys(records[0]);
+        for (let i = 0; i < keys.length; i++) {
+          if (keys[i] !== 'periodIndex') {
+            rebuilt[keys[i]] = records[0][keys[i]];
+          }
+        }
+        records[0] = rebuilt;
+        const indexLess: IntentExecutionContext =
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(indexLessWire));
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.createExecution(indexLess, createTestExecution(), FIXED_NOW);
+        });
+
+        // Converse status binding (1001): a finalization stamp on a
+        // PENDING record is corrupted data; validation runs before the
+        // record lookup, so the executionId need not match.
+        const converseWire: Record<string, Object> =
+          JSON.parse(A4pCodec.serializeIntentExecutionContext(lifecycle.ctx));
+        const converseRecords: Record<string, Object>[] =
+          converseWire['executions'] as Record<string, Object>[];
+        const converseSource: Record<string, Object> = converseRecords[0];
+        converseSource['completedAt'] = 1;
+        // Back into canonical key order, so the order check stays quiet.
+        const stamped: Record<string, Object> = {};
+        const stampedKeys: string[] = Object.keys(converseSource).sort();
+        for (let i = 0; i < stampedKeys.length; i++) {
+          stamped[stampedKeys[i]] = converseSource[stampedKeys[i]];
+        }
+        converseRecords[0] = stamped;
+        const converse: IntentExecutionContext =
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(converseWire));
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.completeExecution(converse, 'any-execution', FIXED_NOW);
+        });
+
+        // Monotonic finalization (3003). Validation runs before the
+        // record lookup, so the executionId need not match.
+        A4p.completeExecution(lifecycle.ctx, execution.id as string, FIXED_NOW);
+        const rewindWire: Record<string, Object> =
+          JSON.parse(A4pCodec.serializeIntentExecutionContext(lifecycle.ctx));
+        const rewindRecords: Record<string, Object>[] = rewindWire['executions'] as Record<string, Object>[];
+        rewindRecords[0]['completedAt'] = (rewindRecords[0]['reservedAt'] as number) - 1;
+        const rewind: IntentExecutionContext =
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(rewindWire));
+        expectThrows(A4pErrorCode.A4P_TIMESTAMP_TOO_EARLY, () => {
+          A4p.completeExecution(rewind, 'any-execution', FIXED_NOW);
+        });
+
+        // Authorized-chain content values (1001): the tampered field is
+        // read by no context-level rule (the structure pass accepts a
+        // blank string), so the 1001 can only originate from the chain
+        // content layer.
+        const chainWire: Record<string, Object> =
+          JSON.parse(A4pCodec.serializeIntentExecutionContext(lifecycle.ctx));
+        const chainL3: Record<string, Object> = chainWire['authorizedIntent'] as Record<string, Object>;
+        const chainL2: Record<string, Object> = chainL3['intentL2'] as Record<string, Object>;
+        const chainL1: Record<string, Object> = chainL2['intentL1'] as Record<string, Object>;
+        chainL1['intentSummary'] = '';
+        const chainBroken: IntentExecutionContext =
+          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(chainWire));
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.revokeIntent(chainBroken, FIXED_NOW);
+        });
+
+        // The valid context is untouched by the rejected calls.
+        expect(lifecycle.ctx.executions.length).assertEqual(1);
         expect(lifecycle.ctx.status).assertEqual(IntentExecutionStatus.ACTIVE);
       });
     });

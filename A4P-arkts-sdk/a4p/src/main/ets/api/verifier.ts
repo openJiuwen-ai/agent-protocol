@@ -29,8 +29,7 @@ import { VerificationResult } from "../models/common"
  *   signature as HS256 and using the public key bytes as the HMAC secret.
  *
  * A verifier that throws — or a null one — fails the calling API with
- * A4P_VERIFY_FAIL (an infrastructure failure, matching the Java SDK,
- * which maps the NullPointerException of the same call to that code);
+ * A4P_VERIFY_FAIL (an infrastructure failure);
  * one that returns no result, a non-boolean `valid`, or a verdict whose
  * `valid` and `code` disagree fails the calling API the same way — the
  * result is checked before it is trusted (see runVerifier in

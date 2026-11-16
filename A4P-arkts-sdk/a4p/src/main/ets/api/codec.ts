@@ -9,8 +9,8 @@ import { a4pThrow } from '../internal/result';
 import { canonicalStringify, deepFreeze } from '../internal/utils';
 import { parseStrictJson } from '../internal/strictJson';
 import {
-  validateIntentL1, validateIntentL2, validateIntentL3, validateIntentExecutionContext,
-  A4pValidationFailure
+  checkIntentL1Structure, checkIntentL2Structure, checkIntentL3Structure,
+  checkIntentExecutionContextStructure, A4pValidationFailure
 } from '../internal/validation';
 
 /**
@@ -22,23 +22,29 @@ import {
  * null input included, since null is invalid data, not an empty document —
  * wrap even a foreign underlying failure (a getter that throws, a cyclic
  * structure exhausting the stack) into the uniform code. Deserialization
- * validates the format only: strict parsing (see parseStrictJson:
+ * validates structure and types only: strict parsing (see parseStrictJson:
  * duplicate keys, keys out of canonical order, explicit nulls,
  * non-canonical number spellings
  * (negative zero included), whitespace, trailing content and malformed
  * literals are rejected instead of being silently last-wins-coalesced by
- * JSON.parse) plus the structural validators, whose closed field sets
- * reject unknown fields at every level. Nothing else is judged: the version is restored
- * as given, and the execution context's ledger, caps and accounting
- * figures are restored verbatim — deserialization returns data, it does
- * not replay the reachability rules the execution APIs enforce on every
- * call, and it passes no version verdict of its own: versions are
- * compared by the chain-facing APIs (issueIntent, signIntent,
- * activateIntent, verifyIntentAuthenticity) and by the execution-class
- * APIs (revokeIntent, createExecution, completeExecution, cancelExecution
- * — each checks the context's own version and its authorized chain on
- * every call), so a restored foreign-version context parses fine but is
- * refused by every operation on it.
+ * JSON.parse) plus the structure-layer validators of internal/validation,
+ * whose closed field sets reject unknown fields at every level and whose
+ * type checks require each field to carry its protocol type. Parameter
+ * values are not judged here: blank, out-of-range
+ * or semantically inconsistent values restore verbatim, and the
+ * lifecycle APIs reject them with A4P_INVALID_PARAMETER (1001) or the
+ * code their rules carry. The version is likewise
+ * restored as given, and the execution context's ledger, caps and
+ * accounting figures are restored verbatim — deserialization returns
+ * data, it does not replay the reachability rules the execution APIs
+ * enforce on every call, and it passes no version verdict of its own:
+ * versions are compared by the chain-facing APIs (issueIntent,
+ * signIntent, activateIntent, verifyIntentAuthenticity) and by the
+ * execution-class APIs (revokeIntent, createExecution,
+ * completeExecution, cancelExecution — each checks the context's own
+ * version and its authorized chain on every call), so a restored
+ * foreign-version context parses fine but is refused by every operation
+ * on it.
  */
 export namespace A4pCodec {
 
@@ -106,7 +112,7 @@ export namespace A4pCodec {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, 'Serialized string is required');
     }
     const obj: IntentL1 = parseStrictly(serialized, 'IntentL1') as IntentL1;
-    const err: A4pValidationFailure | null = validateIntentL1(obj);
+    const err: A4pValidationFailure | null = checkIntentL1Structure(obj);
     if (err) {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, err.detail);
     }
@@ -137,7 +143,7 @@ export namespace A4pCodec {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, 'Serialized string is required');
     }
     const obj: IntentL2 = parseStrictly(serialized, 'IntentL2') as IntentL2;
-    const err: A4pValidationFailure | null = validateIntentL2(obj);
+    const err: A4pValidationFailure | null = checkIntentL2Structure(obj);
     if (err) {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, err.detail);
     }
@@ -168,7 +174,7 @@ export namespace A4pCodec {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, 'Serialized string is required');
     }
     const obj: IntentL3 = parseStrictly(serialized, 'IntentL3') as IntentL3;
-    const err: A4pValidationFailure | null = validateIntentL3(obj);
+    const err: A4pValidationFailure | null = checkIntentL3Structure(obj);
     if (err) {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, err.detail);
     }
@@ -199,7 +205,7 @@ export namespace A4pCodec {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, 'Serialized string is required');
     }
     const obj: IntentExecutionContext = parseStrictly(serialized, 'IntentExecutionContext') as IntentExecutionContext;
-    const shapeErr: A4pValidationFailure | null = validateIntentExecutionContext(obj);
+    const shapeErr: A4pValidationFailure | null = checkIntentExecutionContextStructure(obj);
     if (shapeErr) {
       a4pThrow(A4pErrorCode.A4P_DESERIALIZE_FAIL, shapeErr.detail);
     }

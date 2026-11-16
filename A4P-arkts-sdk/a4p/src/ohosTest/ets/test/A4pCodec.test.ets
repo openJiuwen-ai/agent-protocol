@@ -315,16 +315,17 @@ export default function a4pCodecTest() {
         });
       });
 
-      it('deserialize_fails_whenTimestampIsNegative', 0, () => {
-        // timestamp must be a non-negative integer.
+      it('deserialize_succeeds_whenTimestampIsNegative', 0, () => {
+        // A value defect, not a format one: restored verbatim, rejected
+        // by the chain-facing APIs with 1001.
         const l1 = createL1();
         const serialized = A4pCodec.serializeIntentL1(l1);
         const obj: Record<string, Object> = JSON.parse(serialized);
         obj['timestamp'] = -1;
 
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentL1(JSON.stringify(obj));
-        });
+        const restored = A4pCodec.deserializeIntentL1(JSON.stringify(obj));
+
+        expect(restored.timestamp).assertEqual(-1);
       });
 
       it('deserialize_fails_withoutSign', 0, () => {
@@ -584,10 +585,8 @@ export default function a4pCodecTest() {
         // The canonical form spells each character exactly one way — \",
         // \\, \b, \f, \n, \r, \t, lowercase \u00xx for the remaining
         // control characters below 0x20, and every other character raw —
-        // and the input must be those exact bytes, matching the Java
-        // SDK, which accepts a document only when it equals its own
-        // canonical re-serialization. Any other spelling of a character
-        // is rejected rather than silently re-canonicalized.
+        // and the input must be those exact bytes. Any other spelling of
+        // a character is rejected rather than silently re-canonicalized.
         const l1 = createL1();
         const serialized = A4pCodec.serializeIntentL1(l1);
         const withId = (value: string): string =>
@@ -910,9 +909,8 @@ export default function a4pCodecTest() {
       });
 
       it('serialize_fails_whenNestingExceeds100Levels', 0, () => {
-        // The 100-level nesting limit is shared with the strict parser
-        // and the Java SDK (which enforces it on both directions): a
-        // value may sit at most 100 containers deep. signingEnv.device is
+        // The 100-level nesting limit is shared with the strict parser:
+        // a value may sit at most 100 containers deep. signingEnv.device is
         // a free-form object, so a deep chain there reaches the
         // serializer through a fully validated intent. The device chain
         // sits under two containers (root, signingEnv), so a chain of 98
@@ -974,24 +972,25 @@ export default function a4pCodecTest() {
         });
       });
 
-      it('deserialize_fails_whenTimestampIsNegative', 0, () => {
-        // timestamp must be a non-negative integer.
+      it('deserialize_succeeds_whenTimestampIsNegative', 0, () => {
+        // A value defect, not a format one: restored verbatim, rejected
+        // by the chain-facing APIs with 1001.
         const l3 = createL3();
         const serialized = A4pCodec.serializeIntentL3(l3);
         const obj: Record<string, Object> = JSON.parse(serialized);
         obj['timestamp'] = -1;
 
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentL3(JSON.stringify(obj));
-        });
+        const restored = A4pCodec.deserializeIntentL3(JSON.stringify(obj));
+
+        expect(restored.timestamp).assertEqual(-1);
       });
 
       it('deserialize_fails_whenNestingExceeds100Levels', 0, () => {
         // The parser's side of the 100-level nesting limit (see
-        // serialize_fails_whenNestingExceeds100Levels): the Java SDK
-        // rejects documents nested deeper than 100 levels, so accepting
-        // them here would let the two SDKs disagree about the same
-        // bytes. The device chain sits under two containers (root,
+        // serialize_fails_whenNestingExceeds100Levels): a deeper
+        // document fails deserialization, keeping the round-trip
+        // guarantee that every accepted document re-serializes to the
+        // same bytes. The device chain sits under two containers (root,
         // signingEnv), so a chain of 98 leaves its scalar exactly 100
         // deep and a chain of 99 one past the limit.
         const l3 = createL3();
@@ -1169,17 +1168,6 @@ export default function a4pCodecTest() {
         });
       });
 
-      it('deserialize_fails_whenIntentIdMismatched', 0, () => {
-        const context = createExecutionContext();
-        const serialized = A4pCodec.serializeIntentExecutionContext(context);
-        const obj: Record<string, Object> = JSON.parse(serialized);
-        obj['intentId'] = 'mismatched-intent-id';
-
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
-        });
-      });
-
       it('deserialize_fails_whenStatusIsForeign', 0, () => {
         const context = createExecutionContext();
         const serialized = A4pCodec.serializeIntentExecutionContext(context);
@@ -1240,70 +1228,6 @@ export default function a4pCodecTest() {
         });
       });
 
-      it('deserialize_fails_whenPendingRecordCarriesCompletedAt', 0, () => {
-        const context = createExecutionContext();
-        A4p.createExecution(context, createTestExecution(), Date.now());
-        const serialized = A4pCodec.serializeIntentExecutionContext(context);
-        const obj: Record<string, Object> = JSON.parse(serialized);
-        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
-        executions[0]['completedAt'] = 1;
-        // Back into canonical order, so the order check stays quiet and
-        // the record-shape validation does the rejecting.
-        executions[0] = sortedKeysCopy(executions[0]);
-
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
-        });
-      });
-
-      it('deserialize_fails_whenCompletedAtBeforeReservedAt', 0, () => {
-        // completeExecution/cancelExecution refuse a clock earlier than the
-        // record's reservedAt, so a persisted record violating that
-        // monotonic rule is corrupted data: the record's own timeline is
-        // judged by the format pass, so restore fails with the uniform 5002.
-        const context = createExecutionContextWithLedger();
-        const serialized = A4pCodec.serializeIntentExecutionContext(context);
-        const obj: Record<string, Object> = JSON.parse(serialized);
-        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
-        const reservedAt: number = executions[0]['reservedAt'] as number;
-        executions[0]['completedAt'] = reservedAt - 1;
-
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
-        });
-      });
-
-      it('deserialize_fails_whenPeriodicRecordLacksPeriodIndex', 0, () => {
-        // The default test constraints are periodic, so every record must
-        // carry its period index.
-        const context = createExecutionContext();
-        A4p.createExecution(context, createTestExecution(), Date.now());
-        const serialized = A4pCodec.serializeIntentExecutionContext(context);
-        const obj: Record<string, Object> = JSON.parse(serialized);
-        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
-        executions[0] = withoutKey(executions[0], 'periodIndex');
-
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
-        });
-      });
-
-      it('deserialize_fails_whenNonPeriodicRecordCarriesPeriodIndex', 0, () => {
-        const context = createNonPeriodicExecutionContext();
-        A4p.createExecution(context, createTestExecution(), Date.now());
-        const serialized = A4pCodec.serializeIntentExecutionContext(context);
-        const obj: Record<string, Object> = JSON.parse(serialized);
-        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
-        executions[0]['periodIndex'] = 0;
-        // Back into canonical order, so the order check stays quiet and
-        // the periodicity validation does the rejecting.
-        executions[0] = sortedKeysCopy(executions[0]);
-
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
-        });
-      });
-
       it('deserialize_fails_whenRecordCarriesUnknownField', 0, () => {
         const context = createExecutionContext();
         A4p.createExecution(context, createTestExecution(), Date.now());
@@ -1330,17 +1254,6 @@ export default function a4pCodecTest() {
         });
       });
 
-      it('deserialize_fails_whenPeriodicInfoLacksPeriodFigures', 0, () => {
-        const context = createExecutionContext();
-        const serialized = A4pCodec.serializeIntentExecutionContext(context);
-        const obj: Record<string, Object> = JSON.parse(serialized);
-        obj['executionInfo'] = withoutKey(obj['executionInfo'] as Record<string, Object>, 'periodIndex');
-
-        expectThrows(A4pErrorCode.A4P_DESERIALIZE_FAIL, () => {
-          A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
-        });
-      });
-
       it('roundTrip', 0, () => {
         const original = createExecutionContextWithLedger();
         const serialized = A4pCodec.serializeIntentExecutionContext(original);
@@ -1353,15 +1266,100 @@ export default function a4pCodecTest() {
       });
     });
 
-    // Restore is verbatim: beyond the structural pass above, the
-    // deserializer judges no content — versions, ledger reachability,
-    // caps, statuses and accounting figures are restored as given. The
-    // execution APIs replay the ledger rules on every call, so a
-    // restored context's ledger is judged when used, not when parsed;
-    // versions are never replayed — only the chain-facing APIs compare
-    // them. Each test mutates
-    // exactly one wire property and asserts it round-trips untouched.
+    // Restore is verbatim: beyond the structure pass above, the
+    // deserializer judges no content — versions, values, ledger
+    // reachability, caps, statuses and accounting figures are restored
+    // as given and judged by the lifecycle APIs when the restored
+    // context is used. Each test mutates exactly one wire property and
+    // asserts it round-trips untouched.
     describe('IntentExecutionContextRestoreContent', () => {
+      it('restore_succeeds_whenIntentIdMismatched', 0, () => {
+        // The intentId derivation is content: restored verbatim, rejected
+        // by the execution APIs with 1001 (see
+        // executionApis_failAsA4pError_whenContextContentInvalid).
+        const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContext());
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        obj['intentId'] = 'mismatched-intent-id';
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.intentId).assertEqual('mismatched-intent-id');
+      });
+
+      it('restore_succeeds_whenPendingRecordCarriesCompletedAt', 0, () => {
+        // The converse of the structure pass's status binding is content.
+        const context = createExecutionContext();
+        A4p.createExecution(context, createTestExecution(), Date.now());
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
+        executions[0]['completedAt'] = 1;
+        // Back into canonical order, so the order check stays quiet.
+        executions[0] = sortedKeysCopy(executions[0]);
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.executions[0].completedAt).assertEqual(1);
+      });
+
+      it('restore_succeeds_whenCompletedAtBeforeReservedAt', 0, () => {
+        // Monotonicity is content: restored as given, rejected by the
+        // execution APIs with A4P_TIMESTAMP_TOO_EARLY (3003).
+        const context = createExecutionContextWithLedger();
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
+        const reservedAt: number = executions[0]['reservedAt'] as number;
+        executions[0]['completedAt'] = reservedAt - 1;
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.executions[0].completedAt).assertEqual(reservedAt - 1);
+      });
+
+      it('restore_succeeds_whenPeriodicRecordLacksPeriodIndex', 0, () => {
+        // periodIndex presence is tied to the intent's periodicity — a
+        // content judgment: restored as given, rejected with 1001.
+        const context = createExecutionContext();
+        A4p.createExecution(context, createTestExecution(), Date.now());
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
+        executions[0] = withoutKey(executions[0], 'periodIndex');
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.executions[0].periodIndex).assertUndefined();
+      });
+
+      it('restore_succeeds_whenNonPeriodicRecordCarriesPeriodIndex', 0, () => {
+        // Same periodicity rule, the other direction.
+        const context = createNonPeriodicExecutionContext();
+        A4p.createExecution(context, createTestExecution(), Date.now());
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        const executions: Record<string, Object>[] = obj['executions'] as Record<string, Object>[];
+        executions[0]['periodIndex'] = 0;
+        // Back into canonical order, so the order check stays quiet.
+        executions[0] = sortedKeysCopy(executions[0]);
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.executions[0].periodIndex).assertEqual(0);
+      });
+
+      it('restore_succeeds_whenPeriodicInfoLacksPeriodFigures', 0, () => {
+        // The snapshot's cap-tied presence rules are content too.
+        const context = createExecutionContext();
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const obj: Record<string, Object> = JSON.parse(serialized);
+        obj['executionInfo'] = withoutKey(obj['executionInfo'] as Record<string, Object>, 'periodIndex');
+
+        const restored = A4pCodec.deserializeIntentExecutionContext(JSON.stringify(obj));
+
+        expect(restored.executionInfo.periodIndex).assertUndefined();
+      });
+
       it('restore_succeeds_whenAuthorizedChainVersionForeign', 0, () => {
         const serialized = A4pCodec.serializeIntentExecutionContext(createExecutionContext());
         const obj: Record<string, Object> = JSON.parse(serialized);
