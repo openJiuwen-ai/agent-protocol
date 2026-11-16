@@ -13,6 +13,7 @@ Switching backends changes only ``connect(cfg)``; callers stay unchanged.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from typing import Any
 
 
@@ -197,6 +198,11 @@ def _migrate_legacy_image_table(conn: Any) -> None:
 _KIND_SQLITE = "sqlite"
 _KIND_MEMORY = "memory"
 
+# Seconds sqlite waits for a competing writer before raising "database is
+# locked". The default (5s) is too short when a sweeper and a request race for
+# the write lock; multiple workers/processes share the same file.
+_BUSY_TIMEOUT_SECONDS = 30.0
+
 
 class Backend:
     """Storage backend abstraction.
@@ -211,11 +217,19 @@ class Backend:
     ``args: tuple``); string-concatenating values is forbidden.
     """
 
-    __slots__ = ("kind", "conn")
+    __slots__ = ("kind", "conn", "_lock")
 
     def __init__(self, kind: str, conn: Any) -> None:
         self.kind = kind
         self.conn = conn
+        # A sqlite3.Connection is not safe for concurrent use. ``with conn``
+        # opens/commits a transaction on the *connection*, not on the calling
+        # thread: two threads sharing one connection can read each other's
+        # uncommitted rows, and a rollback in one thread discards writes that
+        # another thread already believes committed. Backend instances are
+        # shared across the FastAPI threadpool, the heartbeat sweeper and the
+        # anti-entropy sweeper, so every statement goes through this lock.
+        self._lock = threading.RLock()
 
     def execute(self, sql: str, args: tuple = ()) -> None:
         """Execute a single write SQL statement.
@@ -223,7 +237,7 @@ class Backend:
         Wraps the statement in ``with conn`` so it becomes its own
         transaction (commit on success / rollback on exception).
         """
-        with self.conn:                       # commit on success / rollback on exception
+        with self._lock, self.conn:  # commit on success / rollback on exception
             self.conn.execute(sql, args)
 
     def query(self, sql: str, args: tuple = ()) -> list[dict]:
@@ -232,8 +246,9 @@ class Backend:
         ``row_factory`` is set to ``sqlite3.Row`` in ``connect``; rows are
         converted to dicts here.
         """
-        cur = self.conn.execute(sql, args)
-        rows = cur.fetchall()
+        with self._lock:
+            cur = self.conn.execute(sql, args)
+            rows = cur.fetchall()
         return [{k: row[k] for k in row.keys()} for row in rows]
 
 
@@ -256,18 +271,20 @@ def connect(cfg: dict) -> Backend:
         if not path:
             raise ValueError("sqlite backend requires cfg['path']")
         # check_same_thread=False: FastAPI runs sync routes in a threadpool;
-        # the connection is created in the warmup thread and reused by
-        # worker threads. SQLite-level concurrency is serialized via the
-        # GIL + the default busy_timeout; cross-thread sharing is safe as
-        # long as we don't concurrently mutate (the registry's CRUD is
-        # short-lived and the sweeper is the only background writer).
-        conn = sqlite3.connect(path, check_same_thread=False)
+        # the connection is created in the warmup thread and reused by worker
+        # threads. Concurrent use is serialised by Backend._lock, and the
+        # busy timeout covers writers in other processes.
+        conn = sqlite3.connect(
+            path, check_same_thread=False, timeout=_BUSY_TIMEOUT_SECONDS
+        )
         conn.row_factory = sqlite3.Row
         return Backend(kind=_KIND_SQLITE, conn=conn)
     if kind == _KIND_MEMORY:
         # check_same_thread=False: FastAPI runs sync routes in a threadpool;
         # the in-memory connection must be shareable across those threads.
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn = sqlite3.connect(
+            ":memory:", check_same_thread=False, timeout=_BUSY_TIMEOUT_SECONDS
+        )
         conn.row_factory = sqlite3.Row
         return Backend(kind=_KIND_MEMORY, conn=conn)
     raise ValueError(f"unknown backend kind: {kind!r}")
