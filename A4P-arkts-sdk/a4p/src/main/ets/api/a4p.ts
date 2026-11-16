@@ -46,9 +46,7 @@ function raise(err: A4pValidationFailure | null): void {
  * returning no result at all, a non-boolean `valid`, or a self-contradictory
  * verdict (`valid` true with a non-success code, or vice versa) is reported
  * the same way. A null verifier is an infrastructure failure of the same
- * class as a throwing one — A4P_VERIFY_FAIL, not A4P_INVALID_PARAMETER —
- * matching the Java SDK, where the NullPointerException the same call
- * raises is caught and mapped to that code.
+ * class as a throwing one — A4P_VERIFY_FAIL, not A4P_INVALID_PARAMETER.
  * @param verifier - The verifier to invoke
  * @param data - The signed bytes to verify
  * @param signature - The signature information to check
@@ -126,9 +124,7 @@ function verifyOrThrow(verifier: SignatureVerifier, data: Uint8Array, signature:
  * fail at the far end of the chain (every downstream validation rejects
  * it), so the failure is surfaced here instead. A null signer is an
  * infrastructure failure of the same class as a throwing one —
- * A4P_SIGNING_FAIL, not A4P_INVALID_PARAMETER — matching the Java SDK,
- * where the NullPointerException the same call raises is caught and
- * mapped to that code.
+ * A4P_SIGNING_FAIL, not A4P_INVALID_PARAMETER.
  * @param signer - The signer to invoke
  * @param data - The bytes to sign
  * @param who - What is being signed (for the logged detail)

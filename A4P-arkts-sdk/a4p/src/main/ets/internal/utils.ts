@@ -207,16 +207,16 @@ export function decodeUtf8(bytes: Uint8Array): string {
 /**
  * Serializes a value to canonical JSON: sorted keys, no whitespace,
  * integers only, undefined property values omitted — a null property is
- * omitted too, as a last-resort fallback (the input validators reject
- * null, and undefined is the only absent spelling; no "key":null pair —
- * bytes the protocol neither produces nor accepts — is ever emitted). A
+ * omitted too (a last-resort fallback for typed protocol fields, whose
+ * validators reject null; the free-form signingEnv values tolerate null),
+ * so no "key":null pair — bytes the protocol neither produces nor
+ * accepts — is ever emitted. A
  * null root or null array item has no acceptable spelling and fails
  * instead: the strict parser rejects explicit nulls at every value
  * position.
  * A value may sit at most MAX_JSON_DEPTH containers deep — the same
- * 100-level limit the strict parser and the Java SDK enforce, so every
- * serialization this SDK emits is one its own parser accepts back and
- * the Java SDK can reproduce.
+ * 100-level limit the strict parser enforces, so every
+ * serialization this SDK emits is one its own parser accepts back.
  * @param value - The value to serialize (plain objects, arrays, primitives)
  * @returns The canonical JSON string
  * @throws A4pError with A4P_SERIALIZE_FAIL on non-plain objects, non-safe integers, non-finite numbers, null/undefined roots and array items, values with no JSON spelling (bigint, function, symbol), or nesting deeper than MAX_JSON_DEPTH
@@ -283,9 +283,9 @@ function canonicalStringifyAt(value: Object, depth: number): string {
     for (let i = 0; i < keys.length; i++) {
       const k: string = keys[i];
       const v: Object = (value as Record<string, Object>)[k];
-      // Null is omitted as a last-resort fallback (the input validators
-      // reject null; undefined is the only absent spelling), never
-      // rendered as "key":null. Array items are values, not optional
+      // Null is omitted — a last-resort fallback for typed fields (whose
+      // validators reject it; the free-form signingEnv values tolerate
+      // null) — never rendered as "key":null. Array items are values, not optional
       // fields — a null item reaches the recursive call and fails there,
       // symmetric with the parser's "[null]" rejection.
       if (v === undefined || v === null) {

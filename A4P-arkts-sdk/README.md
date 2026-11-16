@@ -113,27 +113,32 @@ spellings (the canonical form spells each character exactly one way — `\"`, `\
 below 0x20, every other character raw — so `\/`, a `\uXXXX` escape of a character it
 writes raw, astral characters included: an escaped surrogate pair is rejected, not
 combined, a `\uXXXX` spelling of one of the five short escapes, and uppercase hex
-digits are all rejected, matching the Java SDK, which accepts a document only when it
-equals its own canonical re-serialization), documents nested deeper than 100 levels
-(the limit the Java SDK enforces in both directions), whitespace (the
+digits are all rejected — the input must be exactly the canonical serialization),
+documents nested deeper than 100 levels, whitespace (the
 canonical form carries none — the input must be the exact bytes the serializer emits,
 so padded or pretty-printed documents fail), trailing content and malformed literals
-fail with `A4P_DESERIALIZE_FAIL`. The structural pass checks closed field sets — an unknown field, at any level of the typed objects, is rejected —
-and any rejection (a missing input, a parse rejection or a structural one) fails with
+fail with `A4P_DESERIALIZE_FAIL`. The structure pass checks closed field sets — an unknown field, at any level of the typed objects, is rejected —
+plus required-field presence, per-field types (strings, protocol numbers as safe
+integers, arrays) and enum membership (`action`, `alg`, the record and lifecycle
+statuses), and any rejection (a missing input, a parse rejection or a structural one)
+fails with
 the uniform `A4P_DESERIALIZE_FAIL` (5002): a document that does not parse or hold the
 protocol's shape is a deserialization failure, whatever specific defect it carries
-(the specific cause is recorded via hilog). It checks: the authorized L3 chain, the
-`intentId` derivation, the `activatedTime`/`revokedTime` stamps (validated as
-non-negative integers, with no ordering or status-binding check), every
-ledger record (status-bound finalization timestamps never preceding `reservedAt`,
-a well-formed flat `action`/`executionContent`, `periodIndex` presence matching the intent's periodicity)
-and the accounting snapshot (period figures and `leftExecutionCount` present exactly
-when their caps apply). The format is all deserialization judges: the versions are
-restored as given, and the ledger's content — windows, period indexes, id uniqueness,
-parameter consistency with the signed snapshot, the accumulated caps, the status and
-the accounting figures — is restored verbatim. The execution APIs replay the ledger
-rules on every call, so a restored context's ledger is judged when used, not when
-parsed. Deserialization passes no version verdict of its own: versions are compared
+(the specific cause is recorded via hilog). It checks, structurally: the authorized L3
+chain, string `intentId`/`version` fields, safe-integer stamps, every
+ledger record (a defined status and action, a well-shaped flat
+`action`/`executionContent`, the status-bound finalization *presence* — a COMPLETED
+record carries `completedAt`, a CANCELED one `canceledAt`) and the accounting
+snapshot's required figures. Structure and types are all deserialization judges —
+parameter values are not: versions, blank strings,
+out-of-range amounts and timestamps, the `intentId` derivation, monotonic and
+status-bound finalization stamps, `periodIndex` presence matching the intent's
+periodicity, the cap-tied snapshot figures and the whole ledger content are restored
+verbatim. The lifecycle APIs validate structure *and* content on every call (an
+invalid parameter surfaces as `A4P_INVALID_PARAMETER`, 1001, or the code its rule
+carries — e.g. `A4P_TIMESTAMP_TOO_EARLY`, 3003, for a finalization preceding its
+reservation), so a restored context's ledger is judged when used, not when parsed.
+Deserialization passes no version verdict of its own: versions are compared
 by the chain-facing APIs — `issueIntent`, `signIntent`, `activateIntent`,
 `verifyIntentAuthenticity` — and by the execution-class APIs (`revokeIntent`,
 `createExecution`, `completeExecution`, `cancelExecution` — each checks the
@@ -141,13 +146,15 @@ context's own version and its authorized chain on every call), so a restored
 context of a foreign version parses fine but is refused by every operation on it.
 Callers wanting signature checks run
 `verifyIntentAuthenticity` after the restore — its verdict also rejects unsupported
-L2/L1 versions. Finally the authorization snapshot is re-frozen.
+L3/L2/L1 versions. Finally the authorization snapshot is re-frozen.
 
 Optional fields are `undefined`; absent optional fields are omitted from signed JSON.
-A `null` value is invalid input — every API rejects it with `A4P_INVALID_PARAMETER`;
-undefined is the only absent spelling — and the serializer omits a null property
-only as a last-resort fallback, so the
-canonical form never carries a `"key":null` pair. Null array items (and a null root)
+A `null` value is invalid input — every lifecycle and model API (every entry point
+of the `A4p` namespace) rejects it with `A4P_INVALID_PARAMETER` (1001). The one
+exception is nested: a null value inside the free-form `signingEnv.device`/
+`signingEnv.app` maps is not rejected — input validation does not inspect the map
+contents, and canonical serialization silently omits the property, so the null
+never reaches the signed bytes or the wire form. Null array items (and a null root)
 have no acceptable spelling: serialization fails with `A4P_SERIALIZE_FAIL`, symmetric
 with the strict parser's rejection of explicit nulls at every value position.
 Monetary amounts are positive integers in the application's agreed minor unit. All
@@ -157,7 +164,7 @@ serializes as `0`. Values handed to the SDK must be plain
 objects (object literals), not class instances — canonical serialization rejects class
 instances with `A4P_SERIALIZE_FAIL`. A value may sit at most 100 containers deep:
 canonical serialization rejects deeper values with `A4P_SERIALIZE_FAIL`, the same
-limit the strict parser and the Java SDK enforce, so every serialization this SDK
+limit the strict parser enforces, so every serialization this SDK
 emits is one its own parser accepts back.
 
 Lifecycle and execution functions all take a required explicit clock (`now`, epoch
@@ -168,7 +175,8 @@ derive `now` from a trusted clock, never from a client-provided timestamp. Order
 timestamps are recorded, not evaluated: quota periods and validity are judged against
 `now`.
 
-Required strings must be non-blank (JavaScript `trim()` whitespace). A product needs a
+The parameter-value rules the lifecycle APIs enforce (deserialization restores values
+verbatim — see above): required strings must be non-blank (JavaScript `trim()` whitespace). A product needs a
 non-blank seller id and at least one non-blank `spuId`/`skuId`; seller id + spuId +
 skuId is the whitelist matching key, and a product may appear at most once per group and
 in at most one group. A period rule requires all of `anchorTime`, `periodSeconds` and
@@ -217,8 +225,8 @@ Callers branch on the numeric `code`; the message is a fixed diagnostic text per
 
 `2001` and `2002` also cover the crypto boundary: a null `Signer` or
 `SignatureVerifier`, or one that throws, is an infrastructure failure and is mapped to
-these codes (`A4P_SIGNING_FAIL` / `A4P_VERIFY_FAIL`) by the SDK — the same mapping the
-Java SDK applies to the equivalent failure — so raw exceptions never leak
+these codes (`A4P_SIGNING_FAIL` / `A4P_VERIFY_FAIL`) by the SDK, so raw exceptions
+never leak
 through the lifecycle APIs. A `SignatureVerifier` that returns nothing or a
 self-contradictory result (`valid` true with a non-success code, or `valid` false with
 code `0`) is likewise mapped to `2002`. A `Signer` that returns nothing or a malformed

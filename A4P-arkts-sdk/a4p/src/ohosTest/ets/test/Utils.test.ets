@@ -388,8 +388,8 @@ export default function utilsTest() {
 
       it('fails_whenNestingExceeds100Levels', 0, () => {
         // A value may sit at most 100 containers deep — the same limit
-        // the strict parser (strictJson.ts) and the Java SDK enforce, so
-        // every serialization this SDK emits is one its own parser
+        // the strict parser (strictJson.ts) enforces, so every
+        // serialization this SDK emits is one its own parser
         // accepts back. The scalar inside nestedChainObject(n) sits n
         // containers deep: 100 is the boundary, 101 one past it.
         expect(canonicalStringify(nestedChainObject(100) as Object).length)

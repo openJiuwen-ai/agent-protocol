@@ -5,7 +5,7 @@
 # the field names kept below are signature-bearing bytes. A consuming app
 # that enables -enable-property-obfuscation without these keeps renames
 # the SDK's properties and produces JSON that no other A4P implementation
-# (Java SDK, server) can parse or verify, while responses it receives
+# (the A4P server included) can parse or verify, while responses it receives
 # fail to parse against renamed keys.
 #
 # This file ships with the HAR (merged into the consuming app's rules
