@@ -64,11 +64,36 @@ def test_dev_environments_opt_in(monkeypatch: pytest.MonkeyPatch, env_value: str
     assert _key_bytes() == _DEV_DERIVED_SEED
 
 
+@pytest.mark.parametrize("falsy", ["0", "false", "no", "off", "2", "", " "])
+def test_opt_in_falsy_values_do_not_enable_the_built_in_key(
+    monkeypatch: pytest.MonkeyPatch, falsy: str
+) -> None:
+    """``A4P_ALLOW_DEV_KEYS=0`` 必须是关闭：真值判断会让公开私钥静默复活。"""
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv("A4P_ALLOW_DEV_KEYS", falsy)
+
+    assert dev_signing_keys_allowed() is False
+    with pytest.raises(RuntimeError, match="refusing to fall back"):
+        _key_bytes()
+
+
+@pytest.mark.parametrize("truthy", ["1", "true", "TRUE", " yes ", "on"])
+def test_opt_in_truthy_values_enable_the_built_in_key(
+    monkeypatch: pytest.MonkeyPatch, truthy: str
+) -> None:
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv("A4P_ALLOW_DEV_KEYS", truthy)
+
+    assert _key_bytes() == _DEV_DERIVED_SEED
+
+
 def test_production_rejects_even_with_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_switches(monkeypatch)
     monkeypatch.setenv("A4P_ENV", "production")
     monkeypatch.setenv("A4P_ALLOW_DEV_KEYS", "1")
 
+    # 语义独立：不依赖调用方先查 is_production_environment()。
+    assert dev_signing_keys_allowed() is False
     with pytest.raises(RuntimeError, match="production mode"):
         _key_bytes()
 

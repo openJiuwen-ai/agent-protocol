@@ -54,7 +54,15 @@ def dev_signing_keys_allowed() -> bool:
     Opting in requires either ``A4P_ALLOW_DEV_KEYS=1`` or an explicit
     non-production environment (``A4P_ENV`` / ``APP_ENV`` / ``ENV`` /
     ``PYTHON_ENV`` set to dev, development, local, test, testing or ci).
+
+    Production always returns False, even with the opt-in set: the answer must
+    not depend on the caller checking ``is_production_environment()`` first.
+    The opt-in variable is compared against an explicit truthy set, so
+    ``A4P_ALLOW_DEV_KEYS=0`` / ``false`` / ``off`` cannot accidentally enable
+    the public built-in key.
     """
+    if is_production_environment():
+        return False
     if (os.getenv(_DEV_KEY_OPT_IN_VAR) or "").strip().lower() in _DEV_KEY_OPT_IN_VALUES:
         return True
     for env_name in ("A4P_ENV", "APP_ENV", "ENV", "PYTHON_ENV"):
