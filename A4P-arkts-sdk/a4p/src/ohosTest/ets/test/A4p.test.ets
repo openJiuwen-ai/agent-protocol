@@ -523,7 +523,7 @@ export default function a4pTest() {
 
         const l1 = A4p.createIntent(request, new MockSigner(), Date.now());
 
-        expect(l1.intentId).assertEqual('test-intent-001');
+        expect(l1.intentId).assertEqual('test-intent-0011');
       });
 
       it('createIntent_fails_whenGroupWhiteListHasDuplicateProduct', 0, () => {

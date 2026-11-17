@@ -239,7 +239,7 @@ hilog 记录）。取值来自 `A4pErrorCode` 枚举。`0` 表示成功，其他
 - `verifyIntentAuthenticity` 对整条 L3 链做结构校验（含 L3 自身的 `sign`、`signingEnv`
   与 `version`——链上的时间戳从不参与判定），要求每一层（L3、L2、L1）
   都是协议版本——绝不背书混合版本的链——并验证服务端的 L2 签名，不校验用户签名，也不
-  依赖任何 context 状态。
+  依赖任何 context 状态。    
 
 账本位于内存中。接入方（意图中心）必须在以 `intentId` 加锁的数据库事务中持久化
 context，防止同一个 `intentId` 被重放，并把密钥与身份绑定。
