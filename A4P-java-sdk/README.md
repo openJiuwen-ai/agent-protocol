@@ -24,6 +24,8 @@ mvn test
 mvn package
 ```
 
+Update `revision` in `parent-pom.xml` when releasing a new version. The SDK and examples inherit that version, and the examples use it for their SDK dependency. `mvn install` and `mvn deploy` publish a resolved SDK POM that consumers can use without the source parent POM.
+
 ### Generate English API documentation
 
 From the repository root, run:
@@ -37,7 +39,7 @@ A full JDK 17+ (including `javadoc`) and Maven 3.9+ are required; the first run 
 Generated pages cover the public API (including nested types), excluding tests and the standalone examples module.
 Missing comments do not prevent the build; malformed Javadoc or broken references cause generation to fail.
 
-`mvn package` automatically generates and attaches the English `target/a4p-java-sdk-0.1.0-javadoc.jar`.
+`mvn package` automatically generates and attaches the English `target/a4p-java-sdk-<version>-javadoc.jar`.
 To run tests, package the SDK, and generate HTML documentation together:
 
 ```sh
@@ -61,9 +63,9 @@ bash A4P-java-sdk/scripts/build.sh --help
 ```
 
 - `build` runs `clean package` with `-Dmaven.test.skip=true`, skipping both compilation and execution of test code.
-  The artifact is `A4P-java-sdk/target/a4p-java-sdk-0.1.0.jar`.
-- `ut` runs `clean test`, requires tests to be present, and returns a failure if tests fail. It does not package a JAR;
-  Surefire test reports are located at `A4P-java-sdk/target/surefire-reports/`.
+  The artifact is `A4P-java-sdk/target/a4p-java-sdk-<version>.jar`.
+- `ut` runs the SDK tests, installs the matching SDK JAR locally, and runs the example tests. It fails if tests are
+  missing or fail. Each module writes Surefire reports to its own `target/surefire-reports/` directory.
 - `docs` generates documentation using Javadoc.
 
 The `build` and `ut` modes clean `target/` first; `docs` does not. All modes return Maven's exit code.
@@ -105,23 +107,23 @@ report links in `ut.json`. The script only generates local reports; CI must uplo
 
 ### Build dependencies
 
-The artifact coordinates are `io.openjiuwen:a4p-java-sdk:0.1.0`. Jackson handles JSON; JUnit 5 is used only for testing. No web framework is required.
+Jackson handles JSON; JUnit 5 is used only for testing. No web framework is required.
 
 `jackson-databind` (2.20.1 here) is the only runtime dependency; JUnit 5 has `test` scope.
 
-## Run the example program
-
-The example program depends on the external Java SDK:
+To use the SDK in your own Maven project, add this dependency and set `version` to the SDK release you want to use:
 
 ```xml
 <dependency>
   <groupId>io.openjiuwen</groupId>
   <artifactId>a4p-java-sdk</artifactId>
-  <version>0.1.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
-First run `mvn -f A4P-java-sdk/pom.xml install` to build the SDK, then run `io.openjiuwen.a4p.examples.PaymentExample` from the standalone examples module:
+## Run the example program
+
+The repository's examples use `${project.version}` to select the SDK version inherited from `parent-pom.xml`. From the repository root, install the matching SDK with `mvn -f A4P-java-sdk/pom.xml install`, then run `io.openjiuwen.a4p.examples.PaymentExample`:
 
 ```sh
 mvn -f A4P-java-sdk/examples/pom.xml compile org.codehaus.mojo:exec-maven-plugin:3.6.3:java "-Dexec.mainClass=io.openjiuwen.a4p.examples.PaymentExample"
@@ -198,7 +200,7 @@ unknown values map to `A4P_INTERNAL_ERROR` (cast the `long` returned by `code()`
 ## Version and compatibility
 
 - Current protocol version: `1.0` (`A4p.PROTOCOL_VERSION`)
-- Java SDK build version: `0.1.0`
+- The current Java SDK version is `0.3.0`, as set by `revision` in [parent-pom.xml](parent-pom.xml).
 
 ## More documentation
 
