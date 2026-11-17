@@ -39,9 +39,9 @@ REMOVED_SKILLS_DIR = "removed_skills"
 # SKILL.md frontmatter (uploaded as a ZIP) or the ``name`` field of a service
 # update. It becomes a directory under ``<dataset>/skills/``, so an unvalidated
 # ``..`` makes ``shutil.rmtree(<dataset>/skills/..)`` delete the whole dataset.
-# The ZIP entry paths are already zip-slip guarded; the frontmatter was not.
+# The ZIP entry paths are guarded separately in ``_validate_zip_entry``.
 # ---------------------------------------------------------------------------
-_MAX_SKILL_NAME_LEN = 200
+_MAX_SKILL_NAME_BYTES = 200
 _WINDOWS_RESERVED_NAMES = {
     "con", "prn", "aux", "nul",
     *{f"com{i}" for i in range(1, 10)},
@@ -50,23 +50,64 @@ _WINDOWS_RESERVED_NAMES = {
 
 
 def validate_skill_name(name: str) -> str:
-    """Return ``name`` if it is a safe skill directory name, else raise ValueError."""
+    """Return ``name`` if it is a safe skill directory name, else raise ValueError.
+
+    Rules that only matter on Windows (reserved device names, ``:``, leading /
+    trailing whitespace, trailing dot) are enforced on Windows only: on POSIX
+    those names are legal and skills created by older versions must stay
+    readable and deletable. Control characters are rejected everywhere — they
+    would desync the folder name from the frontmatter it was parsed from.
+    """
     if not isinstance(name, str) or not name:
         raise ValueError("skill name must be a non-empty string")
     if name in (".", ".."):
         raise ValueError(f"invalid skill name: {name!r}")
-    if len(name) > _MAX_SKILL_NAME_LEN:
-        raise ValueError(f"invalid skill name: too long ({len(name)} > {_MAX_SKILL_NAME_LEN})")
-    if name.strip() != name:
-        raise ValueError(f"invalid skill name: leading/trailing whitespace: {name!r}")
+    if len(name.encode("utf-8")) > _MAX_SKILL_NAME_BYTES:
+        raise ValueError(
+            f"invalid skill name: too long ({len(name.encode('utf-8'))} bytes > "
+            f"{_MAX_SKILL_NAME_BYTES})"
+        )
     for ch in ("/", "\\", "\x00"):
         if ch in name:
             raise ValueError(f"invalid skill name: path separator or NUL in {name!r}")
-    if ":" in name:
-        raise ValueError(f"invalid skill name: ':' is not allowed in {name!r}")
-    if name.split(".")[0].lower() in _WINDOWS_RESERVED_NAMES:
-        raise ValueError(f"invalid skill name: {name!r} is a reserved device name")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        raise ValueError(f"invalid skill name: control character in {name!r}")
+    if os.name == "nt":
+        if name.strip() != name:
+            raise ValueError(f"invalid skill name: leading/trailing whitespace: {name!r}")
+        if ":" in name:
+            raise ValueError(f"invalid skill name: ':' is not allowed in {name!r}")
+        if name != name.rstrip(" ."):
+            raise ValueError(
+                f"invalid skill name: trailing dot/space aliases another directory: {name!r}"
+            )
+        if name.split(".")[0].lower() in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"invalid skill name: {name!r} is a reserved device name")
     return name
+
+
+def _validate_zip_entry(entry_name: str) -> None:
+    """Raise ValueError for a ZIP entry that could escape the extraction root.
+
+    ZIP entry names are POSIX-style by specification, whatever the extracting
+    host, so they are parsed as POSIX here and every component is checked. A
+    Windows drive prefix (``C:``) and a backslash are not POSIX absolute paths
+    but *are* absolute / a separator once extracted on Windows, so both are
+    rejected explicitly instead of relying on the host separator.
+    """
+    if not entry_name:
+        raise ValueError("Unsafe path in ZIP: empty entry name")
+    if "\x00" in entry_name:
+        raise ValueError(f"Unsafe path in ZIP: NUL in {entry_name!r}")
+    if "\\" in entry_name:
+        raise ValueError(f"Unsafe path in ZIP: backslash in {entry_name!r}")
+    if entry_name.startswith("/"):
+        raise ValueError(f"Unsafe path in ZIP: absolute path {entry_name!r}")
+    if re.match(r"^[A-Za-z]:", entry_name):
+        raise ValueError(f"Unsafe path in ZIP: drive prefix in {entry_name!r}")
+    for part in entry_name.split("/"):
+        if part == "..":
+            raise ValueError(f"Unsafe path in ZIP: parent reference in {entry_name!r}")
 
 
 
@@ -177,7 +218,14 @@ class RegistryStore:
                 continue
             try:
                 meta = parse_skill_md(skill_md)
-                name = meta["name"]
+                name = validate_skill_name(meta["name"])
+                if name != child.name:
+                    # A frontmatter name that differs from the folder name would
+                    # make skill_path / get_skill_zip address a different
+                    # directory than the one on disk. Treat it as corrupt data.
+                    raise ValueError(
+                        f"frontmatter name {name!r} does not match folder {child.name!r}"
+                    )
                 skill_data = SkillData(
                     name=name,
                     description=meta["description"],
@@ -198,10 +246,11 @@ class RegistryStore:
     def save_skill_zip(self, zip_bytes: bytes) -> SkillData:
         """Extract a skill ZIP, validate SKILL.md, save to skills/{name}/. Returns SkillData."""
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            # Security: reject paths with .. or absolute paths
+            # Security: every entry must be a relative POSIX path without any
+            # parent reference, backslash, drive prefix or NUL — see
+            # _validate_zip_entry for why each of those is needed.
             for info in zf.infolist():
-                if info.filename.startswith("/") or ".." in info.filename:
-                    raise ValueError(f"Unsafe path in ZIP: {info.filename}")
+                _validate_zip_entry(info.filename)
 
             # Find SKILL.md — at root or inside a single top-level directory
             names = zf.namelist()
@@ -231,6 +280,7 @@ class RegistryStore:
             if target_dir.exists():
                 self._safe_rmtree(target_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
+            target_root = target_dir.resolve()
 
             for info in zf.infolist():
                 if info.is_dir():
@@ -242,6 +292,14 @@ class RegistryStore:
                 if not rel_path:
                     continue
                 dest = target_dir / rel_path
+                # Defence in depth: even with the entry checks above, verify the
+                # resolved destination is still inside the skill directory
+                # before touching the filesystem.
+                resolved = dest.resolve()
+                if resolved == target_root or target_root not in resolved.parents:
+                    raise ValueError(
+                        f"Unsafe path in ZIP: {info.filename!r} escapes the skill directory"
+                    )
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(dest, "wb") as dst:
                     dst.write(src.read())
@@ -320,8 +378,14 @@ class RegistryStore:
             f.write(new_content)
 
     def get_skill_zip(self, name: str) -> bytes:
-        """Pack a skill folder into an in-memory ZIP. Raises FileNotFoundError if missing."""
-        skill_dir = self._dir / SKILLS_DIR / name
+        """Pack a skill folder into an in-memory ZIP. Raises FileNotFoundError if missing.
+
+        Goes through ``_skill_dir`` like every write path: ``..`` would
+        otherwise resolve to the whole dataset directory and pack
+        ``service.json`` / ``api_config.json`` / ``auth_config.json`` into the
+        response.
+        """
+        skill_dir = self._skill_dir(name)
         if not skill_dir.is_dir():
             raise FileNotFoundError(f"Skill folder not found: {name}")
         buf = io.BytesIO()

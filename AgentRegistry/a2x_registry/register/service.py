@@ -379,10 +379,17 @@ class RegistryService:
                 return SkillResponse(name=name, dataset=dataset, status="not_found")
             if caller is not None:
                 self._assert_owner(ds[service_id], caller)
-            del ds[service_id]
 
+        # Delete on disk *before* dropping the in-memory entry: name validation
+        # (or an IO error) must not leave the registry claiming the skill is
+        # gone while the folder and service.json still list it. A ValueError
+        # here surfaces as 400 and leaves every layer untouched.
         store = self._get_store(dataset)
         store.remove_skill(name)
+
+        with self._lock:
+            self._entries.get(dataset, {}).pop(service_id, None)
+
         self._regenerate_output(dataset)
         self._mark_taxonomy_stale(dataset)
         self._emit_mutation(dataset, service_id, "deregister", None)
