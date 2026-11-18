@@ -23,6 +23,9 @@ struct HttpServerManagerConfig {
     size_t ioThreadNum{0}; // Number of IO threads.
     TlsConfig tlsConfig{};
     RouteMap routeMap;
+    unsigned int connectionTimeoutSeconds{DEFAULT_CONNECTION_TIMEOUT_SECONDS}; // 0 disables idle reclamation.
+    unsigned int connectionSweepIntervalSeconds{DEFAULT_CONNECTION_SWEEP_INTERVAL_SECONDS};
+    unsigned int requestTimeoutSeconds{DEFAULT_REQUEST_TIMEOUT_SECONDS}; // 0 disables the request budget.
 };
 
 /**

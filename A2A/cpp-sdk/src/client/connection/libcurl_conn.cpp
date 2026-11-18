@@ -66,6 +66,15 @@ int CurlErrorCode(CURLcode result)
         case CURLE_COULDNT_RESOLVE_HOST:
         case CURLE_COULDNT_CONNECT:
         case CURLE_SSL_CONNECT_ERROR:
+        // The connection failed to carry a response rather than carrying a bad one: the peer
+        // closed it before sending anything (GOT_NOTHING, e.g. a server reclaiming the
+        // connection while the request was still being served), cut it off mid-body or
+        // mid-stream (PARTIAL_FILE), or the socket itself failed (SEND_ERROR / RECV_ERROR).
+        // None of these leave anything to parse, so report them as transport failures.
+        case CURLE_GOT_NOTHING:
+        case CURLE_PARTIAL_FILE:
+        case CURLE_SEND_ERROR:
+        case CURLE_RECV_ERROR:
             return static_cast<int>(A2AErrorCode::A2A_TRANSPORT_EXCEPTION);
         default:
             return 0;

@@ -9,15 +9,14 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <vector>
 #include <memory>
-#include <mutex>
 
 #include "http_common.h"
 #include "http_server.h"
 #include "http_server_manager.h"
 #include "server/http_server_builder.h"
 #include "server_transport.h"
+#include "worker_thread_registry.h"
 
 namespace A2A::Transport {
 
@@ -80,8 +79,10 @@ private:
     std::unique_ptr<Server::HttpServerManager> httpServerMgr_{};
     Server::HttpConfig config_;
     std::thread listenThread_;
-    std::vector<std::thread> workerThreads_;
-    mutable std::mutex workerThreadsMutex_;
+    // Handler bodies run on their own tracked threads so the IO thread is not blocked for the
+    // whole (potentially minutes-long) response. Finished workers are joined and removed by
+    // the next request and by the destructor - never detached, they capture this and handler_.
+    WorkerThreadRegistry workerRegistry_;
 
     ServerTransportRpcHandler handler_;
     ServerTransportCardHandler handlerCard_;
