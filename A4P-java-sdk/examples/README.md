@@ -3,7 +3,9 @@
 This is a separate Maven artifact. `Rsa3072` and `PaymentExample` live in
 `io.openjiuwen.a4p.examples` and are not included in the A4P Java SDK JAR.
 
-From the repository root:
+The examples inherit the SDK version from `../parent-pom.xml` and use that
+version for the SDK dependency. Install the matching SDK before running the
+examples. Run these commands from the repository root:
 
 ```sh
 mvn -f A4P-java-sdk/pom.xml install

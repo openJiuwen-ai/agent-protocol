@@ -32,7 +32,7 @@ The SDK provides Ed25519-signed authorization objects, Ed25519 and WebAuthn/pass
 
 ### Payment-intent authorization with A4P Java
 
-The A4P Java SDK is currently released as SDK version `0.1.0` and implements the payment-intent protocol with wire-format version `1.0` with an L1/L2/L3 signature chain for agent creation, intent-center issuance, and user authorization. It supports intent activation, authenticity verification and revocation, plus payment reservation, completion and cancellation with amount, execution-count, product-whitelist and periodic quota checks.
+The A4P Java SDK is currently released as SDK version `0.3.0` and implements the payment-intent protocol with wire-format version `1.0` with an L1/L2/L3 signature chain for agent creation, intent-center issuance, and user authorization. It supports intent activation, authenticity verification and revocation, plus payment reservation, completion and cancellation with amount, execution-count, product-whitelist and periodic quota checks.
 
 The SDK provides immutable models, canonical JSON serialization, execution-context serialization and restoration, pluggable signing and verification interfaces, and an optional RSA-3072 adapter. Its execution ledger is in memory; applications must provide durable storage, database locking, replay prevention and key-to-identity binding. See the [Java SDK guide](./A4P-java-sdk/README.md) for integration details.
 
