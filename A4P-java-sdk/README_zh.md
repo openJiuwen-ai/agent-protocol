@@ -24,6 +24,8 @@ mvn test
 mvn package
 ```
 
+发布新版本时，修改 `parent-pom.xml` 中的 `revision`。SDK 和示例继承该版本，示例也用它来解析 SDK 依赖。`mvn install` 和 `mvn deploy` 使用已解析的 SDK POM，使用方无需获取源码中的父 POM。
+
 ### 生成英文 API 文档
 
 在仓库根目录执行：
@@ -37,7 +39,7 @@ mvn -f A4P-java-sdk/pom.xml javadoc:javadoc
 生成页面展示公开 API（含嵌套类型），不包含测试和独立示例模块。
 缺失注释不会阻止构建；错误的 Javadoc 语法或失效引用会使生成失败。
 
-`mvn package` 会自动生成并附带英文 `target/a4p-java-sdk-0.1.0-javadoc.jar`。
+`mvn package` 会自动生成并附带英文 `target/a4p-java-sdk-<version>-javadoc.jar`。
 同时执行测试、SDK 打包及 HTML 生成：
 
 ```sh
@@ -61,9 +63,9 @@ bash A4P-java-sdk/scripts/build.sh --help
 ```
 
 - `build` 使用 `-Dmaven.test.skip=true` 执行 `clean package`，跳过测试代码的编译与执行，
-产物为 `A4P-java-sdk/target/a4p-java-sdk-0.1.0.jar`。
-- `ut` 执行 `clean test`，要求存在测试，测试失败时返回失败，不打包 JAR；Surefire 测试报告位于
-`A4P-java-sdk/target/surefire-reports/`。
+产物为 `A4P-java-sdk/target/a4p-java-sdk-<version>.jar`。
+- `ut` 运行 SDK 测试，将对应版本的 SDK JAR 安装到本地仓库，再运行示例测试。没有测试或测试失败时返回失败。
+  两个模块分别将 Surefire 报告写入各自的 `target/surefire-reports/` 目录。
 - `docs` 使用 javadoc 生成文档
 
 `build` 和 `ut` 模式会先清理 `target/`，`docs` 不会。所有模式均返回 Maven 的退出码。
@@ -104,23 +106,23 @@ bash A4P-java-sdk/scripts/ut.sh
 
 ### 构建依赖
 
-构件坐标为 `io.openjiuwen:a4p-java-sdk:0.1.0`。JSON 由 Jackson 处理；JUnit 5 仅用于测试。不需要任何 Web 框架。
+JSON 由 Jackson 处理，JUnit 5 仅用于测试。不需要任何 Web 框架。
 
 运行时依赖为 `jackson-databind`（2.21.8）和 `java-json-canonicalization`（1.1），JUnit 5 为 `test` 作用域。
 
-## 运行示例程序
-
-示例程序依赖外部的 java SDK
+在自己的 Maven 项目中使用 SDK 时，添加以下依赖，并将 `version` 设为你要使用的 SDK 发布版本。
 
 ```xml
 <dependency>
   <groupId>io.openjiuwen</groupId>
   <artifactId>a4p-java-sdk</artifactId>
-  <version>0.1.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
-先运行 `mvn -f A4P-java-sdk/pom.xml install` 构建 SDK，再从独立示例模块运行 `io.openjiuwen.a4p.examples.PaymentExample`：
+## 运行示例程序
+
+仓库内的示例通过 `${project.version}` 使用从 `parent-pom.xml` 继承的 SDK 版本。在仓库根目录运行 `mvn -f A4P-java-sdk/pom.xml install` 安装对应版本的 SDK，再运行 `io.openjiuwen.a4p.examples.PaymentExample`。
 
 ```sh
 mvn -f A4P-java-sdk/examples/pom.xml compile org.codehaus.mojo:exec-maven-plugin:3.6.3:java "-Dexec.mainClass=io.openjiuwen.a4p.examples.PaymentExample"
@@ -197,7 +199,7 @@ PaymentExecutionInfo info = PaymentProfile.executionInfo(context);
 ## 版本与兼容性
 
 - 当前协议版本: `1.0`（`A4p.PROTOCOL_VERSION`）
-- java SDK 构建版本: `0.1.0`
+- 当前 Java SDK 版本为 `0.3.0`，由 [parent-pom.xml](parent-pom.xml) 中的 `revision` 设置。
 
 ## 更多文档
 
