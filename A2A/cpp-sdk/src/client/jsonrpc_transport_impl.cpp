@@ -392,6 +392,12 @@ JsonRpcTransport::JsonRpcTransport(const std::string& url, const AgentCard& agen
 
 JsonRpcTransport::~JsonRpcTransport()
 {
+    // Close before member teardown: it joins the I/O thread, so no callback
+    // can be running while JsonRpcTransportImpl's members die
+    // (requestMutex_/requestData_ are declared after conn_ and would
+    // otherwise be destroyed before it), and pending waiters get a close
+    // error instead of hanging. Idempotent with an explicit Close().
+    impl_->Close();
 }
 
 void JsonRpcTransport::SendMessage(const std::string& requestId, const MessageSendParams& request,

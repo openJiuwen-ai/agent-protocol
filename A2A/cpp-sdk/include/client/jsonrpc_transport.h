@@ -38,7 +38,13 @@ public:
     JsonRpcTransport(const std::string& url, const AgentCard& agentCard, const ClientConfig& config,
         const std::vector<std::shared_ptr<ClientCallInterceptor>>& interceptors);
 
-    /** @brief Destructor; closes the underlying connection. */
+    /**
+     * @brief Destructor; closes the underlying connection.
+     * @note Same lifecycle contract as Close(): the transport's I/O thread is
+     *       joined synchronously, no registered callback can run during or
+     *       after destruction, and pending requests receive a "transport is
+     *       closed" error event instead of hanging.
+     */
     ~JsonRpcTransport() override;
 
     /**
@@ -148,6 +154,14 @@ public:
     /**
      * @brief Close the transport and release the underlying HTTP connection.
      * @note 调用后不应再执行任何操作。
+     * @note Lifecycle contract: Close() synchronously terminates the
+     *       transport's I/O thread and guarantees that once it returns, no
+     *       registered callback will run again — callers may destroy the
+     *       transport (or drop a stack instance) immediately afterwards, as
+     *       HttpCardResolver::FetchCard does. In-flight requests receive a
+     *       "transport is closed" error event before it returns. Callbacks
+     *       must be registered before any request is issued (registration
+     *       is not synchronized with the I/O thread).
      */
     void Close() override;
 
