@@ -107,7 +107,7 @@ report links in `ut.json`. The script only generates local reports; CI must uplo
 
 The artifact coordinates are `io.openjiuwen:a4p-java-sdk:0.1.0`. Jackson handles JSON; JUnit 5 is used only for testing. No web framework is required.
 
-`jackson-databind` (2.20.1 here) is the only runtime dependency; JUnit 5 has `test` scope.
+Runtime dependencies are `jackson-databind` (2.21.8) and `java-json-canonicalization` (1.1); JUnit 5 has `test` scope.
 
 ## Run the example program
 
