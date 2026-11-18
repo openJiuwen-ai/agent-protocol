@@ -53,6 +53,19 @@ constexpr int HTTP_LISTEN_BACKLOG = 128;
 // Public client APIs express timeouts in seconds; the HTTP transport layer
 // works in milliseconds. This is the single conversion factor between them.
 constexpr int SECONDS_TO_MS = 1000;
+// Connection reclamation for the HTTP server (see HttpServer::CloseIdleConnections).
+// A connection that neither receives nor sends data for longer than the applicable timeout
+// is closed so that idle/hung clients cannot exhaust file descriptors.
+// Two budgets are used, selected by whether a request is currently being served:
+// - idle: no request in flight, the server is only waiting for the client to speak.
+// - request: a handler is producing the response, so silence on the wire is expected.
+// A2A::Server::HttpConfig mirrors these values as literals because the public header must not
+// include internal headers; a unit test asserts that both sides stay in sync.
+constexpr unsigned int DEFAULT_CONNECTION_TIMEOUT_SECONDS = 300; // 0 disables idle reclamation.
+constexpr unsigned int DEFAULT_CONNECTION_SWEEP_INTERVAL_SECONDS = 30;
+// Matches the client-side cap on a single request (see MAX_TIMEOUT_SECONDS), so a server
+// handler is never reclaimed before the longest request a client may legitimately wait for.
+constexpr unsigned int DEFAULT_REQUEST_TIMEOUT_SECONDS = 1800; // 0 disables the request budget.
 
 struct UserData {
     std::string requestId = "";

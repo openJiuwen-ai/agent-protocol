@@ -153,6 +153,8 @@ request timed out [stage=waiting-response-body, elapsed=300012ms]
 
 该示例内置"只 accept、永不回包"的 TCP 桩，覆盖发现超时、非流式 per-call/config 超时、流式空闲超时（config/per-call）共 5 个场景，见 `examples/timeout_client.cpp`。
 
+> **与服务端回收预算的配套**：流式空闲超时只管客户端这一端。服务端对 in-flight 请求另有独立的静默预算（`HttpConfig::requestTimeoutSeconds`，默认 1800s），静默超过该值服务端会主动关闭连接。预期单步长时间无输出的 agent 任务需两端同时调大，只调大一端时另一端仍会先切断流（表现为 `A2A_TRANSPORT_EXCEPTION` 或 `stream-idle` 超时）；1800s 上限为本 SDK 客户端的硬上限，更长的静默需搭配超时配置更宽的第三方客户端。详见 [server.md - 连接回收与客户端超时的配套关系](server.md#连接回收与客户端超时的配套关系)。
+
 ## 日志
 
 - **SDK 内部日志**：`A2A_LOG` + `SetLogLevel` / `SetLogCallback`（见 `a2a_log.h`）

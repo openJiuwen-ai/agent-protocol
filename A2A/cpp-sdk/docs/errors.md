@@ -100,10 +100,14 @@ std::variant<Message, A2AError, std::pair<Task, UpdateEvent>>
 | HTTP 连接失败 | `A2AClientHTTPError` | 检查网络与 `LD_LIBRARY_PATH` |
 | Card 解析失败 | `A2AClientJSONError` | 检查 `/.well-known/agent-card.json` |
 | 请求超时 | `A2AClientTimeoutError`（`A2A_REQUEST_TIMEOUT` -32101），消息含 `stage` 与 `elapsed` | 按阶段定位：`connect-or-waiting-response-headers` / `waiting-response-body` / `stream-idle` |
+| 连接被对端中断 | `A2AClientException`（`A2A_TRANSPORT_EXCEPTION` -32102），消息如 `Server returned nothing (no headers, no data)` | 对端在响应完成前关闭了连接（如服务端回收仍在处理的连接、网关断流）：检查服务端连接回收配置与网关空闲超时 |
+| 流式响应中途被"正常"截断（无错误信息） | 流收到终止 chunk 后结束，未收到任何 `error` 事件 | 服务端在流式响应已开始后无法投递自生成错误（HTTP/1.1 不允许第二个响应），只终止流并记日志：查服务端 ERROR 日志 `cannot deliver generated response on a started stream` |
 
 > **超时错误信息**：传输层超时会携带阶段与已消耗时间，例如
 > `request timed out [stage=stream-idle, idle=60023ms, elapsed=60023ms]`。
 > 分阶段超时配置见 [client.md - 超时语义](api/client.md#超时语义)。
+
+> **双端超时配套**：服务端 in-flight 请求预算（`HttpConfig::requestTimeoutSeconds`，默认 1800s）与客户端流式空闲超时（默认 60s、上限 1800s）相互独立。预期单步长时间无输出的 agent 任务需两端同时调大：只调大一端时，另一端仍会先切断流，客户端即表现为上表的 `A2A_TRANSPORT_EXCEPTION` 或 `stream-idle` 超时。详见 [server.md - 连接回收与客户端超时的配套关系](api/server.md#连接回收与客户端超时的配套关系)。
 
 ## Server 侧
 
