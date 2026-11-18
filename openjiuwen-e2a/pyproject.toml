@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "e2a"
-version = "0.1.0"
+name = "openjiuwen-e2a"
+version = "0.3.0"
 description = "Shared data structures (dataclasses / enums / constants) between jiuwenswarm and jiuwenswarm-gateway"
 requires-python = ">=3.11,<3.14"
 license = { text = "Apache-2.0" }
