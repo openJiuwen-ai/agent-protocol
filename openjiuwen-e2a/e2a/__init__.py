@@ -256,7 +256,7 @@ from e2a.wire_codec import (
     parse_agent_server_wire_unary,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "ACP_AGENT_TO_CLIENT_METHODS",
