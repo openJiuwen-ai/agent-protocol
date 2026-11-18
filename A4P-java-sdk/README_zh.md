@@ -106,7 +106,7 @@ bash A4P-java-sdk/scripts/ut.sh
 
 构件坐标为 `io.openjiuwen:a4p-java-sdk:0.1.0`。JSON 由 Jackson 处理；JUnit 5 仅用于测试。不需要任何 Web 框架。
 
-`jackson-databind`（此处为 2.20.1）是唯一的运行时依赖，JUnit 5 为 `test` 作用域。
+运行时依赖为 `jackson-databind`（2.21.8）和 `java-json-canonicalization`（1.1），JUnit 5 为 `test` 作用域。
 
 ## 运行示例程序
 
