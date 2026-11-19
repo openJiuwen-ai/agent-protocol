@@ -198,7 +198,9 @@ class A4PHTTPServer:
     @staticmethod
     def _json_payload(body: bytes) -> dict[str, Any]:
         decoded = json.loads(body.decode("utf-8") or "{}")
-        return decoded if isinstance(decoded, dict) else {}
+        if not isinstance(decoded, dict):
+            raise _BadRequest("request body must be a JSON object")
+        return decoded
 
     async def _dispatch(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         try:
