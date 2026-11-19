@@ -147,8 +147,10 @@ class WebAuthnSignatureMethod:
         credential = payload.get("credential")
         if not isinstance(credential, dict):
             raise ValueError("credential missing")
+        verify_registration_response = helpers["verify_registration_response"]
+        verification_error = helpers["WebAuthnException"]
         try:
-            verified = helpers["verify_registration_response"](
+            verified = verify_registration_response(
                 credential=credential,
                 expected_challenge=challenge,
                 expected_rp_id=self.rp_id,
@@ -156,7 +158,7 @@ class WebAuthnSignatureMethod:
                 require_user_presence=True,
                 require_user_verification=True,
             )
-        except helpers["WebAuthnException"] as exc:
+        except (verification_error, KeyError, TypeError, ValueError) as exc:
             raise ValueError("Invalid WebAuthn registration credential") from exc
         credential_id = b64url_encode(verified.credential_id)
         transports = []

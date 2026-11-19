@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import os
 import urllib.error
@@ -180,7 +181,7 @@ class A4PClient:
         try:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    raw = resp.read().decode("utf-8")
+                    body = resp.read()
             except urllib.error.HTTPError as exc:
                 with exc:
                     raw = exc.read().decode("utf-8", errors="replace")
@@ -189,8 +190,12 @@ class A4PClient:
                 except json.JSONDecodeError:
                     error_payload = {"error": raw}
                 raise RuntimeError(f"A4P HTTP {exc.code}: {error_payload}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (OSError, http.client.HTTPException) as exc:
             raise RuntimeError(f"A4P HTTP request failed: {exc}") from exc
+        try:
+            raw = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("A4P HTTP response is not valid UTF-8") from exc
         try:
             parsed = json.loads(raw) if raw else {}
         except json.JSONDecodeError as exc:

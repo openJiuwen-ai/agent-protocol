@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from webauthn.helpers.exceptions import InvalidRegistrationResponse, WebAuthnException
 
 from a4p import (
     A4PServer,
@@ -474,6 +475,8 @@ def _mock_webauthn(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     def verify_registration_response(**kwargs):
         captured["verify_registration"] = kwargs
+        if "registration_error" in captured:
+            raise captured["registration_error"]
         return SimpleNamespace(
             credential_id=b"credential-id",
             credential_public_key=b"cose-public-key",
@@ -500,6 +503,7 @@ def _mock_webauthn(monkeypatch: pytest.MonkeyPatch) -> dict:
             "PublicKeyCredentialDescriptor": Descriptor,
             "ResidentKeyRequirement": Requirement,
             "UserVerificationRequirement": Requirement,
+            "WebAuthnException": WebAuthnException,
             "generate_registration_options": registration_options,
             "generate_authentication_options": authentication_options,
             "verify_registration_response": verify_registration_response,
@@ -588,6 +592,37 @@ def test_webauthn_registration_rejects_invalid_state_and_payload(
                 ],
             }
         )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        InvalidRegistrationResponse("invalid response"),
+        KeyError("missing field"),
+        TypeError("invalid field type"),
+        json.JSONDecodeError("invalid JSON", "", 0),
+    ],
+)
+def test_webauthn_registration_normalizes_verification_errors(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    captured = _mock_webauthn(monkeypatch)
+    captured["registration_error"] = failure
+    store = InMemoryCredentialStore()
+    method = WebAuthnSignatureMethod(store)
+    options = method.registration_options(user_id="user-1")
+
+    with pytest.raises(ValueError, match="^Invalid WebAuthn registration credential$") as error:
+        method.verify_registration(
+            {
+                "userId": "user-1",
+                "registrationRequestId": options["registrationRequestId"],
+                "credential": {},
+            }
+        )
+
+    assert error.value.__cause__ is failure
+    assert store.list_for_user("user-1") == []
 
 
 def test_webauthn_prepare_requires_registered_method_credential(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import io
 import json
 import urllib.error
@@ -174,33 +175,54 @@ def test_client_maps_transport_errors(monkeypatch: pytest.MonkeyPatch) -> None:
         asyncio.run(client.webauthn_registration_options({"userId": "user-1"}))
 
 
-@pytest.mark.parametrize("stage", ["open", "body", "error_body"])
-def test_client_maps_timeouts(monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
-    timeout = TimeoutError("timed out")
-
-    def raise_timeout(*args: object, **kwargs: object) -> None:
-        raise timeout
+@pytest.mark.parametrize(
+    ("stage", "failure"),
+    [
+        ("open", TimeoutError("timed out")),
+        ("body", TimeoutError("timed out")),
+        ("error_body", TimeoutError("timed out")),
+        ("open", ConnectionResetError("connection reset")),
+        ("body", http.client.IncompleteRead(b"{")),
+    ],
+)
+def test_client_maps_request_and_read_errors(
+    monkeypatch: pytest.MonkeyPatch, stage: str, failure: Exception
+) -> None:
+    def raise_read_error() -> None:
+        raise failure
 
     def open_response(*args: object, **kwargs: object) -> _Response:
         if stage == "open":
-            raise timeout
+            raise failure
         if stage == "error_body":
             body = io.BytesIO()
-            monkeypatch.setattr(body, "read", raise_timeout)
+            monkeypatch.setattr(body, "read", raise_read_error)
             raise urllib.error.HTTPError(
                 "http://a4p.example/test", 502, "Bad Gateway", None, body
             )
         response = _Response(b"")
-        monkeypatch.setattr(response, "read", raise_timeout)
+        monkeypatch.setattr(response, "read", raise_read_error)
         return response
 
     monkeypatch.setattr("urllib.request.urlopen", open_response)
     client = A4PClient(base_url="http://a4p.example")
 
-    with pytest.raises(RuntimeError, match="A4P HTTP request failed: timed out") as error:
+    with pytest.raises(RuntimeError, match="A4P HTTP request failed:") as error:
         asyncio.run(client.webauthn_registration_options({"userId": "user-1"}))
 
-    assert error.value.__cause__ is timeout
+    assert error.value.__cause__ is failure
+
+
+def test_client_rejects_invalid_utf8_in_success_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *args, **kwargs: _Response(b'{"userId":"\xff"}')
+    )
+    client = A4PClient(base_url="http://a4p.example")
+
+    with pytest.raises(RuntimeError, match="A4P HTTP response is not valid UTF-8") as error:
+        asyncio.run(client.webauthn_registration_options({"userId": "user-1"}))
+
+    assert isinstance(error.value.__cause__, UnicodeDecodeError)
 
 
 @pytest.mark.parametrize("body", [b"", b"[]"])

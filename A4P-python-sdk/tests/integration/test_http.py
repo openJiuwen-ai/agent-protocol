@@ -335,7 +335,11 @@ def test_http_500_keeps_unexpected_exception_details_in_server_logs(
     ],
     ids=["missing-fields", "malformed-client-data"],
 )
-def test_http_rejects_malformed_webauthn_registration(credential: dict) -> None:
+def test_http_rejects_malformed_webauthn_registration(
+    monkeypatch: pytest.MonkeyPatch, credential: dict
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     store = InMemoryCredentialStore()
     server = A4PServer(user_signature_method=WebAuthnSignatureMethod(store))
     http_server = A4PHTTPServer(server, host="127.0.0.1", port=0)
@@ -343,7 +347,7 @@ def test_http_rejects_malformed_webauthn_registration(credential: dict) -> None:
     async def run() -> None:
         await http_server.start()
         try:
-            client = A4PClient(base_url=f"http://127.0.0.1:{http_server.port}")
+            client = A4PClient(base_url=f"http://127.0.0.1:{http_server.port}/", timeout=2)
             options = await client.webauthn_registration_options({"userId": "user-1"})
             payload = {
                 "userId": "user-1",
