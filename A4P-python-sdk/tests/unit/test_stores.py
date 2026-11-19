@@ -5,11 +5,13 @@ import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
+from a4p import credential_store
 from a4p.credential_store import (
+    CREDENTIAL_STORE_SCHEMA_VERSION,
     CredentialStoreFormatError,
     JsonFileCredentialStore,
     UserCredentialRecord,
@@ -49,6 +51,7 @@ def test_json_file_credential_store_refreshes_cross_process_records(tmp_path) ->
     path = tmp_path / "credentials.json"
     server_store = JsonFileCredentialStore(path)
     authorizer_store = JsonFileCredentialStore(path)
+    other_store = JsonFileCredentialStore(path)
     record = UserCredentialRecord(
         userId="demo-user",
         credentialId="cred-1",
@@ -65,6 +68,86 @@ def test_json_file_credential_store_refreshes_cross_process_records(tmp_path) ->
     assert [item.credentialId for item in server_store.list_for_user("demo-user")] == [
         "cred-1"
     ]
+    other_store.save(replace(record, credentialId="cred-2"))
+    assert {item.credentialId for item in authorizer_store.list_all()} == {
+        "cred-1", "cred-2",
+    }
+
+
+@pytest.mark.parametrize("damaged", [b'{"schemaVersion": 2,', b"\xff"])
+def test_json_file_credential_store_preserves_unreadable_file(
+    tmp_path, caplog, damaged: bytes,
+) -> None:
+    path = tmp_path / "credentials.json"
+    record = UserCredentialRecord("demo-user", "cred-1", "ed25519", {})
+    original_store = JsonFileCredentialStore(path)
+    original_store.save(record)
+    backup = path.read_bytes()
+    path.write_bytes(damaged)
+
+    store = JsonFileCredentialStore(path)
+    assert store.list_all() == []
+    assert original_store.get("cred-1") is None
+    assert "Invalid JSON in credential store" in caplog.text
+    with pytest.raises(CredentialStoreFormatError, match="Invalid JSON"):
+        store.save(record)
+    assert path.read_bytes() == damaged
+
+    path.write_bytes(backup)
+    assert store.get("cred-1") == record
+
+
+def test_json_file_credential_store_isolates_invalid_records(tmp_path, caplog) -> None:
+    path = tmp_path / "credentials.json"
+    valid = UserCredentialRecord("demo-user", "cred-1", "ed25519", {"x": "key"})
+    path.write_text(
+        json.dumps({
+            "schemaVersion": CREDENTIAL_STORE_SCHEMA_VERSION,
+            "credentials": [
+                {**asdict(valid), "extension": "unrecognized"},
+                {**asdict(valid), "credentialId": "bad-key", "publicKey": None},
+                {**asdict(valid), "credentialId": "bad-details", "details": None},
+                {"userId": "demo-user"},
+                None,
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    store = JsonFileCredentialStore(path)
+    assert store.list_all() == [valid]
+    assert "Skipping invalid credential record" in caplog.text
+
+    updated = replace(valid, metadata={"label": "primary"})
+    store.save(updated)
+    assert store.list_all() == [updated]
+    payload = json.loads(path.read_bytes())
+    assert payload["credentials"][0]["extension"] == "unrecognized"
+    assert payload["credentials"][1]["publicKey"] is None
+
+
+def test_json_file_credential_store_keeps_previous_file_when_replace_fails(
+    tmp_path, monkeypatch,
+) -> None:
+    path = tmp_path / "credentials.json"
+    store = JsonFileCredentialStore(path)
+    record = UserCredentialRecord("demo-user", "cred-1", "ed25519", {})
+    store.save(record)
+    previous = path.read_bytes()
+
+    def fail_replace(source, destination) -> None:
+        assert destination == path
+        assert source.parent == path.parent
+        assert path.read_bytes() == previous
+        assert json.loads(source.read_bytes())["credentials"][0]["details"] == {"updated": True}
+        raise OSError("replace interrupted")
+
+    monkeypatch.setattr(credential_store.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace interrupted"):
+        store.save(replace(record, details={"updated": True}))
+    assert path.read_bytes() == previous
+    assert list(tmp_path.iterdir()) == [path]
+    assert store.get("cred-1") == record
 
 
 @pytest.mark.parametrize(

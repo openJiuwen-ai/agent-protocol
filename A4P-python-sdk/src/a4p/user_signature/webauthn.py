@@ -246,6 +246,10 @@ class WebAuthnSignatureMethod:
                 "WebAuthn credential user mismatch: "
                 f"expected '{context.expected_user_id}', got '{record.userId}'"
             )
+        if not isinstance(record.details, Mapping):
+            return False, "WebAuthn credential details invalid: expected an object"
+        if not isinstance(record.publicKey, Mapping):
+            return False, "WebAuthn credential public key invalid: expected an object"
         record_rp_id = str(record.details.get("rpId") or "")
         record_origin = str(record.details.get("origin") or "")
         if record_rp_id and record_rp_id != self.rp_id:
