@@ -157,3 +157,99 @@ def test_normal_dataset_still_deletable(home):
     assert svc.dataset_dir("demo") == home / "database" / "demo"
     svc.delete_dataset("demo")
     assert not (home / "database" / "demo").exists()
+
+
+# ---------------------------------------------------------------------------
+# 六个入口方法：读路径同样要先校验再落盘
+# ---------------------------------------------------------------------------
+
+_ENTRY_POINTS = [
+    ("_ensure_dataset_initialized", lambda svc, name: svc._ensure_dataset_initialized(name)),
+    ("_compute_taxonomy_state", lambda svc, name: svc._compute_taxonomy_state(name)),
+    ("is_auth_required", lambda svc, name: svc.is_auth_required(name)),
+    ("set_auth_config", lambda svc, name: svc.set_auth_config(name, True)),
+    ("get_lease_config", lambda svc, name: svc.get_lease_config(name)),
+    ("set_lease_config", lambda svc, name: svc.set_lease_config(
+        name, enabled=True, min_ttl=10, max_ttl=60, grace_period=30)),
+]
+
+
+@pytest.mark.parametrize(
+    "bad", ["..", "../escape", ".", "a/b", "a\\b", "bad\x00name"]
+)
+@pytest.mark.parametrize(
+    "label, call", _ENTRY_POINTS, ids=[entry[0] for entry in _ENTRY_POINTS]
+)
+def test_entry_points_validate_name_before_touching_disk(home, label, call, bad):
+    """这六处曾直接拼 ``database_dir / dataset`` 做 ``.exists()``：
+
+    调用方用 ``..`` 之类的名字就能让存在性探测（以及
+    ``_compute_taxonomy_state`` 的读文件）落在注册表根目录之外。
+    """
+    svc = RegistryService(home / "database")
+    outside = home / "outside"
+    outside.mkdir()
+
+    with pytest.raises(ValueError):
+        call(svc, bad)
+
+    assert list(outside.iterdir()) == []
+    assert home.exists()
+    assert (home / "auth_data.json").exists()
+    assert (home / "database" / "demo" / "service.json").exists()
+
+
+def test_existing_dataset_dir_distinguishes_bad_name_from_missing(home):
+    """路由层靠异常类型分流：非法名 → 400，合法但不存在 → 404。"""
+    from a2x_registry.register.errors import RegistryNotFoundError
+
+    svc = RegistryService(home / "database")
+
+    with pytest.raises(ValueError):
+        svc.existing_dataset_dir("../escape")
+    with pytest.raises(RegistryNotFoundError):
+        svc.existing_dataset_dir("no_such_dataset")
+
+    assert svc.existing_dataset_dir("demo") == home / "database" / "demo"
+
+
+# ---------------------------------------------------------------------------
+# 长度上限是「创建入口」策略：历史超长数据集仍必须可读、可删
+# ---------------------------------------------------------------------------
+
+
+def test_delete_dataset_ignores_length_cap(home):
+    """删除路径不套用长度上限：超长名会一路走到「不存在」，而不是被长度拒。"""
+    from a2x_registry.register.service import _MAX_DATASET_NAME_LEN
+
+    svc = RegistryService(home / "database")
+    long_name = "d" * (_MAX_DATASET_NAME_LEN + 20)
+
+    with pytest.raises(ValueError, match="does not exist"):
+        svc.delete_dataset(long_name)
+
+    # 创建入口的长度上限不变。
+    with pytest.raises(ValueError, match="too long"):
+        svc.create_dataset("n" * (_MAX_DATASET_NAME_LEN + 1))
+
+
+def test_legacy_over_long_dataset_still_deletable(home):
+    from a2x_registry.register.service import _MAX_DATASET_NAME_LEN
+
+    long_name = "d" * (_MAX_DATASET_NAME_LEN + 20)
+    legacy = home / "database" / long_name
+    try:
+        legacy.mkdir()
+    except OSError as exc:  # Windows MAX_PATH（未开启长路径）下建不出来
+        pytest.skip(f"filesystem cannot hold a {len(long_name)}-char dir: {exc}")
+    (legacy / "register_config.json").write_text("{}", encoding="utf-8")
+
+    svc = RegistryService(home / "database")
+
+    assert long_name in svc.list_datasets()
+    assert svc.dataset_exists(long_name) is True
+
+    svc.delete_dataset(long_name)
+    assert not legacy.exists()
+    assert (home / "database" / "demo" / "service.json").exists()
+

@@ -119,15 +119,21 @@ def reject_unsafe_path_segment(name: str) -> str:
     return name
 
 
-def validate_dataset_name(name: str) -> str:
+def validate_dataset_name(name: str, *, enforce_max_length: bool = True) -> str:
     """Return ``name`` if it is a safe dataset directory name, else raise ValueError.
 
     Strict, caller-facing policy. Rules whose only effect is aliasing an
     existing directory (reserved device names, drive letters, trailing
     dots/spaces, leading/trailing whitespace) are enforced on Windows only.
+
+    ``enforce_max_length=False`` is for *deleting* an existing dataset: the
+    length cap is an input policy for creation, and a dataset created by an
+    older build (POSIX allows names far longer than
+    ``_MAX_DATASET_NAME_LEN``) must stay deletable. Path safety and
+    containment are still enforced by ``dataset_dir``.
     """
     reject_unsafe_path_segment(name)
-    if len(name) > _MAX_DATASET_NAME_LEN:
+    if enforce_max_length and len(name) > _MAX_DATASET_NAME_LEN:
         raise ValueError(f"invalid dataset name: too long ({len(name)} > {_MAX_DATASET_NAME_LEN})")
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
         raise ValueError(f"invalid dataset name: control character in {name!r}")
@@ -315,7 +321,7 @@ class RegistryService:
         Embedding model and formats can be changed later via the dedicated
         ``POST /vector-config`` and ``POST /register-config`` endpoints.
         """
-        config_file = self._database_dir / dataset / "vector_config.json"
+        config_file = self.dataset_dir(dataset) / "vector_config.json"
         if config_file.exists():
             return
         # Idempotent file writes via the same helper create_dataset uses.
@@ -852,6 +858,21 @@ class RegistryService:
             )
         return path
 
+    def existing_dataset_dir(self, dataset: str) -> Path:
+        """Validated dataset dir, asserting that the dataset exists.
+
+        Two failure modes on purpose, so the router layer can map them:
+        ``ValueError`` → 400 (invalid or escaping name) and
+        ``RegistryNotFoundError`` → 404 (valid name, no such dataset). Used by
+        read endpoints that previously probed ``database_dir / dataset``
+        themselves — that probe ran before any name validation, so a hostile
+        name made them do I/O outside the registry root.
+        """
+        ds_dir = self.dataset_dir(dataset)
+        if not ds_dir.is_dir():
+            raise RegistryNotFoundError(f"Dataset '{dataset}' not found")
+        return ds_dir
+
     def _database_root(self) -> Path:
         """Resolved ``database_dir`` (cached; a symlinked root is fine)."""
         if self._resolved_database_dir is None:
@@ -1320,8 +1341,9 @@ class RegistryService:
 
     def _compute_taxonomy_state(self, dataset: str) -> TaxonomyState:
         """Compare current service hash against build_config.json's stored hash."""
-        build_config_path = self._database_dir / dataset / "taxonomy" / BUILD_CONFIG_FILE
-        taxonomy_path     = self._database_dir / dataset / "taxonomy" / TAXONOMY_FILE
+        taxonomy_dir      = self.dataset_dir(dataset) / "taxonomy"
+        build_config_path = taxonomy_dir / BUILD_CONFIG_FILE
+        taxonomy_path     = taxonomy_dir / TAXONOMY_FILE
 
         if not build_config_path.exists() or not taxonomy_path.exists():
             return TaxonomyState.NONEXISTENT
@@ -1445,9 +1467,14 @@ class RegistryService:
         """Delete a dataset directory and all internal caches.
 
         Raises ValueError if the dataset directory does not exist.
+
+        The name is validated with ``enforce_max_length=False``: the length cap
+        is a creation-input policy, and a legacy dataset whose name exceeds it
+        is still listed/readable — it must therefore also be deletable.
+        ``dataset_dir`` keeps the path-safety and containment checks.
         """
         import shutil
-        validate_dataset_name(name)
+        validate_dataset_name(name, enforce_max_length=False)
         ds_dir = self.dataset_dir(name)
         if not ds_dir.exists():
             raise ValueError(f"Dataset '{name}' does not exist")
@@ -1482,7 +1509,11 @@ class RegistryService:
             return cached
         # Don't bother reading disk if the dataset isn't even there — treat
         # as anonymous; the caller will get a 404 elsewhere.
-        if not (self._database_dir / dataset).exists():
+        # ``dataset_dir`` (not a raw join) so a caller-supplied name cannot
+        # probe directories outside the registry root: an unsafe name raises
+        # ValueError, which the router maps to 400 — the read path must not
+        # perform unvalidated I/O outside ``database_dir``.
+        if not self.dataset_dir(dataset).exists():
             return False
         cfg = self._get_store(dataset).load_auth_config()
         required = bool(cfg.get("required", False))
@@ -1496,7 +1527,7 @@ class RegistryService:
         invalidates the in-memory cache so the next request reads the new
         value. Returns the persisted config dict.
         """
-        if not (self._database_dir / dataset).exists():
+        if not self.dataset_dir(dataset).exists():
             raise ValueError(f"Dataset '{dataset}' does not exist")
         self._get_store(dataset).write_auth_config(required=required)
         self._auth_required_cache[dataset] = bool(required)
@@ -1521,7 +1552,9 @@ class RegistryService:
         if cached is not None:
             return cached
         # Don't read disk for nonexistent datasets — caller hits 404 elsewhere.
-        if not (self._database_dir / dataset).exists():
+        # ``dataset_dir`` validates the name first, so an unsafe name can never
+        # turn this probe into I/O outside ``database_dir``.
+        if not self.dataset_dir(dataset).exists():
             from .store import LEASE_CONFIG_DEFAULT
             return dict(LEASE_CONFIG_DEFAULT)
         cfg = self._get_store(dataset).load_lease_config()
@@ -1539,7 +1572,7 @@ class RegistryService:
         persisted config. Bound validation errors propagate as ``ValueError``
         → 400 via the existing ``_run`` mapper.
         """
-        if not (self._database_dir / dataset).exists():
+        if not self.dataset_dir(dataset).exists():
             raise ValueError(f"Dataset '{dataset}' does not exist")
         self._get_store(dataset).write_lease_config(
             enabled=enabled, min_ttl=min_ttl, max_ttl=max_ttl,
