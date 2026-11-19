@@ -46,6 +46,10 @@ public:
 
     /**
     * @brief Terminate the connection and release resources.
+    * @note Lifecycle contract: Terminate() synchronously joins the
+    *       connection's I/O thread; after it returns, no registered
+    *       callback can still run, so the object (and anything the
+    *       callbacks captured) may be destroyed safely.
     */
     virtual void Terminate() = 0;
 
