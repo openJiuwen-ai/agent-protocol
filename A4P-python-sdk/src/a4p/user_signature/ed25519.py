@@ -160,6 +160,8 @@ class RegisteredEd25519Method:
         encoded_signature = str(proof.get("signature") or "").strip()
         if not encoded_signature:
             return False, "User signature missing"
+        if not isinstance(record.publicKey, Mapping):
+            return False, "Registered Ed25519 public key invalid: expected an object"
         try:
             public_key = ed25519_public_key_from_base64url(
                 str(record.publicKey.get("x") or "")
