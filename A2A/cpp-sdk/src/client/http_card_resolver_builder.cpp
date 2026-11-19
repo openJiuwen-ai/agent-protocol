@@ -11,7 +11,7 @@ namespace A2A::Client {
 HttpCardResolverBuilder::~HttpCardResolverBuilder() = default;
 
 std::shared_ptr<A2ACardResolver> HttpCardResolverBuilder::Build(std::string baseUrl, std::string agentCardPath,
-    const std::map<std::string, std::string>& httpKwargs)
+    const std::map<std::string, std::string>& httpKwargs, const CardCacheConfig& cacheConfig)
 {
     try {
         if (baseUrl.empty() || agentCardPath.empty()) {
@@ -19,7 +19,8 @@ std::shared_ptr<A2ACardResolver> HttpCardResolverBuilder::Build(std::string base
             return nullptr;
         }
 
-        return std::make_shared<HttpCardResolver>(std::move(baseUrl), std::move(agentCardPath), httpKwargs);
+        return std::make_shared<HttpCardResolver>(std::move(baseUrl), std::move(agentCardPath), httpKwargs,
+            cacheConfig);
     } catch (const std::exception& e) {
         A2A_LOG(A2A_LOG_LEVEL::ERROR, std::string("exception occured: ") + e.what());
         return nullptr;
