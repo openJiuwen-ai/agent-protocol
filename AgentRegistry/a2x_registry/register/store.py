@@ -94,6 +94,11 @@ def _validate_zip_entry(entry_name: str) -> None:
     Windows drive prefix (``C:``) and a backslash are not POSIX absolute paths
     but *are* absolute / a separator once extracted on Windows, so both are
     rejected explicitly instead of relying on the host separator.
+
+    Call this with ``ZipInfo.orig_filename``, never with ``ZipInfo.filename``:
+    ``zipfile`` truncates ``filename`` at the first NUL (``orig_filename`` keeps
+    it), so a NUL check on ``filename`` can never fire, and a name that only
+    differs in its truncated part would slip through.
     """
     if not entry_name:
         raise ValueError("Unsafe path in ZIP: empty entry name")
@@ -108,6 +113,37 @@ def _validate_zip_entry(entry_name: str) -> None:
     for part in entry_name.split("/"):
         if part == "..":
             raise ValueError(f"Unsafe path in ZIP: parent reference in {entry_name!r}")
+
+
+def _skill_names_match(frontmatter_name: str, folder_name: str) -> bool:
+    """Does a frontmatter ``name`` refer to the folder it was read from?
+
+    Windows filesystems are case-insensitive: ``skills/My-Skill`` and a
+    frontmatter ``name: my-skill`` are the same directory, so an exact match
+    would silently drop skills that were valid before this check landed (they
+    disappear from the registry, and from download/pack too). POSIX stays
+    exact — ``My-Skill`` and ``my-skill`` are two different folders there.
+    """
+    if frontmatter_name == folder_name:
+        return True
+    return os.name == "nt" and frontmatter_name.lower() == folder_name.lower()
+
+
+def _locate_skill_md(zf: zipfile.ZipFile) -> "tuple[str, str]":
+    """Return ``(skill_md_entry, strip_prefix)`` for a skill ZIP.
+
+    Accepts SKILL.md at the archive root, or inside a single top-level
+    directory (``my-skill/SKILL.md`` — the layout the AgentSkills spec allows).
+    ``strip_prefix`` is what has to be removed from entry names on extraction.
+    """
+    names = zf.namelist()
+    if "SKILL.md" in names:
+        return "SKILL.md", ""
+    for top in sorted({n.split("/")[0] for n in names if "/" in n}):
+        candidate = f"{top}/SKILL.md"
+        if candidate in names:
+            return candidate, f"{top}/"
+    raise ValueError("ZIP must contain SKILL.md (at root or in a single top-level directory)")
 
 
 
@@ -219,10 +255,13 @@ class RegistryStore:
             try:
                 meta = parse_skill_md(skill_md)
                 name = validate_skill_name(meta["name"])
-                if name != child.name:
+                if not _skill_names_match(name, child.name):
                     # A frontmatter name that differs from the folder name would
                     # make skill_path / get_skill_zip address a different
                     # directory than the one on disk. Treat it as corrupt data.
+                    # Windows compares case-insensitively — see
+                    # _skill_names_match for why an exact match would hide
+                    # existing skills there.
                     raise ValueError(
                         f"frontmatter name {name!r} does not match folder {child.name!r}"
                     )
@@ -243,32 +282,36 @@ class RegistryStore:
                 logger.warning("Skipping invalid skill '%s': %s", child.name, e)
         return entries
 
+    def peek_skill_name(self, zip_bytes: bytes) -> str:
+        """Validate a skill ZIP and return its frontmatter name — no writes.
+
+        ``save_skill_zip`` replaces ``skills/<name>/`` (no backup), so a caller
+        that has to refuse the upload for a reason the *store* doesn't know
+        about — e.g. the ownership check in
+        ``RegistryService.register_skill`` — must learn the name first.
+        Validation is identical to ``save_skill_zip``: a ZIP rejected here is
+        rejected there too.
+        """
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for info in zf.infolist():
+                _validate_zip_entry(info.orig_filename)
+            skill_md_path, _ = _locate_skill_md(zf)
+            skill_md_content = zf.read(skill_md_path).decode("utf-8")
+        meta = parse_skill_md_content(skill_md_content)
+        return validate_skill_name(meta["name"])
+
     def save_skill_zip(self, zip_bytes: bytes) -> SkillData:
         """Extract a skill ZIP, validate SKILL.md, save to skills/{name}/. Returns SkillData."""
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             # Security: every entry must be a relative POSIX path without any
             # parent reference, backslash, drive prefix or NUL — see
-            # _validate_zip_entry for why each of those is needed.
+            # _validate_zip_entry for why each of those is needed. Validated on
+            # ``orig_filename``: ``filename`` is truncated at the first NUL.
             for info in zf.infolist():
-                _validate_zip_entry(info.filename)
+                _validate_zip_entry(info.orig_filename)
 
             # Find SKILL.md — at root or inside a single top-level directory
-            names = zf.namelist()
-            skill_md_path = None
-            strip_prefix = ""
-            if "SKILL.md" in names:
-                skill_md_path = "SKILL.md"
-            else:
-                # Check for single top-level directory containing SKILL.md
-                top_dirs = {n.split("/")[0] for n in names if "/" in n}
-                for td in top_dirs:
-                    candidate = f"{td}/SKILL.md"
-                    if candidate in names:
-                        skill_md_path = candidate
-                        strip_prefix = f"{td}/"
-                        break
-            if not skill_md_path:
-                raise ValueError("ZIP must contain SKILL.md (at root or in a single top-level directory)")
+            skill_md_path, strip_prefix = _locate_skill_md(zf)
 
             # Parse frontmatter
             skill_md_content = zf.read(skill_md_path).decode("utf-8")
@@ -285,8 +328,11 @@ class RegistryStore:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
-                # Strip prefix if SKILL.md was inside a subdirectory
-                rel_path = info.filename
+                # Strip prefix if SKILL.md was inside a subdirectory.
+                # ``orig_filename`` (not ``filename``) is the name that was
+                # validated above — never extract from a name the checks didn't
+                # see.
+                rel_path = info.orig_filename
                 if strip_prefix and rel_path.startswith(strip_prefix):
                     rel_path = rel_path[len(strip_prefix):]
                 if not rel_path:

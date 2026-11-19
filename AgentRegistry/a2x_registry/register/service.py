@@ -123,6 +123,10 @@ class RegistryService:
         # See docs/heartbeat_design.md.
         self._lease_config_cache: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        # dataset -> mutex serialising skill *upload* against *deregister*
+        # (see _skill_lifecycle_lock). Kept out of _lock on purpose: these
+        # operations span disk I/O and must not block unrelated registry work.
+        self._skill_locks: Dict[str, threading.Lock] = {}
         # Reservation leases — protected by _lock, lazy-swept on access.
         # No background daemon, no disk persistence. Restart clears them.
         self._leases: Dict[Tuple[str, str], _Lease] = {}
@@ -313,6 +317,30 @@ class RegistryService:
         )
         return self._do_register(dataset, entry, req.persistent)
 
+    def _skill_lifecycle_lock(self, dataset: str) -> threading.Lock:
+        """Mutex shared by skill upload and skill deregister for one dataset.
+
+        Both operations touch two layers in sequence — the skill folder on
+        disk, then the in-memory entry — and neither order is atomic on its
+        own. Without a shared mutex:
+
+        * ``register_skill`` writes the folder first; a 403 discovered
+          afterwards would already have destroyed the previous owner's files
+          (that is why the ownership check moves ahead of the write), and
+        * ``deregister_skill`` deletes the folder first; a re-upload that lands
+          in the gap before the entry pop has its brand-new entry removed by
+          the deregister.
+
+        One lock per dataset closes both windows; unrelated datasets don't
+        serialise against each other, and the lock is never held together with
+        ``_lock`` (no lock ordering to reason about).
+        """
+        with self._lock:
+            lock = self._skill_locks.get(dataset)
+            if lock is None:
+                lock = self._skill_locks[dataset] = threading.Lock()
+            return lock
+
     def register_skill(
         self,
         dataset: str,
@@ -331,36 +359,46 @@ class RegistryService:
         self._require_type_allowed(dataset, "skill")
 
         store = self._get_store(dataset)
-        skill_data = store.save_skill_zip(zip_bytes)
+        # The name has to be known before anything is written: save_skill_zip
+        # replaces skills/<name>/ without a backup, so an ownership check that
+        # ran after it would leave the real owner's files destroyed behind a
+        # 403. peek_skill_name parses + validates the same way, read-only.
+        name = store.peek_skill_name(zip_bytes)
+        service_id = generate_service_id("skill", name)
 
-        # Post-extraction re-validation — trivially passes v0.0 (save_skill_zip
-        # already enforced name+description) but will flag issues once a
-        # skill v1.0+ adds stricter checks.
-        self._require_valid(dataset, "skill", skill_data)
+        with self._skill_lifecycle_lock(dataset):
+            with self._lock:
+                existing = self._entries.get(dataset, {}).get(service_id)
+                # On replace, perform the same owner check as update_service so
+                # provider X can't re-upload over provider Y's skill folder.
+                if existing is not None and caller is not None:
+                    self._assert_owner(existing, caller)
 
-        service_id = generate_service_id("skill", skill_data.name)
-        entry = RegistryEntry(
-            service_id=service_id,
-            type="skill",
-            source="skill_folder",
-            owner_id=(caller.principal_id if caller is not None else None),
-            skill_data=skill_data,
-        )
+            skill_data = store.save_skill_zip(zip_bytes)
 
-        with self._lock:
-            ds = self._entries.setdefault(dataset, {})
-            # On replace, perform the same owner check as update_service so
-            # provider X can't re-upload over provider Y's skill folder.
-            existing = ds.get(service_id)
-            if existing is not None and caller is not None:
-                self._assert_owner(existing, caller)
-            status = "updated" if service_id in ds else "registered"
-            ds[service_id] = entry
+            # Post-extraction re-validation — trivially passes v0.0
+            # (save_skill_zip already enforced name+description) but will flag
+            # issues once a skill v1.0+ adds stricter checks.
+            self._require_valid(dataset, "skill", skill_data)
 
-        self._regenerate_output(dataset)
-        self._mark_taxonomy_stale(dataset)
-        self._emit_mutation(dataset, service_id,
-                            "update" if status == "updated" else "register", entry)
+            entry = RegistryEntry(
+                service_id=service_id,
+                type="skill",
+                source="skill_folder",
+                owner_id=(caller.principal_id if caller is not None else None),
+                skill_data=skill_data,
+            )
+
+            with self._lock:
+                ds = self._entries.setdefault(dataset, {})
+                status = "updated" if service_id in ds else "registered"
+                ds[service_id] = entry
+
+            self._regenerate_output(dataset)
+            self._mark_taxonomy_stale(dataset)
+            self._emit_mutation(dataset, service_id,
+                                "update" if status == "updated" else "register",
+                                entry)
         return SkillResponse(name=skill_data.name, dataset=dataset,
                              status=status, service_id=service_id)
 
@@ -370,29 +408,37 @@ class RegistryService:
         name: str,
         caller: Optional[AuthContext] = None,
     ) -> SkillResponse:
-        """Remove a skill folder and its registry entry."""
+        """Remove a skill folder and its registry entry.
+
+        Upload and deregister share ``_skill_lifecycle_lock``: the two steps
+        below are only consistent when no re-upload of the same skill can
+        interleave, otherwise the deregister would pop the fresh entry created
+        between ``remove_skill`` and the pop.
+        """
         service_id = generate_service_id("skill", name)
 
-        with self._lock:
-            ds = self._entries.get(dataset, {})
-            if service_id not in ds:
-                return SkillResponse(name=name, dataset=dataset, status="not_found")
-            if caller is not None:
-                self._assert_owner(ds[service_id], caller)
+        with self._skill_lifecycle_lock(dataset):
+            with self._lock:
+                ds = self._entries.get(dataset, {})
+                if service_id not in ds:
+                    return SkillResponse(name=name, dataset=dataset, status="not_found")
+                if caller is not None:
+                    self._assert_owner(ds[service_id], caller)
 
-        # Delete on disk *before* dropping the in-memory entry: name validation
-        # (or an IO error) must not leave the registry claiming the skill is
-        # gone while the folder and service.json still list it. A ValueError
-        # here surfaces as 400 and leaves every layer untouched.
-        store = self._get_store(dataset)
-        store.remove_skill(name)
+            # Delete on disk *before* dropping the in-memory entry: name
+            # validation (or an IO error) must not leave the registry claiming
+            # the skill is gone while the folder and service.json still list
+            # it. A ValueError here surfaces as 400 and leaves every layer
+            # untouched.
+            store = self._get_store(dataset)
+            store.remove_skill(name)
 
-        with self._lock:
-            self._entries.get(dataset, {}).pop(service_id, None)
+            with self._lock:
+                self._entries.get(dataset, {}).pop(service_id, None)
 
-        self._regenerate_output(dataset)
-        self._mark_taxonomy_stale(dataset)
-        self._emit_mutation(dataset, service_id, "deregister", None)
+            self._regenerate_output(dataset)
+            self._mark_taxonomy_stale(dataset)
+            self._emit_mutation(dataset, service_id, "deregister", None)
         return SkillResponse(name=name, dataset=dataset, status="deleted",
                              service_id=service_id)
 
