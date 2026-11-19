@@ -174,6 +174,35 @@ def test_client_maps_transport_errors(monkeypatch: pytest.MonkeyPatch) -> None:
         asyncio.run(client.webauthn_registration_options({"userId": "user-1"}))
 
 
+@pytest.mark.parametrize("stage", ["open", "body", "error_body"])
+def test_client_maps_timeouts(monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    timeout = TimeoutError("timed out")
+
+    def raise_timeout(*args: object, **kwargs: object) -> None:
+        raise timeout
+
+    def open_response(*args: object, **kwargs: object) -> _Response:
+        if stage == "open":
+            raise timeout
+        if stage == "error_body":
+            body = io.BytesIO()
+            monkeypatch.setattr(body, "read", raise_timeout)
+            raise urllib.error.HTTPError(
+                "http://a4p.example/test", 502, "Bad Gateway", None, body
+            )
+        response = _Response(b"")
+        monkeypatch.setattr(response, "read", raise_timeout)
+        return response
+
+    monkeypatch.setattr("urllib.request.urlopen", open_response)
+    client = A4PClient(base_url="http://a4p.example")
+
+    with pytest.raises(RuntimeError, match="A4P HTTP request failed: timed out") as error:
+        asyncio.run(client.webauthn_registration_options({"userId": "user-1"}))
+
+    assert error.value.__cause__ is timeout
+
+
 @pytest.mark.parametrize("body", [b"", b"[]"])
 def test_client_normalizes_empty_and_non_object_responses(
     monkeypatch: pytest.MonkeyPatch,

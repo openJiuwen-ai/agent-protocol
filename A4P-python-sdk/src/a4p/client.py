@@ -178,17 +178,18 @@ class A4PClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            with exc:
-                raw = exc.read().decode("utf-8", errors="replace")
             try:
-                error_payload = json.loads(raw)
-            except json.JSONDecodeError:
-                error_payload = {"error": raw}
-            raise RuntimeError(f"A4P HTTP {exc.code}: {error_payload}") from exc
-        except urllib.error.URLError as exc:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                with exc:
+                    raw = exc.read().decode("utf-8", errors="replace")
+                try:
+                    error_payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    error_payload = {"error": raw}
+                raise RuntimeError(f"A4P HTTP {exc.code}: {error_payload}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
             raise RuntimeError(f"A4P HTTP request failed: {exc}") from exc
         try:
             parsed = json.loads(raw) if raw else {}

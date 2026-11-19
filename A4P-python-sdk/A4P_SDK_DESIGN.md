@@ -349,6 +349,8 @@ class A4PUserSignatureMethod(Protocol):
 2. 验证注册 credential 并写入 credential store；
 3. 生成 authentication options，验证 assertion、RP ID、origin、用户归属和 sign count。
 
+注册验证会消费 challenge。凭据无效时，HTTP 接口返回 `400 bad_request`；重试前须重新获取 registration options。
+
 `WebAuthnUserSigner` 位于 User Authorizer 侧，只把浏览器 assertion 封装为统一的 `signatures.user`。
 
 #### `src/a4p/user_signature/ed25519.py`
