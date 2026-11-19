@@ -73,7 +73,7 @@ cd tool_example && ./run_example.sh --auth
 ## 运行多个示例（不含 sampling）
 
 ```bash
-./run_all_examples.sh
+bash run_all_examples.sh
 ```
 
 ## 相关文档
