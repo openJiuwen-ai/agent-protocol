@@ -180,10 +180,11 @@ Mandate 和 Token 使用 `TypedDict` 描述，运行时仍是普通 JSON `dict`�
 - `start()` / `stop()` 管理监听；
 - `_dispatch_checked()` 把路径转发到 `A4PServer`；
 - 非 POST 返回 405，未知路径返回 404；
+- 服务端按单个 `Content-Length` 读取请求体，超过 1 MiB 时返回 413。服务端在读取请求体前拒绝重复的 `Content-Length` 和任何 `Transfer-Encoding`，返回 400 并关闭连接。
 - endpoint 抛出的普通 `ValueError` 返回 400；稳定协议冲突返回 409；未处理异常返回 500；
 - 默认监听 `A4P_SERVER_HOST=127.0.0.1`、`A4P_SERVER_PORT=8961`。
 
-它适用于本地集成和演示，不包含生产级 TLS、认证、限流、请求体上限或完整 HTTP 协议治理。
+它适用于本地集成和演示，不包含生产级 TLS、认证、限流或完整 HTTP 协议治理。
 
 ### 4.3 意图授权
 
