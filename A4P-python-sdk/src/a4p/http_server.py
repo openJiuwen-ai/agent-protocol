@@ -118,7 +118,9 @@ class A4PHTTPServer:
             await self._send_json(writer, 400, {"error": "bad_request", "message": str(exc)})
         except Exception as exc:
             logger.exception("[A4PHTTPServer] request failed: %s", exc)
-            await self._send_json(writer, 500, {"error": "internal_error", "message": str(exc)})
+            await self._send_json(
+                writer, 500, {"error": "internal_error", "message": "Internal Server Error"}
+            )
         finally:
             writer.close()
             await writer.wait_closed()

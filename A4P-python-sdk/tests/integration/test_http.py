@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from a4p import A4PClient
+from a4p import A4PClient, InMemoryCredentialStore
 from a4p.user_signature.ed25519 import ed25519_public_jwk
+from a4p.user_signature.webauthn import WebAuthnSignatureMethod
 from a4p.http_server import A4PHTTPServer, a4p_http_port
 from tests.http_support import read_http_response
 from tests.support import ExplicitEd25519A4PServer as A4PServer
@@ -289,3 +291,79 @@ def test_real_http_server_returns_protocol_error_statuses() -> None:
             await http_server.stop()
 
     asyncio.run(run())
+
+
+def test_http_500_keeps_unexpected_exception_details_in_server_logs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    internal_error = "SQLite failed to open /internal/example.sqlite3"
+    server = A4PServer()
+
+    def fail_registration(request: dict) -> dict:
+        raise RuntimeError(internal_error)
+
+    monkeypatch.setattr(server, "register_ed25519_credential", fail_registration)
+    http_server = A4PHTTPServer(server, host="127.0.0.1", port=0)
+
+    async def run() -> bytes:
+        await http_server.start()
+        try:
+            return await _raw_http_request(
+                http_server.port,
+                b"POST /a4p/v1/user-credentials/ed25519/register HTTP/1.1\r\n"
+                b"Host: localhost\r\nContent-Length: 2\r\n\r\n{}",
+            )
+        finally:
+            await http_server.stop()
+
+    headers, body = asyncio.run(run()).split(b"\r\n\r\n", 1)
+    assert headers.startswith(b"HTTP/1.1 500 Internal Server Error")
+    assert json.loads(body) == {"error": "internal_error", "message": "Internal Server Error"}
+    assert internal_error in caplog.text
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        {},
+        {
+            "id": "Y3JlZA",
+            "rawId": "Y3JlZA",
+            "type": "public-key",
+            "response": {"clientDataJSON": "", "attestationObject": ""},
+        },
+    ],
+    ids=["missing-fields", "malformed-client-data"],
+)
+def test_http_rejects_malformed_webauthn_registration(
+    monkeypatch: pytest.MonkeyPatch, credential: dict
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    store = InMemoryCredentialStore()
+    server = A4PServer(user_signature_method=WebAuthnSignatureMethod(store))
+    http_server = A4PHTTPServer(server, host="127.0.0.1", port=0)
+
+    async def run() -> None:
+        await http_server.start()
+        try:
+            client = A4PClient(base_url=f"http://127.0.0.1:{http_server.port}/", timeout=2)
+            options = await client.webauthn_registration_options({"userId": "user-1"})
+            payload = {
+                "userId": "user-1",
+                "registrationRequestId": options["registrationRequestId"],
+                "credential": credential,
+            }
+            with pytest.raises(
+                RuntimeError, match="A4P HTTP 400.*bad_request.*Invalid WebAuthn registration credential"
+            ):
+                await client.verify_webauthn_registration(payload)
+            with pytest.raises(
+                RuntimeError, match="A4P HTTP 400.*No WebAuthn registration challenge"
+            ):
+                await client.verify_webauthn_registration(payload)
+        finally:
+            await http_server.stop()
+
+    asyncio.run(run())
+    assert store.list_for_user("user-1") == []
