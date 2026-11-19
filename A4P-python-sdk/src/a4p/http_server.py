@@ -140,6 +140,8 @@ class A4PHTTPServer:
             raise _BadRequest("request line too long")
         method, path, _version = parts
         headers = await self._read_headers(reader)
+        if "transfer-encoding" in headers:
+            raise _BadRequest("Transfer-Encoding is not supported")
         raw_length = headers.get("content-length")
         try:
             body_size = int(raw_length) if raw_length is not None else 0
@@ -186,7 +188,10 @@ class A4PHTTPServer:
                 raise _BadRequest("too many request headers")
             name, has_separator, value = raw.decode("iso-8859-1").partition(":")
             if has_separator:
-                headers[name.strip().lower()] = value.strip()
+                name = name.strip().lower()
+                if name == "content-length" and name in headers:
+                    raise _BadRequest("duplicate Content-Length")
+                headers[name] = value.strip()
 
     @staticmethod
     def _json_payload(body: bytes) -> dict[str, Any]:
