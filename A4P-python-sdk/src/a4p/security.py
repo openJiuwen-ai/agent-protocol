@@ -27,6 +27,15 @@ _DEV_KEY_ENV_VALUES = {"dev", "development", "local", "test", "testing", "ci"}
 _DEV_KEY_OPT_IN_VAR = "A4P_ALLOW_DEV_KEYS"
 _DEV_KEY_OPT_IN_VALUES = {"1", "true", "yes", "on"}
 
+# Only A4P-owned variables may *enable* the built-in development key. Generic
+# variables such as ``ENV`` / ``PYTHON_ENV`` are routinely set by build systems,
+# containers and unrelated frameworks, so honouring their values here would let
+# an almost-production deployment enable a publicly derivable key by accident.
+# They are still honoured in the opposite direction: any of them reporting
+# "production" keeps the built-in key disabled.
+_DEV_KEY_ENV_NAMES = ("A4P_ENV", "APP_ENV")
+_PRODUCTION_ENV_NAMES = ("A4P_ENV", "APP_ENV", "ENV", "PYTHON_ENV")
+
 
 def random_challenge() -> str:
     """Return a cryptographically secure, URL-safe authorization challenge."""
@@ -34,7 +43,7 @@ def random_challenge() -> str:
 
 
 def is_production_environment() -> bool:
-    for env_name in ("A4P_ENV", "APP_ENV", "ENV", "PYTHON_ENV"):
+    for env_name in _PRODUCTION_ENV_NAMES:
         value = (os.getenv(env_name) or "").strip().lower()
         if value in _PRODUCTION_ENV_VALUES:
             return True
@@ -52,8 +61,13 @@ def dev_signing_keys_allowed() -> bool:
     the same local key instead of a configured trust anchor.
 
     Opting in requires either ``A4P_ALLOW_DEV_KEYS=1`` or an explicit
-    non-production environment (``A4P_ENV`` / ``APP_ENV`` / ``ENV`` /
-    ``PYTHON_ENV`` set to dev, development, local, test, testing or ci).
+    non-production environment: ``A4P_ENV`` / ``APP_ENV`` set to dev,
+    development, local, test, testing or ci. Generic variables such as ``ENV``
+    and ``PYTHON_ENV`` deliberately do *not* opt in -- they are set by build
+    systems, containers and unrelated frameworks, so trusting them would
+    silently hand a publicly derivable key to a near-production deployment.
+    They are still honoured the other way round: when any of them reports
+    "production", the built-in key stays disabled.
 
     Production always returns False, even with the opt-in set: the answer must
     not depend on the caller checking ``is_production_environment()`` first.
@@ -65,7 +79,7 @@ def dev_signing_keys_allowed() -> bool:
         return False
     if (os.getenv(_DEV_KEY_OPT_IN_VAR) or "").strip().lower() in _DEV_KEY_OPT_IN_VALUES:
         return True
-    for env_name in ("A4P_ENV", "APP_ENV", "ENV", "PYTHON_ENV"):
+    for env_name in _DEV_KEY_ENV_NAMES:
         value = (os.getenv(env_name) or "").strip().lower()
         if value in _DEV_KEY_ENV_VALUES:
             return True
@@ -76,10 +90,17 @@ def ed25519_private_key_from_env(*, env_name: str, default_seed_label: str, purp
     raw = os.getenv(env_name)
     if raw is not None:
         value = raw.strip()
-        if value:
-            if value == default_seed_label:
-                _reject_or_warn_default_key(purpose=purpose, env_name=env_name)
-            return _load_ed25519_private_key(value, env_name=env_name)
+        if not value:
+            raise RuntimeError(
+                f"{env_name} is set but empty; refusing to treat a blank value as unset, "
+                f"because that would fall back to the built-in development Ed25519 signing "
+                f"key whose private half is public. Provide a real secret, or unset "
+                f"{env_name} instead of blanking it if you really mean to run with the "
+                f"development key."
+            )
+        if value == default_seed_label:
+            _reject_or_warn_default_key(purpose=purpose, env_name=env_name)
+        return _load_ed25519_private_key(value, env_name=env_name)
 
     if is_production_environment():
         raise RuntimeError(

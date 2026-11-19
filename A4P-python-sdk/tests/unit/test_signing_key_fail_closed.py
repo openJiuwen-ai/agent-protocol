@@ -103,3 +103,63 @@ def test_explicit_secret_is_used_verbatim(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv(ENV_NAME, "hex:" + ("11" * 32))
 
     assert _key_bytes() != _DEV_DERIVED_SEED
+
+
+@pytest.mark.parametrize("blank", ["", " ", "   ", "\t\n"])
+def test_blank_explicit_key_is_a_config_error_not_an_opt_in(
+    monkeypatch: pytest.MonkeyPatch, blank: str
+) -> None:
+    """``KEY=`` 这类空占位不能被当成「未设置」而静默启用公开私钥。"""
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv("A4P_ENV", "dev")
+    monkeypatch.setenv("A4P_ALLOW_DEV_KEYS", "1")
+    monkeypatch.setenv(ENV_NAME, blank)
+
+    with pytest.raises(RuntimeError, match="is set but empty"):
+        _key_bytes()
+
+
+def test_blank_explicit_key_is_rejected_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv("A4P_ENV", "production")
+    monkeypatch.setenv(ENV_NAME, "")
+
+    with pytest.raises(RuntimeError, match="is set but empty"):
+        _key_bytes()
+
+
+@pytest.mark.parametrize("env_name", ["ENV", "PYTHON_ENV"])
+@pytest.mark.parametrize("env_value", ["dev", "development", "local", "test", "ci"])
+def test_generic_env_vars_do_not_enable_the_built_in_key(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, env_value: str
+) -> None:
+    """``ENV`` / ``PYTHON_ENV`` 常被构建系统无关地设置，不能成为隐式开启面。"""
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv(env_name, env_value)
+
+    assert dev_signing_keys_allowed() is False
+    with pytest.raises(RuntimeError, match="refusing to fall back"):
+        _key_bytes()
+
+
+@pytest.mark.parametrize("env_name", ["ENV", "PYTHON_ENV"])
+def test_generic_production_env_vars_still_deny_the_built_in_key(
+    monkeypatch: pytest.MonkeyPatch, env_name: str
+) -> None:
+    """收紧只作用于「允许」方向：通用变量报生产时依旧否决。"""
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv(env_name, "production")
+    monkeypatch.setenv("A4P_ALLOW_DEV_KEYS", "1")
+
+    assert dev_signing_keys_allowed() is False
+    with pytest.raises(RuntimeError, match="production mode"):
+        _key_bytes()
+
+
+@pytest.mark.parametrize("env_value", ["dev", "test", "ci"])
+def test_app_env_also_opts_in(monkeypatch: pytest.MonkeyPatch, env_value: str) -> None:
+    _clear_switches(monkeypatch)
+    monkeypatch.setenv("APP_ENV", env_value)
+
+    assert dev_signing_keys_allowed() is True
+    assert _key_bytes() == _DEV_DERIVED_SEED
