@@ -221,6 +221,12 @@ def test_ed25519_method_rejects_malformed_registered_proofs() -> None:
     assert valid is False
     assert "Registered Ed25519 public key invalid" in reason
 
+    method.credential_store.save(replace(record, publicKey=None))
+    assert method.verify(context, signature) == (
+        False,
+        "Registered Ed25519 public key invalid: expected an object",
+    )
+
     with pytest.raises(ValueError, match="credential_id missing"):
         Ed25519UserSigner(
             credential_id="",
@@ -805,6 +811,13 @@ def test_webauthn_rejects_rp_origin_uv_and_bad_assertion(
         "credentialId": credential_id,
         "proof": {"assertion": {"id": credential_id}},
     }
+
+    method.credential_store.save(replace(record, details=None))
+    assert method.verify(context, signature) == (
+        False,
+        "WebAuthn credential details invalid: expected an object",
+    )
+    method.credential_store.save(record)
 
     valid, reason = method.verify(context, signature)
     assert valid is False
