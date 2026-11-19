@@ -18,8 +18,8 @@ A4P（Agent-to-Agent Payment）支付意图协议的 HarmonyOS（ArkTS）实现�
 `assembleHar`（release）与 `genOnDeviceTestHap`：
 
 ```sh
-scripts/build.sh                                  # 从 PATH 解析 ohpm/hvigorw
-scripts/build.sh --ohpm <path> --hvigorw <path>   # 或显式指定位置
+bash scripts/build.sh                                  # 从 PATH 解析 ohpm/hvigorw
+bash scripts/build.sh --ohpm <path> --hvigorw <path>   # 或显式指定位置
 ```
 
 产物：
