@@ -5,12 +5,17 @@ from __future__ import annotations
 import gzip
 import logging
 import logging.handlers
+import os
 import shutil
 import time
 from datetime import date
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Owner read/write only: the registry is often run as root, so umask-derived
+# 0644 logs would be readable by every local user.
+_LOG_FILE_MODE = 0o600
 
 
 class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
@@ -23,6 +28,9 @@ class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
     ``.gz`` files beyond ``retention_days`` are pruned. A fixed-name file
     left over from a previous day (service down across midnight) is
     archived on startup based on its mtime.
+
+    Both the current log and archives are created mode 0600 so root-started
+    services do not expose logs to other local users.
     """
 
     def __init__(self, log_dir: Path, stem: str, retention_days: int) -> None:
@@ -39,6 +47,23 @@ class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
             delay=True,
         )
         self._archive_stale_file()
+        current = self._log_dir / self._fixed_name()
+        if current.exists():
+            os.chmod(current, _LOG_FILE_MODE)
+
+    def _open(self):
+        # Create with 0600 from the start (umask must not widen it), then
+        # tighten a file inherited from an older release.
+        os.close(
+            os.open(
+                self.baseFilename,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                _LOG_FILE_MODE,
+            )
+        )
+        stream = super()._open()
+        os.chmod(self.baseFilename, _LOG_FILE_MODE)
+        return stream
 
     def _fixed_name(self) -> str:
         return f"{self._stem}.log"
@@ -48,8 +73,16 @@ class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
 
     def _archive(self, src: Path, day: date) -> None:
         gz_path = self._log_dir / self._archived_name(day)
-        with open(src, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
+        fd = os.open(
+            gz_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            _LOG_FILE_MODE,
+        )
+        with open(src, "rb") as f_in:
+            with os.fdopen(fd, "wb") as raw:
+                with gzip.GzipFile(fileobj=raw, mode="wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+        os.chmod(gz_path, _LOG_FILE_MODE)
         src.unlink()
 
     def _archive_stale_file(self) -> None:
