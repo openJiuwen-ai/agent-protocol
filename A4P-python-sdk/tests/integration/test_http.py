@@ -367,3 +367,28 @@ def test_http_rejects_malformed_webauthn_registration(
 
     asyncio.run(run())
     assert store.list_for_user("user-1") == []
+
+
+@pytest.mark.parametrize("body", [b"[]", b'"token"', b"123", b"true", b"null"])
+def test_http_token_verification_rejects_non_object_json(body: bytes) -> None:
+    """非对象请求应返回 400，而不是被当作无效 token。"""
+    async def run() -> None:
+        http_server = A4PHTTPServer(
+            A4PServer(server_id="local://http-status-test"),
+            host="127.0.0.1",
+            port=0,
+        )
+        await http_server.start()
+        try:
+            response = await _raw_http_request(
+                http_server.port,
+                b"POST /a4p/v1/intent-tokens/verify HTTP/1.1\r\n"
+                b"Host: localhost\r\nContent-Length: %d\r\n\r\n" % len(body) + body,
+            )
+            headers, _, payload = response.partition(b"\r\n\r\n")
+            assert headers.startswith(b"HTTP/1.1 400 Bad Request")
+            assert json.loads(payload)["error"] == "bad_request"
+        finally:
+            await http_server.stop()
+
+    asyncio.run(run())
