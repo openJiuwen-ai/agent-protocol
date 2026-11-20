@@ -6,6 +6,12 @@
 
 请以本仓库 **默认分支 / 当前发布标签** 为准进行安全评估与修复；仅维护中的版本线接受安全修复，已过时版本建议升级到最新版本。具体长期支持策略可由维护团队在 Issue 或 Release 说明中补充。
 
+## 安全约束（贡献者须知）
+
+- 禁止硬编码密码 / 密钥 / token；禁止对不可信数据使用 `eval` / `exec` / `pickle.load`
+- 数据源连接串必须去凭据后再进入 artifact / plan / 历史表；凭据只从运行时 config 解析
+- 外部命令一律 `shutil.which()` 取绝对路径执行，禁 `shell=True`
+
 ## 报告漏洞
 
 请**勿先公开漏洞细节**，邮件发至 [contact@openjiuwen.com](mailto:contact@openjiuwen.com)，我们将在 3 个工作日内确认，并按 90 天协调披露政策处理。
@@ -17,7 +23,7 @@
 | 渠道 | 适用场景 | 入口 |
 | ---- | -------- | ---- |
 | 安全邮箱（推荐） | 可被利用的漏洞、敏感安全问题 | `contact@openjiuwen.com` |
-| 私密渠道 | 可被利用的漏洞、敏感安全问题 | 通过 GitCode 仓库 `openJiuwen/agent-protocol` 的维护者私信渠道联系；若平台不提供私信，请使用 Issue 模板中的「安全漏洞」模板提交（[选择模板](https://gitcode.com/openJiuwen/agent-protocol/issues/create/choose)） |
+| 私密渠道 | 可被利用的漏洞、敏感安全问题 | 通过 GitCode 仓库 `openJiuwen/agent-protocol` 的维护者私信渠道联系；若平台不提供私信，请使用 Issue 模板中的「安全漏洞」模板提交 |
 | Issue | 非敏感的安全加固建议、依赖组件风险讨论 | [https://gitcode.com/openJiuwen/agent-protocol/issues](https://gitcode.com/openJiuwen/agent-protocol/issues) |
 
 ### 报告内容要求
