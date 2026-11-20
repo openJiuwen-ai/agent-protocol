@@ -242,7 +242,7 @@ A4P Server 在 complete 时从 pending Mandate 重新派生同一个 challenge�
 
 ### 端点列表
 
-所有端点使用 JSON `POST`：
+所有端点使用 JSON `POST`。非空请求体必须是 JSON 对象；非法 JSON 或顶层为非对象的 JSON 返回 HTTP 400、`bad_request`。
 
 | 端点 | 调用方 | 作用 |
 | --- | --- | --- |
