@@ -1,0 +1,12 @@
+{
+  "name": "a4p",
+  "version": "1.0.0",
+  "description": "A4P (Agent-to-Agent Payment) protocol SDK for HarmonyOS: intent lifecycle management, payment execution accounting, and canonical JSON signing & verification.",
+  "main": "Index.ets",
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.21"
+  }
+}

@@ -4,9 +4,7 @@
 
 #include <nlohmann/json.hpp>
 #include <thread>
-#include <mutex>
 #include <future>
-#include <algorithm>
 
 #include "stream_server_emitter.h"
 #include "a2a_log.h"
@@ -58,6 +56,9 @@ int HttpServerTransport::Start()
     config.host = config_.ip;
     config.port = static_cast<uint16_t>(config_.port);
     config.ioThreadNum = config_.ioThreadNum;
+    config.connectionTimeoutSeconds = config_.connectionTimeoutSeconds;
+    config.connectionSweepIntervalSeconds = config_.connectionSweepIntervalSeconds;
+    config.requestTimeoutSeconds = config_.requestTimeoutSeconds;
 
     // Disable TLS for simple HTTP service
     config.tlsConfig.enabled = false;
@@ -114,6 +115,12 @@ void HttpServerTransport::SetupCardEndpoint(Server::RouteMap& routeMap)
 
 void HttpServerTransport::HandleJsonRpcRequest(const Http::HttpRequest& req, const Http::HttpRequestContext& ctx)
 {
+    // Reap workers that have finished serving earlier requests. They cannot reap themselves:
+    // a thread stays joinable() after running to completion, so self-cleanup based on
+    // joinable() removes nothing and finished handles would accumulate with every request
+    // (see WorkerThreadRegistry). join() on a finished thread returns immediately.
+    workerRegistry_.ReclaimFinished();
+
     // Parse the request to check if it's a streaming method
     std::string contentType = A2A::Http::GetHeaderValue(req.headers, Http::CONTENT_TYPE_HEADER);
 
@@ -142,8 +149,10 @@ bool HttpServerTransport::IsStreamingMethod(const std::string& reqBody) const
 void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
     const std::map<std::string, std::string>& headersCopy)
 {
-    // Create a background thread to handle streaming request
-    std::thread workerThread([this, reqBody, ctx, headersCopy]() mutable {
+    // The handler runs on its own worker thread so the IO thread is not held for the whole
+    // (potentially minutes-long) streaming response. The registry tracks the worker; it is
+    // joined once finished - never detached, the body below captures this and handler_.
+    workerRegistry_.Spawn([this, reqBody, ctx, headersCopy]() mutable {
         // Prepare initial response for streaming
         Http::HttpResponse response;
         SetCommonHeaders(response);
@@ -155,45 +164,38 @@ void HttpServerTransport::HandleStreamingRequest(const std::string& reqBody, con
         response.type = Http::HttpSendType::HTTPRESPONSESTART;
         ctx.httpSendFunc(response, ctx);
 
+        // The response start above already put the chunked SSE head on the wire, so the emitter
+        // must know the stream is open: a non-streaming write now degrades to a data: event
+        // instead of injecting a second status line into the chunked stream.
+        auto emitter = std::make_shared<StreamServerEmitter>(ctx, headersCopy, true);
         try {
-            auto emitter = std::make_shared<StreamServerEmitter>(ctx);
             std::string unusedResp; // For streaming, response body is not used
             handler_(reqBody, unusedResp, emitter);
         } catch (const std::exception& e) {
             std::string error_msg = e.what() ? e.what() : "Unknown exception";
-            A2A_LOG(A2A_LOG_LEVEL::ERROR, "SetNonBlocking failed: " + error_msg);
+            A2A_LOG(A2A_LOG_LEVEL::ERROR, "streaming handler failed: " + error_msg);
 
-            // Send error as SSE event
-            Http::HttpResponse error_response;
-            SetCommonHeaders(error_response);
-            error_response.body = "event: error\ndata: {\"error\":\"" + std::string(e.what()) + "\"}\n\n";
-
-            ctx.httpSendFunc(error_response, ctx);
-        }
-
-        // Clean up the thread from the vector when done
-        {
-            std::lock_guard<std::mutex> lock(workerThreadsMutex_);
-            workerThreads_.erase(
-                std::remove_if(workerThreads_.begin(), workerThreads_.end(),
-                    [](const std::thread& t) { return !t.joinable(); }),
-                workerThreads_.end());
+            // The error goes out as an event inside the open stream (headers are already on the
+            // wire), followed by the terminating chunk; both are dropped if the handler ended
+            // the stream before throwing. Guarded because an exception escaping this lambda
+            // would leave the worker thread and end the process.
+            try {
+                emitter->WriteErrorEvent(error_msg);
+                emitter->WriteDone();
+            } catch (const std::exception& reportError) {
+                A2A_LOG(A2A_LOG_LEVEL::ERROR,
+                    std::string("failed to report streaming error: ") + reportError.what());
+            }
         }
     });
-
-    // Store the thread in our vector and detach it
-    {
-        std::lock_guard<std::mutex> lock(workerThreadsMutex_);
-        workerThreads_.emplace_back(std::move(workerThread));
-    }
 }
 
 void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, const Http::HttpRequestContext& ctx,
     const std::map<std::string, std::string>& headersCopy)
 {
-    // Handle non-streaming request with a dedicated background thread
-    // Create a background thread to handle the request
-    std::thread workerThread([this, reqBody, ctx, headersCopy]() mutable {
+    // Dedicated worker thread for the same reason as the streaming path: the IO thread must
+    // stay free while the handler produces the response. Tracked (and joined) by the registry.
+    workerRegistry_.Spawn([this, reqBody, ctx, headersCopy]() mutable {
         std::string responseLocal;
         auto emitter = std::make_shared<StreamServerEmitter>(ctx, headersCopy);
         try {
@@ -209,22 +211,7 @@ void HttpServerTransport::HandleNonStreamingRequest(const std::string& reqBody, 
         if (!responseLocal.empty()) {
             emitter->WriteNonStreamingData(responseLocal);
         }
-
-        // Clean up the thread from the vector when done
-        {
-            std::lock_guard<std::mutex> lock(workerThreadsMutex_);
-            workerThreads_.erase(
-                std::remove_if(workerThreads_.begin(), workerThreads_.end(),
-                    [](const std::thread& t) { return !t.joinable(); }),
-                workerThreads_.end());
-        }
     });
-
-    // Store the thread in our vector and detach it
-    {
-        std::lock_guard<std::mutex> lock(workerThreadsMutex_);
-        workerThreads_.emplace_back(std::move(workerThread));
-    }
 }
 
 void HttpServerTransport::SetCommonHeaders(Http::HttpResponse& response)
@@ -277,22 +264,9 @@ HttpServerTransport::~HttpServerTransport()
         A2A_LOG(A2A_LOG_LEVEL::ERROR, "Unknown exception in joining listen thread");
     }
 
-    // Join all worker threads before destruction
-    std::vector<std::thread> threadsToJoin;
-    {
-        std::lock_guard<std::mutex> lock(workerThreadsMutex_);
-        for (auto& worker_thread : workerThreads_) {
-            if (worker_thread.joinable()) {
-                threadsToJoin.emplace_back(std::move(worker_thread));
-            }
-        }
-        workerThreads_.clear();
-    }
-    for (auto& t : threadsToJoin) {
-        if (t.joinable()) {
-            t.join();
-        }
-    }
+    // Join all worker threads before destruction: they capture this and handler_, so their
+    // bodies must have returned before member destruction begins.
+    workerRegistry_.JoinAll();
 }
 
 } // namespace A2A::Transport

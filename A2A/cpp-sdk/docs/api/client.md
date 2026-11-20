@@ -8,13 +8,50 @@
 #include "client/http_card_resolver_builder.h"
 
 std::string baseUrl = "http://127.0.0.1:8888";
-auto resolver = A2A::Client::HttpCardResolverBuilder::Build(baseUrl);
+auto resolver = A2A::Client::HttpCardResolverBuilder::Build(baseUrl, "/.well-known/agent-card.json");
 
 auto cardFuture = resolver->GetAgentCard();
 A2A::AgentCard card = cardFuture.get();
 ```
 
 默认路径为 `/.well-known/agent-card.json`（A2A 标准推荐方式）。
+
+构造参数 `httpKwargs` 为**预留参数**：当前版本的发现请求不携带这些 headers（传入值被忽略），待后续版本接入；请勿依赖其生效。
+
+`GetAgentCard` 可选参数：相对路径与发现超时（秒）：
+
+```cpp
+// 指定 10s 发现超时（默认 60s，0 = 默认值）
+auto cardFuture = resolver->GetAgentCard(std::nullopt, 10);
+```
+
+`GetAllAgentCards(timeout)` 同样接受发现超时形参，语义与默认值相同。
+
+### Card 缓存（TTL）
+
+Agent Card 在 Agent 运行期间通常是静态的，高频 Discover（如轮询式任务状态检查）重复拉取同一卡片是纯网络开销。可通过 `CardCacheConfig` 为 resolver 开启 TTL 缓存（**默认关闭**，保持既有行为不变；`enabled` 时要求 `ttl > 0` 且 `maxEntries > 0`，非法组合按缓存禁用处理并记录 WARN，不会静默退化）：
+
+```cpp
+A2A::Client::CardCacheConfig cacheConfig;
+cacheConfig.enabled = true;
+cacheConfig.ttl = 60;                              // 缓存有效期，单位秒，默认 60
+cacheConfig.maxEntries = 64;                       // 条目上限，默认 64
+cacheConfig.refreshRetryInterval = 1000;           // 刷新失败重试退避基数，单位毫秒
+
+auto resolver = A2A::Client::HttpCardResolverBuilder::Build(baseUrl, cardPath, {}, cacheConfig);
+```
+
+行为约定：
+
+- **短连接**：card 发现是一次性 HTTP GET，每次请求按 `baseUrl + 相对路径` 建立独立连接，响应后立即拆链；resolver 构造时不建链；
+- **路径分键**：`GetAgentCard` 的路径实参拼入发现地址，不同路径分别缓存；超过 `maxEntries` 时按刷新次序淘汰最久未刷新条目（O(1)，不依赖时钟精度）；
+- **未过期命中**：直接返回缓存卡片，不发起 HTTP 请求；
+- **未命中合并**（single-flight）：同 key 并发未命中共享同一次网络请求，冷启动不放大请求数；
+- **过期命中**（stale-while-revalidate）：立即返回旧卡片，同时后台异步刷新（同 key 去重）；
+- **失败退避**：后台刷新失败时保留旧条目并按指数退避重试（基数 `refreshRetryInterval`，封顶 32 倍，成功后清零；0 = 每次过期命中即重试），持续故障时不会形成重试风暴；
+- **强制刷新**：`A2ACardResolver::ForceRefresh()` 失效指定路径缓存，并**发起独立的新网络请求**（不合并进该 key 进行中的 single-flight 请求），同时使进行中的后台刷新与前台请求失效——旧请求结果既不写回缓存、也不覆盖新值。超时语义与 `GetAgentCard` 一致：支持按次传入超时（秒），传 0 使用 SDK 默认 60s。默认实现直接转发 `GetAgentCard`，无缓存语义的 resolver 无需单独覆写；
+- **失败不缓存**：传输错误或非卡片响应不写缓存，下次调用继续走网络；
+- **并发安全**：缓存读写由 `std::shared_mutex` 保护；所有 worker（前台 single-flight、后台刷新，以及缓存关闭时的发现请求）在 resolver 析构时收尾，请求尚未完成时析构会阻塞（每类 worker 各有超时上界）。
 
 ## 创建客户端
 
@@ -115,6 +152,36 @@ std::variant<Message, A2AError, std::pair<Task, UpdateEvent>>
 | `supportedTransports` | 客户端支持的传输标签 |
 | `acceptedOutputModes` | 接受的输出模式 |
 | `pushNotificationConfigs` | 默认推送通知配置 |
+| `timeoutSeconds` | 非流式请求总超时（秒，默认 300；<=0 用 SDK 默认值） |
+| `streamingIdleTimeoutSeconds` | 流式空闲超时（秒，默认 60）：相邻数据到达的最大间隔；流式请求无总时长上限 |
+
+## 超时语义
+
+超时参数以**秒**为单位，`0` 表示使用默认值。所有超时共享 **1800s 上限**：配置或传入更大的值会按上限截断（记 WARN 日志），不会导致客户端创建失败。每个阶段独立控制：
+
+| 阶段 | 配置入口 | 默认值 | 语义 |
+|------|----------|--------|------|
+| AgentCard 发现 | `A2ACardResolver::GetAgentCard(path, timeout)` / `GetAllAgentCards(timeout)` | 60s | 发现请求总超时 |
+| TCP/TLS 连接 | 传输层内部（`LibcurlConn`） | 30s | 连接建立超时 |
+| 非流式请求 | `ClientConfig::timeoutSeconds`，可被每次调用的 `timeout` 形参覆盖 | 300s | 请求总超时（含等待响应） |
+| 流式空闲 | `ClientConfig::streamingIdleTimeoutSeconds`，可被 `SendMessage`/`Resubscribe` 的 `timeout` 形参覆盖 | 60s | 相邻数据到达的最大间隔，超时断开流 |
+
+超时发生时通过 `A2AClientTimeoutError`（code `-32101`）抛出，错误消息携带阶段与已耗时，例如：
+
+```
+request timed out [stage=stream-idle, idle=60023ms, elapsed=60023ms]
+request timed out [stage=waiting-response-body, elapsed=300012ms]
+```
+
+超时行为可用自带桩服务的示例直接验证（无需真实 server）：
+
+```bash
+./output/bin/timeout_client   # 退出码 = 失败场景数，0 = 全部通过
+```
+
+该示例内置"只 accept、永不回包"的 TCP 桩，覆盖发现超时、非流式 per-call/config 超时、流式空闲超时（config/per-call）共 5 个场景，见 `examples/timeout_client.cpp`。
+
+> **与服务端回收预算的配套**：流式空闲超时只管客户端这一端。服务端对 in-flight 请求另有独立的静默预算（`HttpConfig::requestTimeoutSeconds`，默认 1800s），静默超过该值服务端会主动关闭连接。预期单步长时间无输出的 agent 任务需两端同时调大，只调大一端时另一端仍会先切断流（表现为 `A2A_TRANSPORT_EXCEPTION` 或 `stream-idle` 超时）；1800s 上限为本 SDK 客户端的硬上限，更长的静默需搭配超时配置更宽的第三方客户端。详见 [server.md - 连接回收与客户端超时的配套关系](server.md#连接回收与客户端超时的配套关系)。
 
 ## 日志
 

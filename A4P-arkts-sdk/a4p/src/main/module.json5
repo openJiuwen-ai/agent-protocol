@@ -1,0 +1,10 @@
+{
+  "module": {
+    "name": "a4p",
+    "type": "har",
+    "deviceTypes": [
+      "default",
+      "tablet"
+    ]
+  }
+}

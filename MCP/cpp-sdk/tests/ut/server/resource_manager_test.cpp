@@ -269,7 +269,7 @@ TEST_F(ResourceManagerTest, ListResources_ResourceInfoPreserved)
     EXPECT_EQ(retrievedResource.icons->size(), 1);
     EXPECT_EQ(retrievedResource.icons->at(0).src, "icon.png");
     ASSERT_TRUE(retrievedResource.annotations.has_value());
-    EXPECT_EQ(retrievedResource.annotations->priority.value(), 1.0);
+    EXPECT_DOUBLE_EQ(retrievedResource.annotations->priority.value(), 1.0);
 }
 
 // Test ReadResource
@@ -530,7 +530,7 @@ TEST_F(ResourceManagerTest, ListResourceTemplates_TemplateInfoPreserved)
     EXPECT_EQ(retrievedTemplate.icons->size(), 1);
     EXPECT_EQ(retrievedTemplate.icons->at(0).src, "template-icon.png");
     ASSERT_TRUE(retrievedTemplate.annotations.has_value());
-    EXPECT_EQ(retrievedTemplate.annotations->priority.value(), 1.0);
+    EXPECT_DOUBLE_EQ(retrievedTemplate.annotations->priority.value(), 1.0);
 }
 
 // Test SubscribeResource

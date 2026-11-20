@@ -444,7 +444,7 @@ TEST(TcpListenerTest, ListenInvalidHost) {
     EXPECT_FALSE(listener.Listen("not-a-host", 0, 1, false));
 }
 
-TEST(TcpListenerTest, ListenPortConflictWithoutReuse) {
+TEST(TcpListenerTest, ListenPortConflictWithoutReusePort) {
     Mcp::EventSystem es;
     ASSERT_TRUE(es.Init());
 
@@ -462,7 +462,10 @@ TEST(TcpListenerTest, ListenPortConflictWithoutReuse) {
 
     TcpListener listener(es);
     uint16_t boundPort = ntohs(addr.sin_port);
-    EXPECT_FALSE(listener.Listen("", boundPort, 1, false));
+    // Pin the family to IPv4 so both sockets target the same address. A bare
+    // Listen("") may return an IPv6 wildcard first, which can bind alongside the
+    // reserved IPv4 wildcard on BSD/macOS and make the result platform-dependent.
+    EXPECT_FALSE(listener.Listen("0.0.0.0", boundPort, 1, false));
 
     ::close(reserved);
 }

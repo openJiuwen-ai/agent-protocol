@@ -67,7 +67,7 @@ sh scripts/run_example.sh -t tool
 3. 在终端 2 运行 Client 示例：
 
 ```bash
-./scripts/run_example.sh -t tool
+sh scripts/run_example.sh -t tool
 # 或
 cd example/client_example/tool_example && ./run_example.sh
 ```

@@ -46,6 +46,10 @@ public:
 
     /**
     * @brief Terminate the connection and release resources.
+    * @note Lifecycle contract: Terminate() synchronously joins the
+    *       connection's I/O thread; after it returns, no registered
+    *       callback can still run, so the object (and anything the
+    *       callbacks captured) may be destroyed safely.
     */
     virtual void Terminate() = 0;
 
@@ -55,18 +59,17 @@ public:
     * @param[in] message message to send.
     * @param[in] headers headers of connection
     * @param[in] userData user data
+    * @param[in] timeoutSecs per-request timeout in seconds (0 = connection default).
+    *            Non-streaming requests: total request timeout.
+    *            Streaming requests: idle timeout between data arrivals.
     */
     virtual int SendMessage(const std::string& message, const std::map<std::string, std::string>& headers,
-        std::shared_ptr<UserData> userData, int timeout) = 0;
+        std::shared_ptr<UserData> userData, int timeoutSecs) = 0;
 
     /**
     * @brief Set callback interface for handling connection events.
     */
     virtual void SetCallback(std::shared_ptr<ConnCallback> callback) = 0;
-
-    virtual void FinishRequest(int timerId) = 0;
-
-    virtual void RefreshRequest(int timerId, int timeout) = 0;
 };
 
 } // namespace A2A

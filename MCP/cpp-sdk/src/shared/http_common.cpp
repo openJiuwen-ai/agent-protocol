@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <regex>
+#include <charconv>
+#include <cctype>
 #include <sstream>
 #include <stdexcept>
 
@@ -86,63 +88,77 @@ void TrimInPlace(std::string& value)
     }
 }
 
-bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
-                         std::unordered_map<std::string, std::string>& headers, std::string& body,
-                         std::size_t& consumedBytes)
+namespace {
+
+bool ParseHeaderFields(const std::string& headerPart,
+                       std::unordered_map<std::string, std::string>& headers, std::size_t& contentLength)
 {
-    consumedBytes = 0;
-
-    if (headerEnd == std::string::npos || headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH > buffer.size()) {
-        return false;
-    }
-
-    const std::size_t bodyStart = headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH;
-
-    // Parse headers from the header part.
-    std::string headerPart = buffer.substr(0, headerEnd);
     std::istringstream headerStream(headerPart);
-
+    bool hasContentLength = false;
     std::string headerLine;
     while (std::getline(headerStream, headerLine)) {
         if (!headerLine.empty() && headerLine.back() == '\r') {
             headerLine.pop_back();
         }
-        if (headerLine.empty()) {
-            continue;
-        }
-        std::size_t colonPosition = headerLine.find(':');
+        const std::size_t colonPosition = headerLine.find(':');
         if (colonPosition == std::string::npos) {
             continue;
         }
-
         std::string key = headerLine.substr(0, colonPosition);
         std::string value = headerLine.substr(colonPosition + 1);
-
         TrimInPlace(key);
         TrimInPlace(value);
-
-        // Convert header name to lowercase for consistent processing
-        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-
-        headers[key] = value;
-    }
-
-    std::size_t contentLength = 0;
-    auto contentLengthIterator = headers.find(CONTENT_LENGTH_HEADER);
-    if (contentLengthIterator != headers.end()) {
-        try {
-            contentLength = static_cast<std::size_t>(std::stoul(contentLengthIterator->second));
-        } catch (...) {
-            contentLength = 0;
+        std::string normalizedKey = key;
+        std::transform(normalizedKey.begin(), normalizedKey.end(), normalizedKey.begin(),
+            [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        if (normalizedKey == "content-length") {
+            if (hasContentLength) {
+                return false;
+            }
+            hasContentLength = true;
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), contentLength);
+            if (result.ec != std::errc() || result.ptr != value.data() + value.size()) {
+                return false;
+            }
+        } else if (normalizedKey == "transfer-encoding") {
+            // Transfer-coded bodies are not decoded by this helper.
+            return false;
         }
+        headers[normalizedKey] = value;
     }
+    return true;
+}
 
+} // namespace
+
+bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
+                         std::unordered_map<std::string, std::string>& headers, std::string& body,
+                         std::size_t& consumedBytes, HttpParseStatus* status)
+{
+    consumedBytes = 0;
+    if (status != nullptr) {
+        *status = HttpParseStatus::INCOMPLETE;
+    }
+    if (headerEnd == std::string::npos || headerEnd > buffer.size() ||
+        buffer.size() - headerEnd < HTTP_HEADER_BODY_SEPARATOR_LENGTH) {
+        return false;
+    }
+    const std::size_t bodyStart = headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH;
+    std::size_t contentLength = 0;
+    if (!ParseHeaderFields(buffer.substr(0, headerEnd), headers, contentLength)) {
+        if (status != nullptr) {
+            *status = HttpParseStatus::INVALID;
+        }
+        return false;
+    }
     if (buffer.size() - bodyStart < contentLength) {
         return false;
     }
-
     body = buffer.substr(bodyStart, contentLength);
     consumedBytes = bodyStart + contentLength;
+    if (status != nullptr) {
+        *status = HttpParseStatus::COMPLETE;
+    }
     return true;
 }
 
@@ -159,6 +175,10 @@ bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent)
 {
     // check if end of event
     if (line.empty()) {
+        // Each data field contributes a trailing LF; remove only the final one.
+        if (!sseEvent.data.empty() && sseEvent.data.back() == '\n') {
+            sseEvent.data.pop_back();
+        }
         if (sseEvent.event.empty() && sseEvent.id.empty() && sseEvent.data.empty() && sseEvent.retry == 0) {
             return false;
         }
@@ -180,13 +200,14 @@ bool parseSseLine(const std::string& line, ServerSentEvent& sseEvent)
         if (firstNonSpace != std::string::npos) {
             sseEvent.id = sseEvent.id.substr(firstNonSpace);
         }
-    } else if (line.find("data:") == 0) {
-        sseEvent.data = line.substr(SSE_DATA_PREFIX_LEN);
-        // Trim leading whitespace
-        size_t firstNonSpace = sseEvent.data.find_first_not_of(" \t");
-        if (firstNonSpace != std::string::npos) {
-            sseEvent.data = sseEvent.data.substr(firstNonSpace);
+    } else if (line == "data" || line.find("data:") == 0) {
+        std::string dataValue = line == "data" ? "" : line.substr(SSE_DATA_PREFIX_LEN);
+        // SSE removes at most one ASCII space after the colon, preserving payload whitespace.
+        if (!dataValue.empty() && dataValue.front() == ' ') {
+            dataValue.erase(0, 1);
         }
+        sseEvent.data += dataValue;
+        sseEvent.data.push_back('\n');
     }
 
     return false;

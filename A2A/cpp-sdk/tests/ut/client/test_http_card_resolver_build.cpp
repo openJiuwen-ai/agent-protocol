@@ -61,5 +61,24 @@ TEST_F(HttpCardResolverBuilderTest, Build_BaseUrlAndAgentCardPathValid_ReturnsRe
     ASSERT_NE(resolver, nullptr);
 }
 
+TEST_F(HttpCardResolverBuilderTest, Build_WithCacheConfig_ReturnsResolver)
+{
+    CardCacheConfig cacheConfig;
+    cacheConfig.enabled = true;
+    cacheConfig.ttl = 30;
+    cacheConfig.maxEntries = 16;
+
+    auto resolver = builder_.Build("https://example.com", "/.well-known/agent.json", {}, cacheConfig);
+
+    ASSERT_NE(resolver, nullptr);
+}
+
+TEST_F(HttpCardResolverBuilderTest, Build_DefaultCacheConfig_ReturnsResolver)
+{
+    auto resolver = builder_.Build("https://example.com", "/.well-known/agent.json");
+
+    ASSERT_NE(resolver, nullptr);
+}
+
 } // namespace
 } // namespace A2A::Client

@@ -6,10 +6,10 @@ endif()
 
 get_filename_component(MCP_SDK_ROOT "${MCP_SDK_ROOT}" ABSOLUTE)
 
-set(MCP_EXAMPLE_LIB "${MCP_SDK_ROOT}/output/lib/libmcp.so")
+set(MCP_EXAMPLE_LIB "${MCP_SDK_ROOT}/output/lib/libmcp${CMAKE_SHARED_LIBRARY_SUFFIX}")
 if(NOT EXISTS "${MCP_EXAMPLE_LIB}")
   message(FATAL_ERROR
-    "libmcp.so not found at ${MCP_EXAMPLE_LIB}. Build the SDK first: ./scripts/build.sh"
+    "libmcp${CMAKE_SHARED_LIBRARY_SUFFIX} not found at ${MCP_EXAMPLE_LIB}. Build the SDK first: ./scripts/build.sh"
   )
 endif()
 
@@ -56,4 +56,8 @@ endif()
 function(mcp_link_example_dependencies target)
   target_include_directories(${target} PRIVATE "${MCP_SDK_ROOT}/include/mcp")
   target_link_libraries(${target} PRIVATE "${MCP_EXAMPLE_LIB}" ${MCP_EXAMPLE_NLOHMANN_TARGET})
+  # Let the example find the shared library at runtime without DYLD/LD env setup.
+  set_target_properties(${target} PROPERTIES
+    BUILD_RPATH "${MCP_SDK_ROOT}/output/lib"
+  )
 endfunction()

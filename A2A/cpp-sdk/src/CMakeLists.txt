@@ -2,9 +2,15 @@
 
 add_library(a2a SHARED)
 
-add_compile_options(
-    -Werror
-)
+# Warnings are errors on every platform. Do not add directory-wide -Wno-*
+# switches here: every SDK source (and its subdirectories) is built under this
+# directory, so such an exemption would also hide the same warning in newly
+# added code. If a pre-existing site ever needs a compiler-specific exemption,
+# scope it to the offending source file in the subdirectory that adds it, e.g.
+#   set_source_files_properties(<file> PROPERTIES COMPILE_OPTIONS
+#       "$<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wno-...>")
+# or to the specific OBJECT library that compiles it.
+add_compile_options(-Werror)
 
 if(A2A_BUILD_CLIENT)
     add_subdirectory(client)

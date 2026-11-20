@@ -10,6 +10,7 @@
 #include <istream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -67,6 +68,12 @@ public:
         setLevelHandler_ = std::move(h);
     }
 
+    /** Advertised server capabilities (updated when tools/prompts/resources are registered). */
+    const ServerCapabilities& GetCapabilities() const
+    {
+        return config_.capabilities;
+    }
+
 private:
     void ReceiveIncomingMessages(const RequestId& requestId, const Request& request, ServerRequestContext& ctx);
     void HandleToolsList(const RequestId& requestId, const Request& request, ServerRequestContext& ctx);
@@ -83,7 +90,7 @@ private:
     void HandleComplete(const RequestId& requestId, const Request& request, ServerRequestContext& ctx);
 
     void SendErrorResponse(const RequestId& requestId, JsonRpcErrorCode code, const std::string& message,
-                           ServerRequestContext& ctx);
+                           ServerRequestContext& ctx, const std::optional<JsonValue>& data = std::nullopt);
 
     bool ValidateConfig(const ServerConfig& config);
     bool ValidateStreamableHttpConfig(const StreamableHttpServerConfig& config);

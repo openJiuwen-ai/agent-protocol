@@ -6,6 +6,8 @@ target_link_libraries(a2a_shared PRIVATE third_party_headers)
 target_include_directories(a2a_shared
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
 set_target_properties(a2a_shared PROPERTIES

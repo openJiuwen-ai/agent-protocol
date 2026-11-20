@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 #include <string>
+#include <limits>
 #include <unordered_map>
 
 static constexpr int HEADER_SIZE = 2;
@@ -167,11 +168,9 @@ TEST(HttpCommonTest, ParseHeadersAndBody_InvalidContentLength)
     std::string body;
     std::size_t consumedBytes = 0;
 
-    EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
-    EXPECT_EQ(headers.size(), 1);
-    EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "abc");
+    EXPECT_FALSE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumedBytes));
     EXPECT_EQ(body, "");
-    EXPECT_EQ(consumedBytes, headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH);
+    EXPECT_EQ(consumedBytes, 0);
 }
 
 TEST(HttpCommonTest, ParseHeadersAndBody_MultipleHeaders)
@@ -233,6 +232,79 @@ TEST(HttpCommonTest, ParseHeadersAndBody_BodyExactlyContentLength)
     EXPECT_EQ(headers[CONTENT_LENGTH_HEADER], "3");
     EXPECT_EQ(body, "xyz");
     EXPECT_EQ(consumedBytes, buffer.size());
+}
+
+TEST(HttpCommonTest, ParseSseLine_MultilineData)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: {", event));
+    EXPECT_FALSE(parseSseLine("data:   \"result\": 1", event));
+    EXPECT_FALSE(parseSseLine("data: }", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "{\n  \"result\": 1\n}");
+}
+
+TEST(HttpCommonTest, ParseSseLine_PreservesEmptyDataLines)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data:", event));
+    EXPECT_FALSE(parseSseLine("data: middle", event));
+    EXPECT_FALSE(parseSseLine("data", event));
+    EXPECT_FALSE(parseSseLine("data:", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "\nmiddle\n\n");
+}
+
+TEST(HttpCommonTest, ParseSseLine_RemovesOnlyOneSpaceAfterColon)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data:  leading spaces", event));
+    EXPECT_FALSE(parseSseLine("data:\tleading tab", event));
+    EXPECT_FALSE(parseSseLine("data: trailing spaces  ", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, " leading spaces\n\tleading tab\ntrailing spaces  ");
+}
+
+TEST(HttpCommonTest, ParseSseLine_SingleLineAndEmptyData)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: single line", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "single line");
+
+    event = ServerSentEvent();
+    EXPECT_FALSE(parseSseLine("data:", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_TRUE(event.data.empty());
+}
+
+TEST(HttpCommonTest, ParseSseLine_InterleavedFieldsDoNotDiscardData)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: first", event));
+    EXPECT_FALSE(parseSseLine(": keepalive", event));
+    EXPECT_FALSE(parseSseLine("event: message", event));
+    EXPECT_FALSE(parseSseLine("id: request-1", event));
+    EXPECT_FALSE(parseSseLine("data: second", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "first\nsecond");
+    EXPECT_EQ(event.event, "message");
+    EXPECT_EQ(event.id, "request-1");
+}
+
+TEST(HttpCommonTest, ParseSseLine_ResetSeparatesEvents)
+{
+    ServerSentEvent event;
+    EXPECT_FALSE(parseSseLine("data: first", event));
+    EXPECT_FALSE(parseSseLine("data: event", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "first\nevent");
+
+    // The HTTP transport resets the event after invoking its callback.
+    event = ServerSentEvent();
+    EXPECT_FALSE(parseSseLine("data: next", event));
+    EXPECT_TRUE(parseSseLine("", event));
+    EXPECT_EQ(event.data, "next");
 }
 
 TEST(HttpCommonTest, HttpResponse_DefaultConstructor)
@@ -313,6 +385,121 @@ TEST(HttpCommonTest, IsValidStreamableHttpEndpoint_InvalidUrls)
 
     EXPECT_FALSE(IsValidStreamableHttpEndpoint("http://localhost:0", &errorMsg));
     EXPECT_EQ(errorMsg, "port out of range");
+}
+
+
+TEST(HttpLengthValidationTest, RejectsMalformedDecimalLengths)
+{
+    for (const auto* value : {"abc", "3junk", "+3", "-0", "-1", "1.0", "3 0", "", " \t",
+                              "184467440737095516160000"}) {
+        SCOPED_TRACE(value);
+        std::string buffer = std::string("Content-Length: ") + value + "\r\n\r\nabcdef";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body = "unchanged";
+        std::size_t consumed = 42;
+        HttpParseStatus status = HttpParseStatus::COMPLETE;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+        EXPECT_EQ(body, "unchanged");
+    }
+}
+
+TEST(HttpLengthValidationTest, RejectsAmbiguousFraming)
+{
+    for (const auto* fields : {
+            "Content-Length: 3\r\nContent-Length: 3",
+            "Content-Length: 2\r\ncontent-length: 3",
+            "content-length: 3\r\nCONTENT-LENGTH: 2",
+            "Content-Length: 3, 3",
+            "Content-Length: 3\r\nTransfer-Encoding: chunked",
+            "transfer-encoding: chunked\r\nCONTENT-LENGTH: 3"}) {
+        SCOPED_TRACE(fields);
+        std::string buffer = std::string(fields) + "\r\n\r\nabc";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body;
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+    }
+}
+
+TEST(HttpLengthValidationTest, AcceptsDecimalWithOptionalWhitespace)
+{
+    for (const auto* value : {"3", "003", "\t3 \t"}) {
+        SCOPED_TRACE(value);
+        std::string buffer = std::string("cOnTeNt-LeNgTh: ") + value + "\r\n\r\nabcNEXT";
+        const auto headerEnd = buffer.find("\r\n\r\n");
+        std::unordered_map<std::string, std::string> headers;
+        std::string body;
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::COMPLETE);
+        EXPECT_EQ(body, "abc");
+        EXPECT_EQ(consumed, headerEnd + HTTP_HEADER_BODY_SEPARATOR_LENGTH + 3);
+    }
+}
+
+TEST(HttpLengthValidationTest, IncompleteBodyCanBeRetried)
+{
+    std::string buffer = "Content-Length: 3\r\n\r\na";
+    const auto headerEnd = buffer.find("\r\n\r\n");
+    std::unordered_map<std::string, std::string> headers;
+    std::string body;
+    std::size_t consumed = 0;
+    HttpParseStatus status;
+    EXPECT_FALSE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumed, &status));
+    EXPECT_EQ(status, HttpParseStatus::INCOMPLETE);
+    EXPECT_EQ(consumed, 0);
+    buffer += "bc";
+    EXPECT_TRUE(ParseHeadersAndBody(buffer, headerEnd, headers, body, consumed, &status));
+    EXPECT_EQ(status, HttpParseStatus::COMPLETE);
+    EXPECT_EQ(body, "abc");
+}
+
+TEST(HttpLengthValidationTest, ChecksSizeLimitsWithoutOverflow)
+{
+    const std::string maximum = std::to_string(std::numeric_limits<std::size_t>::max());
+    for (const auto& value : {maximum, maximum + "0"}) {
+        std::string buffer = "Content-Length: " + value + "\r\n\r\n";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body;
+        std::size_t consumed = 0;
+        HttpParseStatus status;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, value == maximum ? HttpParseStatus::INCOMPLETE : HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+    }
+}
+
+TEST(HttpLengthValidationTest, HeaderBoundsCannotWrapAround)
+{
+    std::unordered_map<std::string, std::string> headers;
+    std::string body;
+    std::size_t consumed = 42;
+    HttpParseStatus status;
+    EXPECT_FALSE(ParseHeadersAndBody("short", std::numeric_limits<std::size_t>::max() - 1,
+                                    headers, body, consumed, &status));
+    EXPECT_EQ(consumed, 0);
+}
+
+TEST(HttpLengthValidationTest, RejectsUnsupportedTransferEncodingWithoutLength)
+{
+    for (const auto* encoding : {"chunked", "gzip", "identity", ""}) {
+        SCOPED_TRACE(encoding);
+        std::string buffer = std::string("Transfer-Encoding: ") + encoding + "\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        std::unordered_map<std::string, std::string> headers;
+        std::string body = "unchanged";
+        std::size_t consumed = 42;
+        HttpParseStatus status;
+        EXPECT_FALSE(ParseHeadersAndBody(buffer, buffer.find("\r\n\r\n"), headers, body, consumed, &status));
+        EXPECT_EQ(status, HttpParseStatus::INVALID);
+        EXPECT_EQ(consumed, 0);
+        EXPECT_EQ(body, "unchanged");
+    }
 }
 
 } // namespace Mcp::Http

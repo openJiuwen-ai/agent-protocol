@@ -1,0 +1,68 @@
+package io.openjiuwen.a4p;
+
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.Test;
+import static io.openjiuwen.a4p.Fixtures.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+class CodecNullTest {
+    private final A4pIntentCodec codec = new A4pIntentCodec();
+
+    @Test void optionalNullFieldsAreOmittedAndAllLevelsRoundTrip() {
+        var l3 = authorized(constraints());
+        var l2 = l3.intentL2();
+        var l1 = l2.intentL1();
+        assertFalse(codec.serializeIntentL3(l3).contains(":null"));
+        assertEquals(l1, ok(codec.deserializeIntentL1(codec.serializeIntentL1(l1))));
+        assertEquals(l2, ok(codec.deserializeIntentL2(codec.serializeIntentL2(l2))));
+        assertEquals(l3, ok(codec.deserializeIntentL3(codec.serializeIntentL3(l3))));
+        var ctx = context();
+        String json = codec.serializeIntentExecutionContext(ctx);
+        assertFalse(json.contains(":null"));
+        assertEquals(json, codec.serializeIntentExecutionContext(ok(codec.deserializeIntentExecutionContext(json))));
+    }
+
+    /** Checks that the null-specific rejection applies before mapping in all four deserializers. */
+    @Test void explicitNullIsRejectedAtEveryLevelAndInNestedContainers() {
+        var l3 = authorized(constraints());
+        String[] jsons = {codec.serializeIntentL1(l3.intentL2().intentL1()),
+            codec.serializeIntentL2(l3.intentL2()), codec.serializeIntentL3(l3),
+            codec.serializeIntentExecutionContext(context())};
+        for (int i = 0; i < jsons.length; i++) {
+            for (String value : new String[]{"null", "{\"nested\":null}", "[null]"}) {
+                ObjectNode node = (ObjectNode) CanonicalJson.MAPPER.valueToTree(CanonicalJson.parse(jsons[i]));
+                try { node.set("probe", CanonicalJson.MAPPER.readTree(value)); }
+                catch (java.io.IOException e) { throw new AssertionError(e); }
+                var result = switch (i) {
+                    case 0 -> codec.deserializeIntentL1(node.toString());
+                    case 1 -> codec.deserializeIntentL2(node.toString());
+                    case 2 -> codec.deserializeIntentL3(node.toString());
+                    default -> codec.deserializeIntentExecutionContext(node.toString());
+                };
+                assertFalse(result.success());
+                assertTrue(result.message().contains("JSON values must not be null"));
+            }
+        }
+    }
+
+    /** Checks that the codec omits object members even inside arrays. */
+    @Test void recursivelyOmitsNullObjectFields() {
+        var node = CanonicalJson.parse("{\"a\":null,\"b\":[{\"c\":null,\"d\":1}]}");
+        assertEquals("{\"b\":[{\"d\":1}]}", CanonicalJson.stringify(A4pIntentCodec.toJsonNode(node)));
+    }
+
+    /** Checks the serialization error code and message for a nested null array item. */
+    @Test void rejectsNullArrayItemsDuringSerialization() {
+        var node = CanonicalJson.parse("{\"payload\":{\"items\":[1,null]}}");
+        var error = assertThrows(A4pException.class, () -> A4pIntentCodec.toJsonNode(node));
+        assertEquals(A4pErrorCode.A4P_SERIALIZE_FAIL, error.code());
+        assertTrue(error.getMessage().contains("Array item cannot be null"));
+    }
+
+    /** Checks the diagnostic when signable bytes are requested for a scalar. */
+    @Test void rejectsNonObjectSignableInput() {
+        var error = assertThrows(A4pException.class, () -> A4pIntentCodec.toSignableBytes(42));
+        assertEquals(A4pErrorCode.A4P_SERIALIZE_FAIL, error.code());
+        assertTrue(error.getMessage().contains("Input Intent is not an object"));
+    }
+}

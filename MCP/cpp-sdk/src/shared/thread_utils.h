@@ -5,20 +5,19 @@
 #ifndef MCP_THREAD_UTILS_H
 #define MCP_THREAD_UTILS_H
 
-#include <pthread.h>
 #include <string>
+
+#include "platform_compat.h"
 
 namespace Mcp {
 
 /**
- * @brief Set the name of the current thread (Linux only)
+ * @brief Set the name of the current thread.
  * @param name The thread name (max 15 characters + null terminator)
  */
 inline void SetCurrentThreadName(const std::string& name)
 {
-    // pthread_setname_np limits thread names to 16 chars including null terminator
-    std::string truncatedName = name.substr(0, 15);
-    pthread_setname_np(pthread_self(), truncatedName.c_str());
+    Platform::SetCurrentThreadName(name);
 }
 
 } // namespace Mcp

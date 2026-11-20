@@ -12,6 +12,9 @@ Persisted state (``RegistryEntry.lease_ttl``) lives in the register
 module; the table only holds the **runtime** countdown state. Restart
 clears it; the store re-grants a grace-period lease for every entry whose
 persisted ``lease_ttl`` is non-empty (restart recovery).
+
+NOTE: ``NodeLeaseConfig`` (per-node lease configuration, appliance mode)
+was removed together with the node heartbeat endpoints.
 """
 
 from __future__ import annotations

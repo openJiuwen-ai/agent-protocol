@@ -1,4 +1,4 @@
-"""通用文本嵌入服务"""
+"""General-purpose text embedding service."""
 
 import os
 from pathlib import Path
@@ -29,12 +29,12 @@ def _find_cached_model(model_name: str) -> str:
 
 
 class EmbeddingModel:
-    """文本嵌入模型封装
+    """Text embedding model wrapper.
 
-    使用 SentenceTransformer 将文本编码为向量表示。
+    Uses SentenceTransformer to encode text into vector representations.
 
     Args:
-        model_name: 模型名称，默认 "all-MiniLM-L6-v2"
+        model_name: model name, default "all-MiniLM-L6-v2"
 
     Example:
         >>> model = EmbeddingModel()
@@ -85,14 +85,14 @@ class EmbeddingModel:
             ) from exc
 
     def encode(self, texts: Union[str, List[str]], show_progress: bool = True) -> np.ndarray:
-        """将文本编码为归一化向量
+        """Encode text into normalized vectors.
 
         Args:
-            texts: 单个文本或文本列表
-            show_progress: 是否显示进度条
+            texts: a single text or a list of texts
+            show_progress: whether to show a progress bar
 
         Returns:
-            形状为 (n, dim) 的向量数组
+            an array of vectors with shape (n, dim)
         """
         return self.model.encode(
             texts,

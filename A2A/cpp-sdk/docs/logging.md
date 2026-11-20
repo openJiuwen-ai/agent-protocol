@@ -48,7 +48,7 @@ A2A_LOG(A2A::Log::A2A_LOG_LEVEL::INFO,
 [YYYY-MM-DD HH:MM:SS.mmm] [tid] [LEVEL] file.cpp::Function:[line] message
 ```
 
-其中 `LEVEL` 为 `DEBUG` / `INFO` / `WARN` / `ERROR` / `FATAL` 之一；`tid` 为 Linux 线程 ID（`syscall(SYS_gettid)`）。级别名由 SDK 自动写入；`A2aLogCallback` 的第一个参数仍为枚举值 `A2A_LOG_LEVEL`。
+其中 `LEVEL` 为 `DEBUG` / `INFO` / `WARN` / `ERROR` / `FATAL` 之一；`tid` 为当前线程的内核级 ID（Linux 为 `gettid`，macOS 为 `pthread_threadid_np`）。级别名由 SDK 自动写入；`A2aLogCallback` 的第一个参数仍为枚举值 `A2A_LOG_LEVEL`。
 
 ### 默认输出：stdout
 

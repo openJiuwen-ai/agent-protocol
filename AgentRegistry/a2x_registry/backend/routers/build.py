@@ -79,7 +79,7 @@ async def trigger_build(
     _cancel_flags[dataset] = stop_event
     _build_jobs[dataset] = {
         "status": "running",
-        "message": "构建中，请稍候...",
+        "message": "Building, please wait...",
         "started_at": time.time(),
         "finished_at": None,
         "logs": [],
@@ -87,7 +87,7 @@ async def trigger_build(
     extra = {k: v for k, v in req.model_dump().items()
              if k != "resume" and v is not None}
     background_tasks.add_task(_run_taxonomy_build, dataset, req.resume, extra, stop_event)
-    return {"dataset": dataset, "status": "started", "message": "构建已启动"}
+    return {"dataset": dataset, "status": "started", "message": "Build started"}
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ async def cancel_build(
     event = _cancel_flags.get(dataset)
     if event:
         event.set()
-    msg = "构建已取消"
+    msg = "Build cancelled"
     _build_jobs[dataset].update({"status": "cancelled", "message": msg, "finished_at": time.time()})
     _push_to_subs(dataset, {"type": "status", "status": "cancelled", "message": msg})
     return {"dataset": dataset, "status": "cancelled", "message": msg}
@@ -235,8 +235,8 @@ def _run_taxonomy_build(dataset: str, resume: str, extra_params: dict = None,
         builder.build(resume=resume)
         # If cancel_build() already updated the job, don't overwrite with "done"
         if job.get("status") == "running":
-            job.update({"status": "done", "message": "分类树构建完成", "finished_at": time.time()})
-            _push_to_subs(dataset, {"type": "status", "status": "done", "message": "分类树构建完成"})
+            job.update({"status": "done", "message": "Taxonomy build complete", "finished_at": time.time()})
+            _push_to_subs(dataset, {"type": "status", "status": "done", "message": "Taxonomy build complete"})
     except InterruptedError:
         pass  # cancel_build() already set status and pushed SSE event
     except Exception as e:

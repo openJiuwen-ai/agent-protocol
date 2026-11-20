@@ -136,7 +136,7 @@ function(_mcp_fetch_git_package)
 endfunction()
 
 function(fetch_or_find_package)
-  set(oneValueArgs NAME GIT_REPO GIT_TAG SYSTEM_PACKAGE_NAME TARGET_NAME)
+  set(oneValueArgs NAME GIT_REPO GIT_TAG SYSTEM_PACKAGE_NAME TARGET_NAME MIN_VERSION)
   set(multiValueArgs OPTIONS)
   cmake_parse_arguments(ARG "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -158,8 +158,22 @@ function(fetch_or_find_package)
   if(${OPTION_VAR})
     find_package(${ARG_SYSTEM_PACKAGE_NAME} QUIET)
     if(${ARG_SYSTEM_PACKAGE_NAME}_FOUND)
-      set(PACKAGE_FOUND TRUE)
-      message(STATUS "Using system ${ARG_NAME} (find_package)")
+      set(_mcp_system_version_ok TRUE)
+      if(ARG_MIN_VERSION)
+        if(DEFINED ${ARG_SYSTEM_PACKAGE_NAME}_VERSION AND NOT "${${ARG_SYSTEM_PACKAGE_NAME}_VERSION}" STREQUAL "")
+          if(${ARG_SYSTEM_PACKAGE_NAME}_VERSION VERSION_LESS ARG_MIN_VERSION)
+            set(_mcp_system_version_ok FALSE)
+            message(STATUS "System ${ARG_NAME} ${${ARG_SYSTEM_PACKAGE_NAME}_VERSION} is older than required ${ARG_MIN_VERSION}; fetching")
+          endif()
+        else()
+          set(_mcp_system_version_ok FALSE)
+          message(STATUS "System ${ARG_NAME} version is unknown; fetching ${ARG_GIT_TAG} (requires >= ${ARG_MIN_VERSION})")
+        endif()
+      endif()
+      if(_mcp_system_version_ok)
+        set(PACKAGE_FOUND TRUE)
+        message(STATUS "Using system ${ARG_NAME} (find_package)")
+      endif()
     endif()
 
     if(NOT PACKAGE_FOUND)
@@ -171,7 +185,11 @@ function(fetch_or_find_package)
         list(REMOVE_DUPLICATES _mcp_pkg_names)
 
         foreach(_mcp_pkg_name IN LISTS _mcp_pkg_names)
-          pkg_check_modules(_mcp_pkg QUIET IMPORTED_TARGET "${_mcp_pkg_name}")
+          set(_mcp_pkg_spec "${_mcp_pkg_name}")
+          if(ARG_MIN_VERSION)
+            set(_mcp_pkg_spec "${_mcp_pkg_name}>=${ARG_MIN_VERSION}")
+          endif()
+          pkg_check_modules(_mcp_pkg QUIET IMPORTED_TARGET "${_mcp_pkg_spec}")
           if(_mcp_pkg_FOUND AND _mcp_pkg_INCLUDE_DIRS AND _mcp_pkg_LIBRARIES
               AND NOT "${_mcp_pkg_INCLUDE_DIRS}" STREQUAL "NOTFOUND"
               AND NOT "${_mcp_pkg_LIBRARIES}" STREQUAL "NOTFOUND")
@@ -240,10 +258,13 @@ fetch_or_find_package(
 )
 
 list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+# Requires >= 2.3.0: combination keyword probes use the validator's internal
+# first_error_handler, so caller-provided handlers only see final failures.
 fetch_or_find_package(
   NAME nlohmann_json_schema_validator
   GIT_REPO https://github.com/pboettch/json-schema-validator.git
   GIT_TAG 2.3.0
+  MIN_VERSION 2.3.0
   SYSTEM_PACKAGE_NAME nlohmann_json_schema_validator
   TARGET_NAME nlohmann_json_schema_validator
 )

@@ -49,12 +49,23 @@ for _libdir in \
     fi
 done
 
-RUN_ENV=(env "LD_LIBRARY_PATH=${CTEST_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH:-}")
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    RUN_ENV=(env "DYLD_LIBRARY_PATH=${CTEST_LD_LIBRARY_PATH}:${DYLD_LIBRARY_PATH:-}")
+else
+    RUN_ENV=(env "LD_LIBRARY_PATH=${CTEST_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH:-}")
+fi
 
 if [[ ${WITH_ASAN} -eq 1 && -z "${A2A_SKIP_ASAN:-}" ]]; then
-    ASAN_LIB="$(gcc -print-file-name=libasan.so 2>/dev/null || true)"
-    if [[ -n "${ASAN_LIB}" && -f "${ASAN_LIB}" ]]; then
-        RUN_ENV+=(LD_PRELOAD="${ASAN_LIB}" ASAN_OPTIONS="${ASAN_OPTIONS:-verify_asan_link_order=0}")
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        # ASAN itself is active on macOS (the sanitizer runtime is linked into
+        # the test binaries by the compiler); only the Linux-specific
+        # LD_PRELOAD of libasan.so does not apply here.
+        echo "Note: ASAN enabled; skipping the Linux-only libasan LD_PRELOAD on macOS."
+    else
+        ASAN_LIB="$(gcc -print-file-name=libasan.so 2>/dev/null || true)"
+        if [[ -n "${ASAN_LIB}" && -f "${ASAN_LIB}" ]]; then
+            RUN_ENV+=(LD_PRELOAD="${ASAN_LIB}" ASAN_OPTIONS="${ASAN_OPTIONS:-verify_asan_link_order=0}")
+        fi
     fi
 fi
 

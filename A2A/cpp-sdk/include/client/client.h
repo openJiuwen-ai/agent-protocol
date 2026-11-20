@@ -32,6 +32,18 @@ struct ClientConfig {
     std::optional<std::vector<std::string>> acceptedOutputModes;
     /** @brief Default push-notification configs. */
     std::vector<PushNotificationConfig> pushNotificationConfigs;
+    /**
+     * @brief Total timeout for non-streaming requests, in seconds (<=0 = SDK default 300s).
+     * @note Can be overridden per request via the timeout parameter of Client methods.
+     * @note Values above the SDK cap (1800s) are clamped to it instead of failing creation.
+     */
+    int timeoutSeconds = 300;
+    /**
+     * @brief Streaming idle timeout in seconds: max gap between arriving data on a stream
+     *        (<=0 = SDK default 60s). Streams have no total-duration cap.
+     * @note Values above the SDK cap (1800s) are clamped to it instead of failing creation.
+     */
+    int streamingIdleTimeoutSeconds = 60;
 };
 
 /** @brief Streaming update payload: status or artifact event. */
@@ -60,7 +72,8 @@ public:
      * @param[in] msg      Message to send.
      * @param[in] context  Per-request client context.
      * @param[in] handler  Called per streaming update or once for non-streaming.
-     * @param[in] timeout  Request timeout in seconds (0 = default).
+     * @param[in] timeout  Timeout in seconds (0 = default). Non-streaming: total request
+     *                    timeout; streaming: max idle interval between messages.
      * @return Future that completes when the request finishes.
      * @throws A2AClientException via future on transport or protocol errors.
      * @note 流式模式下 handler 会被同步多次调用。
@@ -141,7 +154,7 @@ public:
      * @param[in] params   Task ID parameters.
      * @param[in] context  Per-request client context.
      * @param[in] handler  Called for each streaming event.
-     * @param[in] timeout  Request timeout in seconds (0 = default).
+     * @param[in] timeout  Idle timeout in seconds: max gap between events (0 = default).
      * @throws A2AClientException on transport or protocol errors.
      */
     virtual void Resubscribe(const TaskIdParams& params, const ClientCallContext* context,

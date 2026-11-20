@@ -30,6 +30,7 @@
 | nlohmann_json | 3.11.2 | JSON 序列化 |
 | libevent | 2.1.12 | 事件循环（Server I/O） |
 | http_parser | 2.9.4 | HTTP 解析 |
+| GNU coreutils | — | 仅 macOS：`run_example.sh` 超时保护（提供 `gtimeout`；Linux 自带 `timeout`） |
 
 ## 系统包安装
 
@@ -70,6 +71,23 @@ sudo yum install -y \
 sudo pacman -S --needed base-devel cmake openssl curl libevent nlohmann-json
 ```
 
+### macOS（Homebrew）
+
+```bash
+brew install cmake pkgconf openssl@3 curl libevent nlohmann-json coreutils
+```
+
+macOS 上 OpenSSL/curl 为 keg-only，CMake 会自动从 Homebrew 前缀查找它们；也可用
+`bash scripts/install_deps.sh` 自动安装。
+
+macOS 没有 GNU `timeout`，`scripts/run_example.sh` 的冒烟测试依赖 coreutils 提供的
+`gtimeout` 做超时保护（找不到时会直接报错退出，不会静默取消超时）。
+
+> **conda/Anaconda 环境注意**：若当前 shell 激活了 conda（`CONDA_PREFIX` 非空），其自带的
+> OpenSSL/curl/libevent/nlohmann_json/GTest 等可能被 CMake 抢先选中，导致链接错误或
+> undefined symbols。构建前请 `conda deactivate`（含 base），并删除 `build/` 后重新配置
+> （CMake 会把已找到的路径缓存进 `build/CMakeCache.txt`，不删缓存不生效）。
+
 ## 验证依赖
 
 ```bash
@@ -81,6 +99,9 @@ curl-config --version
 
 # CMake
 cmake --version
+
+# GNU timeout（macOS 为 gtimeout，来自 coreutils）
+timeout --version 2>/dev/null || gtimeout --version
 ```
 
 ## 说明

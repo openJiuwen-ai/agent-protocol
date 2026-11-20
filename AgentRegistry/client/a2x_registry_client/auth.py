@@ -7,8 +7,7 @@ The SDK reads credentials from two places only (matching the design in
   2. ``~/.a2x_registry_client/cli_token.json`` — written by
      ``a2x-registry-client login`` (or hand-edited as a last resort)
 
-There is NO environment-variable code path. The reasoning is in §3.3 of
-the design doc: env vars leak across process boundaries (subshells, cron,
+There is NO environment-variable code path. env vars leak across process boundaries (subshells, cron,
 IDE consoles) too easily; explicit ``api_key=`` argument or persisted
 config file are the only two supported credential surfaces.
 """

@@ -107,7 +107,8 @@ void McpServerImplement::ReceiveIncomingMessages(const RequestId& requestId, con
 void McpServerImplement::SendErrorResponse(const RequestId& requestId,
                                            JsonRpcErrorCode code,
                                            const std::string& message,
-                                           ServerRequestContext& ctx)
+                                           ServerRequestContext& ctx,
+                                           const std::optional<JsonValue>& data)
 {
     auto session = ctx.activeSession.lock();
     if (session == nullptr) {
@@ -119,6 +120,7 @@ void McpServerImplement::SendErrorResponse(const RequestId& requestId,
     error.id_ = requestId;
     error.code_ = static_cast<int>(code);
     error.message_ = message;
+    error.data_ = data;
     session->SendResponse(requestId, error, ctx);
 }
 
@@ -168,6 +170,9 @@ void McpServerImplement::HandleToolsCall(const RequestId& requestId, const Reque
             session->SendResponse(requestId, result, ctx);
         }
         // Asynchronous function has no return value, response will be sent via callback
+    } catch (const ToolInputValidationError& e) {
+        MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool: caught exception: " + std::string(e.what()));
+        SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx, e.Data());
     } catch (const std::exception& e) {
         MCP_LOG(MCP_LOG_LEVEL_INFO, "CallTool: caught exception: " + std::string(e.what()));
         SendErrorResponse(requestId, JsonRpcErrorCode::INVALID_PARAMS, e.what(), ctx);
@@ -491,6 +496,9 @@ void McpServerImplement::AddTool(const std::string& name, ToolFunc fn, AddToolOp
     ServerTool tool(name, fn, params.title, params.description, params.inputSchema, params.outputSchema,
                     params.structuredOutput, params.annotations, params.icons);
     toolManager_.AddTool(tool);
+    if (!config_.capabilities.tools.has_value()) {
+        config_.capabilities.tools = ToolsCapabilities{};
+    }
 }
 
 void McpServerImplement::RemoveTool(const std::string& name)
@@ -498,6 +506,9 @@ void McpServerImplement::RemoveTool(const std::string& name)
     CheckServerState();
 
     toolManager_.RemoveTool(name);
+    if (toolManager_.ListTools().tools.empty()) {
+        config_.capabilities.tools.reset();
+    }
 }
 
 void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc handler, AddPromptOptionalParams params)
@@ -520,6 +531,9 @@ void McpServerImplement::AddPrompt(const std::string& name, RenderPromptFunc han
     }
 
     promptManager_.AddPrompt(prompt, handler);
+    if (!config_.capabilities.prompts.has_value()) {
+        config_.capabilities.prompts = PromptsCapabilities{};
+    }
 }
 
 void McpServerImplement::RemovePrompt(const std::string& name)
@@ -527,6 +541,9 @@ void McpServerImplement::RemovePrompt(const std::string& name)
     CheckServerState();
 
     promptManager_.RemovePrompt(name);
+    if (promptManager_.ListPrompts().prompts.empty()) {
+        config_.capabilities.prompts.reset();
+    }
 }
 
 void McpServerImplement::AddResource(const std::string& uri, const std::string& name, ReadResourceFunc readFunc,
@@ -557,6 +574,9 @@ void McpServerImplement::AddResource(const std::string& uri, const std::string& 
     }
 
     resourceManager_.AddResource(resource, readFunc);
+    if (!config_.capabilities.resources.has_value()) {
+        config_.capabilities.resources = ResourcesCapabilities{};
+    }
 }
 
 void McpServerImplement::RemoveResource(const std::string& uri)
@@ -564,6 +584,9 @@ void McpServerImplement::RemoveResource(const std::string& uri)
     CheckServerState();
 
     resourceManager_.RemoveResource(uri);
+    if (resourceManager_.ListResources().resources.empty()) {
+        config_.capabilities.resources.reset();
+    }
 }
 
 void McpServerImplement::AddResourceTemplate(const std::string& uriTemplate, const std::string& name,

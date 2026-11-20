@@ -110,6 +110,7 @@ struct ServerConfig {
     uint32_t workerThreads{1};
     std::size_t toolsPageSize{DEFAULT_TOOLS_PAGE_SIZE};
     std::size_t resourcesPageSize{DEFAULT_RESOURCES_PAGE_SIZE};
+    // Capabilities follow registration (see McpServerImplement::Add*).
     ServerCapabilities capabilities{};
 };
 

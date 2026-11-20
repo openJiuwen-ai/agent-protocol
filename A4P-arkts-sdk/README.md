@@ -1,0 +1,384 @@
+# A4P ArkTS SDK
+
+English | [简体中文](./README_zh.md)
+
+HarmonyOS (ArkTS) implementation of the A4P (Agent-to-Agent Payment) payment-intent
+protocol, delivered as a HAR library (module name `a4p`). It covers the signed intent
+lifecycle (create → issue → authorize → activate), payment execution accounting against
+the frozen authorization snapshot, and the canonical JSON codec used for signing and
+persistence. Cryptography is pluggable through the `Signer` / `SignatureVerifier`
+interfaces.
+
+## Build and test
+
+Requirements: DevEco Studio 5.0 or later with HarmonyOS SDK `5.0.0(12)` (API 12).
+Command-line builds additionally need `ohpm`, `hvigorw` and Bash (Git Bash on Windows
+works); the script also packages the on-device test HAP, which requires `java` (DevEco
+Studio's bundled JBR works). The library itself has no third-party dependencies
+(`@ohos/hypium` is a test-only dev dependency).
+
+The build script always cleans previous outputs first, then runs `ohpm install`,
+`hvigor clean`, `assembleHar` (release) and `genOnDeviceTestHap`:
+
+```sh
+bash scripts/build.sh                                  # resolve ohpm/hvigorw from PATH
+bash scripts/build.sh --ohpm <path> --hvigorw <path>   # or pass explicit locations
+```
+
+Artifacts:
+
+- HAR: `a4p/build/default/outputs/default/a4p.har`
+- On-device test HAP: `a4p/build/default/outputs/ohosTest/a4p-ohosTest-unsigned.hap`
+
+Tests run in DevEco Studio against `a4p/src/ohosTest`, or on a device from the built
+test HAP. There is no example app; the test sources double as reference usage (see
+[Tests](#tests)).
+
+### Consuming the library
+
+Add the module (source path or built HAR) to the consumer module's `oh-package.json5`
+and run `ohpm install`:
+
+```json5
+{
+  "dependencies": {
+    "a4p": "file:../A4P-arkts-sdk/a4p"
+  }
+}
+```
+
+```typescript
+import { A4p, A4pCodec, A4pErrorCode } from 'a4p';
+```
+
+Everything is exported from the single `Index.ets` entry: the `A4p` and `A4pCodec`
+namespaces, the `Signer` / `SignatureVerifier` interfaces, and the data models.
+
+## API
+
+| Specification | ArkTS |
+| --- | --- |
+| `createIntent` | `A4p.createIntent(CreateIntentRequest, Signer, now)` returns `IntentL1` |
+| `issueIntent` | `A4p.issueIntent(IntentL1, SignatureVerifier, IntentIssueContext, Signer, now)` returns `IntentL2` |
+| `signIntent` | `A4p.signIntent(IntentL2, SignatureVerifier, SigningEnv, Signer, now)` returns `IntentL3` |
+| `activateIntent` | `A4p.activateIntent(IntentL3, SignatureVerifier, now)` returns `IntentExecutionContext` |
+| `verifyIntentAuthenticity` | `A4p.verifyIntentAuthenticity(IntentL3, SignatureVerifier)` returns `VerificationResult` |
+| `revokeIntent` | `A4p.revokeIntent(IntentExecutionContext, now)` returns `IntentExecutionContext` |
+| `createExecution / completeExecution / cancelExecution` | Functions on the `A4p` namespace, returning `IntentExecutionContext` |
+| Failure reporting | No result wrapper: APIs return data directly and throw a `BusinessError`-shaped error whose `code` is an `A4pErrorCode` (the concrete class is module-internal; catch structurally) |
+| Codec | `A4pCodec.serializeIntentL1/L2/L3/IntentExecutionContext` return `String`; each `deserialize…` counterpart validates the structure and returns the object |
+| Crypto | None bundled: `Signer.sign(Uint8Array): SignatureInfo` and `SignatureVerifier.verify(Uint8Array, SignatureInfo): VerificationResult` are supplied by the application |
+| Data model | Plain interfaces and string enums (`AI_PAY`, `RSA3072`, `ACTIVE`, `PENDING`) |
+
+`now` is the required explicit-clock parameter (epoch milliseconds) described below.
+
+The sketch below shows the shape of the calls; the ohosTest sources (in particular
+`A4p.test.ets` and `mock/TestDataFactory.ets`) are complete, compiling references.
+
+```typescript
+// The agent creates and signs L1; the server verifies it, issues and signs L2
+// with the three identities; the user verifies L2 and signs L3.
+const intentL1 = A4p.createIntent(request, agentSigner, now);
+const intentL2 = A4p.issueIntent(intentL1, agentVerifier, issueContext, serverSigner, now);
+const intentL3 = A4p.signIntent(intentL2, serverVerifier, signingEnv, userSigner, now);
+
+// Activate: verify the user's L3 signature and freeze the authorization snapshot.
+let context = A4p.activateIntent(intentL3, userVerifier, now);
+
+// Reserve, then complete, one order against the activated intent.
+context = A4p.createExecution(context, execution, now);
+context = A4p.completeExecution(context, executionId, now);
+
+// Failures throw structurally BusinessError-shaped errors; branch on the code.
+try {
+  context = A4p.createExecution(context, execution, now);
+} catch (e) {
+  const err = e as BusinessError<number>;
+  if (err.code === A4pErrorCode.A4P_AMOUNT_EXCEEDED) { /* budget exhausted */ }
+}
+```
+
+A failed `createExecution` can still have moved the context to `EXPIRED` (the lazy flip
+described below), so persist the context after every call.
+`A4pCodec.serializeIntentExecutionContext` / `deserializeIntentExecutionContext` provide
+the persisted form; serialization fails with the uniform `A4P_SERIALIZE_FAIL` (5001) wrapping any
+underlying failure, and deserialization parses strictly, then validates the stored structure.
+
+Parsing is strict: duplicate JSON keys, keys out of canonical order (the canonical form
+sorts every object's keys by UTF-16 code units — a reordered document is rejected, not
+silently re-canonicalized), explicit `null` literals, non-canonical number
+spellings (fractions, exponents, unsafe integers, negative zero), non-canonical escape
+spellings (the canonical form spells each character exactly one way — `\"`, `\\`,
+`\b`, `\f`, `\n`, `\r`, `\t`, lowercase `\u00xx` for the remaining control characters
+below 0x20, every other character raw — so `\/`, a `\uXXXX` escape of a character it
+writes raw, astral characters included: an escaped surrogate pair is rejected, not
+combined, a `\uXXXX` spelling of one of the five short escapes, and uppercase hex
+digits are all rejected — the input must be exactly the canonical serialization),
+documents nested deeper than 100 levels, whitespace (the
+canonical form carries none — the input must be the exact bytes the serializer emits,
+so padded or pretty-printed documents fail), trailing content and malformed literals
+fail with `A4P_DESERIALIZE_FAIL`. The structure pass checks closed field sets — an unknown field, at any level of the typed objects, is rejected —
+plus required-field presence, per-field types (strings, protocol numbers as safe
+integers, arrays) and enum membership (`action`, `alg`, the record and lifecycle
+statuses), and any rejection (a missing input, a parse rejection or a structural one)
+fails with
+the uniform `A4P_DESERIALIZE_FAIL` (5002): a document that does not parse or hold the
+protocol's shape is a deserialization failure, whatever specific defect it carries
+(the specific cause is recorded via hilog). It checks, structurally: the authorized L3
+chain, string `intentId`/`version` fields, safe-integer stamps, every
+ledger record (a defined status and action, a well-shaped flat
+`action`/`executionContent`, the status-bound finalization *presence* — a COMPLETED
+record carries `completedAt`, a CANCELED one `canceledAt`) and the accounting
+snapshot's required figures. Structure and types are all deserialization judges —
+parameter values are not: versions, blank strings,
+out-of-range amounts and timestamps, the `intentId` derivation, monotonic and
+status-bound finalization stamps, `periodIndex` presence matching the intent's
+periodicity, the cap-tied snapshot figures and the whole ledger content are restored
+verbatim. The lifecycle APIs validate structure *and* content on every call (an
+invalid parameter surfaces as `A4P_INVALID_PARAMETER`, 1001, or the code its rule
+carries — e.g. `A4P_TIMESTAMP_TOO_EARLY`, 3003, for a finalization preceding its
+reservation), so a restored context's ledger is judged when used, not when parsed.
+Deserialization passes no version verdict of its own: versions are compared
+by the chain-facing APIs — `issueIntent`, `signIntent`, `activateIntent`,
+`verifyIntentAuthenticity` — and by the execution-class APIs (`revokeIntent`,
+`createExecution`, `completeExecution`, `cancelExecution` — each checks the
+context's own version and its authorized chain on every call), so a restored
+context of a foreign version parses fine but is refused by every operation on it.
+Callers wanting signature checks run
+`verifyIntentAuthenticity` after the restore — its verdict also rejects unsupported
+L3/L2/L1 versions. Finally the authorization snapshot is re-frozen.
+
+Optional fields are `undefined`; absent optional fields are omitted from signed JSON.
+A `null` value is invalid input — every lifecycle and model API (every entry point
+of the `A4p` namespace) rejects it with `A4P_INVALID_PARAMETER` (1001). The one
+exception is nested: a null value inside the free-form `signingEnv.device`/
+`signingEnv.app` maps is not rejected by input validation, and canonical
+serialization silently omits the property, so the null
+never reaches the signed bytes or the wire form. Null array items (and a null root)
+have no acceptable spelling: serialization fails with `A4P_SERIALIZE_FAIL`, symmetric
+with the strict parser's rejection of explicit nulls at every value position.
+Monetary amounts are positive integers in the application's agreed minor unit. All
+protocol numbers must be integers within the JavaScript safe-integer range; values that
+are not integers must be carried as strings, and zero has a single spelling: `-0`
+serializes as `0`. Values handed to the SDK must be plain
+objects (object literals), not class instances — canonical serialization rejects class
+instances with `A4P_SERIALIZE_FAIL`. A value may sit at most 100 containers deep:
+canonical serialization rejects deeper values and cyclic references with
+`A4P_SERIALIZE_FAIL` (5001). The strict parser enforces the same depth limit.
+Lifecycle APIs reject cyclic or overly deep `signingEnv` maps with
+`A4P_INVALID_PARAMETER` (1001), counting depth from the execution-context root
+so the signed intent can also be embedded in that context.
+
+Lifecycle and execution functions all take a required explicit clock (`now`, epoch
+milliseconds); `now` must be a non-negative safe integer. Use a
+fixed value for reproducible signed bytes in tests and offset values for caller-side
+clock-skew policies; the SDK itself applies no tolerance, and production code must
+derive `now` from a trusted clock, never from a client-provided timestamp. Order
+timestamps are recorded, not evaluated: quota periods and validity are judged against
+`now`.
+
+The parameter-value rules the lifecycle APIs enforce (deserialization restores values
+verbatim — see above): required strings must be non-blank (JavaScript `trim()` whitespace). A product needs a
+non-blank seller id and at least one non-blank `spuId`/`skuId`; seller id + spuId +
+skuId is the whitelist matching key, and a product may appear at most once per group and
+in at most one group. A period rule requires all of `anchorTime`, `periodSeconds` and
+`maxExecutionCountPerPeriod`, with `anchorTime <= validFrom` and
+`periodSeconds <= 9007199254740`. `L1.timestamp`, `L2.timestamp`, `L3.timestamp`, the
+activation instant (`activatedTime`) and the revocation instant (`revokedTime`, when
+present) must each be a non-negative integer; none of them takes part in any
+monotonicity check (creation, issuance, signing, activation and revocation run in
+different processes whose clocks cannot be compared). The validity window is
+judged progressively as the chain approaches execution: creation and signing apply no window
+check; issuance and activation refuse an instant past `validUntil` with
+`A4P_TIMESTAMP_EXPIRED` (an L3 or a context created there could never reserve) but
+permit one before `validFrom`, the intent simply waiting for the window to open; the
+full window — both ends — is enforced at reservation
+time, where an early reservation fails with `A4P_TIMESTAMP_TOO_EARLY` and a late one
+flips the context to EXPIRED. Length limits and sensitive-data filtering of
+`intentConversation` are the Agent's responsibility.
+
+### Result codes
+
+Callers branch on the numeric `code`; the message is a fixed diagnostic text per code
+(the specific cause is logged via hilog at the throw site). The values come from the
+`A4pErrorCode` enum. `0` means success and every other value is a protocol failure.
+
+| Code | Constant | Meaning |
+| --- | --- | --- |
+| 0 | `A4P_SUCCESS` | Operation completed successfully |
+| 1001 | `A4P_INVALID_PARAMETER` | Invalid parameter |
+| 1002 | `A4P_UNSUPPORTED_VERSION` | Unsupported version |
+| 1003 | `A4P_DUPLICATE_ID` | Duplicate ID |
+| 2001 | `A4P_SIGNING_FAIL` | Signing failed |
+| 2002 | `A4P_VERIFY_FAIL` | Verification failed |
+| 3001 | `A4P_INVALID_STATUS` | Invalid status |
+| 3002 | `A4P_TIMESTAMP_EXPIRED` | Timestamp expired |
+| 3003 | `A4P_TIMESTAMP_TOO_EARLY` | Timestamp too early |
+| 4001 | `A4P_EXECUTION_COUNT_EXCEEDED` | Execution count exceeded |
+| 4002 | `A4P_AMOUNT_EXCEEDED` | Amount exceeded |
+| 4003 | `A4P_PERIOD_COUNT_EXCEEDED` | Defined for code-table compatibility; never thrown by this SDK (per-period limits report 4004) |
+| 4004 | `A4P_PERIOD_EXECUTION_COUNT_EXCEEDED` | Period execution count exceeded |
+| 4005 | `A4P_CART_MISMATCH` | Cart does not match the authorized resource |
+| 4006 | `A4P_SINGLE_ORDER_AMOUNT_EXCEEDED` | Single order amount exceeded |
+| 4007 | `A4P_PRODUCT_NOT_AUTHORIZED` | Product not authorized |
+| 5001 | `A4P_SERIALIZE_FAIL` | Serialization failed |
+| 5002 | `A4P_DESERIALIZE_FAIL` | Deserialization failed |
+| 6001 | `A4P_INTERNAL_ERROR` | Unexpected internal error |
+
+`2001` and `2002` also cover the crypto boundary: a null `Signer` or
+`SignatureVerifier`, or one that throws, is an infrastructure failure and is mapped to
+these codes (`A4P_SIGNING_FAIL` / `A4P_VERIFY_FAIL`) by the SDK, so raw exceptions
+never leak
+through the lifecycle APIs. A `SignatureVerifier` that returns nothing or a
+self-contradictory result (`valid` true with a non-success code, or `valid` false with
+code `0`) is likewise mapped to `2002`. A `Signer` that returns nothing or a malformed
+`SignatureInfo`, in contrast, has produced bad data at the boundary — not a broken
+signing stack — and fails with `A4P_INVALID_PARAMETER` (1001), so callers can tell the
+two apart.
+
+## Execution semantics
+
+- Pending and completed records both consume amount, count and period quota; only an
+  explicit cancel releases quota. Unknown downstream outcomes do not roll back.
+- The cart must match the whitelist template exactly: `cartItems` and `itemsWhiteList`
+  have the same length, each cart item is paired with a distinct group listing its
+  product (OR within a group, AND across groups), and its quantity equals the group's
+  `quantity`. The cart order does not matter. A wrong size, a group matched twice, a
+  wrong quantity or an uncovered group fails with `A4P_CART_MISMATCH`; a product outside
+  every group fails with `A4P_PRODUCT_NOT_AUTHORIZED`.
+- `orderId` is the payment idempotency key: an order id already in the ledger, canceled
+  records included, is rejected with `A4P_DUPLICATE_ID`. Duplicate execution ids remain
+  rejected after cancellation; a provided execution id must be non-blank, an absent one
+  is generated.
+- Reservation checks run in a fixed order: request structure; versions (the context's
+  own and its authorized chain's); action and currency
+  against the authorized intent; context status; validity window (`validFrom`, the
+  lazy EXPIRED flip); duplicate execution/order ids; the
+  execution-count cap, the single-order cap, the remaining amount; whitelist scope and
+  template; period quota.
+- Every execution-class API compares versions: `revokeIntent`, `createExecution`,
+  `completeExecution` and `cancelExecution` check the context's `version` field and
+  the embedded chain's (L3, L2, L1) on every call, rejecting a foreign-version
+  context with `A4P_UNSUPPORTED_VERSION` before any operation runs on it.
+- `amount` is caller-declared: the SDK validates it against the signed caps but never
+  reconciles it with the cart (`Product` carries no price). Binding the amount to actual
+  prices is the responsibility of the party holding the authoritative product catalog.
+- Revocation requires an ACTIVE context and blocks reservations, but pending executions
+  can still complete or cancel. The flip records `revokedTime`: no clock judgment
+  applies — not against `activatedTime`, not against the ledger's
+  reservations, not against the validity window.
+- A reservation past `validUntil` flips the context to EXPIRED even though the call
+  fails; pending records can still be finalized in EXPIRED and REVOKED states.
+- An ACTIVE context becomes CONSUMED when a completion leaves no pending record and
+  either the count cap is reached or the amount budget is exhausted. REVOKED and
+  EXPIRED are terminal.
+- `executionInfo` always provides `leftAmount`; `periodIndex`/`leftPeriodExecutionCount`
+  appear only for periodic intents and `leftExecutionCount` only when `maxExecutionCount`
+  is present — non-applicable figures are omitted, not null. The snapshot is always
+  re-derived from the ledger, never maintained by hand.
+- The caller's execution object is neither mutated nor aliased: the id is resolved
+  locally and stored as the record's `executionId`, and a deep copy of the execution
+  content lands on the flat ledger record after every check has passed. The ledger is
+  append-only.
+- Completion books no quota but re-derives the accounting snapshot at the evaluation
+  instant, so the period figures follow `now`, not the last ledger mutation.
+- The authorized intent is deep-cloned and deep-frozen at activation; execution checks
+  read the immutable snapshot while the ledger and figures stay mutable.
+- Context operations carry no locks. That is safe in the ArkTS single-threaded runtime,
+  **not** across processes or independently activated copies of the same `intentId`.
+- `verifyIntentAuthenticity` structurally validates the whole L3 chain (its own `sign`,
+  `signingEnv` and `version` included — the chain's timestamps are never judged),
+  requires the protocol version at
+  every level (L3, L2 and L1 — a mixed-version chain is never vouched for), and
+  verifies the server's L2 signature, not the user signature; it does not depend on any
+  context status.
+
+The ledger is in-memory. The integrating service (the intent center) must persist the
+context inside a database transaction locked by `intentId`, prevent replay of the same
+`intentId`, and bind keys to identities.
+
+## Wire format and security
+
+The canonical JSON and Base64URL rules behind every signature are the ones documented in
+[serialization_and_signature_rules.md](../A4P-java-sdk/docs/serialization_and_signature_rules.md): keys sorted by
+UTF-16 code units, no whitespace, safe integers only, `undefined` and `null` omitted
+(a null optional field is an absent field), signing strips only the top-level `sign`
+property (nested chain signatures stay), UTF-8 without BOM, and RFC 4648 Base64URL
+without padding, with the decoder
+rejecting padding, non-URL-safe characters and nonzero unused trailing bits. JSON field
+names are the interface property names (`intentConversation`, `structuredIntent.resources`,
+`userIdentity.id`), every enum is serialized by name (`"AI_PAY"`, `"CONSUMED"`,
+`"PENDING"`), and the protocol version is `1.0`.
+
+Each level's signature covers the level without its whole `sign` object, so that level's
+`alg` and `keyIdentifier` are not part of its own signed bytes; the next level's
+signature covers them. This is the specified design. `alg` must be `RSA3072` (validated
+structurally, since `alg` is detached metadata). Verifiers must resolve keys exclusively
+from `keyIdentifier` against keys they trust for the role, and must reject any `alg`
+incompatible with the resolved key type — never trust the incoming `alg`. This is the
+primary defense against algorithm- and key-confusion attacks (the same class as unsigned
+JWT headers, cf. RFC 8725).
+
+The SDK bundles no cryptographic implementation. For the `RSA3072` suite, supply
+`Signer`/`SignatureVerifier` built on `@kit.CryptoArchitectureKit` using
+`SHA256withRSA` (PKCS#1 v1.5) with 3072-bit keys and unpadded Base64URL; two
+independent implementations of the same suite interoperate as long as both follow the
+rules above.
+
+Caller-supplied objects are deep-cloned into intents, and the activated
+snapshot is deep-frozen.
+
+## Version and compatibility
+
+The protocol version is `1.0`. Every level this SDK creates is stamped with it, and
+the chain-facing APIs validate the levels they receive — rejecting a mismatch
+(including mixed-version chains) with `A4P_UNSUPPORTED_VERSION`. The codec is
+deliberately version-blind: `deserializeIntentL1/L2/L3` and
+`deserializeIntentExecutionContext` restore whatever versions the document carries,
+as given. The execution-class APIs (`revokeIntent`, `createExecution`,
+`completeExecution`, `cancelExecution`) receive the context rather than the levels
+but check its versions on every call，so a restored foreign-version context parses fine
+but is refused by every operation on it (`A4P_UNSUPPORTED_VERSION`).
+Protocol compatibility is governed by the `version` field, not by the HAR version.
+
+## Known limitations
+
+- The ledger is in-memory and per-context. Durability, locked persistence, replay
+  prevention and key-to-identity binding belong to the intent center.
+- No cryptographic implementation is bundled; applications supply `Signer` /
+  `SignatureVerifier`. The XOR-based `MockSigner` in the test sources is a deterministic
+  test double and must not be used for authorization.
+- `verifyIntentAuthenticity` deliberately does not verify the user signature.
+- The validity window is judged only at issuance, activation and reservation; creation
+  and signing record their stamps without judging any clock. The record-level stamps
+  (`reservedAt`, `completedAt`, `canceledAt`) keep their monotonic and status-bound
+  validation; `activatedTime`, `revokedTime` and the chain's timestamps are validated
+  as non-negative integers only, never ordered or status-bound.
+- Context operations are unsynchronized: safe in the single-threaded ArkTS runtime
+  only, not across processes or independently activated copies.
+
+## More documentation
+
+| Document | Contents |
+| --- | --- |
+| [serialization_and_signature_rules.md](../A4P-java-sdk/docs/serialization_and_signature_rules.md) | Canonical JSON and Base64URL rules behind every signature (the rules this SDK implements). |
+
+## Tests
+
+On-device hypium suites under `a4p/src/ohosTest` (300+ cases):
+
+- `A4p.test.ets` — lifecycle (create/issue/sign/activate/verify/revoke), blank and
+  structural validation, signer/verifier failure guards, execution accounting, quota
+  caps and rollback, order idempotency, cart template matching, period boundaries,
+  check ordering, expiry finalization and terminal states.
+- `A4pCodec.test.ets` — deterministic and key-order-independent serialization, the
+  golden wire form at a fixed clock, round-trips, and context restore (including
+  re-freezing the authorized snapshot and the verbatim-restore contract: tampered
+  versions, activation/reservation windows, period indexes, duplicate ids, cart and
+  cap figures, status and accounting disagreements all restore as given).
+- `Utils.test.ets` — base64url, UTF-8 and canonical JSON edge cases, including
+  rejection of non-canonical encodings.
+
+Run them in DevEco Studio against `a4p/src/ohosTest`, or install the built test HAP on
+a device. The test doubles (`MockSigner`, `MockVerifier`, `TestDataFactory`) are
+deterministic fakes for tests only, not authorization-grade cryptography.

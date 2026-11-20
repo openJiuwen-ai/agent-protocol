@@ -1,4 +1,4 @@
-"""HeartbeatStore — per-namespace lease tracking on top of the shared
+"""HeartbeatStore - per-namespace lease tracking on top of the shared
 ``LeaseTable`` state machine.
 
 Pure runtime store: no disk I/O, no FastAPI. The corresponding persisted
@@ -7,10 +7,14 @@ is wired into ``RegistryService`` via the ``set_unhealthy_check`` callback
 at backend startup; the sweeper invokes ``RegistryService.deregister``
 through the synthetic ``SYSTEM_CTX`` for hard deletion.
 
-This module owns the heartbeat-specific concerns — the per-namespace
-4-corner validation matrix and the ``(dataset, service_id)`` keying —
+This module owns the heartbeat-specific concerns - the per-namespace
+4-corner validation matrix and the ``(dataset, service_id)`` keying -
 and delegates the actual lease countdown / state transitions to
 ``a2x_registry.common.lease.LeaseTable``.
+
+NOTE: ``NodeHeartbeatStore`` (appliance-mode per-node variant) was
+removed together with the node heartbeat endpoints —
+instance liveness is now reported by the gateway via PATCH status.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Tuple
 
-from a2x_registry.common.lease import LeaseTable
+from a2x_registry.common.lease import Lease, LeaseState, LeaseTable
 
 from .errors import (
     HeartbeatNotSupportedError,
@@ -30,7 +34,7 @@ from .models import HeartbeatLease
 logger = logging.getLogger(__name__)
 
 
-# (dataset, service_id) → HeartbeatLease
+# (dataset, service_id) -> HeartbeatLease
 _LeaseKey = Tuple[str, str]
 
 

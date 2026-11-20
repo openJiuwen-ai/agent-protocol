@@ -1,15 +1,18 @@
-"""HeartbeatSweeper — background daemon that drives state transitions.
+"""HeartbeatSweeper - background daemon that drives state transitions.
 
 Single daemon thread, period configurable (default 5s). Each tick calls
 ``HeartbeatStore.sweep_tick()`` to get the lists of newly-unhealthy and
 to-hard-delete sids, then invokes ``RegistryService.deregister`` for the
-latter (using the synthetic ``SYSTEM_CTX`` — same code path as
+latter (using the synthetic ``SYSTEM_CTX`` - same code path as
 admin-initiated DELETE, so cache invalidation / file rewrite / vector
 sync all fire as expected).
 
 Tests can either drive ``store.sweep_tick`` directly (synchronous,
-millisecond-fast — preferred) or spin a sweeper with a short period.
+millisecond-fast - preferred) or spin a sweeper with a short period.
 ``sweep_once()`` is exposed for the direct-drive case.
+
+NOTE: ``NodeHeartbeatSweeper`` (appliance-mode per-node variant) was
+removed together with the node heartbeat endpoints.
 """
 
 from __future__ import annotations
@@ -17,9 +20,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
-from .errors import HeartbeatError  # noqa: F401  — re-exported via __init__
+from .errors import HeartbeatError  # noqa: F401  - re-exported via __init__
 from .store import HeartbeatStore
 from .system_ctx import SYSTEM_CTX
 
@@ -97,7 +100,7 @@ class HeartbeatSweeper:
         while not self._stop.is_set():
             try:
                 self.sweep_once()
-            except Exception as exc:  # noqa: BLE001 — defensive
+            except Exception as exc:  # noqa: BLE001 - defensive
                 logger.exception("heartbeat: sweep_once raised: %s", exc)
             # Sleep interruptibly so test teardown doesn't hang.
             self._stop.wait(self._period)

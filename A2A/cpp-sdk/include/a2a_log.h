@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "platform_compat.h"
 
 #include <iomanip>
 #include <sstream>
@@ -102,6 +103,15 @@ static inline void GetCurrentTimeStamp(std::string& timestamp)
     timestamp = oss.str();
 }
 
+/**
+ * @brief Get the current OS thread id in a platform-portable way.
+ * @return A numeric thread id used for log correlation.
+ */
+static inline long long GetCurrentThreadId()
+{
+    return static_cast<long long>(Platform::GetThreadId());
+}
+
 // Internal helper to reduce macro lines and handle C++ string formatting.
 template<typename... Args>
 inline void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func, int line,
@@ -119,7 +129,7 @@ inline void LogInternal(A2A_LOG_LEVEL level, const char* file, const char* func,
     const char* filename = strrchr(file, '/');
     filename = filename ? filename + 1 : file;
 
-    std::string prefix = "[" + timestamp + "] [" + std::to_string(syscall(SYS_gettid)) + "] [" +
+    std::string prefix = "[" + timestamp + "] [" + std::to_string(GetCurrentThreadId()) + "] [" +
                          std::string(GetLogLevelName(level)) + "] " + std::string(filename) + "::" +
                          std::string(func) + ":[" + std::to_string(line) + "] ";
 

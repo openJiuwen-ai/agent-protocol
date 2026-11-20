@@ -202,6 +202,7 @@ void ServerManager::Start()
         }
 
         threadQueueEventIds_[i] = eventId;
+        notifyArg->eventId = eventId;
         eventSystems_.push_back(std::move(eventSystem));
         threadQueues_.push_back(std::move(queue));
     }
@@ -506,7 +507,7 @@ void ServerManager::HandleQueueNotification(int fd, short events, void* arg)
     // If we processed MAX_BATCH_SIZE messages and the queue is still not empty,
     // re-trigger the notification to continue processing in the next event loop iteration
     if (processedCount >= MAX_BATCH_SIZE && !queue->Empty()) {
-        notifyEventArg->eventSystem->NotifyEventId(fd);
+        notifyEventArg->eventSystem->NotifyEventId(notifyEventArg->eventId);
         MCP_LOG(MCP_LOG_LEVEL_DEBUG, "Thread " + std::to_string(notifyEventArg->threadId) +
                 " re-triggered notification for remaining messages");
     }

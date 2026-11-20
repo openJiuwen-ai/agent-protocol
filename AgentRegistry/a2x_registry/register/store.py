@@ -16,6 +16,8 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from a2x_registry.common.atomic import atomic_write_json
+
 from .models import AgentCard, GenericServiceData, RegistryEntry, SkillData
 
 logger = logging.getLogger(__name__)
@@ -103,7 +105,7 @@ class RegistryStore:
     def _flush_api_config(self):
         """Serialize _api_entries to api_config.json. Must be called with lock held."""
         services = [_entry_to_config_dict(e) for e in self._api_entries.values()]
-        _atomic_write(self._dir / API_CONFIG_FILE, {"services": services})
+        atomic_write_json(self._dir / API_CONFIG_FILE, {"services": services})
 
     # --- Skill folder I/O ---
 
@@ -279,7 +281,7 @@ class RegistryStore:
 
     def write_service_json(self, services: List[dict]):
         """Atomically write the output service.json."""
-        _atomic_write(self._dir / SERVICE_JSON_FILE, services)
+        atomic_write_json(self._dir / SERVICE_JSON_FILE, services)
 
     # --- Register-format config ---
 
@@ -305,7 +307,7 @@ class RegistryStore:
 
     def write_register_config(self, formats: Dict[str, str]) -> None:
         """Persist ``register_config.json`` with normalized formats dict."""
-        _atomic_write(self._dir / REGISTER_CONFIG_FILE, {"formats": formats})
+        atomic_write_json(self._dir / REGISTER_CONFIG_FILE, {"formats": formats})
 
     def load_vector_config(self) -> Optional[Dict[str, Any]]:
         """Read ``vector_config.json`` → ``{embedding_model, embedding_dim}``.
@@ -327,7 +329,7 @@ class RegistryStore:
 
     def write_vector_config(self, embedding_model: str, embedding_dim: int) -> None:
         """Persist ``vector_config.json`` atomically."""
-        _atomic_write(
+        atomic_write_json(
             self._dir / VECTOR_CONFIG_FILE,
             {"embedding_model": embedding_model, "embedding_dim": embedding_dim},
         )
@@ -362,7 +364,7 @@ class RegistryStore:
 
     def write_auth_config(self, required: bool) -> None:
         """Persist ``auth_config.json`` with ``{"required": bool, ...}``."""
-        _atomic_write(
+        atomic_write_json(
             self._dir / AUTH_CONFIG_FILE,
             {"required": bool(required), "schema_version": 1},
         )
@@ -415,7 +417,7 @@ class RegistryStore:
             raise ValueError(f"max_ttl ({max_ttl}) must be >= min_ttl ({min_ttl})")
         if grace_period < 0:
             raise ValueError(f"grace_period must be >= 0, got {grace_period}")
-        _atomic_write(
+        atomic_write_json(
             self._dir / LEASE_CONFIG_FILE,
             {
                 "enabled": bool(enabled),
@@ -578,24 +580,3 @@ def _list_skill_files(skill_dir: Path) -> List[str]:
             full = Path(root) / fname
             files.append(full.relative_to(skill_dir).as_posix())
     return sorted(files)
-
-
-def _atomic_write(path: Path, data):
-    """Write JSON data atomically via temp file + os.replace."""
-    content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    tmp_path = path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    try:
-        os.replace(str(tmp_path), str(path))
-    except OSError:
-        import time
-        time.sleep(0.05)
-        try:
-            os.replace(str(tmp_path), str(path))
-        except OSError:
-            # Fallback: direct overwrite (non-atomic but functional on Windows)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)

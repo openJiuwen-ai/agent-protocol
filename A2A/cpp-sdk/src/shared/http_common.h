@@ -5,6 +5,7 @@
 #ifndef A2A_HTTP_COMMON_INCLUDE_H_
 #define A2A_HTTP_COMMON_INCLUDE_H_
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -110,6 +111,7 @@ struct HttpResponse {
     bool success = false;
     A2A::UserData userData;
     int statusCode = 0;
+    int errCode = 0; // Transport-level error code (A2AErrorCode); 0 = not mapped
     std::string errorMessage; // Error message (when success is false)
     std::string statusText;
     ServerSentEvent sseEvent;
@@ -133,6 +135,12 @@ struct HttpRequestContext {
     std::string method;
 
     HttpSendFunc httpSendFunc;  // This function will be constructed in HttpServer::HandleRequest
+    // Identifies the connection connectionId referred to when the request was dispatched. The
+    // server may close and reclaim that connection while a handler is still working, after which
+    // the OS can reuse the same fd number for a different client; the sequence lets the server
+    // drop such a late response instead of writing it to whoever holds the fd now.
+    // 0 means "unknown", for contexts not created by HttpServer::HandleRequest.
+    uint64_t connectionSequence = 0;
 };
 
 // Unified callback type definition
@@ -152,16 +160,21 @@ enum class HttpServerStartResult {
 // Trim ASCII spaces and tabs from both ends of a string in place.
 void TrimInPlace(std::string& value);
 
+enum class HttpParseStatus { COMPLETE, INCOMPLETE, INVALID };
+
 // Parse HTTP headers and body given a full buffer and the position of "\r\n\r\n".
 // - buffer: entire HTTP message buffer.
 // - headerEnd: index of the '\r' in "\r\n\r\n" (returned by find("\r\n\r\n")).
 // - headers: target map to fill with parsed header key/value pairs.
 // - body: target string to fill with body content.
 // - consumedBytes: on success, total bytes consumed (headers + separator + body).
-// Returns true if a complete message (including body) is present; false if incomplete.
+// Returns true for a complete message; false for incomplete or invalid input.
+// status optionally distinguishes these cases. On failure, consumedBytes stays zero.
+// Only a single Content-Length is accepted. Transfer-Encoding is unsupported
+// and always yields INVALID.
 bool ParseHeadersAndBody(const std::string& buffer, std::size_t headerEnd,
     std::unordered_map<std::string, std::string>& headers, std::string& body,
-    std::size_t& consumedBytes);
+    std::size_t& consumedBytes, HttpParseStatus* status = nullptr);
 
 std::string GetHeaderValue(const HttpResponse& response, const std::string& headerName);
 

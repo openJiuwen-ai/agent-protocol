@@ -144,8 +144,14 @@ if [[ ${WITH_ASAN} -eq 1 ]]; then
   CMAKE_ARGS+=("-DASAN=enable")
 fi
 
-# Determine optimal job count for Linux (CPU cores + 1, but max 8 to avoid memory issues)
-CPU_CORES=$(nproc)
+# Determine optimal job count (CPU cores + 1, but max 8 to avoid memory issues)
+if command -v nproc >/dev/null 2>&1; then
+  CPU_CORES=$(nproc)
+elif command -v sysctl >/dev/null 2>&1; then
+  CPU_CORES=$(sysctl -n hw.ncpu)
+else
+  CPU_CORES=4
+fi
 OPTIMAL_JOBS=$((CPU_CORES + 1))
 if [[ ${OPTIMAL_JOBS} -gt 8 ]]; then
   OPTIMAL_JOBS=8

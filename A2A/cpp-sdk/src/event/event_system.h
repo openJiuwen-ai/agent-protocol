@@ -120,13 +120,16 @@ public:
     * @param eventId The eventId returned by CreateNotifyEventId.
     * @param increment The 64-bit value to add to the eventfd counter (default 1).
     * @return true on success, false on failure.
+    * @note Linux writes the event's fd directly (baseline). macOS writes
+    *       through the notify channel and only accepts eventIds from
+    *       CreateNotifyEventId.
     */
     bool NotifyEventId(int eventId, uint64_t increment = 1);
 
     /**
     * @brief Read the current counter value from a file descriptor.
     * @param fd The fd.
-    * @param outValue On success set to the value read from the eventfd.
+    * @param outValue On success set to the value read.
     * @return true on success, false on failure.
     */
     bool ReadEventFd(int fd, uint64_t& outValue) const;
@@ -163,7 +166,7 @@ private:
     std::unique_ptr<Impl> impl_;
     // Protects access to impl_ state that is shared across threads (primarily events map).
     // Do not hold this lock while invoking callbacks or calling event_del/close to avoid deadlocks.
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::atomic<bool> running_{false};
     struct event_base* eventBase_{nullptr};
     int eventThreadIndex_{0};

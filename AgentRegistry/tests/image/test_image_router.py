@@ -1,0 +1,353 @@
+"""镜像管理 router 测试（memory 后端，TestClient，name 主键模型）。
+
+仅覆盖 HTTP 专属关注点：端点路由 + 状态码映射 + 分页 header +
+framework_version 过渡期回退 + 未装配 404。业务逻辑（扁平列表、
+过滤、排序、默认版本、launch-spec 透传、deregister 在用校验）由
+test_image_service.py 覆盖，此处不重复。
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from a2x_registry.image.deps import set_image_service
+from a2x_registry.image.router import router as image_router
+from a2x_registry.image.service import ImageService
+from a2x_registry.register.etcd_client import EtcdError
+
+from .conftest import make_runtime_spec, make_register_body, make_access_mode
+
+
+def _make_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(image_router)
+    return app
+
+
+@pytest.fixture
+def client(image_svc):
+    app = _make_app()
+    return TestClient(app)
+
+
+def _register(client, name="opencode", ver="v0.2.0", framework="opencode", **kw):
+    body = make_register_body(name=name, version=ver, framework=framework, **kw)
+    return client.post("/api/images", json=body)
+
+
+# ── POST /api/images ────────────────────────────────────────────
+
+def test_post_register_first_default(client):
+    r = _register(client)
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {
+        "name": "opencode",
+        "framework": "opencode",
+        "version": "v0.2.0",
+        "status": "registered",
+    }
+
+
+def test_post_missing_version_rejected(client):
+    """version 与 framework_version 都缺 -> 400。"""
+    body = make_register_body()
+    del body["version"]
+    r = client.post("/api/images", json=body)
+    assert r.status_code == 400
+
+
+def test_post_framework_version_transition_fallback(client):
+    """过渡期兼容：只给 deprecated framework_version 也能注册为该 version。"""
+    body = make_register_body()
+    body["framework_version"] = body.pop("version")
+    r = client.post("/api/images", json=body)
+    assert r.status_code == 200
+    assert r.json()["version"] == "v0.2.0"
+
+
+def test_post_rejects_oversized_name(client):
+    """超长 name 在建库前就被拒（否则 DELETE 的 URL 永远装不下）。"""
+    r = _register(client, name="a" * (256 * 1024))
+    assert r.status_code == 422
+
+
+def test_post_rejects_path_separator_in_name(client):
+    """name 作为 URL path 段使用，含 '/' 的记录无法被寻址，创建时拒绝。"""
+    r = _register(client, name="foo/bar")
+    assert r.status_code == 422
+
+
+def test_post_rejects_control_char_in_version(client):
+    r = _register(client, ver="v1.0\n0")
+    assert r.status_code == 422
+
+
+def test_post_allows_colon_and_unicode_identifiers(client):
+    """校验保持宽松：':' / 中文等透传字符不受影响。"""
+    r = _register(client, name="镜像:测试", ver="v1.0.0-rc1:beta")
+    assert r.status_code == 200
+    assert r.json()["name"] == "镜像:测试"
+
+
+def test_post_allows_long_ascii_name(client):
+    """单项阈值放宽到 1024 字符，长 name 的正常场景不受影响。"""
+    long_name = "a" * 1000
+    r = _register(client, name=long_name)
+    assert r.status_code == 200
+    assert r.json()["name"] == long_name
+
+
+def test_post_rejects_name_over_identifier_cap(client):
+    r = _register(client, name="a" * 1025)
+    assert r.status_code == 422
+
+
+def test_post_rejects_encoded_path_over_budget(client):
+    """单项未超 1024，但 name+version 编码后放不进请求行，仍需拒绝。"""
+    r = _register(client, name="镜" * 400, ver="镜" * 400)
+    assert r.status_code == 422
+
+
+def test_post_rejects_pipe_in_name(client):
+    """'|' 是 image_sid 的 name/version 分隔符，出现在 name 里会造成主键撞车。"""
+    r = _register(client, name="a|b", ver="c")
+    assert r.status_code == 422
+
+
+def test_post_allows_pipe_in_version(client):
+    """name 不含 '|' 时编码仍有唯一性，version 里的 '|' 保持透传。"""
+    r = _register(client, name="a", ver="b|c")
+    assert r.status_code == 200
+
+
+# ── GET /api/images (flat) ──────────────────────────────────────
+
+def test_get_list_flat(client):
+    _register(client, ver="v0.2.0")
+    _register(client, ver="v0.1.0")
+    r = client.get("/api/images")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 2
+    assert isinstance(rows, list)
+    assert rows[0]["name"] == "opencode"
+    assert rows[0]["version"] == "v0.2.0"  # version_key DESC，新版本在前
+
+
+def test_get_list_pagination_headers(client):
+    for ver in ["v0.3.0", "v0.2.0", "v0.1.0"]:
+        _register(client, ver=ver)
+    r = client.get("/api/images", params={"size": 2, "page": 1})
+    assert r.status_code == 200
+    assert r.headers["X-Total-Count"] == "3"
+    assert r.headers["X-Page"] == "1"
+    assert r.headers["X-Total-Pages"] == "2"
+    assert r.headers["X-Page-Size"] == "2"
+    assert len(r.json()) == 2
+
+
+# ── GET /api/images/{name}/launch-spec ──────────────────────────
+
+def test_get_launch_spec_with_version(client):
+    _register(client, runtime_spec=make_runtime_spec(cpu=1500))
+    r = client.get("/api/images/opencode/launch-spec", params={"version": "v0.2.0"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "opencode"
+    assert body["version"] == "v0.2.0"
+    assert body["runtime_spec"]["cpu"] == 1500
+    assert body["runtime_spec"]["rootfs"]["imageurl"] == "harbor.local/adapted/opencode:v0.2.0"
+    assert body["env_vars"] == {"A2X_LLM_KEY": "${A2X_LLM_KEY}"}
+    assert body["workspace"] == "/app"
+    assert body["access_mode"] == make_access_mode()
+    assert "imageurl" not in body
+    assert "cpu" not in body
+
+
+def test_get_launch_spec_not_found(client):
+    r = client.get("/api/images/nonexistent/launch-spec")
+    assert r.status_code == 404
+
+
+# ── PUT /api/images/{name}/default ──────────────────────────────
+
+def test_put_set_default(client):
+    _register(client, ver="v0.2.0")
+    _register(client, ver="v0.1.0")
+    r = client.put("/api/images/opencode/default", json={"version": "v0.1.0"})
+    assert r.status_code == 200
+    assert r.json()["default"] == "v0.1.0"
+
+
+def test_put_set_default_framework_version_fallback(client):
+    """过渡期兼容：body 只给 framework_version 也能设默认。"""
+    _register(client, ver="v0.2.0")
+    _register(client, ver="v0.1.0")
+    r = client.put(
+        "/api/images/opencode/default", json={"framework_version": "v0.1.0"}
+    )
+    assert r.status_code == 200
+    assert r.json()["default"] == "v0.1.0"
+
+
+def test_put_set_default_empty_version_rejected(client):
+    _register(client, ver="v0.2.0")
+    r = client.put("/api/images/opencode/default", json={})
+    assert r.status_code == 400
+
+
+def test_put_set_default_not_found(client):
+    _register(client, ver="v0.2.0")
+    r = client.put("/api/images/opencode/default", json={"version": "v9.9.9"})
+    assert r.status_code == 404
+
+
+# ── PATCH /api/images/{name}/{version} (§8) ─────────────────────
+
+def test_patch_update_single_field(client):
+    _register(client, description="旧描述", package_path="/old/")
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"description": "更新后的描述"}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "opencode"
+    assert body["version"] == "v0.2.0"
+    assert body["description"] == "更新后的描述"
+    assert body["package_path"] == "/old/"  # 未给字段保留
+    assert body["is_default"] is True
+
+
+def test_patch_update_runtime_spec_whole_replace(client):
+    _register(client, runtime_spec=make_runtime_spec(cpu=1000))
+    new_spec = make_runtime_spec(cpu=4000)
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"runtime_spec": new_spec}
+    )
+    assert r.status_code == 200
+    assert r.json()["runtime_spec"]["cpu"] == 4000
+
+
+def test_patch_empty_body_rejected(client):
+    _register(client)
+    r = client.patch("/api/images/opencode/v0.2.0", json={})
+    assert r.status_code == 400
+
+
+def test_patch_not_found(client):
+    _register(client)
+    assert client.patch(
+        "/api/images/opencode/v9.9.9", json={"description": "x"}
+    ).status_code == 404
+    assert client.patch(
+        "/api/images/nonexistent/v0.2.0", json={"description": "x"}
+    ).status_code == 404
+
+
+def test_patch_unknown_fields_ignored_keys_not_patchable(client):
+    """主键 name/version 不在请求模型（不可改）；多余未知字段被 pydantic 忽略。"""
+    _register(client)
+    r = client.patch(
+        "/api/images/opencode/v0.2.0",
+        json={"name": "hijack", "version": "v9.9.9", "is_default": True},
+    )
+    # 全部字段都被忽略 -> 等价于空 body -> 400
+    assert r.status_code == 400
+    # 行未被改动
+    rows = client.get("/api/images", params={"name": "opencode"}).json()
+    assert rows[0]["version"] == "v0.2.0"
+    assert rows[0]["is_default"] is True
+
+
+def test_patch_framework_rename_in_use_409(client, image_svc):
+    """§3.2 止血：在用镜像 PATCH 改 framework -> 409（防孤儿实例）。"""
+    _register(client, framework="opencode")
+    image_svc._table_svc.register("instances", {
+        "service_id": "generic_abc123",
+        "kind": "三方",
+        "framework": "opencode",
+        "framework_version": "v0.2.0",
+        "node": "node-1",
+        "user": "user-01",
+        "data": {},
+    })
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"framework": "renamed-fw"}
+    )
+    assert r.status_code == 409
+    # framework 未被改动
+    rows = client.get("/api/images", params={"name": "opencode"}).json()
+    assert rows[0]["framework"] == "opencode"
+
+
+# ── etcd 基础设施故障 -> 502 ──────────────────────────────────────
+
+def test_etcd_error_maps_502_list(client, monkeypatch):
+    """EtcdError（不可达/超时）在列表端点兜底为 502，而非 500。"""
+    def boom(*args, **kwargs):
+        raise EtcdError("etcd unreachable")
+
+    # ImageService 定义了 __slots__，须在类上打补丁。
+    monkeypatch.setattr(ImageService, "query", boom)
+    r = client.get("/api/images")
+    assert r.status_code == 502
+
+
+def test_etcd_error_maps_502_patch(client, monkeypatch):
+    """EtcdError（patch CAS 冲突等）在 PATCH 端点兜底为 502。"""
+    def boom(*args, **kwargs):
+        raise EtcdError("concurrent modification (CAS aborted)")
+
+    monkeypatch.setattr(ImageService, "update_image", boom)
+    r = client.patch(
+        "/api/images/opencode/v0.2.0", json={"description": "x"}
+    )
+    assert r.status_code == 502
+
+
+# ── DELETE /api/images/{name}/{version} ─────────────────────────
+
+def test_delete_deregister(client):
+    _register(client)
+    r = client.delete("/api/images/opencode/v0.2.0")
+    assert r.status_code == 200
+    assert r.json() == {
+        "name": "opencode",
+        "framework": "opencode",
+        "version": "v0.2.0",
+        "status": "deregistered",
+    }
+
+
+def test_delete_in_use_409(client, image_svc):
+    _register(client, framework="opencode")
+    image_svc._table_svc.register("instances", {
+        "service_id": "generic_abc123",
+        "kind": "三方",
+        "framework": "opencode",
+        "framework_version": "v0.2.0",
+        "node": "node-1",
+        "user": "user-01",
+        "data": {},
+    })
+    r = client.delete("/api/images/opencode/v0.2.0")
+    assert r.status_code == 409
+
+
+def test_delete_not_found(client):
+    r = client.delete("/api/images/nonexistent/v0.0.0")
+    assert r.status_code == 404
+
+
+# ── 未装配镜像模块 -> 404 ─────────────────────────────────────────
+
+def test_routes_404_when_not_assembled():
+    set_image_service(None)
+    app = _make_app()
+    c = TestClient(app)
+    assert c.get("/api/images").status_code == 404
+    body = make_register_body()
+    assert c.post("/api/images", json=body).status_code == 404

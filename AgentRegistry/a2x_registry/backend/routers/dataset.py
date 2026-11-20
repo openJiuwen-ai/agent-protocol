@@ -47,10 +47,10 @@ except ValueError:
 _executor = ThreadPoolExecutor(max_workers=_DATASET_WORKERS)
 
 
-def init_registry_service(database_dir: Path, global_config_path: Optional[Path] = None):
+def init_registry_service(database_dir: Path):
     """Initialize the global RegistryService. Called once from backend startup."""
     global _service
-    _service = RegistryService(database_dir, global_config_path)
+    _service = RegistryService(database_dir)
     return _service
 
 
@@ -64,7 +64,7 @@ def get_registry_service() -> RegistryService:
 async def _run(fn, *args):
     """Run a blocking function in the thread pool, mapping exceptions to HTTP errors.
 
-    Layered error contract (see docs/client_design.md §3.4):
+    Layered error contract:
       RegistryNotFoundError → 404   (business "resource doesn't exist")
       HeartbeatError        → 400 + structured body {code, min_ttl?, max_ttl?}
       ValueError            → 400   (validation / forbidden source)
@@ -454,6 +454,11 @@ async def list_services(
         raise HTTPException(
             status_code=400,
             detail=f"fields must be one of {sorted(_VALID_FIELDS)}, got {fields!r}",
+        )
+    if size == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="size must be -1 (all) or a positive page size, got 0",
         )
 
     filters = {
@@ -909,4 +914,4 @@ async def set_vector_config(
         dataset, body.get("embedding_model"), body.get("embedding_dim"),
     )
     search_service.schedule_vector_sync(dataset)
-    return {"dataset": dataset, **cfg, "message": "配置已保存，向量索引将在后台重建"}
+    return {"dataset": dataset, **cfg, "message": "Config saved; vector index will rebuild in background"}

@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include "mcp_log.h"
+#include "platform_compat.h"
 
 namespace Mcp::Net {
 
@@ -291,17 +292,15 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
                         " (" + std::to_string(errno) + ")");
         }
         if (opts.keepAliveIdleSec > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &opts.keepAliveIdleSec,
-                              static_cast<socklen_t>(sizeof(opts.keepAliveIdleSec)));
+            rc = Platform::SetKeepAliveIdle(fd_, opts.keepAliveIdleSec);
             if (rc != 0) {
                 MCP_LOG(MCP_LOG_LEVEL_WARN,
-                        std::string("setsockopt(TCP_KEEPIDLE) failed: ") + std::strerror(errno) +
+                        std::string("setsockopt(keepalive idle) failed: ") + std::strerror(errno) +
                             " (" + std::to_string(errno) + ")");
             }
         }
         if (opts.keepAliveIntvlSec > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &opts.keepAliveIntvlSec,
-                              static_cast<socklen_t>(sizeof(opts.keepAliveIntvlSec)));
+            rc = Platform::SetKeepAliveIntvl(fd_, opts.keepAliveIntvlSec);
             if (rc != 0) {
                 MCP_LOG(MCP_LOG_LEVEL_WARN,
                         std::string("setsockopt(TCP_KEEPINTVL) failed: ") + std::strerror(errno) +
@@ -309,8 +308,7 @@ void TcpSocket::SetTcpOptions(const TcpSocketOptions& opts)
             }
         }
         if (opts.keepAliveCnt > 0) {
-            rc = ::setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &opts.keepAliveCnt,
-                              static_cast<socklen_t>(sizeof(opts.keepAliveCnt)));
+            rc = Platform::SetKeepAliveCnt(fd_, opts.keepAliveCnt);
             if (rc != 0) {
                 MCP_LOG(MCP_LOG_LEVEL_WARN,
                         std::string("setsockopt(TCP_KEEPCNT) failed: ") + std::strerror(errno) +

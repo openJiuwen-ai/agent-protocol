@@ -40,6 +40,8 @@ class SkillData(BaseModel):
 # --- A2A Agent Card (aligned with A2A protocol spec) ---
 
 class AgentSkill(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: str = ""
     name: str
     description: str = ""
@@ -50,11 +52,15 @@ class AgentSkill(BaseModel):
 
 
 class AgentProvider(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     organization: str = ""
     url: str = ""
 
 
 class AgentCapabilities(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     streaming: bool = False
     pushNotifications: bool = False
     stateTransitionHistory: bool = False

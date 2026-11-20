@@ -17,7 +17,31 @@ OUTPUT_DIR="${A2A_OUTPUT_DIR:-${ROOT}/output}"
 EXAMPLE_BIN="${OUTPUT_DIR}/bin"
 LIB_DIR="${OUTPUT_DIR}/lib"
 
-export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH:-}"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    export DYLD_LIBRARY_PATH="${LIB_DIR}:${DYLD_LIBRARY_PATH:-}"
+else
+    export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH:-}"
+fi
+
+# The smoke test must never run without a timeout wrapper: a hung example
+# client would otherwise block the script forever instead of failing. GNU
+# `timeout` ships with coreutils and is always available on Linux; on macOS it
+# comes from Homebrew coreutils as `gtimeout`.
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
+else
+    echo "Error: no timeout tool found (neither 'timeout' nor 'gtimeout')." >&2
+    echo "  macOS: brew install coreutils (provides gtimeout)" >&2
+    echo "  Linux: install the coreutils package" >&2
+    exit 1
+fi
+
+run_with_timeout() {
+    local secs="$1"; shift
+    "${TIMEOUT_BIN}" "${secs}" "$@"
+}
 
 PORT="${A2A_EXAMPLE_PORT:-8888}"
 JSONRPC_BASE="http://127.0.0.1:${PORT}/jsonrpc"
@@ -95,10 +119,26 @@ expect_agent_card_http() {
     fi
 }
 
+wait_for_example_ready() {
+    local label="$1"
+    local server_name="$2"
+    local attempts=50
+    while (( attempts > 0 )); do
+        if curl -sS -o /dev/null --max-time 1 "${CARD_URL}" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+        attempts=$((attempts - 1))
+    done
+    clear_example_process "${server_name}"
+    echo "${label} server did not become ready" >&2
+    exit 1
+}
+
 run_helloworld_example() {
     clear_example_process "helloworld_server"
     "${EXAMPLE_BIN}/helloworld_server" -i 127.0.0.1 -p "${PORT}" &
-    sleep 1
+    wait_for_example_ready "helloworld" "helloworld_server"
 
     expect_agent_card_http "helloworld agent card (HTTP)"
     jsonrpc_expect_result \
@@ -110,7 +150,7 @@ run_helloworld_example() {
     jsonrpc_expect_result "${hello_send_msg}" "helloworld SendMessage"
 
     echo "Running helloworld_client against 127.0.0.1:${PORT}..."
-    timeout 30 "${EXAMPLE_BIN}/helloworld_client" -i 127.0.0.1 -p "${PORT}"
+    run_with_timeout 30 "${EXAMPLE_BIN}/helloworld_client" -i 127.0.0.1 -p "${PORT}"
 
     check_example_process "helloworld_server"
     clear_example_process "helloworld_server"
@@ -119,7 +159,7 @@ run_helloworld_example() {
 run_streaming_example() {
     clear_example_process "streaming_server"
     "${EXAMPLE_BIN}/streaming_server" -i 127.0.0.1 -p "${PORT}" &
-    sleep 1
+    wait_for_example_ready "streaming" "streaming_server"
 
     expect_agent_card_http "streaming agent card (HTTP)"
     jsonrpc_expect_result \
@@ -131,7 +171,7 @@ run_streaming_example() {
     jsonrpc_expect_result "${streaming_send_msg}" "streaming SendMessage"
 
     echo "Running streaming_client against 127.0.0.1:${PORT}..."
-    timeout 60 "${EXAMPLE_BIN}/streaming_client" -i 127.0.0.1 -p "${PORT}"
+    run_with_timeout 60 "${EXAMPLE_BIN}/streaming_client" -i 127.0.0.1 -p "${PORT}"
 
     check_example_process "streaming_server"
     clear_example_process "streaming_server"

@@ -45,8 +45,9 @@ struct WorkerMessage {
 };
 
 struct NotifyEventArg {
-    int threadId;
-    EventSystem* eventSystem;
+    int threadId{-1};
+    int eventId{-1};
+    EventSystem* eventSystem{nullptr};
 };
 
 class ServerManager {
