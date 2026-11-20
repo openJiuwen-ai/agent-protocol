@@ -96,8 +96,15 @@ async def authorize(
             svc = get_registry_service()
         except Exception:
             svc = None
-        if svc is not None and not svc.is_auth_required(dataset):
-            return None
+        if svc is not None:
+            try:
+                if not svc.is_auth_required(dataset):
+                    return None
+            except ValueError:
+                # Unsafe dataset name (single-segment / containment check):
+                # the route's own validation rejects it with 400, so don't let
+                # it surface as a 500 from inside this dependency.
+                return None
 
     # Branch 2 / 3: this request must carry a valid token.
     token = _parse_bearer(authorization)
