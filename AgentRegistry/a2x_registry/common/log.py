@@ -5,12 +5,28 @@ from __future__ import annotations
 import gzip
 import logging
 import logging.handlers
+import os
 import shutil
 import time
 from datetime import date
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Owner read/write only: the registry is often run as root, so umask-derived
+# 0644 logs would be readable by every local user.
+_LOG_FILE_MODE = 0o600
+
+
+def _tighten_permissions(path: Path | str) -> None:
+    """Best-effort chmod; a permission failure must not break logging."""
+    try:
+        os.chmod(path, _LOG_FILE_MODE)
+    except OSError as exc:
+        logger.warning(
+            "Failed to set %s permissions to %#o: %s",
+            path, _LOG_FILE_MODE, exc,
+        )
 
 
 class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
@@ -23,6 +39,9 @@ class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
     ``.gz`` files beyond ``retention_days`` are pruned. A fixed-name file
     left over from a previous day (service down across midnight) is
     archived on startup based on its mtime.
+
+    Both the current log and archives are created mode 0600 so root-started
+    services do not expose logs to other local users.
     """
 
     def __init__(self, log_dir: Path, stem: str, retention_days: int) -> None:
@@ -39,6 +58,23 @@ class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
             delay=True,
         )
         self._archive_stale_file()
+        current = self._log_dir / self._fixed_name()
+        if current.exists():
+            _tighten_permissions(current)
+
+    def _open(self):
+        # Create with 0600 from the start (umask must not widen it), then
+        # tighten a file inherited from an older release.
+        os.close(
+            os.open(
+                self.baseFilename,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                _LOG_FILE_MODE,
+            )
+        )
+        stream = super()._open()
+        _tighten_permissions(self.baseFilename)
+        return stream
 
     def _fixed_name(self) -> str:
         return f"{self._stem}.log"
@@ -48,8 +84,26 @@ class DailyCompressedFileHandler(logging.handlers.TimedRotatingFileHandler):
 
     def _archive(self, src: Path, day: date) -> None:
         gz_path = self._log_dir / self._archived_name(day)
-        with open(src, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
+        # Open the source first: an unreadable source must not create or
+        # truncate the archive, and must not leak a file descriptor.
+        with open(src, "rb") as f_in:
+            fd = os.open(
+                gz_path,
+                os.O_WRONLY | os.O_CREAT,
+                _LOG_FILE_MODE,
+            )
+            try:
+                # O_CREAT mode only applies to new files; tighten an archive
+                # inherited from an older release before touching its content.
+                os.chmod(gz_path, _LOG_FILE_MODE)
+                os.ftruncate(fd, 0)
+                with os.fdopen(fd, "wb") as raw:
+                    fd = None  # ownership transferred to the stream
+                    with gzip.GzipFile(fileobj=raw, mode="wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+            finally:
+                if fd is not None:
+                    os.close(fd)
         src.unlink()
 
     def _archive_stale_file(self) -> None:
