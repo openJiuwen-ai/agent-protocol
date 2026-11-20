@@ -1345,6 +1345,42 @@ export default function a4pTest() {
         // (verifyIntentAuthenticity verifies the embedded L2 instead).
         A4p.activateIntent(l3, new MockVerifier(), Date.now());
       });
+
+      it('signIntent_fails_whenSigningEnvIsCyclic', 0, () => {
+        const lifecycle = createFullLifecycle();
+        const cyclic = createTestSigningEnv();
+        const device: Record<string, Object> = { 'model': 'TestDevice' };
+        device['self'] = device;
+        cyclic.device = device;
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.signIntent(lifecycle.l2, new MockVerifier(), cyclic,
+            new MockSigner(AlgorithmType.RSA3072, 'user-key-001'), FIXED_NOW);
+        });
+      });
+
+      it('signIntent_enforcesSigningEnvDepthAtExecutionContextBoundary', 0, () => {
+        const lifecycle = createFullLifecycle();
+        const verifier = new MockVerifier();
+        const signer = new MockSigner(AlgorithmType.RSA3072, 'user-key-001');
+        // device is at depth 3 in an execution context; leaf must be at 100.
+        let nested: Record<string, Object> = { 'leaf': 'value' };
+        for (let i = 0; i < 96; i++) {
+          const wrapper: Record<string, Object> = { 'n': nested };
+          nested = wrapper;
+        }
+        const env = createTestSigningEnv();
+        env.device = nested;
+        const signed = A4p.signIntent(lifecycle.l2, verifier, env, signer, FIXED_NOW);
+        const context = A4p.activateIntent(signed, verifier, FIXED_NOW);
+        const serialized = A4pCodec.serializeIntentExecutionContext(context);
+        const restored = A4pCodec.deserializeIntentExecutionContext(serialized);
+        expect(A4pCodec.serializeIntentExecutionContext(restored)).assertEqual(serialized);
+
+        env.device = { 'n': nested };
+        expectThrows(A4pErrorCode.A4P_INVALID_PARAMETER, () => {
+          A4p.signIntent(lifecycle.l2, verifier, env, signer, FIXED_NOW);
+        });
+      });
     });
 
     describe('activateIntent', () => {
