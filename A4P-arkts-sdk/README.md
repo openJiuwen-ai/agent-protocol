@@ -21,8 +21,8 @@ The build script always cleans previous outputs first, then runs `ohpm install`,
 `hvigor clean`, `assembleHar` (release) and `genOnDeviceTestHap`:
 
 ```sh
-scripts/build.sh                                  # resolve ohpm/hvigorw from PATH
-scripts/build.sh --ohpm <path> --hvigorw <path>   # or pass explicit locations
+bash scripts/build.sh                                  # resolve ohpm/hvigorw from PATH
+bash scripts/build.sh --ohpm <path> --hvigorw <path>   # or pass explicit locations
 ```
 
 Artifacts:
