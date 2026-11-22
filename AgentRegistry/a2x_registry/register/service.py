@@ -332,8 +332,11 @@ class RegistryService:
           the deregister.
 
         One lock per dataset closes both windows; unrelated datasets don't
-        serialise against each other, and the lock is never held together with
-        ``_lock`` (no lock ordering to reason about).
+        serialise against each other. The two locks are held together, so the
+        ordering is a real invariant: acquire the lifecycle lock *first* and
+        ``_lock`` second, and never take a lifecycle lock while holding
+        ``_lock`` (that would invert the order and can deadlock). Disk work is
+        done with ``_lock`` released, inside the lifecycle critical section.
         """
         with self._lock:
             lock = self._skill_locks.get(dataset)

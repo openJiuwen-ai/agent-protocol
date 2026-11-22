@@ -353,6 +353,51 @@ def test_deregister_failure_leaves_entry_and_folder_untouched(service, monkeypat
     assert service_json.read_text(encoding="utf-8") == before
 
 
+def test_owner_can_replace_own_skill(service):
+    """属主同名重传的主路径：名字预读 → 属主通过 → 覆盖落盘 → 条目 updated。"""
+    svc, ds = service
+    owner = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("alpha", description="v1"), owner)
+    skill_md = ds / "skills" / "alpha" / "SKILL.md"
+    assert "v1" in skill_md.read_text(encoding="utf-8")
+
+    second = svc.register_skill("demo", _skill_zip("alpha", description="v2"), owner)
+
+    assert second.status == "updated"
+    assert second.service_id == first.service_id
+    on_disk = skill_md.read_text(encoding="utf-8")
+    assert "v2" in on_disk
+    assert "v1" not in on_disk
+    entries = svc.list_entries("demo")
+    assert [(e.service_id, e.skill_data.description) for e in entries] == [
+        (first.service_id, "v2")
+    ]
+
+
+def test_failed_extraction_keeps_previous_skill(dataset):
+    """解压中途失败（条目名冲突）不能销毁原 skill，也不能留下暂存目录。"""
+    store = RegistryStore(dataset)
+    store.save_skill_zip(_skill_zip("alpha", description="v1"))
+    skill_md = dataset / "skills" / "alpha" / "SKILL.md"
+    before = skill_md.read_text(encoding="utf-8")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("SKILL.md", "---\nname: alpha\ndescription: v2\n---\n")
+        # 合法条目名，但解压时 ``conflict`` 先是文件、再被当成目录父级 ——
+        # 校验阶段拦不住，只有写到一半才会失败。
+        zf.writestr("conflict", "file")
+        zf.writestr("conflict/inner.py", "x")
+
+    with pytest.raises(OSError):
+        store.save_skill_zip(buf.getvalue())
+
+    assert skill_md.read_text(encoding="utf-8") == before
+    leftovers = [p.name for p in (dataset / "skills").iterdir() if p.name.startswith(".")]
+    assert leftovers == []
+
+
 def test_upload_and_deregister_share_one_lock(service, monkeypatch):
     """注销删盘与重传必须互斥：否则注销会把重传刚写好的条目一起 pop 掉。"""
     svc, ds = service

@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import threading
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -318,37 +319,54 @@ class RegistryStore:
             meta = parse_skill_md_content(skill_md_content)
             name = validate_skill_name(meta["name"])
 
-            # Extract to skills/{name}/
+            # Extract into a temporary sibling and swap it in only after every
+            # entry has been written. Extracting straight into skills/{name}/
+            # would delete the previous owner's folder before the upload is
+            # known to be good: a corrupt entry (BadZipFile/CRC), a full disk or
+            # a name conflict inside the archive would leave the registry
+            # entry pointing at a half-written uploader-controlled tree.
             target_dir = self._skill_dir(name)
-            if target_dir.exists():
-                self._safe_rmtree(target_dir)
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_root = target_dir.resolve()
+            staging_dir = self._skills_root() / f".{name}.{uuid.uuid4().hex}.tmp"
+            staging_dir.mkdir(parents=True, exist_ok=False)
+            staging_root = staging_dir.resolve()
+            try:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    # Strip prefix if SKILL.md was inside a subdirectory.
+                    # ``orig_filename`` (not ``filename``) is the name that was
+                    # validated above — never extract from a name the checks
+                    # didn't see.
+                    rel_path = info.orig_filename
+                    if strip_prefix and rel_path.startswith(strip_prefix):
+                        rel_path = rel_path[len(strip_prefix):]
+                    if not rel_path:
+                        continue
+                    dest = staging_dir / rel_path
+                    # Defence in depth: even with the entry checks above, verify
+                    # the resolved destination is still inside the staging
+                    # directory before touching the filesystem.
+                    resolved = dest.resolve()
+                    if resolved == staging_root or staging_root not in resolved.parents:
+                        raise ValueError(
+                            f"Unsafe path in ZIP: {info.filename!r} escapes the skill directory"
+                        )
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
 
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                # Strip prefix if SKILL.md was inside a subdirectory.
-                # ``orig_filename`` (not ``filename``) is the name that was
-                # validated above — never extract from a name the checks didn't
-                # see.
-                rel_path = info.orig_filename
-                if strip_prefix and rel_path.startswith(strip_prefix):
-                    rel_path = rel_path[len(strip_prefix):]
-                if not rel_path:
-                    continue
-                dest = target_dir / rel_path
-                # Defence in depth: even with the entry checks above, verify the
-                # resolved destination is still inside the skill directory
-                # before touching the filesystem.
-                resolved = dest.resolve()
-                if resolved == target_root or target_root not in resolved.parents:
-                    raise ValueError(
-                        f"Unsafe path in ZIP: {info.filename!r} escapes the skill directory"
-                    )
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(info) as src, open(dest, "wb") as dst:
-                    dst.write(src.read())
+                # Swap the complete new tree in. POSIX rename() replaces an
+                # existing directory atomically; Windows cannot replace a
+                # non-empty directory in one step, so the old folder is removed
+                # first — still only after the new tree is fully on disk.
+                if target_dir.exists():
+                    self._safe_rmtree(target_dir)
+                os.replace(staging_dir, target_dir)
+            except BaseException:
+                # The previous skill (if any) was never touched: only the
+                # staging directory has to go.
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise
 
         return SkillData(
             name=name,
