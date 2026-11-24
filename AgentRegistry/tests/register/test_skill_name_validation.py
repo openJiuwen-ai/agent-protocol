@@ -439,3 +439,99 @@ def test_upload_and_deregister_share_one_lock(service, monkeypatch):
     assert [e.skill_data.name for e in svc.list_entries("demo")] == ["alpha"]
     assert (ds / "skills" / "alpha" / "SKILL.md").exists()
 
+
+
+# ---------------------------------------------------------------------------
+# 属主检查必须找到「已有」skill，而不是只看上传名生成的 id
+# ---------------------------------------------------------------------------
+
+
+def test_owner_check_matches_skill_renamed_by_update(service):
+    """update_service 改名不换 service_id；重传新名时仍必须命中旧条目做属主检查。"""
+    svc, ds = service
+    owner = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+    intruder = AuthContext(principal_id="intruder", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("alpha", description="owner"), owner)
+    svc.update_service("demo", first.service_id, {"name": "beta"}, owner)
+
+    skill_md = ds / "skills" / "beta" / "SKILL.md"
+    before = skill_md.read_text(encoding="utf-8")
+
+    with pytest.raises(PermissionError):
+        svc.register_skill("demo", _skill_zip("beta", description="intruder"), intruder)
+
+    assert skill_md.read_text(encoding="utf-8") == before
+    assert [(e.service_id, e.skill_data.name) for e in svc.list_entries("demo")] == [
+        (first.service_id, "beta")
+    ]
+
+
+def test_owner_can_replace_skill_under_its_new_name(service):
+    """改名后属主重传新名：仍走 updated，且不会为同一目录多出一个条目。"""
+    svc, ds = service
+    owner = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("alpha", description="v1"), owner)
+    svc.update_service("demo", first.service_id, {"name": "beta"}, owner)
+
+    second = svc.register_skill("demo", _skill_zip("beta", description="v2"), owner)
+
+    assert second.status == "updated"
+    assert second.service_id == first.service_id
+    assert "v2" in (ds / "skills" / "beta" / "SKILL.md").read_text(encoding="utf-8")
+    assert [(e.service_id, e.skill_data.name) for e in svc.list_entries("demo")] == [
+        (first.service_id, "beta")
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="大小写不敏感是 Windows 文件系统的特性")
+def test_owner_check_matches_case_only_variant_on_windows(service):
+    """``skills/Alpha`` 与上传名 ``alpha`` 在 Windows 上是同一目录，属主检查不能漏。"""
+    svc, ds = service
+    owner = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+    intruder = AuthContext(principal_id="intruder", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("Alpha", description="owner"), owner)
+    skill_md = ds / "skills" / "Alpha" / "SKILL.md"
+    before = skill_md.read_text(encoding="utf-8")
+
+    with pytest.raises(PermissionError):
+        svc.register_skill("demo", _skill_zip("alpha", description="intruder"), intruder)
+
+    assert skill_md.read_text(encoding="utf-8") == before
+    assert [(e.service_id, e.skill_data.name) for e in svc.list_entries("demo")] == [
+        (first.service_id, "Alpha")
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 最终替换失败也不能丢旧 skill
+# ---------------------------------------------------------------------------
+
+
+def test_replace_swap_failure_keeps_previous_skill(dataset, monkeypatch):
+    """staging 已写好、旧目录已移开，此时 os.replace 失败必须把旧目录移回来。"""
+    store = RegistryStore(dataset)
+    store.save_skill_zip(_skill_zip("alpha", description="v1"))
+    skill_dir = dataset / "skills" / "alpha"
+    skill_md = skill_dir / "SKILL.md"
+    before = skill_md.read_text(encoding="utf-8")
+
+    real_replace = os.replace
+
+    def failing_replace(src, dst):
+        # Only fail the staging -> skills/alpha swap; the backup moves
+        # (skills/alpha -> .bak and .bak -> skills/alpha) must still work.
+        if dst == skill_dir and str(src).endswith(".tmp"):
+            raise OSError("simulated swap failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="simulated swap failure"):
+        store.save_skill_zip(_skill_zip("alpha", description="v2"))
+
+    assert skill_md.read_text(encoding="utf-8") == before
+    leftovers = [p.name for p in (dataset / "skills").iterdir() if p.name.startswith(".")]
+    assert leftovers == []

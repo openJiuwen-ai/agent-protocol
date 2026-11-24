@@ -344,6 +344,33 @@ class RegistryService:
                 lock = self._skill_locks[dataset] = threading.Lock()
             return lock
 
+    def _find_skill_entry_locked(
+        self, dataset: str, service_id: str, name: str,
+    ) -> Optional[RegistryEntry]:
+        """Find the skill entry an upload named ``name`` would replace.
+
+        Must be called with ``_lock`` held. Entries keep the id generated from
+        the name they were *first* uploaded under: ``update_service`` renames a
+        skill folder without re-keying its entry. A lookup by
+        ``generate_service_id("skill", name)`` therefore misses an existing
+        skill after a rename and silently skips its ownership check. On
+        Windows the folder is also case-insensitive, so a case-only variant
+        addresses the same directory and must resolve to the same entry.
+        """
+        ds = self._entries.get(dataset, {})
+        entry = ds.get(service_id)
+        if entry is not None:
+            return entry
+        for candidate in ds.values():
+            if candidate.type != "skill" or candidate.skill_data is None:
+                continue
+            existing_name = candidate.skill_data.name
+            if existing_name == name:
+                return candidate
+            if os.name == "nt" and existing_name.lower() == name.lower():
+                return candidate
+        return None
+
     def register_skill(
         self,
         dataset: str,
@@ -362,20 +389,29 @@ class RegistryService:
         self._require_type_allowed(dataset, "skill")
 
         store = self._get_store(dataset)
-        # The name has to be known before anything is written: save_skill_zip
-        # replaces skills/<name>/ without a backup, so an ownership check that
-        # ran after it would leave the real owner's files destroyed behind a
-        # 403. peek_skill_name parses + validates the same way, read-only.
+        # The name has to be known before anything is written. save_skill_zip
+        # now stages the new tree, but an ownership check that ran after it
+        # would still have replaced the real owner's files before the 403.
+        # peek_skill_name parses + validates the same way, read-only.
         name = store.peek_skill_name(zip_bytes)
         service_id = generate_service_id("skill", name)
 
         with self._skill_lifecycle_lock(dataset):
             with self._lock:
-                existing = self._entries.get(dataset, {}).get(service_id)
+                existing = self._find_skill_entry_locked(dataset, service_id, name)
                 # On replace, perform the same owner check as update_service so
                 # provider X can't re-upload over provider Y's skill folder.
-                if existing is not None and caller is not None:
-                    self._assert_owner(existing, caller)
+                # The lookup tolerates a renamed entry and a Windows case-only
+                # variant: both address the folder this upload is about to
+                # replace, so skipping their owner check would hand them to
+                # any caller.
+                if existing is not None:
+                    if caller is not None:
+                        self._assert_owner(existing, caller)
+                    # Reuse the entry's id: update_service renames a skill
+                    # without re-keying it, so adding the id derived from the
+                    # new name would leave two entries for one folder.
+                    service_id = existing.service_id
 
             skill_data = store.save_skill_zip(zip_bytes)
 

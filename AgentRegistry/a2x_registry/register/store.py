@@ -355,16 +355,45 @@ class RegistryStore:
                     with zf.open(info) as src, open(dest, "wb") as dst:
                         dst.write(src.read())
 
-                # Swap the complete new tree in. POSIX rename() replaces an
-                # existing directory atomically; Windows cannot replace a
-                # non-empty directory in one step, so the old folder is removed
-                # first — still only after the new tree is fully on disk.
+                # Swap the complete new tree in. rename() cannot replace a
+                # non-empty directory (POSIX and Windows alike), so the old
+                # tree is moved aside rather than deleted. If the final rename
+                # fails, the backup is moved back: the previous skill survives
+                # any failure in this step, not just a mid-extraction one.
+                backup_dir = None
                 if target_dir.exists():
-                    self._safe_rmtree(target_dir)
-                os.replace(staging_dir, target_dir)
+                    backup_dir = self._skills_root() / f".{name}.{uuid.uuid4().hex}.bak"
+                    os.replace(target_dir, backup_dir)
+                try:
+                    os.replace(staging_dir, target_dir)
+                except BaseException:
+                    if backup_dir is not None:
+                        # A failed rename leaves the target absent; drop
+                        # anything that did land there before restoring. If the
+                        # restore itself fails, keep the backup — it is then
+                        # the only copy of the old skill.
+                        try:
+                            if target_dir.exists():
+                                self._safe_rmtree(target_dir)
+                            os.replace(backup_dir, target_dir)
+                        except BaseException:
+                            logger.error(
+                                "Failed to restore skill %r from %s; backup kept",
+                                name, backup_dir, exc_info=True,
+                            )
+                    raise
+                if backup_dir is not None:
+                    try:
+                        self._safe_rmtree(backup_dir)
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove old skill backup %s",
+                            backup_dir, exc_info=True,
+                        )
             except BaseException:
-                # The previous skill (if any) was never touched: only the
-                # staging directory has to go.
+                # Extraction failed, or the swap failed and was rolled back:
+                # only the staging directory has to go. A backup that could
+                # not be restored is intentionally left for manual recovery.
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 raise
 
