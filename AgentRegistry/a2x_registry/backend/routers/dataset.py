@@ -339,7 +339,8 @@ async def get_register_config(
 ):
     """Return the per-type ``min_version`` map that gates registration."""
     svc = get_registry_service()
-    return {"dataset": dataset, "formats": svc.get_register_config(dataset)}
+    formats = await _run(svc.get_register_config, dataset)
+    return {"dataset": dataset, "formats": formats}
 
 
 @router.post("/{dataset}/register-config")
@@ -902,7 +903,8 @@ async def get_vector_config(
     _ctx: Optional[AuthContext] = Depends(authorize),
 ):
     """Get the vector (embedding) config for a dataset."""
-    cfg = get_registry_service().get_vector_config(dataset)
+    svc = get_registry_service()
+    cfg = await _run(svc.get_vector_config, dataset)
     return {"dataset": dataset, **cfg}
 
 
