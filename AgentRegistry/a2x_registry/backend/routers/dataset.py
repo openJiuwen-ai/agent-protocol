@@ -368,9 +368,21 @@ async def delete_dataset(
     """Delete a dataset directory and all associated data.
 
     Admin-only on auth-required datasets; anon-OK on legacy datasets.
+
+    The registry deletion runs first; the search-side purge follows only
+    once it succeeded. ``delete_dataset`` is what validates the name and
+    asserts the dataset exists, so a refused request (400/404) must not
+    have touched the index — purging first used to drop a Chroma
+    collection and the cached search instances for a dataset the endpoint
+    then declined to delete, leaving an index-less dataset that still
+    looked intact to every read path.
+
+    ``purge_dataset`` stays best-effort by contract: a Chroma failure is
+    logged and the deletion still reports success.
     """
+    svc = get_registry_service()
+    await _run(svc.delete_dataset, dataset)
     search_service.purge_dataset(dataset)
-    await _run(get_registry_service().delete_dataset, dataset)
     return {"dataset": dataset, "status": "deleted"}
 
 
