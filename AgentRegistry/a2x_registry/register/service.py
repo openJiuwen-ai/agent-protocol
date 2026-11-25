@@ -747,11 +747,6 @@ class RegistryService:
 
         return RegistryStatus(total_services=total, by_source=by_source, datasets=all_datasets)
 
-    def list_datasets(self) -> List[str]:
-        """List all datasets that have registry data."""
-        with self._lock:
-            return list(self._entries.keys())
-
     def dataset_dir(self, dataset: str) -> Path:
         """Return the on-disk directory for a dataset.
 
@@ -799,12 +794,17 @@ class RegistryService:
         return (self._database_dir / name).is_dir()
 
     def list_datasets(self) -> List[str]:
-        """Return all dataset directory names. Order: alphabetical."""
-        if not self._database_dir.exists():
-            return []
-        return sorted(
-            d.name for d in self._database_dir.iterdir() if d.is_dir()
-        )
+        """Return all dataset directory names. Order: alphabetical.
+
+        Delegates to :meth:`_discover_datasets` so that directories sharing
+        ``_database_dir`` without dataset markers are not reported as
+        datasets. The shared ChromaDB store (:meth:`chroma_dir`) lives at
+        ``<database_dir>/chroma`` — a plain sub-directory scan reports it as
+        a dataset, which leaks a phantom namespace into the CLI listing,
+        cluster namespace negotiation and ``dataset in list_datasets()``
+        style guards.
+        """
+        return self._discover_datasets()
 
     def list_datasets_with_counts(self) -> List[Dict[str, Any]]:
         """List all datasets on disk with their service + query counts.
