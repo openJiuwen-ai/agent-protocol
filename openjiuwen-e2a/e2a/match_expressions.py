@@ -1,9 +1,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """实例 Agent 授权表达式：配置写入和请求准入共用的解析、校验与求值。
 
-来源：``gateway/config/enterprise/expressions.py``。表达式只允许 ``user_id`` /
-``group_id`` / ``bot_id`` 三个字段，支持 ``==`` / ``!=`` / ``in`` / ``not in``
-以及 ``and`` / ``or`` 组合；列表表示 OR。
+来源：``gateway/config/enterprise/expressions.py``。表达式允许 ``user_id`` /
+``group_id`` / ``bot_id`` / ``agent_id`` 四个字段，支持 ``==`` / ``!=`` / ``in`` /
+``not in`` 以及 ``and`` / ``or`` 组合；列表表示 OR。
 
 边界：本模块是纯 stdlib 的确定性纯函数，无反向依赖，故收口到协议包作为
 gateway 与 server 两侧共用的唯一实现。与其配套的配置读写、准入流程仍留在
@@ -17,8 +17,9 @@ import json
 import re
 from typing import Any
 
-_ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id"})
+_ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id", "agent_id"})
 # 对常见误写保留明确的错误提示；其余非空表达式统一通过 AST 校验。
+# 注：agent_id 已纳入白名单（issue #124），仅 service_id 仍被显式拒绝。
 _ALWAYS_MATCH_FORBIDDEN_CHECKS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\$\{"), "template_ref placeholders like ${...} are not allowed"),
     (re.compile(r"===|!=="), "=== / !== are not allowed; use == / !="),
@@ -27,8 +28,8 @@ _ALWAYS_MATCH_FORBIDDEN_CHECKS: tuple[tuple[re.Pattern[str], str], ...] = (
         "ordering operators (>, <, >=, <=) are not allowed; only == / != / in / not in are supported",
     ),
     (
-        re.compile(r"\bservice_id\b|\bagent_id\b", re.IGNORECASE),
-        "service_id / agent_id are not allowed; only user_id / group_id / bot_id",
+        re.compile(r"\bservice_id\b", re.IGNORECASE),
+        "service_id is not allowed; only user_id / group_id / bot_id / agent_id",
     ),
 )
 _MATCH_EXPR_PREFIX = "invalid match_expr"
@@ -139,7 +140,7 @@ def _validate_match_ast(node: ast.AST) -> None:
 
     raise ValueError(
         "only comparison expressions combined with and/or are allowed "
-        "(fields limited to user_id / group_id / bot_id)"
+        "(fields limited to user_id / group_id / bot_id / agent_id)"
     )
 
 
@@ -154,7 +155,7 @@ def _validate_match_value(node: ast.AST) -> None:
     if isinstance(node, ast.Name):
         if node.id not in _ALLOWED_MATCH_NAMES:
             raise ValueError(
-                f"unknown name {node.id!r}; only user_id / group_id / bot_id are allowed"
+                f"unknown name {node.id!r}; only user_id / group_id / bot_id / agent_id are allowed"
             )
         return
     if isinstance(node, ast.Call):
