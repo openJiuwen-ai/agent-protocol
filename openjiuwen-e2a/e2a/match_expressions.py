@@ -8,6 +8,10 @@
 边界：本模块是纯 stdlib 的确定性纯函数，无反向依赖，故收口到协议包作为
 gateway 与 server 两侧共用的唯一实现。与其配套的配置读写、准入流程仍留在
 各仓实现侧。
+
+注：``agent_id`` 的运行时来源是 ``identity.py`` 的 web 路由身份契约
+（``WEB_ROUTING_ID_FIELDS`` / ``apply_routing_metadata`` / ``web_routing_identity``），
+两侧白名单须保持同步，否则 identity 缺字段会 fail-closed（见 ``_MISSING``）。
 """
 
 from __future__ import annotations

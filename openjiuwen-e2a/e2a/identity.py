@@ -22,7 +22,10 @@ ROUTING_METADATA_KEY: str = "routing"
 #: 说话人标识（放在 ``metadata`` 顶层，不放进 routing）。
 USER_ID_FIELD: str = "user_id"
 #: 仅这些字段写入 ``metadata.routing``。
-WEB_ROUTING_ID_FIELDS: tuple[str, ...] = ("group_id", "bot_id", "gateway_id")
+# 注：agent_id 自 issue #124 起纳入 web 路由身份（与 match_expressions 的
+# _ALLOWED_MATCH_NAMES 对齐），使按 Agent 匹配的授权策略在 web/gateway 全链路
+# 不再因字段被 apply_routing_metadata 静默丢弃而恒为 _MISSING。
+WEB_ROUTING_ID_FIELDS: tuple[str, ...] = ("group_id", "bot_id", "gateway_id", "agent_id")
 #: 完整身份字段（顶层 user_id + routing 维度）。
 WEB_IDENTITY_FIELDS: tuple[str, ...] = (USER_ID_FIELD, *WEB_ROUTING_ID_FIELDS)
 #: 企业版租户路由/查询字段（HTTP query 与 E2A routing 共用）。
@@ -70,7 +73,7 @@ def apply_routing_metadata(
     metadata: Mapping[str, Any] | None,
     routing: Mapping[str, str] | None,
 ) -> dict[str, Any]:
-    """写入身份：``user_id`` → 顶层；``group_id``/``bot_id``/``gateway_id`` → ``routing``。"""
+    """写入身份：``user_id`` → 顶层；``group_id``/``bot_id``/``gateway_id``/``agent_id`` → ``routing``。"""
     meta = dict(metadata or {})
     identity = dict(routing or {})
 
@@ -97,7 +100,7 @@ def apply_routing_metadata(
 
 
 def web_routing_identity(metadata: Mapping[str, Any] | None) -> dict[str, str]:
-    """读完整身份：顶层 ``user_id`` + ``metadata.routing`` 三字段。"""
+    """读完整身份：顶层 ``user_id`` + ``metadata.routing`` 四字段（group_id/bot_id/gateway_id/agent_id）。"""
     if not isinstance(metadata, Mapping):
         return {}
     identity: dict[str, str] = {}
