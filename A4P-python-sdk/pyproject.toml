@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ath = [
+  "ath-sdk==0.1.0",
+]
 demo = [
   "mcp[cli]>=1.28.1,<2.0.0",
 ]

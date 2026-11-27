@@ -732,3 +732,36 @@ uv run --extra demo python examples/note_mcp_a4p/smoke_test.py
 - Operation complete 成功后以 `operationId` 做持久化幂等；
 - 为 A4P Server 和 Tool Server 之间增加认证、网络保护、限流和审计；
 - 把用户拒绝、授权验证、额度消费和业务执行结果写入外部审计系统。
+
+## 13. ATH 协议互通
+
+ATH 协议（Agent Trust Handshake Protocol，智能体可信握手协议）是由中国信息通信研究院联合各机构于 2026 年 4 月发起并开源发布的标准化可信交互框架。
+
+### 13.1 接入架构
+
+`a4p.integrations.ath` 是通过 `a4p[ath]` 安装的异步客户端集成模块。Agent 应用按工具配置选择授权路径，通过该模块复用官方 ATH Python SDK，由 ATH Gateway 实施权限校验并代理业务请求。
+
+### 13.2 授权与调用流程
+
+1. 应用调用 `discover()` 获取服务商、可用 scopes 和审批要求，并将已认证的 Gateway 用户身份和登录令牌封装为 `GatewaySession`。
+2. `ensure_registered()` 检查或创建 Agent 注册，并校验目标服务商的审批状态、批准 scopes 和有效期。注册凭证由 `RegistrationStore` 按 Gateway、Gateway 用户和 Agent 标识保存。
+3. `begin_authorization(application_session)` 返回现有有效授权，或创建待处理事务并返回授权链接。用户在浏览器完成商城 OAuth 授权，Gateway 处理回调。应用调用 `resume_authorization(application_session, transaction_id)`，SDK 根据已完成的 Gateway 会话交换令牌。事务受应用会话和有效期约束，成功交换后即被消费。
+4. `call_api(application_session, operation, body=...)` 按操作名查找预配置的 HTTP 方法、固定路径和所需 scopes，检查当前会话的令牌有效期及权限后，经 Gateway 代理请求。业务写操作由单次调用发出。
+5. `revoke(application_session)` 撤销当前会话的 ATH 令牌。应用使用 `async with` 或 `aclose()` 释放客户端资源。
+
+### 13.3 接口与凭证
+
+| 接口或类型 | 用途 |
+| --- | --- |
+| `ATHClient(config, gateway_session, *, registration_store=None)` | 为指定 Gateway、Agent 和服务商创建异步客户端 |
+| `ATHConfig` / `ATHOperation` | 声明 Agent 签名身份、服务商及每项业务操作所需的 scopes |
+| `AuthorizationRequired` | 返回待处理事务标识、用户授权链接和过期时间 |
+| `Authorized` | 返回令牌的有效 scopes 和到期时间 |
+| `cancel_authorization(application_session, transaction_id)` | 取消当前会话中的本地待处理事务 |
+| `ATHError.code` | 区分注册待审批、权限不足、事务过期、令牌失效和传输错误 |
+
+应用层分别管理 Agent 签名密钥和 Gateway 登录会话。待处理事务及 ATH Access Token 保存在客户端进程内，注册凭证可以由应用注入的存储实现持久化。宿主应用将授权链接和事务标识关联到待恢复的工具任务，向用户展示授权状态和业务结果。
+
+### 13.4 商城演示与测试
+
+[ATH Shop 示例](examples/ath_shop/README.md)提供命令行和网页入口，串起服务发现、Agent 注册、用户授权、令牌交换、商品查询、加购、确认下单和令牌撤销。确认下单后会生成模拟订单。网关集成测试覆盖事务与会话绑定、重复交换、权限校验和撤销，示例测试覆盖下单确认和写请求结果不确定时的处理。
