@@ -42,3 +42,9 @@ class MemoryRegistrationStore:
 class AccessGrant:
     authorization: Authorized
     token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class PendingRevocation:
+    credentials: RegistrationCredentials
+    token: str = field(repr=False)

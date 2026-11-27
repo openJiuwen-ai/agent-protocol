@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 import httpx
 from ath import AsyncATHGatewayClient
+from ath.client._base import require_token
 from ath.exceptions import ATHError as SDKError
 from ath.types import AgentStatus, ProviderApproval
 from joserfc.errors import JoseError
@@ -61,6 +62,21 @@ class GatewayTransport(AsyncATHGatewayClient):
 
     async def registration_status(self, client_id: str) -> AgentStatusResponse:
         return AgentStatusResponse.model_validate(await self._get_gateway_json(f"/ath/agents/{client_id}"))
+
+    async def proxy(self, provider: str, method: str, path: str, body: Any = None) -> Any:
+        if method.upper() != "HEAD":
+            return await super().proxy(provider, method, path, body)
+
+        token = require_token(self.access_token)
+        if not path.startswith("/"):
+            path = f"/{path}"
+        await self._raw_request(
+            "HEAD",
+            self._ath_url(f"/ath/proxy/{provider}{path}"),
+            body,
+            {"Authorization": f"Bearer {token}", "X-ATH-Agent-ID": self.agent_id},
+        )
+        return None
 
 
 async def gateway_call(request: Awaitable[T], *, phase: str = "") -> T:

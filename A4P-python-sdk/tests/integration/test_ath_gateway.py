@@ -41,12 +41,16 @@ def gateway(monkeypatch):
         developer_name="Test",
         purpose="Test ATH integration",
         provider_id="shop",
-        operations={"add": ATHOperation("POST", "/cart/add", frozenset({"cart:write"}))},
+        operations={
+            "add": ATHOperation("POST", "/cart/add", frozenset({"cart:write"})),
+            "check": ATHOperation("HEAD", "/cart", frozenset({"cart:read"})),
+        },
     )
     requests = []
     state = SimpleNamespace(
         registration_status="approved", registered=False, exchange_error=None,
-        exchange_timeout=False, token_scopes=["cart:write"],
+        exchange_timeout=False, token_scopes=["cart:read", "cart:write"],
+        head_status=200, revoke_error=None, pause_revoke=None,
     )
 
     async def handle(request):
@@ -65,7 +69,7 @@ def gateway(monkeypatch):
             status = {
                 "agent_status": state.registration_status,
                 "client_id": "client-1",
-                "approved_providers": [{"provider_id": "shop", "approved_scopes": ["cart:write"]}],
+                "approved_providers": [{"provider_id": "shop", "approved_scopes": sorted(config.scopes)}],
                 "approval_expires": "2099-01-01T00:00:00.000Z",
             }
             if request.method == "POST":
@@ -73,12 +77,13 @@ def gateway(monkeypatch):
                 state.registered = True
                 payload = json.loads(request.content)
                 assert payload["agent_attestation"]
-                assert payload["requested_providers"] == [{"provider_id": "shop", "scopes": ["cart:write"]}]
+                assert payload["requested_providers"] == [{"provider_id": "shop", "scopes": sorted(config.scopes)}]
                 return httpx.Response(201, json={**status, "client_secret": "shop-registration-secret"})
             return httpx.Response(200, json={**status, "agent_id": config.agent_id})
         if path == "/ath/authorize":
             payload = json.loads(request.content)
             assert payload["state"] and payload["agent_attestation"]
+            assert payload["scopes"] == ["cart:read", "cart:write"]
             assert payload["user_redirect_uri"] == f"{config.gateway_url}/ui/callback"
             assert "Authorization" not in request.headers
             return httpx.Response(200, json={
@@ -105,8 +110,24 @@ def gateway(monkeypatch):
             assert request.headers["X-ATH-Agent-ID"] == config.agent_id
             assert json.loads(request.content) == {"quantity": 1}
             return httpx.Response(200, json={"added": True})
+        if path == "/ath/proxy/shop/cart":
+            assert request.method == "HEAD"
+            assert request.headers["Authorization"] == "Bearer shop-access-token"
+            assert request.headers["X-ATH-Agent-ID"] == config.agent_id
+            return httpx.Response(state.head_status, headers={"Content-Type": "application/json"})
         if path == "/ath/revoke":
-            assert json.loads(request.content)["token"] == "shop-access-token"
+            assert json.loads(request.content) == {
+                "token": "shop-access-token",
+                "client_id": "client-1",
+                "client_secret": "shop-registration-secret",
+            }
+            if state.pause_revoke is not None:
+                state.pause_revoke.set()
+                await asyncio.Future()
+            if state.revoke_error == "timeout":
+                raise httpx.ReadTimeout("The revocation response was lost", request=request)
+            if state.revoke_error:
+                return httpx.Response(400, json={"code": state.revoke_error})
             return httpx.Response(200, json={})
         pytest.fail(f"Unexpected ATH endpoint {path}")
 
@@ -201,14 +222,95 @@ def test_wrong_gateway_user_and_insufficient_grant_do_not_reach_service(gateway)
         async with ATHClient(config, session) as client:
             pending = await client.begin_authorization("app-a")
             assert isinstance(pending, AuthorizationRequired)
-            state.token_scopes = []
+            state.token_scopes = ["cart:write"]
             with pytest.raises(ATHError) as insufficient:
                 await client.resume_authorization("app-a", pending.transaction_id)
             assert insufficient.value.code == "insufficient_scope"
+            assert requests.count("/ath/revoke") == 1
             with pytest.raises(ATHError) as missing:
                 await client.call_api("app-a", "add")
             assert missing.value.code == "authorization_required"
             assert "/ath/proxy/shop/cart/add" not in requests
+
+    asyncio.run(scenario())
+
+
+def test_head_proxy_accepts_empty_json_response_and_maps_failure(gateway):
+    config, session, state, requests = gateway
+
+    async def scenario():
+        async with ATHClient(config, session) as client:
+            pending = await client.begin_authorization("app-a")
+            await client.resume_authorization("app-a", pending.transaction_id)
+            assert await client.call_api("app-a", "check") is None
+            path = "/ath/proxy/shop/cart"
+            assert requests.count(path) == 1
+            state.head_status = 404
+            with pytest.raises(ATHError) as failed:
+                await client.call_api("app-a", "check")
+            assert failed.value.code == "service_error"
+            assert failed.value.http_status == 404
+            assert requests.count(path) == 2
+
+    asyncio.run(scenario())
+
+
+def test_partial_grant_revocation_failure_blocks_only_its_session(gateway):
+    config, session, state, requests = gateway
+
+    async def scenario():
+        async with ATHClient(config, session) as client:
+            pending = await client.begin_authorization("app-a")
+            state.token_scopes = ["cart:write"]
+            state.revoke_error = "timeout"
+            with pytest.raises(ATHError) as failed:
+                await client.resume_authorization("app-a", pending.transaction_id)
+            assert failed.value.code == "revocation_pending"
+            with pytest.raises(ATHError) as duplicate:
+                await client.resume_authorization("app-a", pending.transaction_id)
+            assert duplicate.value.code == "invalid_transaction"
+            assert requests.count("/ath/token") == 1
+            with pytest.raises(ATHError) as unavailable:
+                await client.call_api("app-a", "add")
+            assert unavailable.value.code == "authorization_required"
+            with pytest.raises(ATHError) as blocked:
+                await client.begin_authorization("app-a")
+            assert blocked.value.code == "revocation_pending"
+            assert requests.count("/ath/authorize") == 1
+            assert requests.count("/ath/revoke") == 2
+            await client.revoke("app-b")
+            assert requests.count("/ath/revoke") == 2
+            assert isinstance(await client.begin_authorization("app-b"), AuthorizationRequired)
+            state.revoke_error = "TOKEN_REVOKED"
+            await client.revoke("app-a")
+            assert requests.count("/ath/revoke") == 3
+            assert isinstance(await client.begin_authorization("app-a"), AuthorizationRequired)
+            assert requests.count("/ath/authorize") == 3
+            assert requests.count("/ath/revoke") == 3
+
+    asyncio.run(scenario())
+
+
+def test_cancelling_partial_grant_revocation_leaves_it_available_for_retry(gateway):
+    config, session, state, requests = gateway
+
+    async def scenario():
+        async with ATHClient(config, session) as client:
+            pending = await client.begin_authorization("app-a")
+            state.token_scopes = ["cart:write"]
+            started = state.pause_revoke = asyncio.Event()
+            exchange = asyncio.create_task(client.resume_authorization("app-a", pending.transaction_id))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            exchange.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await exchange
+            state.pause_revoke = None
+            with pytest.raises(ATHError) as duplicate:
+                await client.resume_authorization("app-a", pending.transaction_id)
+            assert duplicate.value.code == "invalid_transaction"
+            await client.revoke("app-a")
+            assert requests.count("/ath/token") == 1
+            assert requests.count("/ath/revoke") == 2
 
     asyncio.run(scenario())
 

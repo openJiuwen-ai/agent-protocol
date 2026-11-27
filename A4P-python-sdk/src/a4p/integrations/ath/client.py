@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from .credentials import (
     AccessGrant,
     MemoryRegistrationStore,
+    PendingRevocation,
     RegistrationCredentials,
     RegistrationKey,
     RegistrationStore,
@@ -66,6 +67,7 @@ class ATHClient:
         self._unsaved_registration: RegistrationCredentials | None = None
         self._transactions = AuthorizationSessions()
         self._grants: dict[str, AccessGrant] = {}
+        self._pending_revocations: dict[str, PendingRevocation] = {}
         self._next_grant_expiry: datetime | None = None
         self._lock = asyncio.Lock()
         self._closed = False
@@ -92,6 +94,7 @@ class ATHClient:
         self._require_session(application_session)
         async with self._lock:
             await self._verify_gateway_user()
+            await self._revoke_partial_grant(application_session)
             grant = self._grants.get(application_session)
             if grant and grant.authorization.expires_at > utcnow():
                 return grant.authorization
@@ -127,7 +130,8 @@ class ATHClient:
 
         A pending response leaves the transaction available for the user's next
         explicit continuation. A request with an uncertain exchange outcome ends
-        the local transaction.
+        the local transaction. If this raises `revocation_pending`, retry with
+        `revoke(application_session)` before closing this client.
         """
         self._require_session(application_session)
         async with self._lock:
@@ -173,6 +177,10 @@ class ATHClient:
             ):
                 raise ATHError("invalid_gateway_response", "The Gateway returned an invalid ATH token binding")
             if not self._config.scopes <= scopes:
+                self._pending_revocations[application_session] = PendingRevocation(
+                    credentials, response.access_token,
+                )
+                await self._revoke_partial_grant(application_session)
                 raise ATHError("insufficient_scope", "User consent did not grant all required ATH scopes")
             try:
                 expires_at = issued_at + timedelta(seconds=response.expires_in)
@@ -222,29 +230,47 @@ class ATHClient:
                 self._gateway.set_token("")
 
     async def revoke(self, application_session: str) -> None:
-        """Revoke the session's current ATH grant and discard any pending consent."""
+        """Revoke the session's ATH token, including a partial grant awaiting cleanup."""
         self._require_session(application_session)
         async with self._lock:
             await self._verify_gateway_user()
             pending = self._transactions.for_session(application_session)
             if pending:
                 self._transactions.discard(pending.interaction.transaction_id)
+            await self._revoke_partial_grant(application_session)
             grant = self._grants.get(application_session)
             if grant is None:
                 return
             credentials = await self._registration_store.get(self._registration_key)
             if credentials is None:
                 raise ATHError("agent_not_registered", "ATH registration credentials are required for revocation")
-            self._set_credentials(credentials)
-            self._gateway.set_token(grant.token)
-            try:
-                await self._gateway_call(self._gateway.revoke())
-            except ATHError as error:
-                if error.code not in _INVALID_TOKENS:
-                    raise
-            finally:
-                self._gateway.set_token("")
+            await self._revoke_token(credentials, grant.token)
             self._grants.pop(application_session)
+
+    async def _revoke_partial_grant(self, application_session: str) -> None:
+        pending = self._pending_revocations.get(application_session)
+        if pending is None:
+            return
+        try:
+            await self._revoke_token(pending.credentials, pending.token)
+        except ATHError as error:
+            raise ATHError(
+                "revocation_pending",
+                f"Consent did not grant all required ATH scopes and token revocation failed ({error.code})",
+                http_status=error.http_status,
+            ) from None
+        self._pending_revocations.pop(application_session)
+
+    async def _revoke_token(self, credentials: RegistrationCredentials, token: str) -> None:
+        self._set_credentials(credentials)
+        self._gateway.set_token(token)
+        try:
+            await self._gateway_call(self._gateway.revoke())
+        except ATHError as error:
+            if error.code not in _INVALID_TOKENS:
+                raise
+        finally:
+            self._gateway.set_token("")
 
     async def aclose(self) -> None:
         async with self._lock:
@@ -253,6 +279,7 @@ class ATHClient:
             self._closed = True
             self._transactions.clear()
             self._grants.clear()
+            self._pending_revocations.clear()
             self._unsaved_registration = None
             await self._gateway.close()
 
