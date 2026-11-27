@@ -204,6 +204,10 @@ class RegistryService:
         # See docs/heartbeat_design.md.
         self._lease_config_cache: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        # dataset -> mutex serialising skill *upload* against *deregister*
+        # (see _skill_lifecycle_lock). Kept out of _lock on purpose: these
+        # operations span disk I/O and must not block unrelated registry work.
+        self._skill_locks: Dict[str, threading.Lock] = {}
         # Reservation leases — protected by _lock, lazy-swept on access.
         # No background daemon, no disk persistence. Restart clears them.
         self._leases: Dict[Tuple[str, str], _Lease] = {}
@@ -394,6 +398,123 @@ class RegistryService:
         )
         return self._do_register(dataset, entry, req.persistent)
 
+    def _skill_lifecycle_lock(self, dataset: str) -> threading.Lock:
+        """Mutex shared by skill upload and skill deregister for one dataset.
+
+        Both operations touch two layers in sequence — the skill folder on
+        disk, then the in-memory entry — and neither order is atomic on its
+        own. Without a shared mutex:
+
+        * ``register_skill`` writes the folder first; a 403 discovered
+          afterwards would already have destroyed the previous owner's files
+          (that is why the ownership check moves ahead of the write), and
+        * ``deregister_skill`` deletes the folder first; a re-upload that lands
+          in the gap before the entry pop has its brand-new entry removed by
+          the deregister.
+
+        One lock per dataset closes both windows; unrelated datasets don't
+        serialise against each other. The two locks are held together, so the
+        ordering is a real invariant: acquire the lifecycle lock *first* and
+        ``_lock`` second, and never take a lifecycle lock while holding
+        ``_lock`` (that would invert the order and can deadlock). Disk work is
+        done with ``_lock`` released, inside the lifecycle critical section.
+        """
+        with self._lock:
+            lock = self._skill_locks.get(dataset)
+            if lock is None:
+                lock = self._skill_locks[dataset] = threading.Lock()
+            return lock
+
+    def _reclaim_skill_ids_locked(self, dataset: str, service_id: str) -> bool:
+        """Re-key skill entries left on a stale id so ``service_id`` is free.
+
+        ``service_id`` is ``hash(name)`` and ``update_service`` renames a folder
+        without re-keying its entry, so the skill formerly called ``name`` keeps
+        sitting on this very id. Storing a new entry as-is would overwrite that
+        other skill's registry record — its folder survives as an orphan and
+        the skill disappears from every listing. Moving each stale entry to the
+        id derived from the name it carries now (exactly what a restart
+        rebuilds from the folders) frees this key without dropping a skill.
+
+        Returns True when ``service_id`` is free afterwards. Must be called
+        with ``_lock`` held.
+        """
+        ds = self._entries.get(dataset, {})
+        if service_id not in ds:
+            return True
+        stale = [
+            (sid, entry) for sid, entry in ds.items()
+            if entry.source == "skill_folder"
+            and entry.skill_data is not None
+            and sid != generate_service_id("skill", entry.skill_data.name)
+        ]
+        # Detach first: while a rename chain is being resolved, an entry whose
+        # canonical id is still held by another stale entry must not look like
+        # a conflict.
+        for sid, _entry in stale:
+            del ds[sid]
+        for sid, entry in stale:
+            canonical = generate_service_id("skill", entry.skill_data.name)
+            if canonical in ds:
+                # The same name twice (legacy duplicates). Keeping the stale
+                # key beats dropping a record; a restart collapses them.
+                logger.warning(
+                    "Duplicate skill name '%s' in dataset '%s': keeping stale id %s",
+                    entry.skill_data.name, dataset, sid,
+                )
+                ds[sid] = entry
+                continue
+            # Keep the key and the entry's own ``service_id`` in sync: output
+            # records, mutation events and every API response read the field.
+            ds[canonical] = entry.model_copy(update={"service_id": canonical})
+            logger.info(
+                "Re-keyed skill '%s' in dataset '%s': %s -> %s",
+                entry.skill_data.name, dataset, sid, canonical,
+            )
+        return service_id not in ds
+
+    def _find_skill_entry_locked(
+        self, dataset: str, service_id: str, name: str,
+    ) -> Optional[RegistryEntry]:
+        """Find the skill entry an upload named ``name`` would replace.
+
+        Must be called with ``_lock`` held. The folder is identified by the
+        skill's own name, never by ``service_id``:
+
+        * Entries keep the id generated from the name they were *first*
+          uploaded under — ``update_service`` renames a skill folder without
+          re-keying its entry — so a lookup by
+          ``generate_service_id("skill", name)`` misses an existing skill
+          after a rename and silently skips its ownership check.
+        * The reverse also holds, and is worse: ``alpha`` renamed to ``beta``
+          still owns ``hash("alpha")``, so a later, unrelated upload named
+          ``alpha`` hits that entry. Checking *its* owner either denies the
+          real owner of the target folder, or lets the renamed skill's owner
+          through and then overwrites that entry — i.e. one skill deleted from
+          the registry by an upload of another name.
+        * On Windows the folder is case-insensitive, so a case-only variant
+          addresses the same directory and must resolve to the same entry.
+        """
+        ds = self._entries.get(dataset, {})
+        exact = None
+        folded = None
+        for candidate in ds.values():
+            if candidate.type != "skill" or candidate.skill_data is None:
+                continue
+            existing_name = candidate.skill_data.name
+            if existing_name == name:
+                # Legacy duplicates can claim one name; the canonical entry
+                # (id derived from this name) wins so re-uploads keep the id.
+                if candidate.service_id == service_id:
+                    return candidate
+                if exact is None:
+                    exact = candidate
+                continue
+            if (os.name == "nt" and folded is None
+                    and existing_name.lower() == name.lower()):
+                folded = candidate
+        return exact if exact is not None else folded
+
     def register_skill(
         self,
         dataset: str,
@@ -412,36 +533,62 @@ class RegistryService:
         self._require_type_allowed(dataset, "skill")
 
         store = self._get_store(dataset)
-        skill_data = store.save_skill_zip(zip_bytes)
+        # The name has to be known before anything is written. save_skill_zip
+        # now stages the new tree, but an ownership check that ran after it
+        # would still have replaced the real owner's files before the 403.
+        # peek_skill_name parses + validates the same way, read-only.
+        name = store.peek_skill_name(zip_bytes)
+        service_id = generate_service_id("skill", name)
 
-        # Post-extraction re-validation — trivially passes v0.0 (save_skill_zip
-        # already enforced name+description) but will flag issues once a
-        # skill v1.0+ adds stricter checks.
-        self._require_valid(dataset, "skill", skill_data)
+        with self._skill_lifecycle_lock(dataset):
+            with self._lock:
+                existing = self._find_skill_entry_locked(dataset, service_id, name)
+                # On replace, perform the same owner check as update_service so
+                # provider X can't re-upload over provider Y's skill folder.
+                # The lookup tolerates a renamed entry and a Windows case-only
+                # variant: both address the folder this upload is about to
+                # replace, so skipping their owner check would hand them to
+                # any caller.
+                if existing is not None:
+                    if caller is not None:
+                        self._assert_owner(existing, caller)
+                    # Reuse the entry's id: update_service renames a skill
+                    # without re-keying it, so adding the id derived from the
+                    # new name would leave two entries for one folder.
+                    service_id = existing.service_id
+                elif not self._reclaim_skill_ids_locked(dataset, service_id):
+                    # This id is held by a skill whose name is neither this
+                    # upload's nor a renamable variant of it: never overwrite
+                    # another skill's record, refuse instead.
+                    raise ValueError(
+                        f"Service id '{service_id}' is already used by another skill"
+                    )
 
-        service_id = generate_service_id("skill", skill_data.name)
-        entry = RegistryEntry(
-            service_id=service_id,
-            type="skill",
-            source="skill_folder",
-            owner_id=(caller.principal_id if caller is not None else None),
-            skill_data=skill_data,
-        )
+            skill_data = store.save_skill_zip(zip_bytes)
 
-        with self._lock:
-            ds = self._entries.setdefault(dataset, {})
-            # On replace, perform the same owner check as update_service so
-            # provider X can't re-upload over provider Y's skill folder.
-            existing = ds.get(service_id)
-            if existing is not None and caller is not None:
-                self._assert_owner(existing, caller)
-            status = "updated" if service_id in ds else "registered"
-            ds[service_id] = entry
+            # Post-extraction re-validation — trivially passes v0.0
+            # (save_skill_zip already enforced name+description) but will flag
+            # issues once a skill v1.0+ adds stricter checks.
+            self._require_valid(dataset, "skill", skill_data)
 
-        self._regenerate_output(dataset)
-        self._mark_taxonomy_stale(dataset)
-        self._emit_mutation(dataset, service_id,
-                            "update" if status == "updated" else "register", entry)
+            entry = RegistryEntry(
+                service_id=service_id,
+                type="skill",
+                source="skill_folder",
+                owner_id=(caller.principal_id if caller is not None else None),
+                skill_data=skill_data,
+            )
+
+            with self._lock:
+                ds = self._entries.setdefault(dataset, {})
+                status = "updated" if service_id in ds else "registered"
+                ds[service_id] = entry
+
+            self._regenerate_output(dataset)
+            self._mark_taxonomy_stale(dataset)
+            self._emit_mutation(dataset, service_id,
+                                "update" if status == "updated" else "register",
+                                entry)
         return SkillResponse(name=skill_data.name, dataset=dataset,
                              status=status, service_id=service_id)
 
@@ -451,22 +598,37 @@ class RegistryService:
         name: str,
         caller: Optional[AuthContext] = None,
     ) -> SkillResponse:
-        """Remove a skill folder and its registry entry."""
+        """Remove a skill folder and its registry entry.
+
+        Upload and deregister share ``_skill_lifecycle_lock``: the two steps
+        below are only consistent when no re-upload of the same skill can
+        interleave, otherwise the deregister would pop the fresh entry created
+        between ``remove_skill`` and the pop.
+        """
         service_id = generate_service_id("skill", name)
 
-        with self._lock:
-            ds = self._entries.get(dataset, {})
-            if service_id not in ds:
-                return SkillResponse(name=name, dataset=dataset, status="not_found")
-            if caller is not None:
-                self._assert_owner(ds[service_id], caller)
-            del ds[service_id]
+        with self._skill_lifecycle_lock(dataset):
+            with self._lock:
+                ds = self._entries.get(dataset, {})
+                if service_id not in ds:
+                    return SkillResponse(name=name, dataset=dataset, status="not_found")
+                if caller is not None:
+                    self._assert_owner(ds[service_id], caller)
 
-        store = self._get_store(dataset)
-        store.remove_skill(name)
-        self._regenerate_output(dataset)
-        self._mark_taxonomy_stale(dataset)
-        self._emit_mutation(dataset, service_id, "deregister", None)
+            # Delete on disk *before* dropping the in-memory entry: name
+            # validation (or an IO error) must not leave the registry claiming
+            # the skill is gone while the folder and service.json still list
+            # it. A ValueError here surfaces as 400 and leaves every layer
+            # untouched.
+            store = self._get_store(dataset)
+            store.remove_skill(name)
+
+            with self._lock:
+                self._entries.get(dataset, {}).pop(service_id, None)
+
+            self._regenerate_output(dataset)
+            self._mark_taxonomy_stale(dataset)
+            self._emit_mutation(dataset, service_id, "deregister", None)
         return SkillResponse(name=name, dataset=dataset, status="deleted",
                              service_id=service_id)
 

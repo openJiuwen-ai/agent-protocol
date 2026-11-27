@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import threading
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +32,121 @@ LEASE_CONFIG_FILE = "lease_config.json"
 SERVICE_JSON_FILE = "service.json"
 SKILLS_DIR = "skills"
 REMOVED_SKILLS_DIR = "removed_skills"
+
+# ---------------------------------------------------------------------------
+# Skill name validation
+#
+# A skill name comes from user-supplied content: the ``name`` key of a
+# SKILL.md frontmatter (uploaded as a ZIP) or the ``name`` field of a service
+# update. It becomes a directory under ``<dataset>/skills/``, so an unvalidated
+# ``..`` makes ``shutil.rmtree(<dataset>/skills/..)`` delete the whole dataset.
+# The ZIP entry paths are guarded separately in ``_validate_zip_entry``.
+# ---------------------------------------------------------------------------
+_MAX_SKILL_NAME_BYTES = 200
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *{f"com{i}" for i in range(1, 10)},
+    *{f"lpt{i}" for i in range(1, 10)},
+}
+
+
+def validate_skill_name(name: str) -> str:
+    """Return ``name`` if it is a safe skill directory name, else raise ValueError.
+
+    Rules that only matter on Windows (reserved device names, ``:``, leading /
+    trailing whitespace, trailing dot) are enforced on Windows only: on POSIX
+    those names are legal and skills created by older versions must stay
+    readable and deletable. Control characters are rejected everywhere — they
+    would desync the folder name from the frontmatter it was parsed from.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError("skill name must be a non-empty string")
+    if name in (".", ".."):
+        raise ValueError(f"invalid skill name: {name!r}")
+    if len(name.encode("utf-8")) > _MAX_SKILL_NAME_BYTES:
+        raise ValueError(
+            f"invalid skill name: too long ({len(name.encode('utf-8'))} bytes > "
+            f"{_MAX_SKILL_NAME_BYTES})"
+        )
+    for ch in ("/", "\\", "\x00"):
+        if ch in name:
+            raise ValueError(f"invalid skill name: path separator or NUL in {name!r}")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        raise ValueError(f"invalid skill name: control character in {name!r}")
+    if os.name == "nt":
+        if name.strip() != name:
+            raise ValueError(f"invalid skill name: leading/trailing whitespace: {name!r}")
+        if ":" in name:
+            raise ValueError(f"invalid skill name: ':' is not allowed in {name!r}")
+        if name != name.rstrip(" ."):
+            raise ValueError(
+                f"invalid skill name: trailing dot/space aliases another directory: {name!r}"
+            )
+        if name.split(".")[0].lower() in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"invalid skill name: {name!r} is a reserved device name")
+    return name
+
+
+def _validate_zip_entry(entry_name: str) -> None:
+    """Raise ValueError for a ZIP entry that could escape the extraction root.
+
+    ZIP entry names are POSIX-style by specification, whatever the extracting
+    host, so they are parsed as POSIX here and every component is checked. A
+    Windows drive prefix (``C:``) and a backslash are not POSIX absolute paths
+    but *are* absolute / a separator once extracted on Windows, so both are
+    rejected explicitly instead of relying on the host separator.
+
+    Call this with ``ZipInfo.orig_filename``, never with ``ZipInfo.filename``:
+    ``zipfile`` truncates ``filename`` at the first NUL (``orig_filename`` keeps
+    it), so a NUL check on ``filename`` can never fire, and a name that only
+    differs in its truncated part would slip through.
+    """
+    if not entry_name:
+        raise ValueError("Unsafe path in ZIP: empty entry name")
+    if "\x00" in entry_name:
+        raise ValueError(f"Unsafe path in ZIP: NUL in {entry_name!r}")
+    if "\\" in entry_name:
+        raise ValueError(f"Unsafe path in ZIP: backslash in {entry_name!r}")
+    if entry_name.startswith("/"):
+        raise ValueError(f"Unsafe path in ZIP: absolute path {entry_name!r}")
+    if re.match(r"^[A-Za-z]:", entry_name):
+        raise ValueError(f"Unsafe path in ZIP: drive prefix in {entry_name!r}")
+    for part in entry_name.split("/"):
+        if part == "..":
+            raise ValueError(f"Unsafe path in ZIP: parent reference in {entry_name!r}")
+
+
+def _skill_names_match(frontmatter_name: str, folder_name: str) -> bool:
+    """Does a frontmatter ``name`` refer to the folder it was read from?
+
+    Windows filesystems are case-insensitive: ``skills/My-Skill`` and a
+    frontmatter ``name: my-skill`` are the same directory, so an exact match
+    would silently drop skills that were valid before this check landed (they
+    disappear from the registry, and from download/pack too). POSIX stays
+    exact — ``My-Skill`` and ``my-skill`` are two different folders there.
+    """
+    if frontmatter_name == folder_name:
+        return True
+    return os.name == "nt" and frontmatter_name.lower() == folder_name.lower()
+
+
+def _locate_skill_md(zf: zipfile.ZipFile) -> "tuple[str, str]":
+    """Return ``(skill_md_entry, strip_prefix)`` for a skill ZIP.
+
+    Accepts SKILL.md at the archive root, or inside a single top-level
+    directory (``my-skill/SKILL.md`` — the layout the AgentSkills spec allows).
+    ``strip_prefix`` is what has to be removed from entry names on extraction.
+    """
+    names = zf.namelist()
+    if "SKILL.md" in names:
+        return "SKILL.md", ""
+    for top in sorted({n.split("/")[0] for n in names if "/" in n}):
+        candidate = f"{top}/SKILL.md"
+        if candidate in names:
+            return candidate, f"{top}/"
+    raise ValueError("ZIP must contain SKILL.md (at root or in a single top-level directory)")
+
+
 
 # Default behavior when ``auth_config.json`` is missing: the namespace is
 # anonymous (backward-compat with every dataset created before this module
@@ -58,6 +174,24 @@ class RegistryStore:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._api_entries: Dict[str, RegistryEntry] = {}
         self._lock = threading.Lock()
+
+    # -- skill directory helpers -------------------------------------------
+
+    def _skill_dir(self, name: str) -> Path:
+        """Return ``<dataset>/skills/<name>`` after validating ``name``."""
+        validate_skill_name(name)
+        return self._dir / SKILLS_DIR / name
+
+    def _skills_root(self) -> Path:
+        return self._dir / SKILLS_DIR
+
+    def _safe_rmtree(self, target: Path) -> None:
+        """Delete a skill folder, refusing anything outside ``skills/``."""
+        root = self._skills_root().resolve()
+        resolved = target.resolve()
+        if resolved == root or root not in resolved.parents:
+            raise ValueError(f"refusing to delete outside {SKILLS_DIR}/: {resolved}")
+        shutil.rmtree(resolved)
 
     # --- Read ---
 
@@ -121,7 +255,17 @@ class RegistryStore:
                 continue
             try:
                 meta = parse_skill_md(skill_md)
-                name = meta["name"]
+                name = validate_skill_name(meta["name"])
+                if not _skill_names_match(name, child.name):
+                    # A frontmatter name that differs from the folder name would
+                    # make skill_path / get_skill_zip address a different
+                    # directory than the one on disk. Treat it as corrupt data.
+                    # Windows compares case-insensitively — see
+                    # _skill_names_match for why an exact match would hide
+                    # existing skills there.
+                    raise ValueError(
+                        f"frontmatter name {name!r} does not match folder {child.name!r}"
+                    )
                 skill_data = SkillData(
                     name=name,
                     description=meta["description"],
@@ -139,56 +283,119 @@ class RegistryStore:
                 logger.warning("Skipping invalid skill '%s': %s", child.name, e)
         return entries
 
+    def peek_skill_name(self, zip_bytes: bytes) -> str:
+        """Validate a skill ZIP and return its frontmatter name — no writes.
+
+        ``save_skill_zip`` replaces ``skills/<name>/`` (no backup), so a caller
+        that has to refuse the upload for a reason the *store* doesn't know
+        about — e.g. the ownership check in
+        ``RegistryService.register_skill`` — must learn the name first.
+        Validation is identical to ``save_skill_zip``: a ZIP rejected here is
+        rejected there too.
+        """
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for info in zf.infolist():
+                _validate_zip_entry(info.orig_filename)
+            skill_md_path, _ = _locate_skill_md(zf)
+            skill_md_content = zf.read(skill_md_path).decode("utf-8")
+        meta = parse_skill_md_content(skill_md_content)
+        return validate_skill_name(meta["name"])
+
     def save_skill_zip(self, zip_bytes: bytes) -> SkillData:
         """Extract a skill ZIP, validate SKILL.md, save to skills/{name}/. Returns SkillData."""
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            # Security: reject paths with .. or absolute paths
+            # Security: every entry must be a relative POSIX path without any
+            # parent reference, backslash, drive prefix or NUL — see
+            # _validate_zip_entry for why each of those is needed. Validated on
+            # ``orig_filename``: ``filename`` is truncated at the first NUL.
             for info in zf.infolist():
-                if info.filename.startswith("/") or ".." in info.filename:
-                    raise ValueError(f"Unsafe path in ZIP: {info.filename}")
+                _validate_zip_entry(info.orig_filename)
 
             # Find SKILL.md — at root or inside a single top-level directory
-            names = zf.namelist()
-            skill_md_path = None
-            strip_prefix = ""
-            if "SKILL.md" in names:
-                skill_md_path = "SKILL.md"
-            else:
-                # Check for single top-level directory containing SKILL.md
-                top_dirs = {n.split("/")[0] for n in names if "/" in n}
-                for td in top_dirs:
-                    candidate = f"{td}/SKILL.md"
-                    if candidate in names:
-                        skill_md_path = candidate
-                        strip_prefix = f"{td}/"
-                        break
-            if not skill_md_path:
-                raise ValueError("ZIP must contain SKILL.md (at root or in a single top-level directory)")
+            skill_md_path, strip_prefix = _locate_skill_md(zf)
 
             # Parse frontmatter
             skill_md_content = zf.read(skill_md_path).decode("utf-8")
             meta = parse_skill_md_content(skill_md_content)
-            name = meta["name"]
+            name = validate_skill_name(meta["name"])
 
-            # Extract to skills/{name}/
-            target_dir = self._dir / SKILLS_DIR / name
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            target_dir.mkdir(parents=True, exist_ok=True)
+            # Extract into a temporary sibling and swap it in only after every
+            # entry has been written. Extracting straight into skills/{name}/
+            # would delete the previous owner's folder before the upload is
+            # known to be good: a corrupt entry (BadZipFile/CRC), a full disk or
+            # a name conflict inside the archive would leave the registry
+            # entry pointing at a half-written uploader-controlled tree.
+            target_dir = self._skill_dir(name)
+            staging_dir = self._skills_root() / f".{name}.{uuid.uuid4().hex}.tmp"
+            staging_dir.mkdir(parents=True, exist_ok=False)
+            staging_root = staging_dir.resolve()
+            try:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    # Strip prefix if SKILL.md was inside a subdirectory.
+                    # ``orig_filename`` (not ``filename``) is the name that was
+                    # validated above — never extract from a name the checks
+                    # didn't see.
+                    rel_path = info.orig_filename
+                    if strip_prefix and rel_path.startswith(strip_prefix):
+                        rel_path = rel_path[len(strip_prefix):]
+                    if not rel_path:
+                        continue
+                    dest = staging_dir / rel_path
+                    # Defence in depth: even with the entry checks above, verify
+                    # the resolved destination is still inside the staging
+                    # directory before touching the filesystem.
+                    resolved = dest.resolve()
+                    if resolved == staging_root or staging_root not in resolved.parents:
+                        raise ValueError(
+                            f"Unsafe path in ZIP: {info.filename!r} escapes the skill directory"
+                        )
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
 
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                # Strip prefix if SKILL.md was inside a subdirectory
-                rel_path = info.filename
-                if strip_prefix and rel_path.startswith(strip_prefix):
-                    rel_path = rel_path[len(strip_prefix):]
-                if not rel_path:
-                    continue
-                dest = target_dir / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(info) as src, open(dest, "wb") as dst:
-                    dst.write(src.read())
+                # Swap the complete new tree in. rename() cannot replace a
+                # non-empty directory (POSIX and Windows alike), so the old
+                # tree is moved aside rather than deleted. If the final rename
+                # fails, the backup is moved back: the previous skill survives
+                # any failure in this step, not just a mid-extraction one.
+                backup_dir = None
+                if target_dir.exists():
+                    backup_dir = self._skills_root() / f".{name}.{uuid.uuid4().hex}.bak"
+                    os.replace(target_dir, backup_dir)
+                try:
+                    os.replace(staging_dir, target_dir)
+                except BaseException:
+                    if backup_dir is not None:
+                        # A failed rename leaves the target absent; drop
+                        # anything that did land there before restoring. If the
+                        # restore itself fails, keep the backup — it is then
+                        # the only copy of the old skill.
+                        try:
+                            if target_dir.exists():
+                                self._safe_rmtree(target_dir)
+                            os.replace(backup_dir, target_dir)
+                        except BaseException:
+                            logger.error(
+                                "Failed to restore skill %r from %s; backup kept",
+                                name, backup_dir, exc_info=True,
+                            )
+                    raise
+                if backup_dir is not None:
+                    try:
+                        self._safe_rmtree(backup_dir)
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove old skill backup %s",
+                            backup_dir, exc_info=True,
+                        )
+            except BaseException:
+                # Extraction failed, or the swap failed and was rolled back:
+                # only the staging directory has to go. A backup that could
+                # not be restored is intentionally left for manual recovery.
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise
 
         return SkillData(
             name=name,
@@ -200,7 +407,7 @@ class RegistryStore:
 
     def remove_skill(self, name: str) -> bool:
         """Move a skill folder to removed_skills/. Returns True if it existed."""
-        skill_dir = self._dir / SKILLS_DIR / name
+        skill_dir = self._skill_dir(name)
         if not skill_dir.exists():
             return False
         removed_dir = self._dir / REMOVED_SKILLS_DIR
@@ -218,8 +425,8 @@ class RegistryStore:
         """
         if not new_name or new_name == old_name:
             return
-        old_dir = self._dir / SKILLS_DIR / old_name
-        new_dir = self._dir / SKILLS_DIR / new_name
+        old_dir = self._skill_dir(old_name)
+        new_dir = self._skill_dir(new_name)
         if not old_dir.exists():
             raise FileNotFoundError(f"Skill folder not found: {old_name}")
         if new_dir.exists():
@@ -232,7 +439,7 @@ class RegistryStore:
         Preserves body text and any frontmatter keys not in ``updates``.
         Creates frontmatter if missing.
         """
-        skill_md = self._dir / SKILLS_DIR / name / "SKILL.md"
+        skill_md = self._skill_dir(name) / "SKILL.md"
         if not skill_md.exists():
             raise FileNotFoundError(f"SKILL.md not found for skill '{name}'")
         with open(skill_md, "r", encoding="utf-8") as f:
@@ -264,8 +471,14 @@ class RegistryStore:
             f.write(new_content)
 
     def get_skill_zip(self, name: str) -> bytes:
-        """Pack a skill folder into an in-memory ZIP. Raises FileNotFoundError if missing."""
-        skill_dir = self._dir / SKILLS_DIR / name
+        """Pack a skill folder into an in-memory ZIP. Raises FileNotFoundError if missing.
+
+        Goes through ``_skill_dir`` like every write path: ``..`` would
+        otherwise resolve to the whole dataset directory and pack
+        ``service.json`` / ``api_config.json`` / ``auth_config.json`` into the
+        response.
+        """
+        skill_dir = self._skill_dir(name)
         if not skill_dir.is_dir():
             raise FileNotFoundError(f"Skill folder not found: {name}")
         buf = io.BytesIO()

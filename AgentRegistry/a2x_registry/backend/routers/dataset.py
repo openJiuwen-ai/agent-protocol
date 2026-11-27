@@ -586,6 +586,10 @@ async def get_single_service(
                 status_code=404,
                 detail=f"Skill folder not found: {entry.skill_data.name}",
             )
+        except ValueError as e:
+            # Name validation (single segment / containment): a client error,
+            # not a 500 — the old code only mapped FileNotFoundError here.
+            raise HTTPException(status_code=400, detail=str(e))
         return Response(
             content=zip_bytes,
             media_type="application/zip",
@@ -858,6 +862,10 @@ async def download_skill(
         zip_bytes = svc.get_skill_zip(dataset, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    except ValueError as e:
+        # get_skill_zip validates the name (read-side traversal guard); an
+        # invalid name is a 400, not an unmapped 500.
+        raise HTTPException(status_code=400, detail=str(e))
     return Response(
         content=zip_bytes,
         media_type="application/zip",
