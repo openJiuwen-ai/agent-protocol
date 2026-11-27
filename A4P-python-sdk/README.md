@@ -32,7 +32,7 @@ A4P（Agentic Authentication, Authorization, and Audit Protocol）是一套面�
   - Intent 和 Operation 统一采用 prepare/complete 两阶段接口，支持授权服务与用户确认异步完成。
   - Operation 授权由受保护的 Tool Server 发起和完成；Intent 授权由 Agent 发起，授权结果在后续工具调用中验证。
   - SDK 内置异步 HTTP 客户端、轻量 HTTP 服务端和可定制的授权展示文本，便于嵌入现有 Agent 与工具服务。
-
+- 与 ATH 协议互通，支持通过 ATH Gateway 完成 Agent 注册、用户授权和服务访问。
 
 ## 快速开始
 
@@ -56,7 +56,6 @@ uv sync
   `demo` 额外依赖；
 - `examples/note_mcp_a4p/smoke_test.py`：使用测试签名器覆盖笔记 MCP 的
   prepare/complete 流程，不启动 Web UI，需要安装 `demo` 额外依赖。
-
 
 ### 最小 Ed25519 注册与授权全链路示例
 
@@ -163,6 +162,14 @@ note_mcp_a4p smoke tests passed
 ```
 
 该示例可在 Windows、macOS、Linux 环境中运行。
+
+### ATH Gateway 集成
+
+安装 `a4p[ath]` 或运行 `uv sync --extra ath`，即可使用
+`a4p.integrations.ath` 异步客户端。独立商城示例演示通过 Gateway 注册 Agent、
+获得浏览器授权、查找商品、加入购物车、查看购物车和订单，以及可选的模拟下单。[运行商城 Demo](examples/ath_shop/README.md)
+
+This product is developed based on OpenATH protocol. [Official ATH Python SDK](https://github.com/ath-protocol/python-sdk)
 
 ### JSON 凭据文件恢复
 

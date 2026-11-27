@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A4P-ATH协议互认测试——Agent购物流程演示</title>
+<style>
+:root{font:16px/1.6 "Inter","PingFang SC",sans-serif;color:#182e30;background:#f3f6f4;--green:#006851;--line:#d7e1dd}
+*{box-sizing:border-box}body{margin:0}main{max-width:1220px;margin:auto;padding:42px 5vw}h1{font-size:clamp(28px,4vw,46px);line-height:1.2;letter-spacing:-.04em;margin:0 0 12px}h2{font-size:21px;margin:0}h3{font-size:16px;margin:0}p{margin:6px 0}#context,small,.hint{color:#4b645e}.layout{margin-top:28px;display:grid;grid-template-columns:minmax(210px,1fr) minmax(0,2.4fr);gap:20px;align-items:start}aside,article{background:white;border:1px solid var(--line);border-radius:16px;padding:24px}aside ol{list-style:none;padding:0;margin:18px 0 0}aside li{display:flex;align-items:center;gap:12px;color:#4b645e;padding:12px 0}li b{display:grid;place-items:center;border:1px solid var(--line);border-radius:50%;width:32px;height:32px;font:14px monospace}li.done b{background:#daefe5;color:#075d43}li.active{font-weight:bold;color:var(--green)}li.active b{background:var(--green);color:white}article>div+div{margin-top:20px}.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.status{font-size:14px;background:#e9f1ec;border-radius:20px;padding:4px 12px}button,.link{border:0;border-radius:8px;padding:10px 18px;background:var(--green);color:white;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}button:disabled{opacity:.5;cursor:wait}button.secondary{background:#e8f0eb;color:#23493c}label{display:block;font-weight:600;margin:14px 0 4px}input{border:1px solid #93aaa1;border-radius:8px;padding:11px;font:inherit;width:min(100%,380px)}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.record{border-top:1px solid var(--line);padding-top:14px;margin-top:16px}.record small{font:13px monospace}.fields{padding:10px 14px;background:#f4f8f5;border-radius:8px;margin:6px 0;overflow-wrap:anywhere}.field{padding:3px 0}.key{font-size:14px;color:#536e65;margin-right:10px}.err{color:#983623}.rail{height:5px;background:#e2ebe5;border-radius:4px;margin:16px 0}.rail i{display:block;height:100%;background:#14886a;transition:width .3s}#context{overflow-wrap:anywhere}button:focus-visible,a:focus-visible{outline:3px solid #d78f13} @media(max-width:720px){main{padding:24px 16px}.layout{grid-template-columns:1fr}aside,article{padding:17px}aside ol{display:grid;grid-template-columns:repeat(2,1fr)}aside li{padding:4px 0}}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.top{flex-wrap:wrap}
+</style>
+<main><h1>A4P-ATH协议互认测试——Agent购物流程演示</h1>
+<div class="layout"><aside><h2>执行进度</h2><div class="rail"><i id="progress"></i></div><ol id="steps"></ol><details class="record"><summary>连接信息</summary><div id="context"></div></details></aside>
+<article><div class="top"><h2>运行记录</h2><div class="toolbar"><span id="status" class="status">连接中</span><button id="newRun" disabled>新建运行</button></div></div>
+<div id="records"></div><div id="controls"></div><p id="error" role="alert" class="err"></p></article></div></main>
+<script>
+const $ = id => document.getElementById(id);
+const stages = ['网关发现','代理注册','用户授权','令牌交换','商城访问','令牌撤销'];
+const labels = {shop_user:'商城账号',cart_to_order:'待结算购物车',items:'商品明细',product:'商品',quantity:'数量',total:'总额',id:'编号',status:'状态',order:'本次订单',cart_after_add:'加购后购物车',recent_orders:'最近订单'};
+function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
+function fields(data){
+  if(data===null || typeof data!=='object')return el('span',String(data));
+  if(Array.isArray(data)&&data.every(x=>typeof x==='string'))return el('span',data.join(' · ')||'无');
+  const box=el('div',undefined,'fields');
+  for(const [key,value] of Object.entries(data)){
+    const row=el('div',undefined,'field');
+    if(!Array.isArray(data))row.append(el('span',labels[key]||key,'key'));
+    if(key==='授权地址' && /^https?:\/\//i.test(value)){
+      const a=el('a','打开商城授权页','link');a.href=value;a.target='_blank';a.rel='noopener noreferrer';row.append(a);
+    }else row.append(fields(value));
+    box.append(row);
+  }
+  return box;
+}
+let signature='',busy=false;
+function render(s){
+  const fingerprint=JSON.stringify(s);if(fingerprint===signature)return;signature=fingerprint;
+  $('context').replaceChildren(fields({'ATH 网关地址':s.gateway,'代理标识':s.agent}));
+  const seen=new Set(s.events.map(e=>e.step));
+  const last=s.events.at(-1)?.step||0;
+  $('steps').replaceChildren(...stages.map((name,i)=>{
+    const li=el('li');li.className=seen.has(i+1)?'done':'';
+    if(s.running && i+1===(s.pending?.kind==='consent'?3:Math.max(1,last)))li.className='active';
+    li.append(el('b',String(i+1).padStart(2,'0')),el('span',name));return li;
+  }));
+  $('progress').style.width=(seen.size/6*100)+'%';
+  $('newRun').disabled=!!s.restarting;
+  $('newRun').onclick=()=>post('/new',{id:s.id});
+  $('status').textContent=s.restarting?'正在结束本轮':s.error?'执行异常':s.pending?'等待操作':s.running?'执行中':last?'已结束':'待启动';
+  $('records').replaceChildren(...s.events.map(e=>{
+    const n=el('section',undefined,'record');n.append(el('small',String(e.step).padStart(2,'0')+' / '+stages[e.step-1]),el('h3',e.message));
+    if(e.data!==null)n.append(fields(e.data));return n;
+  }));
+  const c=$('controls');c.replaceChildren();$('error').textContent=s.error;
+  if(s.restarting)return;
+  if(!s.running && !last && !s.error){
+    const form=el('form'), label=el('label','网关密码'), pw=el('input'), start=el('button','开始演示');
+    const userLabel=el('label','网关用户名'), user=el('input');
+    user.id='username';user.name='username';user.autocomplete='username';user.required=true;user.value=s.user;userLabel.htmlFor=user.id;
+    form.append(userLabel,user);
+    pw.type='password';pw.required=true;pw.id='password';pw.autocomplete='current-password';label.htmlFor=pw.id;
+    form.append(label,pw,el('p',s.signup?'使用当前账号注册或登录网关。':'使用当前账号登录网关。','hint'));
+    const actions=el('div',undefined,'actions');actions.append(start);form.append(actions);
+    form.onsubmit=e=>{e.preventDefault();post('/start',{id:s.id,username:user.value,password:pw.value})};c.append(form);
+  }else if(s.pending){
+    const consent=s.pending.kind==='consent';
+    c.append(el('p',consent?'在新标签页完成商城授权后，返回此处继续。':'本次订单包含以上整车商品，收货地址为 华为北京研究所。'));
+    const actions=el('div',undefined,'actions');
+    for(const [text,value] of consent?[['已授权，交换令牌','continue'],['取消授权','q']]:[['确认整车下单','yes'],['跳过下单','no']]){
+      const b=el('button',text,actions.children.length?'secondary':'');b.onclick=()=>post('/answer',{id:s.pending.id,answer:value});actions.append(b);
+    }c.append(actions);
+  }
+}
+async function refresh(){const r=await fetch('/state',{cache:'no-store'});if(!r.ok)throw Error();render(await r.json())}
+async function post(path,data){
+  if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);
+  try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});await refresh();if(!r.ok)$('error').textContent='操作未接受，请核对当前步骤。'}
+  catch{$('error').textContent='连接中断，请核对运行记录。'}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=b.id==='newRun' && $('status').textContent==='正在结束本轮')}
+}
+async function poll(){try{if(!busy)await refresh()}catch{$('status').textContent='连接中断';signature=''}setTimeout(poll,800)}poll();
+</script></html>
