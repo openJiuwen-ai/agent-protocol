@@ -828,11 +828,6 @@ class RegistryService:
 
         return RegistryStatus(total_services=total, by_source=by_source, datasets=all_datasets)
 
-    def list_datasets(self) -> List[str]:
-        """List all datasets that have registry data."""
-        with self._lock:
-            return list(self._entries.keys())
-
     def dataset_dir(self, dataset: str) -> Path:
         """Return the on-disk directory for a dataset.
 
@@ -927,34 +922,15 @@ class RegistryService:
     def list_datasets(self) -> List[str]:
         """Return all dataset directory names. Order: alphabetical.
 
-        Directories that are not a plain segment or that resolve outside
-        ``database_dir`` are skipped (and logged), so one odd entry on disk
-        cannot make listing fail for every other dataset.
+        Delegates to :meth:`_discover_datasets` so that directories sharing
+        ``_database_dir`` without dataset markers are not reported as
+        datasets. The shared ChromaDB store (:meth:`chroma_dir`) lives at
+        ``<database_dir>/chroma`` — a plain sub-directory scan reports it as
+        a dataset, which leaks a phantom namespace into the CLI listing,
+        cluster namespace negotiation and ``dataset in list_datasets()``
+        style guards.
         """
-        return [d.name for d in self._safe_dataset_dirs()]
-
-    def _safe_dataset_dirs(self) -> List[Path]:
-        """Dataset directories directly under ``database_dir``, unsafe ones skipped.
-
-        Discovery/read paths must not abort on a legacy directory name
-        (leading/trailing spaces, ``:``, a Windows device name) or on a
-        symlink pointing outside the root: log a warning and move on, so the
-        remaining datasets still load instead of the service failing to
-        start.
-        """
-        if not self._database_dir.exists():
-            return []
-        out: List[Path] = []
-        for d in sorted(self._database_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            try:
-                self.dataset_dir(d.name)
-            except ValueError as exc:
-                logger.warning("Skipping dataset directory %r: %s", d.name, exc)
-                continue
-            out.append(d)
-        return out
+        return self._discover_datasets()
 
     def list_datasets_with_counts(self) -> List[Dict[str, Any]]:
         """List all datasets on disk with their service + query counts.
@@ -1759,7 +1735,39 @@ class RegistryService:
     # Internal — dataset discovery / global config
     # -----------------------------------------------------------------------
 
+    def _safe_dataset_dirs(self) -> List[Path]:
+        """Dataset directories directly under ``database_dir``, unsafe ones skipped.
+
+        Discovery/read paths must not abort on a legacy directory name
+        (leading/trailing spaces, ``:``, a Windows device name) or on a
+        symlink pointing outside the root: log a warning and move on, so the
+        remaining datasets still load instead of the service failing to
+        start.
+        """
+        if not self._database_dir.exists():
+            return []
+        out: List[Path] = []
+        for d in sorted(self._database_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                self.dataset_dir(d.name)
+            except ValueError as exc:
+                logger.warning("Skipping dataset directory %r: %s", d.name, exc)
+                continue
+            out.append(d)
+        return out
+
     def _discover_datasets(self) -> List[str]:
+        """Dataset names under ``database_dir``, in alphabetical order.
+
+        Only directories carrying a dataset marker count as datasets, so the
+        shared ChromaDB store (``chroma_dir()``) and stray directories are not
+        reported. Directories that are not a plain segment or that resolve
+        outside ``database_dir`` are skipped (and logged) by
+        :meth:`_safe_dataset_dirs`, so one odd entry on disk cannot make
+        listing fail for every other dataset.
+        """
         return [
             d.name for d in self._safe_dataset_dirs()
             if (
