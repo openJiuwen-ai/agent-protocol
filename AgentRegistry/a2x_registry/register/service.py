@@ -72,6 +72,85 @@ except ValueError:
         "ignoring invalid A2X_REGISTRY_AGENT_CARD_WORKERS (using %s)", _DEFAULT_AGENT_CARD_WORKERS
     )
     _AGENT_CARD_WORKERS = _DEFAULT_AGENT_CARD_WORKERS
+# ---------------------------------------------------------------------------
+# Dataset name validation
+#
+# Dataset names become directory names directly under ``database_dir``. Any
+# name that can escape that root (``.``, ``..``, path separators, NUL, drive
+# letters) must be rejected *before* it reaches the filesystem — otherwise a
+# caller-supplied ``..`` turns (for example) ``delete_dataset`` into
+# ``shutil.rmtree(<database_dir>/..)`` and wipes the whole registry home
+# directory. Names are deliberately validated with a deny-list rather than a
+# strict allow-list so existing datasets (including non-ASCII names) keep
+# working.
+#
+# Two tiers on purpose:
+#   * ``reject_unsafe_path_segment`` — platform independent minimum, applied
+#     wherever a path is built. Guarantees a single plain segment.
+#   * ``validate_dataset_name`` — strict policy, applied to *caller supplied*
+#     names only (create / delete / upload). Platform specific rules are
+#     Windows-only because those names alias other directories only there; on
+#     POSIX they are legal and may already exist on disk, and rejecting them
+#     would make historical datasets impossible to delete.
+# Containment of the *resolved* path is enforced in
+# ``RegistryService.dataset_dir`` (a single safe segment can still be a
+# symlink pointing outside the root).
+# ---------------------------------------------------------------------------
+_MAX_DATASET_NAME_LEN = 200
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *{f"com{i}" for i in range(1, 10)},
+    *{f"lpt{i}" for i in range(1, 10)},
+}
+# Characters that turn a name into a multi-segment path (or a device path) on
+# every platform.
+_UNSAFE_SEGMENT_CHARS = ("/", "\\", "\x00")
+
+
+def reject_unsafe_path_segment(name: str) -> str:
+    """Return ``name`` if it is exactly one plain path segment, else raise ValueError."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("dataset name must be a non-empty string")
+    if name in (".", ".."):
+        raise ValueError(f"invalid dataset name: {name!r}")
+    for ch in _UNSAFE_SEGMENT_CHARS:
+        if ch in name:
+            raise ValueError(f"invalid dataset name: path separator or NUL in {name!r}")
+    return name
+
+
+def validate_dataset_name(name: str, *, enforce_max_length: bool = True) -> str:
+    """Return ``name`` if it is a safe dataset directory name, else raise ValueError.
+
+    Strict, caller-facing policy. Rules whose only effect is aliasing an
+    existing directory (reserved device names, drive letters, trailing
+    dots/spaces, leading/trailing whitespace) are enforced on Windows only.
+
+    ``enforce_max_length=False`` is for *deleting* an existing dataset: the
+    length cap is an input policy for creation, and a dataset created by an
+    older build (POSIX allows names far longer than
+    ``_MAX_DATASET_NAME_LEN``) must stay deletable. Path safety and
+    containment are still enforced by ``dataset_dir``.
+    """
+    reject_unsafe_path_segment(name)
+    if enforce_max_length and len(name) > _MAX_DATASET_NAME_LEN:
+        raise ValueError(f"invalid dataset name: too long ({len(name)} > {_MAX_DATASET_NAME_LEN})")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        raise ValueError(f"invalid dataset name: control character in {name!r}")
+    if os.name == "nt":
+        if name.strip() != name:
+            raise ValueError(f"invalid dataset name: leading/trailing whitespace: {name!r}")
+        if ":" in name:
+            raise ValueError(f"invalid dataset name: ':' is not allowed in {name!r}")
+        if name != name.rstrip(" ."):
+            raise ValueError(
+                f"invalid dataset name: trailing dot/space aliases another directory: {name!r}"
+            )
+        if name.split(".")[0].lower() in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"invalid dataset name: {name!r} is a reserved device name")
+    return name
+
+
 BUILD_CONFIG_FILE = "build_config.json"
 TAXONOMY_FILE    = "taxonomy.json"
 
@@ -105,6 +184,8 @@ class RegistryService:
         allowed_a2a_versions: Optional[Set[str]] = None,
     ):
         self._database_dir = database_dir
+        # Cached resolved root used by dataset_dir() containment checks.
+        self._resolved_database_dir: Optional[Path] = None
         # Legacy knob kept for callers that still pass an a2a allow-list. When
         # set, it overrides the per-dataset register_config.json for a2a.
         self._allowed_a2a_versions = allowed_a2a_versions
@@ -240,7 +321,7 @@ class RegistryService:
         Embedding model and formats can be changed later via the dedicated
         ``POST /vector-config`` and ``POST /register-config`` endpoints.
         """
-        config_file = self._database_dir / dataset / "vector_config.json"
+        config_file = self.dataset_dir(dataset) / "vector_config.json"
         if config_file.exists():
             return
         # Idempotent file writes via the same helper create_dataset uses.
@@ -753,8 +834,45 @@ class RegistryService:
         Lets callers (build pipeline, search service, frontend export
         helpers) ask "where does this dataset live?" without rebuilding
         the path from PROJECT_ROOT themselves.
+
+        The *resolved* directory must be a direct child of
+        ``database_dir``. A single safe segment is not enough on its own: an
+        existing ``<database_dir>/<name>`` symlink can point anywhere, and
+        every read/delete path built from it would then act outside the
+        root.
+
+        Raises ValueError for names that are not one plain segment, or whose
+        resolved path leaves ``database_dir``.
         """
-        return self._database_dir / dataset
+        reject_unsafe_path_segment(dataset)
+        path = self._database_dir / dataset
+        if path.resolve().parent != self._database_root():
+            raise ValueError(
+                f"invalid dataset name: {dataset!r} resolves outside the "
+                "registry database directory"
+            )
+        return path
+
+    def existing_dataset_dir(self, dataset: str) -> Path:
+        """Validated dataset dir, asserting that the dataset exists.
+
+        Two failure modes on purpose, so the router layer can map them:
+        ``ValueError`` → 400 (invalid or escaping name) and
+        ``RegistryNotFoundError`` → 404 (valid name, no such dataset). Used by
+        read endpoints that previously probed ``database_dir / dataset``
+        themselves — that probe ran before any name validation, so a hostile
+        name made them do I/O outside the registry root.
+        """
+        ds_dir = self.dataset_dir(dataset)
+        if not ds_dir.is_dir():
+            raise RegistryNotFoundError(f"Dataset '{dataset}' not found")
+        return ds_dir
+
+    def _database_root(self) -> Path:
+        """Resolved ``database_dir`` (cached; a symlinked root is fine)."""
+        if self._resolved_database_dir is None:
+            self._resolved_database_dir = self._database_dir.resolve()
+        return self._resolved_database_dir
 
     def service_json_path(self, dataset: str) -> Path:
         """Return the path to ``service.json`` for a dataset (the unified
@@ -782,16 +900,24 @@ class RegistryService:
         return self._database_dir / "chroma"
 
     def dataset_exists(self, name: str) -> bool:
-        """True if ``<database_dir>/<name>`` is a directory.
+        """True if ``<database_dir>/<name>`` is a directory inside the root.
 
         Lighter-weight than ``list_datasets_with_counts``: doesn't require
         a ``service.json``, so empty datasets (just created, no entries)
         are detected. Used by the auth router to validate namespace lists
         when admin creates a non-admin principal.
+
+        Hostile names never reach the filesystem: a name that is not a single
+        plain segment, or that resolves outside ``database_dir``, yields
+        ``False`` rather than a traversed existence check.
         """
         if not self._database_dir.exists():
             return False
-        return (self._database_dir / name).is_dir()
+        try:
+            ds_dir = self.dataset_dir(name)
+        except ValueError:
+            return False
+        return ds_dir.is_dir()
 
     def list_datasets(self) -> List[str]:
         """Return all dataset directory names. Order: alphabetical.
@@ -821,9 +947,7 @@ class RegistryService:
         if not self._database_dir.exists():
             return []
         out: List[Dict[str, Any]] = []
-        for d in sorted(self._database_dir.iterdir()):
-            if not d.is_dir():
-                continue
+        for d in self._safe_dataset_dirs():
             service_file = d / "service.json"
             if not service_file.exists():
                 continue
@@ -1097,7 +1221,7 @@ class RegistryService:
 
     def _get_store(self, dataset: str) -> RegistryStore:
         if dataset not in self._stores:
-            self._stores[dataset] = RegistryStore(self._database_dir / dataset)
+            self._stores[dataset] = RegistryStore(self.dataset_dir(dataset))
         return self._stores[dataset]
 
     def _regenerate_output(self, dataset: str) -> bool:
@@ -1193,8 +1317,9 @@ class RegistryService:
 
     def _compute_taxonomy_state(self, dataset: str) -> TaxonomyState:
         """Compare current service hash against build_config.json's stored hash."""
-        build_config_path = self._database_dir / dataset / "taxonomy" / BUILD_CONFIG_FILE
-        taxonomy_path     = self._database_dir / dataset / "taxonomy" / TAXONOMY_FILE
+        taxonomy_dir      = self.dataset_dir(dataset) / "taxonomy"
+        build_config_path = taxonomy_dir / BUILD_CONFIG_FILE
+        taxonomy_path     = taxonomy_dir / TAXONOMY_FILE
 
         if not build_config_path.exists() or not taxonomy_path.exists():
             return TaxonomyState.NONEXISTENT
@@ -1247,7 +1372,8 @@ class RegistryService:
         ``formats`` normalizes to an empty dict (which would reject every
         registration).
         """
-        ds_dir = self._database_dir / name
+        validate_dataset_name(name)
+        ds_dir = self.dataset_dir(name)
         if ds_dir.exists():
             raise ValueError(f"Dataset '{name}' already exists")
         if embedding_model is None:
@@ -1301,7 +1427,8 @@ class RegistryService:
           loader interprets as ``required: false`` — preserving the
           backward-compat invariant for every legacy dataset on disk.
         """
-        ds_dir = self._database_dir / name
+        validate_dataset_name(name)
+        ds_dir = self.dataset_dir(name)
         ds_dir.mkdir(parents=True, exist_ok=True)
         (ds_dir / "query").mkdir(exist_ok=True)
         if not (ds_dir / "vector_config.json").exists():
@@ -1316,9 +1443,15 @@ class RegistryService:
         """Delete a dataset directory and all internal caches.
 
         Raises ValueError if the dataset directory does not exist.
+
+        The name is validated with ``enforce_max_length=False``: the length cap
+        is a creation-input policy, and a legacy dataset whose name exceeds it
+        is still listed/readable — it must therefore also be deletable.
+        ``dataset_dir`` keeps the path-safety and containment checks.
         """
         import shutil
-        ds_dir = self._database_dir / name
+        validate_dataset_name(name, enforce_max_length=False)
+        ds_dir = self.dataset_dir(name)
         if not ds_dir.exists():
             raise ValueError(f"Dataset '{name}' does not exist")
         with self._lock:
@@ -1352,7 +1485,11 @@ class RegistryService:
             return cached
         # Don't bother reading disk if the dataset isn't even there — treat
         # as anonymous; the caller will get a 404 elsewhere.
-        if not (self._database_dir / dataset).exists():
+        # ``dataset_dir`` (not a raw join) so a caller-supplied name cannot
+        # probe directories outside the registry root: an unsafe name raises
+        # ValueError, which the router maps to 400 — the read path must not
+        # perform unvalidated I/O outside ``database_dir``.
+        if not self.dataset_dir(dataset).exists():
             return False
         cfg = self._get_store(dataset).load_auth_config()
         required = bool(cfg.get("required", False))
@@ -1366,7 +1503,7 @@ class RegistryService:
         invalidates the in-memory cache so the next request reads the new
         value. Returns the persisted config dict.
         """
-        if not (self._database_dir / dataset).exists():
+        if not self.dataset_dir(dataset).exists():
             raise ValueError(f"Dataset '{dataset}' does not exist")
         self._get_store(dataset).write_auth_config(required=required)
         self._auth_required_cache[dataset] = bool(required)
@@ -1391,7 +1528,9 @@ class RegistryService:
         if cached is not None:
             return cached
         # Don't read disk for nonexistent datasets — caller hits 404 elsewhere.
-        if not (self._database_dir / dataset).exists():
+        # ``dataset_dir`` validates the name first, so an unsafe name can never
+        # turn this probe into I/O outside ``database_dir``.
+        if not self.dataset_dir(dataset).exists():
             from .store import LEASE_CONFIG_DEFAULT
             return dict(LEASE_CONFIG_DEFAULT)
         cfg = self._get_store(dataset).load_lease_config()
@@ -1409,7 +1548,7 @@ class RegistryService:
         persisted config. Bound validation errors propagate as ``ValueError``
         → 400 via the existing ``_run`` mapper.
         """
-        if not (self._database_dir / dataset).exists():
+        if not self.dataset_dir(dataset).exists():
             raise ValueError(f"Dataset '{dataset}' does not exist")
         self._get_store(dataset).write_lease_config(
             enabled=enabled, min_ttl=min_ttl, max_ttl=max_ttl,
@@ -1596,18 +1735,48 @@ class RegistryService:
     # Internal — dataset discovery / global config
     # -----------------------------------------------------------------------
 
-    def _discover_datasets(self) -> List[str]:
+    def _safe_dataset_dirs(self) -> List[Path]:
+        """Dataset directories directly under ``database_dir``, unsafe ones skipped.
+
+        Discovery/read paths must not abort on a legacy directory name
+        (leading/trailing spaces, ``:``, a Windows device name) or on a
+        symlink pointing outside the root: log a warning and move on, so the
+        remaining datasets still load instead of the service failing to
+        start.
+        """
         if not self._database_dir.exists():
             return []
-        return sorted(
-            d.name for d in self._database_dir.iterdir()
-            if d.is_dir() and (
+        out: List[Path] = []
+        for d in sorted(self._database_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                self.dataset_dir(d.name)
+            except ValueError as exc:
+                logger.warning("Skipping dataset directory %r: %s", d.name, exc)
+                continue
+            out.append(d)
+        return out
+
+    def _discover_datasets(self) -> List[str]:
+        """Dataset names under ``database_dir``, in alphabetical order.
+
+        Only directories carrying a dataset marker count as datasets, so the
+        shared ChromaDB store (``chroma_dir()``) and stray directories are not
+        reported. Directories that are not a plain segment or that resolve
+        outside ``database_dir`` are skipped (and logged) by
+        :meth:`_safe_dataset_dirs`, so one odd entry on disk cannot make
+        listing fail for every other dataset.
+        """
+        return [
+            d.name for d in self._safe_dataset_dirs()
+            if (
                 (d / USER_CONFIG_FILE).exists()
                 or (d / API_CONFIG_FILE).exists()
                 or (d / "register_config.json").exists()
                 or (d / "skills").is_dir()
             )
-        )
+        ]
 
 
 # ---------------------------------------------------------------------------
