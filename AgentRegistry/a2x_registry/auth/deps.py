@@ -83,6 +83,29 @@ async def authorize(
     store = get_auth_store()
     dataset = request.path_params.get("dataset")
 
+    # Validate ``{dataset}`` before anything else — including the auth-off
+    # fast path below. Some endpoints (register-config / vector-config) call
+    # the service layer directly instead of going through ``_run``, so a name
+    # that fails validation there would surface as a 500. With no auth store
+    # this dependency used to return immediately, leaving the handler to be
+    # the first validator, which is the same 500. Both configurations must
+    # reject a hostile name with the same 400.
+    if dataset is not None:
+        from a2x_registry.backend.routers.dataset import get_registry_service
+        from a2x_registry.register.service import validate_dataset_name
+        try:
+            svc = get_registry_service()
+        except Exception:
+            svc = None
+        if svc is not None:
+            try:
+                # ``enforce_max_length=False``: the cap is a creation policy,
+                # legacy datasets with longer names must stay readable.
+                validate_dataset_name(dataset, enforce_max_length=False)
+                svc.dataset_dir(dataset)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # Branch 1a: registry has no auth at all → fully anonymous.
     if store is None:
         return None
@@ -96,9 +119,9 @@ async def authorize(
             svc = get_registry_service()
         except Exception:
             svc = None
-        if svc is not None and not svc.is_auth_required(dataset):
-            return None
-
+        if svc is not None:
+            if not svc.is_auth_required(dataset):
+                return None
     # Branch 2 / 3: this request must carry a valid token.
     token = _parse_bearer(authorization)
     if token is None:

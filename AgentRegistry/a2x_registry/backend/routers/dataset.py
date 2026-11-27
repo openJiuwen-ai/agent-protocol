@@ -232,10 +232,14 @@ async def create_dataset(
 
 @router.get("/{dataset}/auth-config")
 async def get_auth_config(dataset: str):
-    """Read the per-namespace auth flag. Public — no token required."""
+    """Read the per-namespace auth flag. Public — no token required.
+
+    The existence probe goes through the service layer: it validates the name
+    first (unsafe → 400) and only then stats the directory, so a caller-supplied
+    name can't be used to probe paths outside the registry root.
+    """
     svc = get_registry_service()
-    if not (svc._database_dir / dataset).exists():
-        raise HTTPException(404, f"Dataset '{dataset}' not found")
+    await _run(svc.existing_dataset_dir, dataset)
     return {"dataset": dataset, "required": svc.is_auth_required(dataset)}
 
 
@@ -272,10 +276,13 @@ def svc_set_auth_config(dataset: str, required: bool):
 async def get_lease_config(dataset: str):
     """Read the per-namespace heartbeat lease config. Public — no token
     required, so SDKs can detect whether to send ``lease_ttl`` before
-    triggering a 400."""
+    triggering a 400.
+
+    Same pre-validation as ``GET /{dataset}/auth-config``: the name is checked
+    before any filesystem probe (unsafe → 400, missing → 404).
+    """
     svc = get_registry_service()
-    if not (svc._database_dir / dataset).exists():
-        raise HTTPException(404, f"Dataset '{dataset}' not found")
+    await _run(svc.existing_dataset_dir, dataset)
     return {"dataset": dataset, **svc.get_lease_config(dataset)}
 
 
@@ -332,7 +339,8 @@ async def get_register_config(
 ):
     """Return the per-type ``min_version`` map that gates registration."""
     svc = get_registry_service()
-    return {"dataset": dataset, "formats": svc.get_register_config(dataset)}
+    formats = await _run(svc.get_register_config, dataset)
+    return {"dataset": dataset, "formats": formats}
 
 
 @router.post("/{dataset}/register-config")
@@ -360,9 +368,21 @@ async def delete_dataset(
     """Delete a dataset directory and all associated data.
 
     Admin-only on auth-required datasets; anon-OK on legacy datasets.
+
+    The registry deletion runs first; the search-side purge follows only
+    once it succeeded. ``delete_dataset`` is what validates the name and
+    asserts the dataset exists, so a refused request (400/404) must not
+    have touched the index — purging first used to drop a Chroma
+    collection and the cached search instances for a dataset the endpoint
+    then declined to delete, leaving an index-less dataset that still
+    looked intact to every read path.
+
+    ``purge_dataset`` stays best-effort by contract: a Chroma failure is
+    logged and the deletion still reports success.
     """
+    svc = get_registry_service()
+    await _run(svc.delete_dataset, dataset)
     search_service.purge_dataset(dataset)
-    await _run(get_registry_service().delete_dataset, dataset)
     return {"dataset": dataset, "status": "deleted"}
 
 
@@ -895,7 +915,8 @@ async def get_vector_config(
     _ctx: Optional[AuthContext] = Depends(authorize),
 ):
     """Get the vector (embedding) config for a dataset."""
-    cfg = get_registry_service().get_vector_config(dataset)
+    svc = get_registry_service()
+    cfg = await _run(svc.get_vector_config, dataset)
     return {"dataset": dataset, **cfg}
 
 
