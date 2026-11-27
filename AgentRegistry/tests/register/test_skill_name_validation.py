@@ -18,7 +18,11 @@ import pytest
 
 from a2x_registry.common.auth_context import AuthContext
 from a2x_registry.register.service import RegistryService
-from a2x_registry.register.store import RegistryStore, validate_skill_name
+from a2x_registry.register.store import (
+    RegistryStore,
+    generate_service_id,
+    validate_skill_name,
+)
 
 
 def _skill_zip(name: str, description: str = "demo") -> bytes:
@@ -503,6 +507,79 @@ def test_owner_check_matches_case_only_variant_on_windows(service):
     assert [(e.service_id, e.skill_data.name) for e in svc.list_entries("demo")] == [
         (first.service_id, "Alpha")
     ]
+
+
+# ---------------------------------------------------------------------------
+# 旧 id 指向的可能是另一个 skill：不能拿它做属主检查
+# ---------------------------------------------------------------------------
+
+
+def test_stale_id_does_not_take_over_the_old_name(service):
+    """``alpha`` 改名 ``beta`` 后旧 id 仍占着 ``alpha``；别人上传新 ``alpha`` 不能被它挡住。"""
+    svc, ds = service
+    owner = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+    newcomer = AuthContext(principal_id="owner-2", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("alpha"), owner)
+    svc.update_service("demo", first.service_id, {"name": "beta"}, owner)
+
+    second = svc.register_skill("demo", _skill_zip("alpha", description="brand new"), newcomer)
+
+    assert second.status == "registered"
+    assert second.service_id == generate_service_id("skill", "alpha")
+    # 旧 id 被还给新 skill；改名后的 skill 迁到 hash(新名)，两者各留一条记录。
+    assert sorted(
+        (e.service_id, e.skill_data.name) for e in svc.list_entries("demo")
+    ) == [
+        (generate_service_id("skill", "alpha"), "alpha"),
+        (generate_service_id("skill", "beta"), "beta"),
+    ]
+    assert first.service_id != generate_service_id("skill", "beta")
+    assert "brand new" in (ds / "skills" / "alpha" / "SKILL.md").read_text(encoding="utf-8")
+    assert (ds / "skills" / "beta" / "SKILL.md").exists()
+
+
+def test_owner_upload_of_old_name_does_not_swallow_the_renamed_skill(service):
+    """属主自己上传旧名同样只新增 skill：改名后的条目不能被顶掉。"""
+    svc, ds = service
+    owner = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("alpha", description="v1"), owner)
+    svc.update_service("demo", first.service_id, {"name": "beta"}, owner)
+
+    second = svc.register_skill("demo", _skill_zip("alpha", description="new alpha"), owner)
+
+    assert second.status == "registered"
+    # 两条记录都在：新 skill 拿回 hash(alpha)，改名后的 skill 迁到 hash(beta)。
+    entries = {e.skill_data.name: e.service_id for e in svc.list_entries("demo")}
+    assert entries == {
+        "alpha": generate_service_id("skill", "alpha"),
+        "beta": generate_service_id("skill", "beta"),
+    }
+    assert "new alpha" in (ds / "skills" / "alpha" / "SKILL.md").read_text(encoding="utf-8")
+    assert (ds / "skills" / "beta" / "SKILL.md").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="大小写不敏感是 Windows 文件系统的特性")
+def test_stale_id_does_not_authorize_replacing_another_owners_folder(service):
+    """旧 id 命中别人的 skill：既不能据此放行，也不能绕过目标目录的属主。"""
+    svc, ds = service
+    owner1 = AuthContext(principal_id="owner-1", role="provider", namespaces=frozenset({"demo"}))
+    owner2 = AuthContext(principal_id="owner-2", role="provider", namespaces=frozenset({"demo"}))
+
+    first = svc.register_skill("demo", _skill_zip("alpha"), owner1)
+    svc.update_service("demo", first.service_id, {"name": "gamma"}, owner1)
+    svc.register_skill("demo", _skill_zip("Alpha", description="owner-2"), owner2)
+
+    skill_md = ds / "skills" / "Alpha" / "SKILL.md"
+    before = skill_md.read_text(encoding="utf-8")
+
+    # Windows 上 skills/Alpha 与上传名 alpha 是同一目录，属主是 owner-2。
+    with pytest.raises(PermissionError):
+        svc.register_skill("demo", _skill_zip("alpha", description="intruder"), owner1)
+
+    assert skill_md.read_text(encoding="utf-8") == before
+    assert sorted(e.skill_data.name for e in svc.list_entries("demo")) == ["Alpha", "gamma"]
 
 
 # ---------------------------------------------------------------------------

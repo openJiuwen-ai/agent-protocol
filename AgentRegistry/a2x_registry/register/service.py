@@ -344,32 +344,95 @@ class RegistryService:
                 lock = self._skill_locks[dataset] = threading.Lock()
             return lock
 
+    def _reclaim_skill_ids_locked(self, dataset: str, service_id: str) -> bool:
+        """Re-key skill entries left on a stale id so ``service_id`` is free.
+
+        ``service_id`` is ``hash(name)`` and ``update_service`` renames a folder
+        without re-keying its entry, so the skill formerly called ``name`` keeps
+        sitting on this very id. Storing a new entry as-is would overwrite that
+        other skill's registry record — its folder survives as an orphan and
+        the skill disappears from every listing. Moving each stale entry to the
+        id derived from the name it carries now (exactly what a restart
+        rebuilds from the folders) frees this key without dropping a skill.
+
+        Returns True when ``service_id`` is free afterwards. Must be called
+        with ``_lock`` held.
+        """
+        ds = self._entries.get(dataset, {})
+        if service_id not in ds:
+            return True
+        stale = [
+            (sid, entry) for sid, entry in ds.items()
+            if entry.source == "skill_folder"
+            and entry.skill_data is not None
+            and sid != generate_service_id("skill", entry.skill_data.name)
+        ]
+        # Detach first: while a rename chain is being resolved, an entry whose
+        # canonical id is still held by another stale entry must not look like
+        # a conflict.
+        for sid, _entry in stale:
+            del ds[sid]
+        for sid, entry in stale:
+            canonical = generate_service_id("skill", entry.skill_data.name)
+            if canonical in ds:
+                # The same name twice (legacy duplicates). Keeping the stale
+                # key beats dropping a record; a restart collapses them.
+                logger.warning(
+                    "Duplicate skill name '%s' in dataset '%s': keeping stale id %s",
+                    entry.skill_data.name, dataset, sid,
+                )
+                ds[sid] = entry
+                continue
+            # Keep the key and the entry's own ``service_id`` in sync: output
+            # records, mutation events and every API response read the field.
+            ds[canonical] = entry.model_copy(update={"service_id": canonical})
+            logger.info(
+                "Re-keyed skill '%s' in dataset '%s': %s -> %s",
+                entry.skill_data.name, dataset, sid, canonical,
+            )
+        return service_id not in ds
+
     def _find_skill_entry_locked(
         self, dataset: str, service_id: str, name: str,
     ) -> Optional[RegistryEntry]:
         """Find the skill entry an upload named ``name`` would replace.
 
-        Must be called with ``_lock`` held. Entries keep the id generated from
-        the name they were *first* uploaded under: ``update_service`` renames a
-        skill folder without re-keying its entry. A lookup by
-        ``generate_service_id("skill", name)`` therefore misses an existing
-        skill after a rename and silently skips its ownership check. On
-        Windows the folder is also case-insensitive, so a case-only variant
-        addresses the same directory and must resolve to the same entry.
+        Must be called with ``_lock`` held. The folder is identified by the
+        skill's own name, never by ``service_id``:
+
+        * Entries keep the id generated from the name they were *first*
+          uploaded under — ``update_service`` renames a skill folder without
+          re-keying its entry — so a lookup by
+          ``generate_service_id("skill", name)`` misses an existing skill
+          after a rename and silently skips its ownership check.
+        * The reverse also holds, and is worse: ``alpha`` renamed to ``beta``
+          still owns ``hash("alpha")``, so a later, unrelated upload named
+          ``alpha`` hits that entry. Checking *its* owner either denies the
+          real owner of the target folder, or lets the renamed skill's owner
+          through and then overwrites that entry — i.e. one skill deleted from
+          the registry by an upload of another name.
+        * On Windows the folder is case-insensitive, so a case-only variant
+          addresses the same directory and must resolve to the same entry.
         """
         ds = self._entries.get(dataset, {})
-        entry = ds.get(service_id)
-        if entry is not None:
-            return entry
+        exact = None
+        folded = None
         for candidate in ds.values():
             if candidate.type != "skill" or candidate.skill_data is None:
                 continue
             existing_name = candidate.skill_data.name
             if existing_name == name:
-                return candidate
-            if os.name == "nt" and existing_name.lower() == name.lower():
-                return candidate
-        return None
+                # Legacy duplicates can claim one name; the canonical entry
+                # (id derived from this name) wins so re-uploads keep the id.
+                if candidate.service_id == service_id:
+                    return candidate
+                if exact is None:
+                    exact = candidate
+                continue
+            if (os.name == "nt" and folded is None
+                    and existing_name.lower() == name.lower()):
+                folded = candidate
+        return exact if exact is not None else folded
 
     def register_skill(
         self,
@@ -412,6 +475,13 @@ class RegistryService:
                     # without re-keying it, so adding the id derived from the
                     # new name would leave two entries for one folder.
                     service_id = existing.service_id
+                elif not self._reclaim_skill_ids_locked(dataset, service_id):
+                    # This id is held by a skill whose name is neither this
+                    # upload's nor a renamable variant of it: never overwrite
+                    # another skill's record, refuse instead.
+                    raise ValueError(
+                        f"Service id '{service_id}' is already used by another skill"
+                    )
 
             skill_data = store.save_skill_zip(zip_bytes)
 
