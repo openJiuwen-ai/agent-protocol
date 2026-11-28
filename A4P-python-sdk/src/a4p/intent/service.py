@@ -246,6 +246,10 @@ class IntentAuthorizationService:
             expire_at_epoch=expire_at_epoch,
         )
         if not consumed:
+            if executions_used <= 0:
+                # The store only reports zero usage for an expired token; keep the
+                # reason accurate instead of blaming the execution quota.
+                return False, "Token expired"
             return False, "Token execution usage exceeded"
         return True, {
             "usage": {
