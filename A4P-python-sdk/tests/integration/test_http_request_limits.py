@@ -7,11 +7,13 @@ import time
 import pytest
 
 from a4p.http_server import (
+    DEFAULT_READ_TIMEOUT_SECONDS,
     MAX_HEADER_COUNT,
     MAX_HEADER_LINE_SIZE,
     MAX_HEADER_SIZE,
     MAX_REQUEST_LINE_SIZE,
     A4PHTTPServer,
+    a4p_http_read_timeout,
 )
 from tests.http_support import read_http_response
 
@@ -222,3 +224,57 @@ def test_read_http_response_times_out_instead_of_hanging() -> None:
             listener.close()
 
     asyncio.run(run())
+
+
+def test_http_server_drops_client_that_never_finishes_the_request() -> None:
+    """建立连接后不发完整请求头的客户端，必须被读超时关闭。
+
+    asyncio 没有内建读超时，``_read_request`` 里的 ``readline()`` 会无限等待：
+    一个 slowloris 风格的连接就能长期占住一个任务和一个 fd。``test_read_http_response_times_out_instead_of_hanging``
+    只覆盖了客户端侧读取，服务端侧此前完全没有超时。
+    """
+
+    async def run() -> None:
+        server = A4PHTTPServer(
+            object(),  # type: ignore[arg-type]
+            host="127.0.0.1",
+            port=0,
+            read_timeout_seconds=0.2,
+        )
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+            try:
+                writer.write(b"POST /missing HTTP/1.1\r\nHost: localhost\r\n")
+                await writer.drain()
+                data = await asyncio.wait_for(reader.read(), timeout=5)
+                assert data == b"", f"期望服务端主动关闭连接，实际收到 {data[:60]!r}"
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            await server.stop()
+
+    asyncio.run(run())
+
+
+def test_http_read_timeout_defaults_and_rejects_invalid_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A4P_HTTP_READ_TIMEOUT_S 未配置时取默认值，非法值必须显式报错而非静默降级。"""
+    monkeypatch.delenv("A4P_HTTP_READ_TIMEOUT_S", raising=False)
+    assert a4p_http_read_timeout() == DEFAULT_READ_TIMEOUT_SECONDS
+
+    monkeypatch.setenv("A4P_HTTP_READ_TIMEOUT_S", "not-a-number")
+    with pytest.raises(ValueError, match="A4P_HTTP_READ_TIMEOUT_S must be a number"):
+        a4p_http_read_timeout()
+
+    monkeypatch.setenv("A4P_HTTP_READ_TIMEOUT_S", "0")
+    with pytest.raises(ValueError, match="A4P_HTTP_READ_TIMEOUT_S must be positive"):
+        a4p_http_read_timeout()
+
+
+def test_http_server_rejects_non_positive_read_timeout() -> None:
+    """读超时必须为正数，0 或负数会让每个连接被立刻丢弃。"""
+    with pytest.raises(ValueError, match="read_timeout_seconds must be positive"):
+        A4PHTTPServer(object(), host="127.0.0.1", port=0, read_timeout_seconds=0)
