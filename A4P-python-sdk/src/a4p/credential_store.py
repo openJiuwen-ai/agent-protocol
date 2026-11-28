@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -10,15 +11,70 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from collections.abc import Iterator
 from typing import Any, Protocol
 
 
 CREDENTIAL_STORE_SCHEMA_VERSION = 2
 _logger = logging.getLogger(__name__)
 
+# Credentials live in one JSON file that every process rewrites wholesale, so a
+# per-instance threading.Lock is not enough: two processes (for example the
+# server and a separately started user authorizer) read the same snapshot and
+# the slower one silently replaces the other's record. Every read-modify-write
+# cycle is therefore serialized by an OS-level lock on a sidecar file.
+LOCK_RETRY_INTERVAL_SECONDS = 0.01
+LOCK_TIMEOUT_SECONDS = 10.0
+REPLACE_RETRY_ATTEMPTS = 5
+
 
 class CredentialStoreFormatError(ValueError):
     """Raised when a persisted credential file has an invalid or unsupported format."""
+
+
+class CredentialStoreLockError(RuntimeError):
+    """Raised when the cross-process credential store lock cannot be acquired."""
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(lock_path: Path) -> Iterator[None]:
+    """Hold an exclusive inter-process lock for one credential store file."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise CredentialStoreLockError(
+                            f"Timed out waiting for credential store lock {lock_path}"
+                        ) from None
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
 
 
 @dataclass(frozen=True)
@@ -97,7 +153,7 @@ class JsonFileCredentialStore(InMemoryCredentialStore):
     def save(self, record: UserCredentialRecord) -> None:
         if not _valid_record(record):
             raise ValueError("Invalid credential record")
-        with self._lock:
+        with self._lock, _exclusive_file_lock(self._lock_path()):
             try:
                 payload = self._read_payload()
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -114,6 +170,9 @@ class JsonFileCredentialStore(InMemoryCredentialStore):
             else:
                 items.append(serialized_record)
             self._flush(payload)
+
+    def _lock_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".lock")
 
     def get(self, credential_id: str) -> UserCredentialRecord | None:
         self._refresh()
@@ -185,7 +244,18 @@ class JsonFileCredentialStore(InMemoryCredentialStore):
                 )
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
-            os.replace(temporary_path, self.path)
+            for attempt in range(REPLACE_RETRY_ATTEMPTS):
+                try:
+                    os.replace(temporary_path, self.path)
+                except PermissionError:
+                    # Windows reports a sharing violation while another process
+                    # still holds the target open; retry briefly instead of
+                    # failing an otherwise valid write.
+                    if attempt + 1 >= REPLACE_RETRY_ATTEMPTS:
+                        raise
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS * (attempt + 1))
+                else:
+                    break
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
@@ -193,6 +263,7 @@ class JsonFileCredentialStore(InMemoryCredentialStore):
 
 __all__ = [
     "A4PCredentialStore",
+    "CredentialStoreLockError",
     "CREDENTIAL_STORE_SCHEMA_VERSION",
     "CredentialStoreFormatError",
     "InMemoryCredentialStore",

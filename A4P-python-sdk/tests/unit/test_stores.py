@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -146,7 +147,12 @@ def test_json_file_credential_store_keeps_previous_file_when_replace_fails(
     with pytest.raises(OSError, match="replace interrupted"):
         store.save(replace(record, details={"updated": True}))
     assert path.read_bytes() == previous
-    assert list(tmp_path.iterdir()) == [path]
+    # The cross-process lock sidecar is the only allowed extra artifact; the
+    # interrupted write must not leave its temporary file behind.
+    assert sorted(item.name for item in tmp_path.iterdir()) == [
+        "credentials.json",
+        "credentials.json.lock",
+    ]
     assert store.get("cred-1") == record
 
 
@@ -218,3 +224,41 @@ def test_sqlite_usage_store_removes_expired_records(tmp_path) -> None:
             ("expired-token",),
         ).fetchone()
     assert row is None
+
+
+def _save_many_records(store_path: str, tag: str, count: int) -> None:
+    store = JsonFileCredentialStore(store_path)
+    for index in range(count):
+        store.save(UserCredentialRecord("demo-user", f"cred-{tag}-{index}", "ed25519", {}))
+
+
+def test_json_file_credential_store_keeps_concurrent_cross_process_writes(tmp_path) -> None:
+    """两个进程并发写同一凭据文件时，两份记录都必须保留。
+
+    没有跨进程互斥时 save() 是读-改-写全量覆盖：两个进程读到同一快照，
+    后写者会把先写者的记录整条抹掉（实测 4 进程 x 25 条只剩 26~33 条）。
+    """
+    path = tmp_path / "credentials.json"
+    JsonFileCredentialStore(path).save(
+        UserCredentialRecord("demo-user", "seed", "ed25519", {})
+    )
+
+    methods = multiprocessing.get_all_start_methods()
+    context = multiprocessing.get_context("fork" if "fork" in methods else "spawn")
+    processes = [
+        context.Process(target=_save_many_records, args=(str(path), tag, 40))
+        for tag in ("alpha", "beta")
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=180)
+        assert process.exitcode == 0
+
+    credential_ids = {
+        record.credentialId for record in JsonFileCredentialStore(path).list_all()
+    }
+    expected = {"seed"} | {
+        f"cred-{tag}-{index}" for tag in ("alpha", "beta") for index in range(40)
+    }
+    assert credential_ids == expected
