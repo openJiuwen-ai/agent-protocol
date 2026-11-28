@@ -6,6 +6,7 @@ import base64
 import importlib
 import json
 import secrets
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from functools import lru_cache
@@ -68,6 +69,11 @@ def _options_to_payload(options: Any) -> dict[str, Any]:
 
 
 WEBAUTHN_SIGNATURE_METHOD = "webauthn"
+# A registration challenge only has to survive one browser round trip. Keeping
+# them forever turns an unauthenticated endpoint into a memory sink, so entries
+# now expire and the pending set is bounded.
+REGISTRATION_CHALLENGE_TTL_SECONDS = 300
+MAX_PENDING_REGISTRATION_CHALLENGES = 1024
 
 
 class WebAuthnSignatureMethod:
@@ -87,7 +93,23 @@ class WebAuthnSignatureMethod:
         self.rp_id = rp_id
         self.rp_name = rp_name
         self.expected_origin = expected_origin
-        self._registration_challenges: dict[str, tuple[str, bytes]] = {}
+        self._registration_challenges: dict[str, tuple[str, bytes, float]] = {}
+
+    def _prune_registration_challenges(self) -> None:
+        """Drop expired challenges and keep the pending set bounded (FIFO)."""
+        now = time.time()
+        for request_id in [
+            request_id
+            for request_id, (_user_id, _challenge, expires_at)
+            in self._registration_challenges.items()
+            if expires_at <= now
+        ]:
+            self._registration_challenges.pop(request_id, None)
+        while len(self._registration_challenges) >= MAX_PENDING_REGISTRATION_CHALLENGES:
+            oldest = next(iter(self._registration_challenges), None)
+            if oldest is None:
+                break
+            self._registration_challenges.pop(oldest, None)
 
     def method_policy(self) -> dict[str, Any]:
         return {"userVerification": "required"}
@@ -102,7 +124,12 @@ class WebAuthnSignatureMethod:
         helpers = _load_webauthn()
         challenge = secrets.token_bytes(32)
         registration_request_id = f"webauthn_registration_{secrets.token_urlsafe(18)}"
-        self._registration_challenges[registration_request_id] = (user_id, challenge)
+        self._prune_registration_challenges()
+        self._registration_challenges[registration_request_id] = (
+            user_id,
+            challenge,
+            time.time() + REGISTRATION_CHALLENGE_TTL_SECONDS,
+        )
         existing = [
             helpers["PublicKeyCredentialDescriptor"](id=b64url_decode(record.credentialId))
             for record in self.credential_store.list_for_user(user_id)
@@ -138,7 +165,9 @@ class WebAuthnSignatureMethod:
         pending = self._registration_challenges.pop(registration_request_id, None)
         if pending is None:
             raise ValueError(f"No WebAuthn registration challenge: {registration_request_id}")
-        pending_user_id, challenge = pending
+        pending_user_id, challenge, expires_at = pending
+        if expires_at <= time.time():
+            raise ValueError(f"WebAuthn registration challenge expired: {registration_request_id}")
         if pending_user_id != user_id:
             raise ValueError(
                 "WebAuthn registration user mismatch: "
