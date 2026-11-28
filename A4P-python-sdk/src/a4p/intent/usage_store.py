@@ -112,9 +112,21 @@ class SQLiteIntentTokenUsageStore:
             # "attempt to write a readonly database".
             connection.execute(self._SCHEMA_SQL)
             connection.execute("BEGIN IMMEDIATE")
+            now_epoch = int(time.time())
+            if now_epoch >= expire_at_epoch:
+                # An already-expired token must never be consumable. The sweep below
+                # deletes expired rows and the "row is None" branch then re-inserts the
+                # token with executions_used = 1, so without this guard an expired token
+                # would report success forever and its quota would never advance.
+                connection.execute(
+                    "DELETE FROM intent_token_usage WHERE token_id = ?",
+                    (normalized_token_id,),
+                )
+                connection.commit()
+                return False, 0
             connection.execute(
                 "DELETE FROM intent_token_usage WHERE expire_at_epoch <= ?",
-                (int(time.time()),),
+                (now_epoch,),
             )
             row = connection.execute(
                 """
