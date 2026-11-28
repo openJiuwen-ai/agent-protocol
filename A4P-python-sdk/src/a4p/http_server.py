@@ -30,6 +30,11 @@ MAX_HEADER_COUNT = 100
 # Request line: "METHOD SP TARGET SP VERSION" plus CRLF.
 MAX_REQUEST_LINE_SIZE = 8 * 1024
 
+# A peer that connects and then stalls mid-request (slowloris) holds a task and
+# a file descriptor for as long as it likes: asyncio imposes no read timeout of
+# its own, so every read below is bounded by this budget.
+DEFAULT_READ_TIMEOUT_SECONDS = 10.0
+
 
 class _PayloadTooLarge(Exception):
     """Raised when a request body exceeds :data:`MAX_BODY_SIZE`."""
@@ -63,11 +68,38 @@ def a4p_http_port() -> int:
     return port
 
 
+def a4p_http_read_timeout() -> float:
+    raw = (os.getenv("A4P_HTTP_READ_TIMEOUT_S") or "").strip()
+    if not raw:
+        return DEFAULT_READ_TIMEOUT_SECONDS
+    try:
+        timeout = float(raw)
+    except ValueError:
+        raise ValueError(f"A4P_HTTP_READ_TIMEOUT_S must be a number, got {raw!r}") from None
+    if timeout <= 0:
+        raise ValueError(f"A4P_HTTP_READ_TIMEOUT_S must be positive, got {timeout}")
+    return timeout
+
+
 class A4PHTTPServer:
-    def __init__(self, a4p_server: A4PServer, *, host: str | None = None, port: int | None = None) -> None:
+    def __init__(
+        self,
+        a4p_server: A4PServer,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        read_timeout_seconds: float | None = None,
+    ) -> None:
         self.a4p_server = a4p_server
         self.host = host or a4p_http_host()
         self.port = a4p_http_port() if port is None else port
+        self.read_timeout_seconds = (
+            a4p_http_read_timeout() if read_timeout_seconds is None else float(read_timeout_seconds)
+        )
+        if self.read_timeout_seconds <= 0:
+            raise ValueError(
+                f"read_timeout_seconds must be positive, got {self.read_timeout_seconds}"
+            )
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -95,7 +127,17 @@ class A4PHTTPServer:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            request = await self._read_request(reader)
+            try:
+                request = await asyncio.wait_for(
+                    self._read_request(reader),
+                    timeout=self.read_timeout_seconds,
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.warning(
+                    "[A4PHTTPServer] dropping client that did not finish its request within %ss",
+                    self.read_timeout_seconds,
+                )
+                return
             if request is None:
                 return
             if request.method != "POST":
@@ -256,4 +298,4 @@ class A4PHTTPServer:
         await writer.drain()
 
 
-__all__ = ["A4PHTTPServer", "a4p_http_host", "a4p_http_port"]
+__all__ = ["A4PHTTPServer", "a4p_http_host", "a4p_http_port", "a4p_http_read_timeout"]
