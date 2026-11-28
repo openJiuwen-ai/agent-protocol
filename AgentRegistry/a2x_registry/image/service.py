@@ -7,6 +7,9 @@ Responsibilities:
   name has no default yet. New §6 fields (``description`` /
   ``package_path`` / ``image_archive_path`` / ``access_mode``) live inside
   ``data``.
+- ``ensure_system_image``: create or refresh the single system-owned
+  (``uploaded_by="system"``) row for a name; replaces it when its version
+  or spec changes, so a built-in image never keeps stale metadata.
 - ``query``: return **flat** rows (one row per name version) with optional
   ``name`` / ``framework`` / ``uploaded_by`` filters and SQL-side pagination
   (``LIMIT/OFFSET``). Returns ``(rows, total)`` tuple.
@@ -50,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 IMAGE_REGISTRY = "images"
 INSTANCE_REGISTRY = "instances"
+
+# Owner of pre-seeded / built-in rows (see the image table schema comment).
+SYSTEM_UPLOADED_BY = "system"
 
 # Web access-mode port allocation window: a ``web_svc_port`` entry's ``port``
 # must be an integer within [WEB_PORT_MIN, WEB_PORT_MAX]. Plain constants for
@@ -180,6 +186,108 @@ class ImageService:
             "version": version,
             "status": status,
         }
+
+    # ------------------------------------------------------------------
+    # ensure_system_image (built-in / pre-seeded rows)
+    # ------------------------------------------------------------------
+
+    def ensure_system_image(
+        self,
+        *,
+        name: str,
+        version: str,
+        framework: str,
+        runtime_spec: Dict[str, Any],
+        description: Optional[str] = None,
+        access_mode: Optional[List[Dict[str, Any]]] = None,
+        env_vars: Optional[Dict[str, str]] = None,
+        workspace: Optional[str] = None,
+        mounts: Optional[List[Dict[str, Any]]] = None,
+        image_module_version: Optional[str] = None,
+    ) -> str:
+        """Create or refresh the single system-owned row for ``name``.
+
+        Returns ``"unchanged"`` / ``"created"`` / ``"updated"``. A definition
+        change (version, runtime spec, access mode, …) replaces the previous
+        system row. Removal bypasses the in-use guard on purpose: a built-in
+        image is never launched from the registry, while existing instance
+        rows keep their own framework/version references.
+        """
+        desired_access_mode = access_mode or []
+        desired_env_vars = env_vars or {}
+        desired_mounts = mounts or []
+
+        rows = self._table_svc.query(IMAGE_REGISTRY, {"name": name})
+        system_rows = [
+            row for row in rows
+            if row.get("uploaded_by") == SYSTEM_UPLOADED_BY
+        ]
+        if len(system_rows) == 1 and self._system_row_matches(
+            system_rows[0],
+            version=version,
+            framework=framework,
+            description=description,
+            runtime_spec=runtime_spec,
+            access_mode=desired_access_mode,
+            env_vars=desired_env_vars,
+            workspace=workspace,
+            mounts=desired_mounts,
+            image_module_version=image_module_version,
+        ):
+            return "unchanged"
+
+        self.register_image(
+            name=name,
+            version=version,
+            runtime_spec=runtime_spec,
+            uploaded_by=SYSTEM_UPLOADED_BY,
+            framework=framework,
+            description=description,
+            access_mode=desired_access_mode,
+            env_vars=desired_env_vars,
+            workspace=workspace,
+            mounts=desired_mounts,
+            image_module_version=image_module_version,
+        )
+        keep_sid = image_sid(name, version)
+        for row in system_rows:
+            if row.get("service_id") != keep_sid:
+                self._table_svc.deregister(IMAGE_REGISTRY, row["service_id"])
+        self.set_default(name, version)
+        logger.info(
+            "ensure_system_image %s@%s (replaced %d old row(s))",
+            name, version, len(system_rows),
+        )
+        return "updated" if system_rows else "created"
+
+    @staticmethod
+    def _system_row_matches(
+        row: Dict[str, Any],
+        *,
+        version: str,
+        framework: str,
+        description: Optional[str],
+        runtime_spec: Dict[str, Any],
+        access_mode: List[Dict[str, Any]],
+        env_vars: Dict[str, str],
+        workspace: Optional[str],
+        mounts: List[Dict[str, Any]],
+        image_module_version: Optional[str],
+    ) -> bool:
+        """Return whether an existing system row matches the desired row."""
+        data = row.get("data", {}) or {}
+        return (
+            bool(row.get("is_default"))
+            and row.get("version") == version
+            and row.get("framework") == framework
+            and data.get("description") == description
+            and data.get("runtime_spec") == runtime_spec
+            and (data.get("access_mode") or []) == access_mode
+            and (data.get("env_vars") or {}) == env_vars
+            and data.get("workspace") == workspace
+            and (data.get("mounts") or []) == mounts
+            and data.get("image_module_version") == image_module_version
+        )
 
     # ------------------------------------------------------------------
     # query (flat + paginated)

@@ -304,6 +304,31 @@ def run_warmup() -> None:
                 set_image_service(image_svc)
                 logger.info("  ImageService assembled (appliance mode)")
 
+                # Built-in agent carrier row: the management plane lists
+                # images, so seed the system-owned jiuwenswarm entry instead
+                # of hard-coding it in the query API. Non-fatal: a missing
+                # display row must not keep the registry down.
+                try:
+                    from a2x_registry.image.builtin import (
+                        BUILTIN_IMAGE_VERSION_ENV,
+                        seed_builtin_image,
+                    )
+
+                    builtin_version = os.environ.get(
+                        BUILTIN_IMAGE_VERSION_ENV, ""
+                    ).strip()
+                    seed_status = seed_builtin_image(
+                        image_svc, version=builtin_version
+                    )
+                    logger.info(
+                        "  Built-in image seeded (status=%s)", seed_status
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "  Built-in image seeding failed: %s",
+                        exc, exc_info=True,
+                    )
+
                 # 元戎客户端（可选）：endpoint 空 = 未配置，模式 B 请求回 501。
                 yuanrong_client = _build_yuanrong_client(instance_consts)
                 instance_svc = InstanceService(
